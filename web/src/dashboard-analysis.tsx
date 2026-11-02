@@ -12,6 +12,7 @@ import { usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { orderedUsageQuery } from "./usage-query-order";
 import { toolMetricPresentation } from "./tools-dashboard-model";
 import { useOriginMetadata } from "./origin-dimensions";
+import { CreateDashboardCard } from "./create-dashboard-card";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
@@ -148,11 +149,11 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
-      : <MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers}
+      : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers}
         onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
-        }} />}
+        }} /><CreateDashboardCard catalog={catalog} state={state} where={where} /></div>}
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
     {children}

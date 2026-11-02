@@ -62,7 +62,7 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 			t.Fatalf("scheduled sync refreshed %s: %q %v", key, value, err)
 		}
 	}
-	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 5 {
+	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != len(stageOrder) {
 		t.Fatal("scheduled sync lost deferred work")
 	}
 	catalog.background = background
@@ -338,7 +338,7 @@ func TestAutomaticRefreshKeepsIntentionalStateAndAuditsNoops(t *testing.T) {
 	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM messages WHERE text='freshincrementalzebra'") != 1 {
 		t.Fatal("appended message missing")
 	}
-	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 5 {
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != len(stageOrder) {
 		t.Fatal("deferred library work was not marked")
 	}
 	after, _ = queryMaps(server.Catalog.DB, "SELECT * FROM source_states")
@@ -755,7 +755,8 @@ func TestVerificationReadsOffHostCapturesAfterSourceRemoval(t *testing.T) {
 	t.Cleanup(func() { server.stop(5 * time.Second) })
 	summary := server.verifyAllInputs(t.Context(), "retained", nil)
 	if summary.Checked != 1 || summary.Passed != 1 || summary.Errors != 0 || summary.Deferred != 0 {
-		t.Fatalf("retained off-host verification: %+v", summary)
+		checks, _ := queryMaps(catalog.DB, "SELECT source_name,unit,outcome,detail FROM sync_verifications")
+		t.Fatalf("retained off-host verification: %+v; checks=%+v", summary, checks)
 	}
 	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_verifications WHERE host_id='host-a' AND outcome='passed'") != 1 {
 		t.Fatal("verification was attributed to the wrong host")

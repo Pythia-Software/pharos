@@ -258,14 +258,6 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
   return {refresh};
 }
 
-// Keep disclosure controls focusable while their editors are collapsed.
-for (const button of document.querySelectorAll('[data-layout-disclosure]')) {
-  button.onclick = () => {
-    const expanded = button.getAttribute('aria-expanded') !== 'true';
-    button.setAttribute('aria-expanded', String(expanded));
-    button.querySelector('span').textContent = expanded ? 'Collapse' : 'Expand';
-    const title = document.getElementById(button.getAttribute('aria-controls')).parentElement.querySelector('h3').textContent;
-    button.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} ${title}`);
-    document.getElementById(button.getAttribute('aria-controls')).hidden = !expanded;
-  };
+function quickStatsSettingsURL() {
+  return '/settings/layout?' + new URLSearchParams({disclosures: JSON.stringify({quickStatsSettings: true}), reveal: 'section:quickStatsSettings'});
 }

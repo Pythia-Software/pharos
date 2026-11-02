@@ -43,6 +43,7 @@ const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), rat
 const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id", "Units"), { id: "idea_peak", op: "max" as const, field: "level", label: "Peak recorded concurrency" }];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
+  model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
   tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
   writing: [

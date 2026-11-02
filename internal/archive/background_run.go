@@ -18,6 +18,11 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		return s.backgroundCapture(ctx, op, "sources", names)
 	case "preserve":
 		return s.backgroundCapture(ctx, op, "preserve", nil)
+	case "verification":
+		ctx, child := op.childFrom(ctx, OperationSpec{Kind: "index.verify", Variant: "queued", Trigger: triggerChained})
+		err := s.verifyQueued(ctx, child)
+		child.Finish(err)
+		return err
 	case "upgrade":
 		ctx, child := op.Child(OperationSpec{Kind: "library.upgrade", Trigger: triggerChained})
 		err := s.Catalog.RunUpgrade(ctx, nil)

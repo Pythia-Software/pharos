@@ -6,8 +6,6 @@
   let activeRun = null;
   let runningIds = new Set();
   let openIssues = [];
-  const openPanels = new Set();
-  const initializedPanels = new Set();
   const node = (tag, text, className = '') => {
     const element = document.createElement(tag);
     element.textContent = text;
@@ -67,19 +65,14 @@
     return element;
   };
   const panel = (title, key, initiallyOpen = false) => {
-    if (!initializedPanels.has(key)) {
-      initializedPanels.add(key);
-      if (initiallyOpen) openPanels.add(key);
-    }
     const element = node('details', '', 'sync-panel sync-disclosure');
-    element.open = openPanels.has(key);
+    element.dataset.viewKey = 'sync:' + key;
+    element.dataset.viewDefault = String(Boolean(initiallyOpen));
+    element.setAttribute('data-view-capture-initial', '');
+    element.open = Boolean(initiallyOpen);
     const summary = node('summary', title);
     summary.dataset.syncFocus = key;
     element.append(summary);
-    element.ontoggle = () => {
-      if (!element.isConnected) return;
-      if (element.open) openPanels.add(key); else openPanels.delete(key);
-    };
     return element;
   };
   const style = node('style', `
@@ -101,7 +94,7 @@
     .sync-metric{background:var(--panel);padding:14px 16px;min-width:0}
     .sync-metric span{display:block;color:var(--muted);font-size:var(--fs-sm)}
     .sync-metric strong{display:block;font-size:var(--fs-2xl);font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
-    .sync-result{display:inline-block;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
+    .sync-result{display:inline-block;max-width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
     .sync-result.attention{color:var(--warn);border-color:var(--warn)}
     .sync-disclosure>summary{cursor:pointer;font-weight:600;font-size:var(--fs-md)}
     .sync-disclosure[open]>summary{margin-bottom:16px}
@@ -246,7 +239,7 @@
     if (focused) [...dashboard.querySelectorAll('[data-sync-focus]')].find(element => element.dataset.syncFocus === focused)?.focus({preventScroll: true});
   }
 
-  async function refresh() {
+  async function refresh({automatic = false} = {}) {
     if (busy) return;
     busy = true;
     try {
@@ -254,7 +247,10 @@
       renderHeader(activity);
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
-        status = await call('/api/sync/status');
+        const latest = await call('/api/sync/status');
+        // Keep history still while it is being reviewed. Page visits, Refresh
+        // and actions replace it; activity, source status and alerts stay live.
+        status = automatic && status?.settings ? {...latest, history: status.history} : latest;
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
@@ -266,9 +262,9 @@
         window.pharosLibrary?.renderAlerts?.();
       }
     } catch (error) { if (!status) showError(error.message); }
-    finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
+    finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
   }
-  window.addEventListener('pharos:route', refresh);
+  window.addEventListener('pharos:route', () => refresh());
   window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};

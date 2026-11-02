@@ -44,7 +44,11 @@
 .bg-detail{margin:8px 0 0 15px;padding:10px 12px;border-radius:6px;background:var(--panel);font-size:var(--fs-sm)}
 .bg-detail p{margin:0 0 6px}
 .bg-detail .bg-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
-.bg-detail select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:4px 6px;background:var(--bg);color:var(--ink)}
+.bg-detail select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:4px 6px;background:var(--bg);color:var(--ink);max-width:100%}
+.bg-detail .bg-row>label{min-width:0;max-width:100%}
+#backgroundSchedule .bg-detail .bg-button{max-width:100%;white-space:normal;text-align:left}
+.bg-detail .bg-moves{gap:6px}
+#backgroundSchedule .bg-moves .bg-button{padding:4px 8px;border-radius:4px;font-size:var(--fs-xs);font-weight:500;line-height:1.3}
 .bg-error{color:var(--bad)}
 .bg-sources{border:0;margin:6px 0 0;padding:0}
 .bg-sources legend{font-weight:600;padding:0}
@@ -136,7 +140,7 @@
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
     return {mode: document.settings?.mode || view.mode, settings: document.settings || {}, columns, everything: view.everything?.text || '',
-      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document)};
+      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null};
   }
 
   // On battery: each cadence's choice, and the low-battery rule. Null on a
@@ -162,6 +166,7 @@
       dot: DOTS[item.state] ?? '', state: item.state, text: stateText(item, now), error: item.error || '',
       cost: item.cost ? {class: item.cost.class || '', text: item.cost.text || ''} : null,
       choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed),
+      moves: item.cadence_moves || [], temporary: item.temporary_cadence || null,
       sources: Array.isArray(item.sources) ? item.sources.map(source => ({name: source.name, selected: Boolean(source.selected)})) : null};
   }
 
@@ -176,7 +181,7 @@
   }
 
   // ---- rendering
-  let document_ = null, expanded = null, inFlight = false, fetchedAt = 0, sheet = null;
+  let document_ = null, inFlight = false, fetchedAt = 0, sheet = null, labelsSaving = false, labelsRevision = 0;
   const node = (tag, className = '', text) => {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -255,17 +260,20 @@
   function renderItem(item) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
-    const open = expanded === item.id;
+    const open = window.pharosView?.read('disclosures', {})['background:' + item.id] === true;
     const head = node('button', 'bg-item-head');
     head.type = 'button';
+    head.dataset.viewKey = 'background:' + item.id;
+    head.dataset.viewDefault = 'false';
+    head.setAttribute('aria-controls', 'background-detail-' + item.id);
     head.setAttribute('aria-expanded', String(open));
     head.append(node('span', `bg-dot ${item.dot}`), node('span', 'bg-name', item.label));
     if (item.cost?.class) head.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
-    head.onclick = () => { expanded = open ? null : item.id; render(); };
     entry.append(head, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
     if (item.note) entry.append(node('span', 'bg-note', item.note));
-    if (!open) return entry;
     const detail = node('div', 'bg-detail');
+    detail.id = 'background-detail-' + item.id;
+    detail.hidden = !open;
     const line = (label, value) => { const p = node('p'); p.append(node('strong', '', `${label}: `), value); return p; };
     detail.append(line('Feeds', item.feeds), line('Usually takes', item.cost?.text || 'not measured yet'));
     if (item.why) detail.append(node('p', 'muted', item.why));
@@ -273,7 +281,7 @@
     if (item.sources?.length) detail.append(sourcePicker(item.sources));
     const row = node('div', 'bg-row');
     if (item.choices.length) {
-      const label = node('label', '', 'Run ');
+      const label = node('label', '', item.temporary ? 'Normally ' : 'Run ');
       label.append(select(item.choices.map(choice => [choice.value, choice.label]), item.override, value => save({overrides: {[item.id]: value}}), `When ${item.label} runs`));
       row.append(label);
     }
@@ -283,6 +291,18 @@
       refresh(true);
     }));
     detail.append(row);
+    if (item.temporary) {
+      const expiry = new Date(item.temporary.expires_at).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+      detail.append(line('Temporary schedule', `${item.cadenceLabel} until ${expiry}`));
+    }
+    if (item.moves.length || item.temporary) {
+      const moves = node('div', 'bg-row bg-moves');
+      for (const move of item.moves) {
+        moves.append(button(move.label, () => save({temporary_cadences: {[item.id]: move.cadence}})));
+      }
+      if (item.temporary) moves.append(button('End temporary schedule', () => save({temporary_cadences: {[item.id]: ''}})));
+      detail.append(moves);
+    }
     entry.append(detail);
     return entry;
   }
@@ -311,13 +331,15 @@
 
   function render() {
     const target = host();
-    if (!target || !document_) return;
+    if (!target || !document_ || labelsSaving) return;
     // A select being used keeps its value until it is changed.
     if (target.contains(document.activeElement) && document.activeElement.matches('select')) return;
     const focused = document.activeElement?.closest?.('[data-item]')?.dataset.item;
+    const labelsFocused = document.activeElement?.id === 'labelsEnabled';
     const model = scheduleModel(document_);
     if (!model) return;
     const content = node('div');
+    if (model.labels) content.append(renderLabels(model.labels));
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
@@ -396,15 +418,59 @@
       node('p', 'muted', 'Background work stops as soon as you eject the library or quit Pharos, and carries on where it left off.'));
     content.append(considerate);
     target.replaceChildren(...content.childNodes);
+    if (labelsFocused) target.querySelector('#labelsEnabled')?.focus({preventScroll: true});
     if (focused) target.querySelector(`[data-item="${window.CSS.escape(focused)}"] .bg-item-head`)?.focus({preventScroll: true});
+  }
+
+  function renderLabels(settings) {
+    const card = node('section', 'bg-card');
+    const description = node('p', 'muted', 'Label messages locally and highlight requests, replies and feedback in the conversation reader. This setting follows the library. Turning it off keeps existing labels; a run in progress finishes.');
+    description.id = 'messageLabelsDescription';
+    const label = node('label', 'bg-check');
+    const box = node('input');
+    box.id = 'labelsEnabled';
+    box.type = 'checkbox';
+    box.setAttribute('role', 'switch');
+    box.setAttribute('aria-describedby', 'messageLabelsDescription messageLabelsStatus');
+    box.checked = settings.enabled;
+    box.disabled = !settings.can_change;
+    const status = node('p', 'muted', settings.status);
+    status.id = 'messageLabelsStatus';
+    status.setAttribute('role', 'status');
+    box.onchange = async () => {
+      const focused = document.activeElement === box;
+      labelsSaving = true;
+      labelsRevision++;
+      box.disabled = true;
+      let saved = false;
+      try {
+        document_ = await call('/api/labels/settings', {enabled: box.checked});
+        saved = true;
+      } catch (error) {
+        box.checked = settings.enabled;
+        status.textContent = error.message;
+        toast(error.message);
+      } finally {
+        labelsSaving = false;
+        box.disabled = !settings.can_change;
+      }
+      if (saved) render();
+      if (focused && (document.activeElement === box || document.activeElement === document.body)) host()?.querySelector('#labelsEnabled')?.focus({preventScroll: true});
+    };
+    label.append(box, 'Enable message labels');
+    card.append(node('h3', '', 'Message labels'), description, label, status);
+    return card;
   }
 
   async function refresh(force = false) {
     const target = host();
-    if (!target || inFlight || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
+    if (!target || inFlight || labelsSaving || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
     inFlight = true;
+    const revision = labelsRevision;
     try {
-      document_ = await call('/api/background');
+      const next = await call('/api/background');
+      if (revision !== labelsRevision || labelsSaving) return;
+      document_ = next;
       fetchedAt = Date.now();
       render();
     } catch (error) {

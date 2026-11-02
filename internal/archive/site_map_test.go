@@ -631,6 +631,26 @@ func TestSiteLinkTodayWindows(t *testing.T) {
 
 func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	site := testSiteMap(t)
+	for _, sample := range []struct{ page, key string }{
+		{"settings/layout", "quickStatsSettings"}, {"settings/layout", "headerSettings"}, {"settings/layout", "menuBarPreferences"},
+		{"settings/sync", "sync:diagnostics"}, {"settings/sync", "sync:forecast:run-1"}, {"settings/sync", "background:writing"},
+		{"settings/backups", "cloud:schedule:destination-1"}, {"settings", "library:drive-health"}, {"analyze/carbon", "carbon:row:large:output"},
+	} {
+		for _, open := range []bool{true, false} {
+			result, err := site.linkTool(map[string]any{"page": sample.page, "view": map[string]any{"disclosures": map[string]any{sample.key: open}}, "reveal": "section:" + sample.key})
+			if err != nil {
+				t.Fatal(err)
+			}
+			roundTrip(t, site, "disclosure "+sample.key, result["url"].(string))
+		}
+	}
+	for _, overlay := range []string{"none", "drive"} {
+		result, err := site.linkTool(map[string]any{"page": "settings", "view": map[string]any{"overlay": overlay, "disclosures": map[string]any{"status:cadence:hourly": true}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		roundTrip(t, site, "drive overlay "+overlay, result["url"].(string))
+	}
 	args := linkArgs(t, `{"page":"analyze/query/usage","query":{"select":[{"field":"model","width":240}],"fitToScreen":false,"where":[{"field":"last_usage_at","op":">=","value":"-7d"}],"orderBy":[{"field":"model","dir":"desc"}],"limit":5,"offset":10,"aggregations":[{"id":"tokens","op":"sum","field":"total_tokens","groupBy":["model"]}]},"view":{"disclosures":{"query:usage:layout":true}},"highlight":["section:summary","row:usage-1"],"reveal":"control:disclosures"}`)
 	result, err := site.linkTool(args)
 	if err != nil {
@@ -669,6 +689,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal("non-timestamp window accepted")
 	}
 	for _, input := range []string{
+		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"reader_page":"1","reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
 	} {
@@ -677,6 +698,11 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 			t.Fatal(input, err)
 		}
 		roundTrip(t, site, "view", result["url"].(string))
+	}
+	for _, state := range []string{`{"view":"unknown"}`, `{"hours":0}`, `{"hourA":2}`, `{"hiddenPercentiles":["p99"]}`, `{"timezone":"unknown/zone"}`, `{"unknown":true}`} {
+		if _, err := site.linkTool(linkArgs(t, `{"page":"analyze/thinking-detail","view":{"thinking":`+state+`}}`)); err == nil {
+			t.Fatal("invalid Thinking view accepted", state)
+		}
 	}
 	nested, err := site.linkTool(map[string]any{"url": "/work/w/conversation/c?conversation=c&reveal=message%3Am"})
 	if err != nil {
@@ -692,6 +718,138 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		if _, err := site.linkTool(map[string]any{"url": raw}); err == nil {
 			t.Errorf("accepted invalid view %s", raw)
 		}
+	}
+}
+
+// Every Analyze dashboard takes site_link's days and each of its options, and
+// reads them back as the same arguments. A dashboard that agents can reach
+// only through raw view state, or without its range, fails here.
+func TestSiteLinkEveryDashboardTakesItsOptionsAndDays(t *testing.T) {
+	site := testSiteMap(t)
+	dashboards := 0
+	for _, path := range site.nodeOrder {
+		node := site.Nodes[path]
+		if mode, _ := node.Fixed.get("analyze_mode"); mode != "dashboards" {
+			continue
+		}
+		dashboards++
+		links := []map[string]any{{"page": path, "days": 30}, {"page": path, "days": "today"}}
+		for _, option := range node.Options {
+			switch option.Kind {
+			case "where", "window", "days":
+			case "dashboard_chart":
+				for _, view := range site.Analyze.Dashboards[node.Dashboard].viewOrder {
+					links = append(links, map[string]any{"page": path, "options": map[string]any{"view": view}})
+				}
+			default:
+				values := []any{option.Default}
+				if len(option.Values) > 0 {
+					values = nil
+					for _, value := range option.Values {
+						values = append(values, value.Value)
+					}
+				}
+				for _, value := range values {
+					options := map[string]any{option.Name: siteString(value)}
+					for _, need := range option.Requires {
+						options[need.Option] = siteString(need.Values[0])
+					}
+					links = append(links, map[string]any{"page": path, "options": options})
+				}
+			}
+		}
+		if len(links) == 2 {
+			t.Errorf("%s takes no options: give it a catalog or options keyed into its state (dashboardLinks in site-map.ts)", path)
+		}
+		for _, args := range links {
+			name := path + " " + compactJSON(args)
+			result, err := site.linkTool(linkArgs(t, compactJSON(args)))
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+				continue
+			}
+			roundTrip(t, site, name, result["url"].(string))
+			read := result["arguments"].(map[string]any)
+			if days, given := args["days"]; given && siteString(read["days"]) != siteString(days) {
+				t.Errorf("%s: reads back days %v", name, read["days"])
+			}
+			if options, given := args["options"].(map[string]any); given {
+				for key, value := range options {
+					if got, _ := read["options"].(map[string]any); got == nil || siteString(got[key]) != siteString(value) {
+						t.Errorf("%s: reads back options %s", name, compactJSON(read["options"]))
+					}
+				}
+			}
+		}
+	}
+	if dashboards < len(site.Analyze.Dashboards)+2 {
+		t.Fatalf("%d dashboard pages", dashboards)
+	}
+}
+
+// The Thinking dashboards keep their controls in one JSON parameter;
+// site_link takes them as options and days, as on the other dashboards.
+func TestSiteLinkThinkingOptionsAndDays(t *testing.T) {
+	site := testSiteMap(t)
+	thinking := func(link string) map[string]any {
+		u, _ := url.Parse(link)
+		var state map[string]any
+		if err := json.Unmarshal([]byte(u.Query().Get("thinking")), &state); err != nil {
+			t.Fatal(link, err)
+		}
+		return state
+	}
+	result, err := site.linkTool(linkArgs(t, `{"page":"analyze/thinking-detail","options":{"view":"wait-box","groupBy":"preceding_tool","model":"claude-opus-5-5"},"days":30,"view":{"thinking":{"hiddenPercentiles":["p95"]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := result["url"].(string)
+	if got := compactJSON(thinking(link)); got != `{"groupBy":"preceding_tool","hiddenPercentiles":["p95"],"model":"claude-opus-5-5","range":"30d","view":"wait-box"}` {
+		t.Fatal(got)
+	}
+	if summary := result["summary"].(string); !strings.Contains(summary, "box plots by Preceding tool") || !strings.Contains(summary, "model claude-opus-5-5") || !strings.Contains(summary, "last 30 days") {
+		t.Fatal(summary)
+	}
+	if args := result["arguments"].(map[string]any); compactJSON(args["options"]) != `{"groupBy":"preceding_tool","model":"claude-opus-5-5","view":"wait-box"}` || args["days"] != 30 {
+		t.Fatal(compactJSON(args))
+	}
+	roundTrip(t, site, "thinking options", link)
+	result, err = site.linkTool(linkArgs(t, `{"page":"analyze/thinking-overview","options":{"effort":"high"},"days":"today","filters":[{"field":"harness","op":"=","value":"claude-code"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compactJSON(thinking(result["url"].(string))); got != `{"effort":"high","range":"today"}` {
+		t.Fatal(got)
+	}
+	roundTrip(t, site, "thinking today", result["url"].(string))
+	// The page writes every control, including calendar settings outside the
+	// calendar view; reading its link back gives arguments that resubmit.
+	full := `{"view":"time","groupBy":"none","model":"all","effort":"all","normalization":"share","minimum":0,"period":"day","hours":6,"days":3,"range":"30d","calendarRows":"day","calendarMetric":"raw","hourA":18,"hourB":9,"sortBy":"median","sortDirection":"desc","hiddenPercentiles":[],"session":"","traceScale":"linear","timezone":"America/Denver"}`
+	for _, page := range []string{"thinking-detail", "thinking-overview"} {
+		link := "/analyze?analyze_mode=dashboards&analyze_topic=" + page + "&analyze_data=model_requests&thinking=" + url.QueryEscape(full)
+		read, err := site.linkTool(map[string]any{"url": link})
+		if err != nil {
+			t.Fatal(page, err)
+		}
+		args := read["arguments"].(map[string]any)
+		if options, _ := args["options"].(map[string]any); options["calendarRows"] != nil || args["days"] != 30 {
+			t.Errorf("%s: dormant calendar rows read as an option: %s", page, compactJSON(args))
+		}
+		roundTrip(t, site, "full Thinking state on "+page, link)
+	}
+	for input, want := range map[string]string{
+		`{"page":"analyze/thinking-overview","options":{"view":"histogram"}}`:                                 "options.view",
+		`{"page":"analyze/thinking-detail","options":{"view":"pie"}}`:                                         "options.view",
+		`{"page":"analyze/thinking-detail","options":{"calendarRows":"week"}}`:                                "options.calendarRows",
+		`{"page":"analyze/thinking-detail","days":14}`:                                                        "days",
+		`{"page":"analyze/thinking-detail","options":{"view":"heatmap"},"view":{"thinking":{"view":"time"}}}`: "options.view",
+	} {
+		if _, err := site.linkTool(linkArgs(t, input)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want an error naming %s", input, err, want)
+		}
+	}
+	if _, err := site.linkTool(linkArgs(t, `{"page":"analyze/thinking-detail","options":{"view":"calendar","calendarRows":"week"}}`)); err != nil {
+		t.Error(err)
 	}
 }
 

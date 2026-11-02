@@ -41,8 +41,9 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Codex stores a spawned thread as its own work, linked by parent_id.
-	if _, err := catalog.DB.Exec(`UPDATE conversations SET parent_id=(SELECT id FROM conversations WHERE native_id='review') WHERE native_id='child'`); err != nil {
+	// Codex stores a spawned thread as its own work, linked by parent_id, with
+	// its depth and agent path (a fork without them continues its root).
+	if _, err := catalog.DB.Exec(`UPDATE conversations SET parent_id=(SELECT id FROM conversations WHERE native_id='review'),agent_depth=1,agent_path='/root/worker' WHERE native_id='child'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {

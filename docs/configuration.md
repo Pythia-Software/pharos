@@ -6,6 +6,13 @@ for those flows, independent app/library locations, and verified moves. The
 configuration and beside-app layouts below remain available for existing installs
 and explicit CLI use.
 
+**Settings → App preferences → Pause indexing during queries** is off by default.
+When enabled, indexing and library maintenance yield while interactive queries
+run, including agent queries. Sustained use can delay indexing. The toggle is
+saved with the library and applies without restarting; switching it off resumes
+paused work. Cached views still retain their results throughout an ingest with
+either setting.
+
 The default file is `archive.toml`; override it with `--config` or `PHAROS_CONFIG`. Paths may use `~`.
 Relative paths (`data_dir`, `catalog_path`, `archive_root`, `staging_root`,
 `executable`, and source `path`s) resolve against the directory containing the

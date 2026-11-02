@@ -1,7 +1,9 @@
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import assert from "node:assert/strict";
 import { compactMetricPresentation } from "../../../src/card-presentation";
-import { compactTimelineBuckets } from "../../../src/column-marks";
+import { compactTimelineBuckets, compactTimelineScale, CompactColumns } from "../../../src/column-marks";
 
 test("cumulative card covers start at the selected range, fill idle days and normalize only accumulated amounts", () => {
   const source = [
@@ -176,4 +178,36 @@ test("log scatter disclosure counts nonpositive pairs once and leaves missing da
   clause.display = { kind: "scatter" };
   assert.deepEqual(compactMetricPresentation(input).axisScales, { xScale: { mode: "linear" }, yScale: { mode: "linear" } });
   assert.equal(compactMetricPresentation(input).omittedLogPoints, 0);
+});
+
+test("dashboard covers retain the chart's logarithmic axes", () => {
+  const input = preview({preserveScale:true});
+  const {clause,result} = input.metrics[0];
+  clause.display = {kind:'bar-horizontal',xScale:{mode:'log'}};
+  result.buckets.push({keys:['unpriced'],value:10000,count:5});
+  assert.equal(compactMetricPresentation(input).axisScales.xScale.mode,'log');
+  delete input.preserveScale;
+  assert.equal(compactMetricPresentation(input).axisScales.xScale.mode,'linear');
+});
+
+
+test("percentage timeline labels retain percentage units across scales while shares keep a fixed axis", () => {
+  const buckets = [.25, .5, 1].map((value, index) => ({ key: String(index), date: new Date(2026, 9, index + 1), values: { rate: value } }));
+  const series = [{ key: "rate", label: "Failure rate", color: "red" }];
+  const linear = compactTimelineScale(buckets, series, { scale: "linear" });
+  for (const scale of ["linear", "logarithmic", "half"]) {
+    const options = { unit: "percent", scale, percent: false, prepared: true };
+    const axis = compactTimelineScale(buckets, series, options);
+    assert.equal(axis.y(1), 100);
+    if (scale !== "linear") assert.ok(axis.y(.5) > linear.y(.5), `${scale} is not a linear percentage axis`);
+    const html = renderToStaticMarkup(React.createElement(CompactColumns, { buckets, series, ...options }));
+    const text = html.replace(/<[^>]*>/g, " ");
+    assert.match(text, /0%/);
+    assert.match(text, /100%/);
+    assert.match(html, /Failure rate: 50%/);
+  }
+  const partial = buckets.slice(0, 2);
+  const shares = compactTimelineScale(partial, series, { percent: true, scale: "logarithmic" });
+  assert.equal(shares.y(.5), 50, "share-of-total charts keep the whole 0–100% axis");
+  assert.deepEqual(shares.ticks, [.25, .5, .75, 1]);
 });

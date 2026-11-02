@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/labeler/labelertest"
 )
 
 // testDurability skips the drive flushes that durableCatalog makes every
@@ -33,6 +35,10 @@ func TestMain(m *testing.M) {
 	// are the CLI's, not test flags.
 	if os.Getenv(labelingFakeEnv) != "" {
 		os.Exit(labelingFakeCLI())
+	}
+	// A fake labeler worker is this binary too (see labelertest.FakeWorker).
+	if mode := os.Getenv(labelertest.FakeWorkerEnv); mode != "" {
+		os.Exit(labelertest.FakeWorker(mode))
 	}
 	flag.Parse()
 	if code, ran := runInProcesses(); ran {

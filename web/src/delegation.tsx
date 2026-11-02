@@ -337,8 +337,7 @@ function ColumnPicker({
     commit(id, next);
   }
   return (
-    <ViewDisclosure viewKey="delegation:columns" className="delegation-columns">
-      <summary data-pharos-target="control:delegation_columns">Columns · {columns.length}</summary>
+    <ViewDisclosure viewKey="delegation:columns" className="delegation-columns" summary={<>Columns · {columns.length}</>} summaryTarget="control:delegation_columns">
       <div>
         <p>
           Choose columns. Drag handles to change their order in both families.
@@ -801,11 +800,10 @@ export function DelegationExplorer({
             </span>
           )}
           {childSessions.length > 0 && (
-            <ViewDisclosure viewKey="delegation:scope">
-              <summary>
+            <ViewDisclosure viewKey="delegation:scope" summary={<>
                 {childSessions.length}
                 {data?.focus_truncated ? "+" : ""} child sessions
-              </summary>
+              </>}>
               <div className="delegation-child-menu">
                 {childSessions.map((n) => (
                   <button key={n.id} data-session-id={n.id} onClick={() => openNode(n)}>
@@ -1277,8 +1275,7 @@ export function DelegationExplorer({
                   </button>
                 </div>
               )}
-              <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions">
-                <summary>Metric definitions & evidence</summary>
+              <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Metric definitions & evidence">
                 <p>
                   Self is one execution. Self + children includes distinct
                   ownership descendants. Workspace totals count each canonical
@@ -2008,8 +2005,7 @@ function ParallelActivity({
         />
       )}
       {selected && (
-        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions">
-          <summary>Selected session · inferred evidence episodes</summary>
+        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected session · inferred evidence episodes">
           <p>
             Clusters use tool/request timestamps and the first and last session
             message timestamps. A gap over 30 minutes starts a new cluster;

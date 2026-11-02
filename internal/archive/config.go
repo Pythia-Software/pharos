@@ -67,6 +67,10 @@ type Config struct {
 	// uncompressed (docs/capture-compression.md).
 	CaptureCompressAfterDays int
 	CaptureRecoveryID        string
+
+	// Labels configures the local message labeler (docs/local-labeler.md),
+	// off unless labels_enabled is set.
+	Labels LabelerSettings
 }
 
 func defaultConfig(path string) Config {
@@ -198,6 +202,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.CPUIDLECeiling = floatValue(root, "cpu_idle_ceiling", config.CPUIDLECeiling)
 	config.IOMBPSCeiling = floatValue(root, "io_mbps_ceiling", config.IOMBPSCeiling)
 	config.YieldPollSeconds = floatValue(root, "yield_poll_seconds", config.YieldPollSeconds)
+	config.Labels = labelerSettingsFrom(root, base)
 	for index := range config.Sources {
 		config.Sources[index].File = path
 	}
@@ -394,6 +399,12 @@ func SetSourceEnabled(path, name string, enabled bool) error {
 // source tables. It is used by the launcher so Finder can start the embedded
 // Go service without depending on a shell PATH.
 func SetRootString(path, key, value string) error {
+	return setRootValue(path, key, fmt.Sprintf("%q", value))
+}
+
+// setRootValue writes a TOML scalar supplied by the caller, preserving the
+// other assignments and tables.
+func setRootValue(path, key, value string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -406,7 +417,7 @@ func SetRootString(path, key, value string) error {
 			break
 		}
 	}
-	replacement := fmt.Sprintf("%s = %q\n", key, value)
+	replacement := fmt.Sprintf("%s = %s\n", key, value)
 	found := -1
 	for index := 0; index < tableAt; index++ {
 		name, _, ok := strings.Cut(stripTOMLComment(strings.TrimSpace(lines[index])), "=")
@@ -418,6 +429,9 @@ func SetRootString(path, key, value string) error {
 	if found >= 0 {
 		lines[found] = replacement
 	} else {
+		if tableAt > 0 && !strings.HasSuffix(lines[tableAt-1], "\n") {
+			lines[tableAt-1] += "\n"
+		}
 		lines = append(lines[:tableAt], append([]string{replacement}, lines[tableAt:]...)...)
 	}
 	temporary := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".pharos.tmp")

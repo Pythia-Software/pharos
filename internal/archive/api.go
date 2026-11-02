@@ -217,6 +217,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.life.requests.Done()
+	if interactiveRead(r) {
+		defer s.Catalog.beginInteractiveRead(r.Context())()
+	}
 	debug.SetPanicOnFault(true) // see exitOnFault
 	defer func() {
 		if value := recover(); value != nil {
@@ -315,6 +318,8 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
 	"/assets/ask-model.js":         {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-glow.js":          {"ask-glow.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-prompt.js":        {"ask-prompt.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
@@ -326,6 +331,10 @@ var uiAssets = map[string]struct{ name, contentType string }{
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
+	case path == "/api/markdown-favicon":
+		s.markdownFavicon(w, r)
 	case isUIPage(path):
 		writeHTML(w, appHTML())
 	case strings.HasPrefix(path, "/conversation/"):
@@ -527,6 +536,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, map[string]any{"id": "environment:web", "label": "Web (device unknown)", "kind": "web"})
 		writeJSON(w, map[string]any{"machines": rows}, 200)
+	case path == "/api/thinking":
+		s.handleThinking(w, r)
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
@@ -739,6 +750,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postFindings(w, r, body)
 	case path == "/api/preferences":
 		s.postPreferences(w, r, body)
+	case path == "/api/labels/settings":
+		s.postLabelsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":

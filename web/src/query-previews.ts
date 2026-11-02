@@ -15,6 +15,8 @@ import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } 
 import { activityPresentation } from "./machine-activity-data";
 import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
+import { loadDashboardCardPreview } from "./dashboard-card-preview";
+import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -30,9 +32,11 @@ export type QueryPreview = {
   ranking?: { label: string; value: number; color: string }[];
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
   timeline?: CardCover["timeline"];
+  dashboardTrend?: CompactTimelineOptions;
+  preserveScale?: boolean;
   study?: HumanStudyPreview;
 };
-type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
+type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
@@ -337,6 +341,19 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 // canonical revisions; an aborted caller never lends its signal to another run.
 export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return;
+  const dashboards = jobs.filter(job => job.options?.dashboard);
+  if (dashboards.length) {
+    const pending = [...dashboards];
+    const work = async () => {
+      while (pending.length && !signal?.aborted) {
+        const job = pending.shift()!;
+        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal); if (!signal?.aborted) publish(job.id, preview); }
+        catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
+      }
+    };
+    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal)]);
+    return;
+  }
   if (jobs.some(job => [...(job.query.grouping?.keys ?? []), ...(job.query.aggregations ?? []).flatMap(metric => metric.groupBy), ...(job.options?.recipe?.exploration?.keys ?? [])].some(field => field === "machine_id" || field === "execution_machine_id"))) await loadOriginMetadata();
   const contexts = new Map<QueryDataset, Promise<Context>>();
   function context(job: PreviewJob) {

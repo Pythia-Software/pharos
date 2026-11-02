@@ -1,6 +1,8 @@
 package archive
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -10,6 +12,168 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {
+	useHost(t, "host-a")
+	server, units := stableCodexDirectory(t, 2)
+	// A single oversized input beside a small one; lower the audit limit
+	// instead of manufacturing thousands of conversations.
+	appendSourceFile(t, units[0].ID, strings.Repeat(" ", 64<<10)+"\n")
+	stamp := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(units[0].ID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if result := ingestSource(t, server.Catalog, units[0].Source); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	adapter, _ := MakeAdapter(units[0].Source)
+	units = nil
+	if err := adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
+		units = append(units, unitOf(adapter.Config(), parts, false))
+		return true
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &automaticAuditBytes, int64(64<<10))
+	var verified string
+	if err := server.Catalog.DB.QueryRow("SELECT verified_at FROM sync_verification_progress WHERE unit=?", units[0].ID).Scan(&verified); err != nil {
+		t.Fatal(err)
+	}
+	pool := newAuditPool(server.Catalog)
+	pool.units = units
+	result := server.Catalog.auditPool(t.Context(), pool, "fallback")
+	if result.Outcome != "passed" || len(result.Attempts) != 2 || result.Attempts[0].Reason != "evidence_size" || result.Unit != units[1].ID {
+		t.Fatalf("an oversized candidate prevented verification of a small one: %+v", result)
+	}
+	var retained string
+	if err := server.Catalog.DB.QueryRow("SELECT verified_at FROM sync_verification_progress WHERE unit=?", units[0].ID).Scan(&retained); err != nil || retained != verified {
+		t.Fatalf("an attempt advanced completed verification: %q -> %q (%v)", verified, retained, err)
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verification_progress WHERE heavy=1") != 1 {
+		t.Fatal("large check was not durably queued")
+	}
+	restored := newAuditPool(server.Catalog)
+	restored.consider(units[0])
+	if len(restored.units) != 0 {
+		t.Fatal("a queued large check consumed the next quick audit")
+	}
+	if !server.runBackgroundPass(t.Context(), "requested", []string{"verification"}, nil) {
+		t.Fatal("larger verification pass did not run")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verification_progress WHERE heavy=1") != 0 {
+		t.Fatal("completed larger check remained queued")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verifications WHERE outcome='passed'") != 2 {
+		t.Fatal("larger pass did not verify the queued input")
+	}
+
+	// Cancellation leaves durable work for the next pass, with no completed
+	// check invented for an input the cancelled pass never read.
+	if err := server.Catalog.recordVerification(units[0], auditResult{Outcome: "deferred", Reason: "evidence_size"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if !server.runBackgroundPass(ctx, "requested", []string{"verification"}, nil) {
+		t.Fatal("cancelled pass was not admitted")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verification_progress WHERE heavy=1") != 1 {
+		t.Fatal("cancellation discarded pending verification")
+	}
+
+	for _, kind := range []string{"codex", "antigravity"} {
+		t.Run("retained-"+kind, func(t *testing.T) {
+			root := t.TempDir()
+			if kind == "antigravity" {
+				root = antigravityFixture(t)
+			} else {
+				writeSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), codexLines("queued-session", 1))
+				db, err := sql.Open("sqlite", filepath.Join(root, "state_1.sqlite"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				execSQL(t, db, "CREATE TABLE threads(id TEXT,name TEXT);INSERT INTO threads VALUES('queued-session','Queued name')")
+				db.Close()
+			}
+			source := SourceConfig{Name: kind, Kind: kind, Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+			server := automaticTestServer(t, source)
+			override(t, &automaticAuditBytes, int64(1))
+			var queued string
+			func() {
+				adapter, err := MakeAdapter(source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				input, err := server.Catalog.acquireRetainedInput(t.Context(), adapter, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer input.Close()
+				if result := server.Catalog.IngestContext(t.Context(), input.Adapter, nil); result.Error != nil {
+					t.Fatal(result.Error)
+				}
+				pool := newAuditPool(server.Catalog)
+				if err := input.Adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
+					unit := unitOf(input.Adapter.Config(), parts, false)
+					unit.Reader = input.Adapter
+					pool.units = append(pool.units, unit)
+					return true
+				}, nil); err != nil {
+					t.Fatal(err)
+				}
+				if len(pool.units) != 1 || !strings.HasPrefix(pool.units[0].ID, "sqlite:") {
+					t.Fatalf("fixture did not discover a retained database group: %+v", pool.units)
+				}
+				queued = pool.units[0].ID
+				if result := server.Catalog.auditPool(t.Context(), pool, "retained-queue"); result.Outcome != "deferred" || result.Reason != "evidence_size" {
+					t.Fatalf("retained group did not enter the larger-check queue: %+v", result)
+				}
+			}() // Release the original reader before the worker rediscovers it.
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verification_progress WHERE unit=? AND heavy=1", queued) != 1 {
+				t.Fatal("retained group was not durably queued")
+			}
+			if !server.runBackgroundPass(t.Context(), "requested", []string{"verification"}, nil) {
+				t.Fatal("retained group verification pass did not run")
+			}
+			var outcome, reason string
+			var pending int
+			if err := server.Catalog.DB.QueryRow(`SELECT v.outcome,p.heavy,COALESCE(p.reason,'') FROM sync_verifications v
+				JOIN sync_verification_progress p USING(host_id,source_name,unit) WHERE v.unit=?`, queued).Scan(&outcome, &pending, &reason); err != nil {
+				t.Fatal(err)
+			}
+			if outcome != "passed" || pending != 0 {
+				t.Fatalf("available retained group remained pending: outcome=%s heavy=%d reason=%s", outcome, pending, reason)
+			}
+		})
+	}
+}
+
+func TestAutomaticAuditBoundsAttemptsAndSharesCancellation(t *testing.T) {
+	useHost(t, "host-a")
+	server, units := stableCodexDirectory(t, 2)
+	pool := newAuditPool(server.Catalog)
+	pool.units = nil
+	for range automaticAuditAttempts + 1 {
+		unit := units[0]
+		unit.Bytes = automaticAuditBytes + 1
+		pool.units = append(pool.units, unit)
+	}
+	result := server.Catalog.auditPool(t.Context(), pool, "attempt-bound")
+	if len(result.Attempts) != automaticAuditAttempts || result.Outcome != "deferred" {
+		t.Fatalf("unbounded fallback: %+v", result)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	previous := parseHook
+	t.Cleanup(func() { parseHook = previous })
+	parseHook = func(string) { cancel() }
+	pool = newAuditPool(server.Catalog)
+	pool.units = units
+	result = server.Catalog.auditPool(ctx, pool, "cancel-fallback")
+	if len(result.Attempts) != 1 || result.Reason != "cancelled" {
+		t.Fatalf("cancellation did not stop the shared sampling budget: %+v", result)
+	}
+}
 
 // Tests of the independent audit and verification of synced inputs
 // (incremental_audit.go).
@@ -31,6 +195,9 @@ func TestReferenceAuditIgnoresMaterializedDeferredToolCube(t *testing.T) {
 	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM tool_call_cube") == 0 {
 		t.Fatal("fixture has no materialized tool cube")
 	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM tool_query_facts") == 0 {
+		t.Fatal("fixture has no materialized tool query facts")
+	}
 	unit := firstSyncUnit(t, server.Catalog, source)
 	if result := server.Catalog.auditUnit(t.Context(), unit, "cube", automaticAuditBytes); result.Outcome != "passed" {
 		t.Fatalf("deferred cube broke immediate reference verification: %+v", result)
@@ -46,6 +213,25 @@ func TestReferenceAuditIgnoresMaterializedDeferredToolCube(t *testing.T) {
 	if result := server.Catalog.auditUnit(t.Context(), unit, "legacy", automaticAuditBytes); result.Outcome != "passed" {
 		t.Fatalf("an old tool-output posting failed reference verification: %+v", result)
 	}
+	// Legacy JSON null means no aliases, just like the current empty array.
+	// An actual extra alias remains a detectable source-data mismatch.
+	execTx(t, server.Catalog.DB, "UPDATE conversations SET aliases_json='null'")
+	if result := server.Catalog.auditUnit(t.Context(), unit, "legacy-aliases", automaticAuditBytes); result.Outcome != "passed" {
+		t.Fatalf("equivalent empty aliases failed reference verification: %+v", result)
+	}
+	execTx(t, server.Catalog.DB, `UPDATE conversations SET aliases_json='["unexpected-alias"]'`)
+	if result := server.Catalog.auditUnit(t.Context(), unit, "alias-corruption", automaticAuditBytes); result.Outcome != "mismatch" || !slices.Contains(result.Differences, "conversations") {
+		t.Fatalf("alias corruption was hidden: %+v", result)
+	}
+	var toolName string
+	if err := server.Catalog.DB.QueryRow("SELECT tool_name FROM tool_calls LIMIT 1").Scan(&toolName); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, server.Catalog.DB, "UPDATE conversations SET aliases_json='[]'", "UPDATE tool_calls SET tool_name='damaged-tool'")
+	if result := server.Catalog.auditUnit(t.Context(), unit, "tool-corruption", automaticAuditBytes); result.Outcome != "mismatch" || !slices.Contains(result.Differences, "tool_calls") {
+		t.Fatalf("tool corruption was hidden by deferred query facts: %+v", result)
+	}
+	execTx(t, server.Catalog.DB, "UPDATE tool_calls SET tool_name="+sqlQuote(toolName))
 	if _, err := server.Catalog.DB.Exec("DELETE FROM messages_trigram"); err != nil {
 		t.Fatal(err)
 	}

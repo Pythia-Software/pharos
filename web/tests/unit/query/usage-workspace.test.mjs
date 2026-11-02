@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toMetricQuery, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
+import modelRequests from "../../../../schemas/model_requests.schema.json";
 import tl1Attempts from "../../../../schemas/tl1_attempts.schema.json";
 import usage from "../../../../schemas/usage.schema.json";
 import conversationActivity from "../../../../schemas/conversation_activity.schema.json";
@@ -20,7 +21,7 @@ import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog.ts";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
 // A dashboard's trend clause, as its supporting query carries it.
 const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Date.parse("2026-10-20T12:00:00Z") }).supporting.aggregations[0];
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
@@ -169,13 +170,13 @@ test("dashboard previews distinguish source and group filters and retain custom 
 });
 
 test("all eight dashboards offer four distinct native queries that retain source scope", () => {
-  const documents = { usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, mcp_calls: mcpCalls };
+  const documents = { model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, mcp_calls: mcpCalls };
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
     ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
     ["skills", "skill_usages", trendClause(skillsAnalysisCatalog, { metric: "records", split: "skill_name" })],
-    ["time", "tool_calls", trendClause(agentTimeAnalysisCatalog, { metric: "time", split: "activity" })],
+    ["time", "tool_calls", trendClause(toolTimeAnalysisCatalog, { metric: "time", split: "activity" })],
     ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" }],
     ["tools", "tools", analysisQuery(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_category" }, []).clause],
     ["mcp", "mcp_calls", analysisQuery(mcpAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }, []).clause],
@@ -225,7 +226,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -255,7 +256,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = { tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const schemas = { model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -499,7 +500,7 @@ import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
 
 test("Analyze defaults and Details cover every dataset without changing explicit saved projections", () => {
-  const documents = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), details = usageDetailsSchema(schema, dataset);
     assert.ok(details);
@@ -517,7 +518,7 @@ test("Analyze defaults and Details cover every dataset without changing explicit
 });
 
 test("Analyze keeps every drilldown after the selected data and before native Detail", () => {
-  const documents = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const original = loadSchema(document), schema = usageQuerySchema(original, dataset);
     const saved = { ...EMPTY_QUERY, select: [{ field: ITEM_DETAILS_COLUMN }, { field: "id", width: 175 }] };
@@ -710,7 +711,7 @@ test("dashboard Today uses its pinned timezone and reports an invalid zone", () 
   assert.equal(read().where.find(term => term.op === ">=").value, "2026-11-03T15:00:00.000Z");
   const dashboard = read();
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: dashboard.where }));
-  const supporting = analysisQuery(agentTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
+  const supporting = analysisQuery(toolTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
   const queryParams = new URL(usageWorkspaceURL({ mode: "query", dataset: "tool_calls", query: supporting }, params), "http://localhost").searchParams;
   const window = readRollingWindow(queryParams, "tool_calls");
   assert.equal(window.timezone, "Asia/Tokyo", "supporting queries keep the dashboard pin");

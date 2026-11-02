@@ -1,14 +1,16 @@
 import { defaultChartScale } from "./chart-scale";
 import type { AnalysisState } from "./dashboard-analysis-model";
 import type { TokenChartView } from "./usage-presets";
-import type { UsageTopic } from "./usage-workspace-model";
+import type { engineUsageTopics } from "./usage-workspace-model";
 
 // The chart each Analyze dashboard opens with, and merges a link's
 // analyze_chart over (useUsageDashboardState). The page and the site map
 // (site-map.ts) both read these.
 // The legacy Tokens page's saved chart starts from defaultTokenChart too.
 export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model_family", period: "week", hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" };
-export const dashboardDefaults: Record<UsageTopic, AnalysisState> = {
+// Specialized dashboards own their own state contract. Keep the engine catalog
+// exhaustive without inventing engine metrics for those pages.
+export const dashboardDefaults: Record<string, AnalysisState> = {
   calls: { metric: "calls", split: "tool_name", view: "compare" },
   activity: { metric: "human_input", split: "provider_model", period: "day" },
   tokens: { ...defaultTokenChart, period: "day" },
@@ -19,4 +21,4 @@ export const dashboardDefaults: Record<UsageTopic, AnalysisState> = {
   carbon: { metric: "co2", split: "type", period: "day" },
   time: { metric: "time", split: "activity", period: "day" },
   skills: { metric: "records", split: "skill_name", period: "day" },
-};
+} satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

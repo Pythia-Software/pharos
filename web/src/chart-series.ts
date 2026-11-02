@@ -1,11 +1,37 @@
 import { chartSeriesStyle, otherSeriesColor } from "./chart-colors";
 import { periodBuckets, periodIndex, periodKey, periodStart, type ChartPeriod } from "./chart-period";
+import { columnScale, type ChartScale } from "./chart-scale";
 
 export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string };
 export type ChartBucket = { key: string; date: Date; values: Record<string, number>; parts?: Record<string, Array<[string, number]>>; detail?: string; windowSize?: number; history?: boolean };
 export const chartDisplays = ["interval", "cumulative"] as const;
 export type ChartDisplay = typeof chartDisplays[number];
 export const validChartDisplay = (value: unknown): value is ChartDisplay | undefined => value === undefined || chartDisplays.includes(value as ChartDisplay);
+
+// Logarithmic timelines compare each series independently: a stack's segment
+// heights would depend on the amounts below it, rather than its own value.
+export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, percent = false, reference = 0 }: { scale: ChartScale; lines?: boolean; percent?: boolean; reference?: number }) {
+  lines ||= scale === "logarithmic" && !percent;
+  const peaks = buckets.map(bucket => {
+    const values = series.map(item => bucket.values[item.key] ?? 0);
+    return lines ? Math.max(0, ...values) : values.reduce((sum, value) => sum + value, 0);
+  });
+  return { ...columnScale([...peaks, reference], percent ? "linear" : scale), lines };
+}
+
+// Missing additive amounts are idle periods; missing ratios break the line.
+// A single period gets a short horizontal segment so it remains visible.
+export function timelinePath(buckets: ChartBucket[], key: string, y: (value: number) => number, additive = true): string {
+  let pen = "M";
+  const steps = buckets.flatMap((bucket, index) => {
+    const value = bucket.values[key] ?? (additive ? 0 : undefined);
+    if (value === undefined) { pen = "M"; return []; }
+    const step = `${pen} ${1000 * (index + .5) / buckets.length} ${100 - y(value)}`;
+    pen = "L";
+    return [step];
+  });
+  return steps.join(" ") + (buckets.length === 1 && steps.length ? ` L 1000 ${100 - y(buckets[0].values[key] ?? 0)}` : "");
+}
 
 // Accumulate original amounts within the visible range, including folded
 // series. Normalize shares afterwards; adding interval percentages is wrong.

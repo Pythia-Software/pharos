@@ -64,7 +64,35 @@
       "field": "delegation_tint"
     },
     {
-      "file": "web/src/usage-query-ideas.tsx",
+      "file": "internal/archive/assets/background.js",
+      "field": "disclosures"
+    },
+    {
+      "file": "internal/archive/assets/carbon.js",
+      "field": "disclosures"
+    },
+    {
+      "file": "internal/archive/assets/library.js",
+      "field": "disclosures"
+    },
+    {
+      "file": "internal/archive/assets/status-panel.js",
+      "field": "disclosures"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
+      "field": "disclosures"
+    },
+    {
+      "file": "web/src/authored.tsx",
+      "field": "disclosures"
+    },
+    {
+      "file": "web/src/conversation-results.tsx",
+      "field": "disclosures"
+    },
+    {
+      "file": "web/src/thinking-dashboard.tsx",
       "field": "disclosures"
     },
     {
@@ -116,6 +144,14 @@
       "field": "optimize_area"
     },
     {
+      "file": "internal/archive/assets/library.js",
+      "field": "overlay"
+    },
+    {
+      "file": "internal/archive/assets/status-panel.js",
+      "field": "overlay"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "overlay"
     },
@@ -134,6 +170,10 @@
     {
       "file": "internal/archive/assets/ui.py",
       "field": "reader_filter_level"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_labels"
     },
     {
       "file": "web/src/conversation-search.tsx",
@@ -164,6 +204,10 @@
       "field": "safety_rank"
     },
     {
+      "file": "web/src/conversation-results.tsx",
+      "field": "search_cards"
+    },
+    {
       "file": "web/src/index.tsx",
       "field": "search_cards"
     },
@@ -174,6 +218,14 @@
     {
       "file": "web/src/workspace-inbox.ts",
       "field": "sidebar_width"
+    },
+    {
+      "file": "web/src/thinking-dashboard.tsx",
+      "field": "thinking"
+    },
+    {
+      "file": "web/src/thinking-dashboard.tsx",
+      "field": "thinking_filters"
     }
   ],
   "controls": [
@@ -300,8 +352,8 @@
       "owner": "<html:fragment>",
       "tag": "details",
       "control": "<details>",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "fragment:879c7380da274c8e:0",
@@ -309,8 +361,9 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" id=\"edit-path\" aria-label=\"Edit library location\" aria-controls=\"path-editor\" aria-expanded=\"false\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Expands fields for an unapplied library setup, creation, restoration or opening action."
     },
     {
       "key": "fragment:8b211a012cdc22a0:0",
@@ -327,8 +380,8 @@
       "owner": "<html:fragment>",
       "tag": "details",
       "control": "<details class=\"wizard-alternate\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "fragment:ac809973bd93027b:0",
@@ -345,8 +398,8 @@
       "owner": "<html:fragment>",
       "tag": "summary",
       "control": "<summary>",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "fragment:bc67936da84f1af6:1",
@@ -354,8 +407,8 @@
       "owner": "<html:fragment>",
       "tag": "summary",
       "control": "<summary>",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "fragment:c0680b8f8ac87696:0",
@@ -426,8 +479,9 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" id=\"edit-name\" aria-label=\"Edit library name\" aria-controls=\"name\" aria-expanded=\"false\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Expands fields for an unapplied library setup, creation, restoration or opening action."
     },
     {
       "key": "fragment:f10a7292cd1c64bd:0",
@@ -516,15 +570,7 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" class=\"pharos-icon-control pharos-history-trigger cursor-interaction\" aria-label=\"History\" data-tooltip=\"Chat history\" aria-expanded=\"false\" aria-haspopup=\"dialog\" aria-controls=\"pharos-chat-history\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:1b10f28691f91420:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-browse pharos-icon-control\" aria-label=\"Float Ask Pharos\" title=\"Picture in picture · keep browsing\">",
+      "disclosure": true,
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -536,6 +582,15 @@
       "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model and effort as your default\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:226ebb0b1ffcca38:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-send cursor-interaction\" aria-label=\"Send question\" data-tooltip=\"Send question\" data-action=\"send\" disabled>",
+      "contract": "action",
+      "reason": "Starts or cancels a private Ask request; it does not change the linked library view."
     },
     {
       "key": "fragment:2721697042beae61:0",
@@ -556,13 +611,13 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:3b9493b344721371:0",
+      "key": "fragment:431a1ba11bc82920:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-clear-chat cursor-interaction\" aria-label=\"Clear\" data-tooltip=\"Clear chat and start fresh\" hidden>",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+      "control": "<button type=\"button\" class=\"pharos-window-close cursor-interaction\" aria-label=\"Close Ask Pharos\" title=\"Close Ask Pharos (Escape)\" hidden>",
+      "contract": "transient",
+      "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
     },
     {
       "key": "fragment:4a649a70fea95888:0",
@@ -592,13 +647,14 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:55c76d8f8d3c5aa8:0",
+      "key": "fragment:584408b697814075:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
-      "tag": "textarea",
-      "control": "<textarea id=\"pharos-question\" aria-label=\"Ask a question\" placeholder=\"What would you like to find in your work?\" rows=\"2\">",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-idea-toggle pharos-plain cursor-interaction\" aria-expanded=\"true\" aria-controls=\"pharos-idea-viewport\">",
+      "disclosure": true,
       "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+      "reason": "Shows prompt suggestions inside the private Ask editor, independently of the result view."
     },
     {
       "key": "fragment:5e47ea571ac9bf33:0",
@@ -714,15 +770,7 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" class=\"pharos-model-trigger cursor-interaction\" aria-expanded=\"false\" aria-haspopup=\"dialog\" aria-controls=\"pharos-model-menu\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:a9d2832d3a28dc3d:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-plain pharos-stop cursor-interaction\">",
+      "disclosure": true,
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -745,15 +793,6 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:bd29815702d25302:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-window-close pharos-plain\" aria-label=\"Close Ask Pharos\" hidden>",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
       "key": "fragment:bdb1b51f287e9afe:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -763,20 +802,20 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:cb3c3de9ef456866:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-browse pharos-icon-control cursor-interaction\" aria-label=\"Float Ask Pharos\" title=\"Picture in picture · keep browsing\" data-tooltip=\"Picture in picture · keep browsing\">",
+      "contract": "transient",
+      "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
+    },
+    {
       "key": "fragment:e4b6f7d373db8149:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button type=\"button\" class=\"pharos-more-ideas cursor-interaction\" aria-label=\"Next suggestions\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:e53fc43380f21697:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-send cursor-interaction\" aria-label=\"Send question\" data-tooltip=\"Send question\" disabled>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -826,6 +865,55 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:fa76bd164da9f5dd:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-clear-chat cursor-interaction\" aria-label=\"Clear\" title=\"Clear chat and start fresh\" hidden>",
+      "contract": "editing",
+      "reason": "Clears the private Ask conversation and unsent draft, then starts a fresh composer; this is an action, not durable view state."
+    },
+    {
+      "key": "eedffbde75af05e5:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "closeHistory",
+      "tag": "aria-expanded",
+      "control": "historyTrigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Chat history and model selection are transient chat-editor surfaces; applied conversation content remains owned by Ask Pharos."
+    },
+    {
+      "key": "0cb9277ed50c7461:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "closePicker",
+      "tag": "aria-expanded",
+      "control": "pickerTrigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Chat history and model selection are transient chat-editor surfaces; applied conversation content remains owned by Ask Pharos."
+    },
+    {
+      "key": "7a3da1f61576d71f:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "openHistory",
+      "tag": "aria-expanded",
+      "control": "historyTrigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Chat history and model selection are transient chat-editor surfaces; applied conversation content remains owned by Ask Pharos."
+    },
+    {
+      "key": "0f37dbdf940827c3:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "openPicker",
+      "tag": "aria-expanded",
+      "control": "pickerTrigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Chat history and model selection are transient chat-editor surfaces; applied conversation content remains owned by Ask Pharos."
+    },
+    {
       "key": "64d4ebee36121e2b:0",
       "file": "internal/archive/assets/ask-pharos.js",
       "owner": "showPickerPage",
@@ -842,6 +930,25 @@
       "control": "'button'",
       "contract": "editing",
       "reason": "Ask conversation/drafts remain on the private chat protocol, not public view URLs."
+    },
+    {
+      "key": "8d138b9bccbfa081:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "syncIdeaVisibility",
+      "tag": "aria-expanded",
+      "control": "ideaToggle",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Ask prompt ideas are suggestions for the unapplied chat composer; their picker visibility is editor state."
+    },
+    {
+      "key": "6c90fe78404cee3a:0",
+      "file": "internal/archive/assets/ask-prompt.js",
+      "owner": "makeChip",
+      "tag": "button",
+      "control": "'button'",
+      "contract": "editing",
+      "reason": "Removes a context chip from the unsent Ask prompt draft."
     },
     {
       "key": "78f30533f5901a54:0",
@@ -871,13 +978,34 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "9959dade78db8ac0:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderItem",
+      "tag": "aria-expanded",
+      "control": "head",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Background item expansion uses background:<item ID> through the shared classic button binding."
+    },
+    {
       "key": "eb774bc870314479:0",
       "file": "internal/archive/assets/background.js",
       "owner": "renderItem",
       "tag": "button",
       "control": "'button', 'bg-item-head'",
+      "sharedDisclosure": true,
       "contract": "settings",
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "3327c32c534abd22:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderLabels",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Persists the library labels_enabled setting through /api/labels/settings; it controls background processing, not the current URL view."
     },
     {
       "key": "c7b7dd6cbc73773b:0",
@@ -921,8 +1049,20 @@
       "owner": "calculationLedger",
       "tag": "button",
       "control": "'button', 'carbon-row-trigger', tierLabel(tier)",
+      "sharedDisclosure": true,
       "contract": "view.carbon",
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
+    },
+    {
+      "key": "d8262f49844f43fb:0",
+      "file": "internal/archive/assets/carbon.js",
+      "owner": "calculationLedger",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Carbon evidence rows use carbon:row:<tier>:<category> and materialize evidence on restored open state."
     },
     {
       "key": "d1235270b2e97fed:0",
@@ -939,6 +1079,7 @@
       "owner": "disclosure",
       "tag": "details",
       "control": "'details', cls",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Carbon factor explanations and source disclosures use stable carbon keys in the shared disclosures map."
     },
@@ -948,6 +1089,7 @@
       "owner": "disclosure",
       "tag": "summary",
       "control": "'summary', '', title",
+      "sharedDisclosure": true,
       "contract": "view.carbon",
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
     },
@@ -975,6 +1117,7 @@
       "owner": "methodology",
       "tag": "details",
       "control": "'details', 'carbon-method'",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Carbon factor explanations and source disclosures use stable carbon keys in the shared disclosures map."
     },
@@ -984,6 +1127,7 @@
       "owner": "methodology",
       "tag": "summary",
       "control": "'summary', '', 'All factor settings and sources'",
+      "sharedDisclosure": true,
       "contract": "view.carbon",
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
     },
@@ -1020,8 +1164,8 @@
       "owner": "<module>",
       "tag": "summary",
       "control": "'summary', 'Schedule and advanced settings'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "24d8358134cd20f4:0",
@@ -1038,8 +1182,38 @@
       "owner": "<module>",
       "tag": "summary",
       "control": "'summary', 'Prepared Bash commands'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
+    },
+    {
+      "key": "9051cdd79610196b:0",
+      "file": "internal/archive/assets/cloud-backup.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "explore",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Opening a setup wizard starts an unapplied backup draft; closing or changing wizard steps is editing state."
+    },
+    {
+      "key": "9051cdd79610196b:1",
+      "file": "internal/archive/assets/cloud-backup.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "explore",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Opening a setup wizard starts an unapplied backup draft; closing or changing wizard steps is editing state."
+    },
+    {
+      "key": "9051cdd79610196b:2",
+      "file": "internal/archive/assets/cloud-backup.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "explore",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Opening a setup wizard starts an unapplied backup draft; closing or changing wizard steps is editing state."
     },
     {
       "key": "cc4240622fbcc1da:0",
@@ -1047,8 +1221,8 @@
       "owner": "<module>",
       "tag": "summary",
       "control": "'summary', 'Detailed options'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "d401198275b82b89:0",
@@ -1065,8 +1239,8 @@
       "owner": "<module>",
       "tag": "details",
       "control": "'details'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "d5fa1214964d1ffd:1",
@@ -1074,8 +1248,8 @@
       "owner": "<module>",
       "tag": "details",
       "control": "'details'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "d5fa1214964d1ffd:2",
@@ -1083,8 +1257,8 @@
       "owner": "<module>",
       "tag": "details",
       "control": "'details'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "b4694f69102ee3bb:0",
@@ -1101,8 +1275,8 @@
       "owner": "downloadSection",
       "tag": "summary",
       "control": "'summary', 'View download command'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "a5a80f7d204ecaeb:0",
@@ -1119,8 +1293,28 @@
       "owner": "downloadSection",
       "tag": "details",
       "control": "'details'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
+    },
+    {
+      "key": "4a058084af10c5ea:0",
+      "file": "internal/archive/assets/cloud-backup.js",
+      "owner": "finishCloudSetup",
+      "tag": "aria-expanded",
+      "control": "explore",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Opening a setup wizard starts an unapplied backup draft; closing or changing wizard steps is editing state."
+    },
+    {
+      "key": "3f0f8e4af575f320:0",
+      "file": "internal/archive/assets/cloud-backup.js",
+      "owner": "openDestination",
+      "tag": "aria-expanded",
+      "control": "explore",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Opening a setup wizard starts an unapplied backup draft; closing or changing wizard steps is editing state."
     },
     {
       "key": "bdff20b9f691e63a:0",
@@ -1137,8 +1331,9 @@
       "owner": "renderOngoing",
       "tag": "details",
       "control": "'details', null, 'cloud-schedule-settings'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
       "key": "fc0bb66b06b71f09:0",
@@ -1146,8 +1341,19 @@
       "owner": "renderOngoing",
       "tag": "summary",
       "control": "'summary', 'Schedule settings'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
+    },
+    {
+      "key": "6a2c5c95cbcbc1d8:0",
+      "file": "internal/archive/assets/header.js",
+      "owner": "initHeaderOverflow",
+      "tag": "aria-expanded",
+      "control": "more",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Header overflow is a transient tool picker."
     },
     {
       "key": "bd6425e4b2a8db96:0",
@@ -1155,8 +1361,9 @@
       "owner": "activityLine",
       "tag": "details",
       "control": "'details', 'pharos-sub pharos-activity-details'",
-      "contract": "settings",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "e7b12e0499163d89:0",
@@ -1164,8 +1371,9 @@
       "owner": "activityLine",
       "tag": "summary",
       "control": "'summary'",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "5435ab726331dea0:0",
@@ -1195,6 +1403,16 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "17e55420b92f9603:0",
+      "file": "internal/archive/assets/library.js",
+      "owner": "closePanel",
+      "tag": "aria-expanded",
+      "control": "chip",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
+    },
+    {
       "key": "1ceec9b6cccae43e:0",
       "file": "internal/archive/assets/library.js",
       "owner": "ensureChip",
@@ -1202,6 +1420,16 @@
       "control": "'button', 'pharos-drive'",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "65eefeabae3c3549:0",
+      "file": "internal/archive/assets/library.js",
+      "owner": "ensureChip",
+      "tag": "aria-expanded",
+      "control": "chip",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
     },
     {
       "key": "deae122c69fe30e4:0",
@@ -1213,6 +1441,16 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "c79c0ddbbedec09d:0",
+      "file": "internal/archive/assets/library.js",
+      "owner": "openPanel",
+      "tag": "aria-expanded",
+      "control": "chip",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
+    },
+    {
       "key": "18a567b333d8cb01:0",
       "file": "internal/archive/assets/library.js",
       "owner": "renderAppUpdate",
@@ -1220,6 +1458,17 @@
       "control": "'button', 'combo-icon pharos-app-update'",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "7fab2ce7b03c27bf:0",
+      "file": "internal/archive/assets/library.js",
+      "owner": "renderDriveHealth",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
     },
     {
       "key": "fragment:17c750737607866b:0",
@@ -1290,17 +1539,8 @@
       "owner": "<html:fragment>",
       "tag": "details",
       "control": "<details id=\"library-settings-transfer-panel\" class=\"library-settings-card library-settings-panel\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
-    },
-    {
-      "key": "fragment:33b4ba2e8e143868:0",
-      "file": "internal/archive/assets/managed-library.html",
-      "owner": "<html:fragment>",
-      "tag": "details",
-      "control": "<details class=\"library-settings-about\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Application-location information uses library:application; transfer disclosure exposes an unapplied copy/move transaction form."
     },
     {
       "key": "fragment:38e34b019c128a19:0",
@@ -1330,6 +1570,17 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
+      "key": "fragment:467278db3d1bf446:0",
+      "file": "internal/archive/assets/managed-library.html",
+      "owner": "<html:fragment>",
+      "tag": "details",
+      "control": "<details class=\"library-settings-about\" data-view-key=\"library:application\" data-view-field=\"disclosures\">",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Application-location information uses library:application; transfer disclosure exposes an unapplied copy/move transaction form."
+    },
+    {
       "key": "fragment:49ad814f23af568d:0",
       "file": "internal/archive/assets/managed-library.html",
       "owner": "<html:fragment>",
@@ -1344,8 +1595,9 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button id=\"library-settings-restore\" type=\"button\" aria-expanded=\"false\" aria-controls=\"library-settings-restore-form\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Expands fields for an unapplied library setup, creation, restoration or opening action."
     },
     {
       "key": "fragment:5b3559e1127706e7:0",
@@ -1416,8 +1668,8 @@
       "owner": "<html:fragment>",
       "tag": "summary",
       "control": "<summary>",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Application-location information uses library:application; transfer disclosure exposes an unapplied copy/move transaction form."
     },
     {
       "key": "fragment:9c22ba645930a556:1",
@@ -1425,8 +1677,9 @@
       "owner": "<html:fragment>",
       "tag": "summary",
       "control": "<summary>",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Application-location information uses library:application; transfer disclosure exposes an unapplied copy/move transaction form."
     },
     {
       "key": "fragment:a7043a6457525362:0",
@@ -1488,8 +1741,9 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button id=\"library-settings-open\" type=\"button\" aria-expanded=\"false\" aria-controls=\"library-settings-open-form\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Expands fields for an unapplied library setup, creation, restoration or opening action."
     },
     {
       "key": "fragment:e5ed0d013f12c88f:0",
@@ -1497,8 +1751,9 @@
       "owner": "<html:fragment>",
       "tag": "button",
       "control": "<button id=\"library-settings-new\" type=\"button\" aria-expanded=\"false\" aria-controls=\"library-settings-create-form\">",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Expands fields for an unapplied library setup, creation, restoration or opening action."
     },
     {
       "key": "fragment:ef6cd6027d25b281:0",
@@ -1508,6 +1763,16 @@
       "control": "<input id=\"library-settings-recover-path\" autocomplete=\"off\" spellcheck=\"false\" required aria-describedby=\"library-settings-recover-note\">",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "4d67aac205336037:0",
+      "file": "internal/archive/assets/managed-library.js",
+      "owner": "form",
+      "tag": "aria-expanded",
+      "control": "$(button)",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
     },
     {
       "key": "96618094543c673c:0",
@@ -1578,8 +1843,8 @@
       "owner": "candidateRow",
       "tag": "summary",
       "control": "'summary', '', 'Rename this source'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "260fa8590ef54eec:0",
@@ -1605,8 +1870,8 @@
       "owner": "candidateRow",
       "tag": "details",
       "control": "'details', 'pharos-source-rename'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "72f7e973d26732d2:0",
@@ -1614,8 +1879,8 @@
       "owner": "optionalBackup",
       "tag": "details",
       "control": "'details', 'pharos-custom-source'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "cb1237aff6398c35:0",
@@ -1623,8 +1888,8 @@
       "owner": "optionalBackup",
       "tag": "summary",
       "control": "'summary', '', 'Protect your history with an optional backup'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "4f6bab0bc2995df2:0",
@@ -1668,8 +1933,8 @@
       "owner": "renderLocations",
       "tag": "summary",
       "control": "'summary', '', 'Use a different folder'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "7bca15e95ff0d0c0:0",
@@ -1677,8 +1942,8 @@
       "owner": "renderLocations",
       "tag": "details",
       "control": "'details', 'pharos-custom-source'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "5f712d6bb1e55a87:0",
@@ -1695,8 +1960,8 @@
       "owner": "renderTools",
       "tag": "details",
       "control": "'details', 'pharos-other-tools'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "82f3cefa074105b9:0",
@@ -1704,8 +1969,8 @@
       "owner": "renderTools",
       "tag": "details",
       "control": "'details', 'pharos-other-sources'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "be92617a24c50042:0",
@@ -1713,8 +1978,8 @@
       "owner": "renderTools",
       "tag": "summary",
       "control": "'summary', '', 'Other tools'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "ed773e6cf3b10cfb:0",
@@ -1722,8 +1987,8 @@
       "owner": "renderTools",
       "tag": "summary",
       "control": "'summary', '', 'ChatGPT exports and other formats'",
-      "contract": "settings",
-      "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+      "contract": "editing",
+      "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
       "key": "02a9d1cd32a4c315:0",
@@ -1740,8 +2005,9 @@
       "owner": "cadenceList",
       "tag": "summary",
       "control": "'summary'",
-      "contract": "settings",
-      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "5fd00d2ef6f7a013:0",
@@ -1749,8 +2015,29 @@
       "owner": "cadenceList",
       "tag": "details",
       "control": "'details'",
-      "contract": "settings",
-      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
+    },
+    {
+      "key": "5617805e32346100:0",
+      "file": "internal/archive/assets/status-panel.js",
+      "owner": "close",
+      "tag": "aria-expanded",
+      "control": "chip()",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Library drive status panel is restored with overlay=drive; no focus movement during URL restoration."
+    },
+    {
+      "key": "2b243e256eade760:0",
+      "file": "internal/archive/assets/status-panel.js",
+      "owner": "renderChip",
+      "tag": "aria-expanded",
+      "control": "target",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Library drive status panel is restored with overlay=drive; no focus movement during URL restoration."
     },
     {
       "key": "0138786a2b976830:0",
@@ -1758,8 +2045,9 @@
       "owner": "renderPanel",
       "tag": "details",
       "control": "'details'",
-      "contract": "settings",
-      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "99b509e459519a10:0",
@@ -1767,8 +2055,9 @@
       "owner": "renderPanel",
       "tag": "summary",
       "control": "'summary', '', 'Details for support'",
-      "contract": "settings",
-      "reason": "Read-only background-update cadence and support diagnostics in the Library status panel; operational diagnostics are excluded from content view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "30dd407bc3fb9139:0",
@@ -1821,8 +2110,9 @@
       "owner": "panel",
       "tag": "summary",
       "control": "'summary', title",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "e9e7db9487bd7e3d:0",
@@ -1830,8 +2120,9 @@
       "owner": "panel",
       "tag": "details",
       "control": "'details', '', 'sync-panel sync-disclosure'",
-      "contract": "settings",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "html:0135b6ac2c05c3f9:0",
@@ -1839,15 +2130,6 @@
       "owner": "<html:settings>",
       "tag": "button",
       "control": "<button id=\"usageSummaryLinks\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"usageSummaryLinksTitle\" aria-describedby=\"usageSummaryLinksDescription\" aria-checked=\"false\">",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
-    },
-    {
-      "key": "html:2daf451befda345e:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"menuBarExpand\" class=\"menu-bar-expand\" type=\"button\" aria-expanded=\"false\" aria-controls=\"menuBarOptions\" hidden>",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
@@ -1861,15 +2143,6 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
-      "key": "html:392bce67601d04a2:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "details",
-      "control": "<details class=\"sync-separate\">",
-      "contract": "settings",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
-    },
-    {
       "key": "html:3af61b3ea3e1ea68:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -1877,6 +2150,17 @@
       "control": "<button id=\"unifiedActivity\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"unifiedActivityTitle\" aria-describedby=\"unifiedActivityDescription\" aria-checked=\"false\">",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "html:6451dc20ca7284f0:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "details",
+      "control": "<details class=\"sync-separate\" data-view-key=\"sync:separate\" data-view-field=\"disclosures\">",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "html:6f2936f3f335b6b5:0",
@@ -1906,6 +2190,51 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:83f26f5f07f6b58c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"headerExpand\" class=\"menu-bar-expand\" type=\"button\" data-layout-disclosure data-view-key=\"headerSettings\" data-view-label=\"Header\" data-view-field=\"disclosures\" aria-expanded=\"false\" aria-controls=\"headerOptions\" aria-label=\"Expand Header\">",
+      "binding": "disclosures",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "html:89fb76fced05db29:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"menuBarExpand\" data-view-key=\"menuBarPreferences\" data-view-label=\"macOS menu bar\" data-view-field=\"disclosures\" class=\"menu-bar-expand\" type=\"button\" aria-expanded=\"false\" aria-controls=\"menuBarOptions\" hidden>",
+      "binding": "disclosures",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "html:976238cc930ea94f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"quickStatsExpand\" class=\"menu-bar-expand\" type=\"button\" data-layout-disclosure data-view-key=\"quickStatsSettings\" data-view-label=\"Quick Stats\" data-view-field=\"disclosures\" aria-expanded=\"false\" aria-controls=\"quickStatsOptions\" aria-label=\"Expand Quick Stats\">",
+      "binding": "disclosures",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "html:c93fda6c25a2c2d9:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"pauseIndexingForQueries\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"pauseIndexingForQueriesTitle\" aria-describedby=\"pauseIndexingForQueriesDescription\" aria-checked=\"false\">",
+      "contract": "settings",
+      "reason": "Saved library preference for query-driven indexing pauses; defaults off and applies independently of URL view state."
+    },
+    {
       "key": "html:e4a2ee823cd209b2:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -1915,15 +2244,6 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
-      "key": "html:e6e73d39f03ada85:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"headerExpand\" class=\"menu-bar-expand\" type=\"button\" data-layout-disclosure aria-expanded=\"false\" aria-controls=\"headerOptions\" aria-label=\"Expand Header\">",
-      "contract": "settings",
-      "reason": "Disclosure for the saved Header configuration in Layout Preferences."
-    },
-    {
       "key": "html:e82c8e9c95103973:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -1931,15 +2251,6 @@
       "control": "<select id=\"menuBarUsagePeriod\">",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
-    },
-    {
-      "key": "html:f2498ac920929866:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"quickStatsExpand\" class=\"menu-bar-expand\" type=\"button\" data-layout-disclosure aria-expanded=\"false\" aria-controls=\"quickStatsOptions\" aria-label=\"Expand Quick Stats\">",
-      "contract": "settings",
-      "reason": "Disclosure for saved Quick Stats layout configuration in Layout Preferences."
     },
     {
       "key": "html:fece4257baf940c9:0",
@@ -1956,8 +2267,9 @@
       "owner": "<html:settings>",
       "tag": "summary",
       "control": "<summary>",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of sync:separate, bound to the shared disclosures map."
     },
     {
       "key": "html:02b02da5220640ae:0",
@@ -2001,6 +2313,7 @@
       "owner": "<html:shell>",
       "tag": "button",
       "control": "<button id=\"bookmarksToggle\" class=\"header-icon bookmarks-toggle\" type=\"button\" aria-label=\"Bookmarks\" title=\"Bookmarks\" aria-expanded=\"false\" aria-controls=\"bookmarksDrawer\">",
+      "disclosure": true,
       "contract": "view.overlay",
       "reason": "Read-only header overlay visibility is restored by restoreViewOverlay."
     },
@@ -2091,6 +2404,7 @@
       "owner": "<html:shell>",
       "tag": "button",
       "control": "<button id=\"feedbackOpen\" title=\"Show UI feedback\" aria-expanded=\"false\" aria-controls=\"feedbackPanel\" hidden>",
+      "disclosure": true,
       "contract": "editing",
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
@@ -2145,6 +2459,7 @@
       "owner": "<html:shell>",
       "tag": "input",
       "control": "<input data-view-field=\"history_search\" id=\"historyFilter\" type=\"search\" placeholder=\"Filter history…\" aria-label=\"Filter history\">",
+      "binding": "history_search",
       "contract": "view.history_search",
       "reason": "Applied History filter is bidirectional in history_search."
     },
@@ -2235,6 +2550,7 @@
       "owner": "<html:shell>",
       "tag": "button",
       "control": "<button id=\"navigatorToggle\" class=\"header-icon navigator-toggle\" type=\"button\" hidden title=\"Show navigation bar\" aria-label=\"Navigation bar\" aria-controls=\"navigator\" aria-expanded=\"false\">",
+      "disclosure": true,
       "contract": "transient",
       "reason": "Opens an unapplied composer or transient navigation/tools menu."
     },
@@ -2307,6 +2623,8 @@
       "owner": "<html:shell>",
       "tag": "button",
       "control": "<button id=\"historyToggle\" data-view-field=\"overlay\" class=\"header-icon history-toggle\" type=\"button\" aria-label=\"History\" title=\"History\" aria-expanded=\"false\" aria-controls=\"historyDrawer\">",
+      "binding": "overlay",
+      "disclosure": true,
       "contract": "view.overlay",
       "reason": "Read-only header overlay visibility is restored by restoreViewOverlay."
     },
@@ -2316,6 +2634,7 @@
       "owner": "<html:shell>",
       "tag": "button",
       "control": "<button id=\"headerMore\" class=\"header-icon header-more\" type=\"button\" aria-label=\"More tools\" aria-haspopup=\"dialog\" aria-controls=\"headerOverflow\" aria-expanded=\"false\" hidden>",
+      "disclosure": true,
       "contract": "transient",
       "reason": "Opens an unapplied composer or transient navigation/tools menu."
     },
@@ -2325,6 +2644,7 @@
       "owner": "<html:shell>",
       "tag": "button",
       "control": "<button id=\"usageSummaryToggle\" class=\"header-icon usage-summary-toggle\" type=\"button\" aria-label=\"Quick Stats\" title=\"Quick Stats\" aria-haspopup=\"dialog\" aria-expanded=\"false\" aria-controls=\"usageSummary\">",
+      "disclosure": true,
       "contract": "view.overlay",
       "reason": "Quick Stats is the read-only usage overlay restored by restoreViewOverlay; its saved layout is configured separately in Settings."
     },
@@ -2437,6 +2757,16 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
+      "key": "b870c6c6bfff5a5a:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "addExpandableRow",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
       "key": "f6f36ddd11694a75:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "addExpandableRow",
@@ -2446,22 +2776,64 @@
       "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
     },
     {
-      "key": "25f10a91a1fd2428:0",
+      "key": "838dd41920350d87:0",
       "file": "internal/archive/assets/ui.py",
-      "owner": "authorshipNote",
-      "tag": "summary",
-      "control": "'summary', '', `${(Number(authorship.typed_words)||0).toLocaleString()} words typed · ${other.toLocaleString()} from elsewhere`",
+      "owner": "apply",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
       "contract": "reader",
-      "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
-      "key": "e09e30c29b34bee4:0",
+      "key": "838dd41920350d87:1",
       "file": "internal/archive/assets/ui.py",
-      "owner": "authorshipNote",
-      "tag": "details",
-      "control": "'details', 'authorship-note'",
+      "owner": "apply",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
       "contract": "reader",
-      "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
+      "key": "9136fa352d564e4a:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "apply",
+      "tag": "aria-expanded",
+      "control": "button",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
+      "key": "ef5afc9997fc9e8c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "apply",
+      "tag": "aria-expanded",
+      "control": "prefix",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
+      "key": "23798f084b8428ff:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "applySummary",
+      "tag": "aria-expanded",
+      "control": "toolTrigger",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
+      "key": "b9d31ba372bfa501:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "closePreview",
+      "tag": "aria-expanded",
+      "control": "selected",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
       "key": "e67d39f5fc03fa7f:0",
@@ -2536,6 +2908,16 @@
       "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
     },
     {
+      "key": "179e9b17baafc37e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "fileChip",
+      "tag": "aria-expanded",
+      "control": "target",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
       "key": "72f76dfc7ec03b42:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "fileChip",
@@ -2552,6 +2934,16 @@
       "control": "'button', 'file-prefix', absolute&&!inside?directory:'…/'",
       "contract": "reader",
       "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
+    },
+    {
+      "key": "fb60197526389a84:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "fileChip",
+      "tag": "aria-expanded",
+      "control": "prefix",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
       "key": "f198b3524e1971d5:0",
@@ -2635,6 +3027,16 @@
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
+      "key": "0f8141ea4b1c2254:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "narrativeEvent",
+      "tag": "aria-expanded",
+      "control": "button",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
       "key": "31ea544c956cc4d8:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "narrativeEvent",
@@ -2716,6 +3118,16 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "88a82cb4ea6ef376:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
       "key": "91fac2acbf38cf4f:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -2723,6 +3135,16 @@
       "control": "'details', 'source-details'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
+    },
+    {
+      "key": "ae4e84b69857b628:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "aria-expanded",
+      "control": "toolTrigger",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
       "key": "bd819234dad95fa0:0",
@@ -2905,6 +3327,16 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "eea20fbe4e4f3d9c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderHistory",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "contract": "view.history_collapsed",
+      "reason": "History group disclosure identities use the history_collapsed URL field."
+    },
+    {
       "key": "0a63b12753448b3c:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderNext",
@@ -2939,6 +3371,36 @@
       "control": "'button', item.shown?'':'hidden-only', item.shown?`#${item.index+1} · ${item.shown}`:`#${item.index+1}`",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+    },
+    {
+      "key": "34ee83a2e65ae313:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "setDrawer",
+      "tag": "aria-expanded",
+      "control": "$(toggle)",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Header content overlay is bound to the shared overlay enum."
+    },
+    {
+      "key": "dad5ac61da46493e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "setFeedbackExpanded",
+      "tag": "aria-expanded",
+      "control": "$('#feedbackOpen')",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Annotation drafts and the feedback editing panel are editing state."
+    },
+    {
+      "key": "c3bb368abd2c3597:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "setNavOpen",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Address-bar visibility is a transient navigation editor."
     },
     {
       "key": "ee5d557122c20749:0",
@@ -3031,6 +3493,16 @@
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
+      "key": "5a0abc4e1c9b4583:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "setUsageSummaryOpen",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Header content overlay is bound to the shared overlay enum."
+    },
+    {
       "key": "2d4932a3acb23daa:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "showPreview",
@@ -3038,6 +3510,26 @@
       "control": "'button', 'preview-close', 'Close'",
       "contract": "reader",
       "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
+    },
+    {
+      "key": "aa61141416bb0f64:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "showPreview",
+      "tag": "aria-expanded",
+      "control": "button",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
+    },
+    {
+      "key": "ce26c0fea851ee5c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "showPreview",
+      "tag": "aria-expanded",
+      "control": "selected",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
       "key": "aa5a6fe4f81bf10b:0",
@@ -3085,6 +3577,15 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "a240ddf105d4c2db:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "transcriptLabelsControl",
+      "tag": "button",
+      "control": "'button', 'transcript-labels-toggle', 'Labels'",
+      "contract": "reader",
+      "reason": "The Labels toggle writes reader_labels through the view contract; its saved preference is only the fallback when a link carries none."
+    },
+    {
       "key": "0e18c887173fcc9b:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "xmlTreeView",
@@ -3126,6 +3627,7 @@
       "owner": "AppNavigation",
       "tag": "button",
       "control": "id=\"appNavigationToggle\" onClick={show}",
+      "disclosure": true,
       "contract": "navigation",
       "reason": "Canonical destination URLs; sidebar presentation uses nav_collapsed/nav_expanded. Navigation menu openness is transient."
     },
@@ -3136,6 +3638,7 @@
       "tag": "button",
       "control": "id=\"appSidebarToggle\" data-view-field=\"nav_collapsed\" aria-label={rail ? \"Collapse sidebar\" : \"Expand sidebar\"} onClick={toggleSidebar}",
       "binding": "nav_collapsed",
+      "disclosure": true,
       "contract": "view.nav_collapsed",
       "reason": "Bound directly to the registered view field."
     },
@@ -3329,13 +3832,16 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "6a764d83e5dfb0ec:0",
+      "key": "84fca23778f9e1a1:0",
       "file": "web/src/authored.tsx",
       "owner": "AuthoredMessageCard",
       "tag": "button",
-      "control": "onClick={() => setExpanded(value => !value)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+      "control": "data-view-field=\"disclosures\" onClick={() => setExpanded(value => !value)}",
+      "binding": "disclosures",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "25b8829efe8bf9e8:0",
@@ -3587,6 +4093,7 @@
       "tag": "button",
       "control": "data-view-field=\"card_filters\" onClick={() => { const open = !filtersOpen; setFiltersOpen(open); saveCardLibraryView({ filters: open }); }}",
       "binding": "card_filters",
+      "disclosure": true,
       "contract": "view.card_filters",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -3696,6 +4203,7 @@
       "owner": "ChartLegendChip",
       "tag": "button",
       "control": "aria-label={item.label} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
+      "disclosure": true,
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -3772,6 +4280,15 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
+      "key": "00b8ca7063fb7202:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Repository\" value={repository} onChange={event => update({ repository: event.target.value, workspace: \"\", agent: \"\", zoom: null })}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
       "key": "1ba826d922a107fb:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
@@ -3790,20 +4307,20 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "23c422988c1e32dc:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Count by\" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: \"\", agent: \"\" })}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
       "key": "367f6cbf3ae84728:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
       "tag": "summary",
       "control": "",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "398e55aca2f68959:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "id=\"parallelism-view\" aria-label=\"View\" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -3835,11 +4352,11 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "6b97346377bae589:0",
+      "key": "6957713e4f0054a1:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Turn gap\" value={gap} onChange={event => update({ gap: Number(event.target.value) })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Range\" value={settings.range === \"day\" ? range.startDay : settings.range} onChange={event => chooseRange(event.target.value)}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -3853,38 +4370,11 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "ce1d993d0f45edfb:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Range\" value={settings.range === \"day\" ? range.startDay : settings.range} onChange={event => chooseRange(event.target.value)}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
       "key": "d0391cb720be4f15:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
       "tag": "details",
       "control": "open={settings.showConversations} onToggle={event => { if (event.currentTarget.open !== settings.showConversations) update({ showConversations: event.currentTarget.open }); }}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
-      "key": "d1cfc38b1d0e76f3:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "aria-label=\"Repository\" value={repository} onChange={event => update({ repository: event.target.value, workspace: \"\", agent: \"\", zoom: null })}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
-      "key": "de7407e02c9f86ba:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "select",
-      "control": "id=\"parallelism-view\" aria-label=\"View\" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -3896,6 +4386,74 @@
       "control": "onClick={() => chooseUnit(concurrencyUnit(thread, counting))}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "f1d8acea58644b6b:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Turn gap\" value={gap} onChange={event => update({ gap: Number(event.target.value) })}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "ff8fe79cc4b0a670:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Count by\" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: \"\", agent: \"\" })}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "1175fae1fc64a7a2:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "branchList",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "168b8957c2968f12:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "branchList",
+      "tag": "button",
+      "control": "onClick={() => void load(id)}",
+      "contract": "action",
+      "reason": "Retries loading the same conversation or overview without changing the selected view."
+    },
+    {
+      "key": "2c8b24403d7927dd:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "entryList",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" onClick={() => choose(id, item.id)}",
+      "binding": "search_cards",
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "76969926c6d90b29:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "entryList",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`search:${workspaceID}:conversation:${id}:entry:${item.id}:children`} defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "71f63e383558595c:0",
+      "file": "web/src/conversation-results.tsx",
+      "owner": "ResultConversationBrowser",
+      "tag": "button",
+      "control": "onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}",
+      "contract": "action",
+      "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
       "key": "0b24f86fce417896:0",
@@ -3913,6 +4471,7 @@
       "tag": "ViewDisclosure",
       "control": "viewKey=\"reader:search-coverage\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -3981,13 +4540,58 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "de3dbf33796756a6:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "summary",
+      "key": "2da290a1c01e8a10:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
       "control": "",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "3539ef4de8f33cc5:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "input",
+      "control": "value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ada7fc2fbb9ff79:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "onClick={() => dialog.current?.close()}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "b4d31e6a92c6f43b:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "a",
+      "control": "onClick={event => { event.preventDefault(); window.pharosNavigate?.(\"/home\"); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "bd9c4bbde6c23fdf:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "aria-label=\"Create card\" onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "eccae4db9182a984:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "textarea",
+      "control": "value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })}",
+      "contract": "editing",
+      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
     {
       "key": "069920aa96aa07cd:0",
@@ -4197,6 +4801,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "94c6e0900334d288:0",
+      "file": "web/src/dashboard-select.tsx",
+      "owner": "DashboardSelect",
+      "tag": "select",
+      "control": "",
+      "contract": "dashboard",
+      "reason": "Native select delegates value and changes to its dashboard caller; the hidden selected label only determines width."
+    },
+    {
       "key": "017af1e340829c8c:0",
       "file": "web/src/dashboard-trend.tsx",
       "owner": "AnalysisTrend",
@@ -4332,6 +4945,15 @@
       "reason": "Query Builder serializes its definition in q_*; query_layout controls its collapse state."
     },
     {
+      "key": "a762fe31ca857a95:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "SourceQueryBuilder",
+      "tag": "QueryFilterRow",
+      "control": "",
+      "contract": "native-query",
+      "reason": "Edits the native source query, including grouping.source filters, through the published Query Table API."
+    },
+    {
       "key": "756f4bd37da479aa:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "SourceStatement",
@@ -4368,21 +4990,13 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "83d0c76f329bdccd:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ColumnPicker",
-      "tag": "summary",
-      "control": "",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "b8cb43f8c4d950e9:0",
       "file": "web/src/delegation.tsx",
       "owner": "ColumnPicker",
       "tag": "ViewDisclosure",
       "control": "viewKey=\"delegation:columns\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -4419,6 +5033,7 @@
       "owner": "DelegationExplorer",
       "tag": "button",
       "control": "onClick={toggleSessions}",
+      "disclosure": true,
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
@@ -4437,24 +5052,6 @@
       "owner": "DelegationExplorer",
       "tag": "button",
       "control": "onClick={() => sortColumn(m.id, family)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "52057b010d8fa555:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "summary",
-      "control": "",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "52057b010d8fa555:1",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "summary",
-      "control": "",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
@@ -4501,6 +5098,7 @@
       "owner": "DelegationExplorer",
       "tag": "button",
       "control": "aria-label={`${collapsed.has(n.id) ? \"Expand\" : \"Collapse\"} ${n.label}`} onClick={() => toggle(n)}",
+      "disclosure": true,
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
@@ -4549,6 +5147,7 @@
       "tag": "ViewDisclosure",
       "control": "viewKey=\"delegation:scope\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -4559,6 +5158,7 @@
       "tag": "ViewDisclosure",
       "control": "viewKey=\"delegation:definitions\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -4568,6 +5168,7 @@
       "owner": "InboxSessions",
       "tag": "button",
       "control": "aria-label={`${collapsed.has(n.id) ? \"Expand\" : \"Collapse\"} ${n.label}`} onClick={() => toggle(n)}",
+      "disclosure": true,
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
@@ -4626,15 +5227,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "5084682622041168:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "summary",
-      "control": "",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "52ca64201b490bd9:0",
       "file": "web/src/delegation.tsx",
       "owner": "ParallelActivity",
@@ -4658,6 +5250,7 @@
       "owner": "ParallelActivity",
       "tag": "button",
       "control": "aria-label={`${detailed ? \"Collapse\" : \"Expand\"} activity for ${n.label}`} onClick={() => { closeMark(); setExpanded((old) => { const next = new Set(old); next.has(n.id) ? next.delete(n.id) : next.add(n.id); return next; }); }}",
+      "disclosure": true,
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
@@ -4686,6 +5279,7 @@
       "tag": "button",
       "control": "data-view-field=\"delegation_event\" aria-label={`${m.name}, ${m.count} call${m.count === 1 ? \"\" : \"s\"}${m.error ? \", error\" : \"\"}`} onClick={(event) => { setEventID(event.currentTarget.dataset.eventId!); setMark({ node: n, mark: m, anchor: event.currentTarget }); }}",
       "binding": "delegation_event",
+      "disclosure": true,
       "contract": "view.delegation_event",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -4705,6 +5299,7 @@
       "tag": "ViewDisclosure",
       "control": "viewKey=\"delegation:definitions\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -5128,6 +5723,7 @@
       "owner": "Menu",
       "tag": "button",
       "control": "aria-label={ariaLabel} onClick={() => setOpen(value => !value)}",
+      "disclosure": true,
       "contract": "editing",
       "reason": "Finding/cart mutations, handoff drafts and menu openness are excluded."
     },
@@ -5210,17 +5806,9 @@
       "tag": "ViewDisclosure",
       "control": "viewKey=\"findings:weeks\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "a60e5d5252308cc9:0",
-      "file": "web/src/findings.tsx",
-      "owner": "WeeksTable",
-      "tag": "summary",
-      "control": "",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
       "key": "07f331eeb7dcdfb3:0",
@@ -5376,14 +5964,26 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "3f80cc92874f3cc1:0",
+      "key": "4fdbaf71bb0bff42:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
       "tag": "button",
-      "control": "data-view-field=\"search_cards\" onClick={() => setBrowse((value) => !value)}",
+      "control": "data-view-field=\"search_cards\" onClick={() => { setHasBrowsed(true); setBrowse(value => !value); }}",
       "binding": "search_cards",
+      "disclosure": true,
       "contract": "view.search_cards",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "65734982c21de1f3:0",
+      "file": "web/src/index.tsx",
+      "owner": "ConversationResultCard",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" aria-label={`Browse turns: ${activitySummary}`} onClick={() => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); }}",
+      "binding": "search_cards",
+      "disclosure": true,
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "40b4c7c5f5fca240:0",
@@ -5494,21 +6094,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "588888a2da2e6389:0",
-      "file": "web/src/index.tsx",
-      "owner": "LibraryPage",
-      "tag": "summary",
-      "control": "",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
       "key": "b2e3b1e8425cba7a:0",
       "file": "web/src/index.tsx",
       "owner": "LibraryPage",
       "tag": "ViewDisclosure",
       "control": "viewKey=\"library:search-details\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
     },
@@ -5700,24 +6292,6 @@
       "control": "onClick={() => void copy()}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "e91721fa28de8d2d:0",
-      "file": "web/src/index.tsx",
-      "owner": "ResultConversationBrowser",
-      "tag": "button",
-      "control": "onClick={() => setActive(index + 1)} aria-label=\"Next turn\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "f9b03a0c5cf078b5:0",
-      "file": "web/src/index.tsx",
-      "owner": "ResultConversationBrowser",
-      "tag": "button",
-      "control": "onClick={() => setActive(index - 1)} aria-label=\"Previous turn\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
       "key": "04209a8ead3dd74e:0",
@@ -6062,20 +6636,20 @@
       "reason": "Legacy view-state migration is explicitly deferred."
     },
     {
-      "key": "59afb5cd20ed97dd:0",
+      "key": "167c3030ecac74aa:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label=\"Activity repository\" value={scope.repository} onChange={event => filter({ repository: event.target.value })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "5eb4c775d57fc534:0",
+      "key": "28b31ea4f0f20ecd:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label=\"Activity model\" value={scope.model} onChange={event => filter({ model: event.target.value })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Activity repository\" value={scope.repository} onChange={event => filter({ repository: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6089,29 +6663,29 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "bbb6a13686c0a204:0",
+      "key": "a04de5aa2e26d649:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Activity model\" value={scope.model} onChange={event => filter({ model: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "d913befc39deb7f9:0",
+      "key": "a217d747d436fb2b:0",
       "file": "web/src/machine-activity.tsx",
       "owner": "MachineActivity",
-      "tag": "select",
-      "control": "aria-label=\"Activity provider\" value={scope.provider} onChange={event => filter({ provider: event.target.value })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "db7caed12f502143:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "select",
+      "tag": "DashboardSelect",
       "control": "aria-label=\"Activity period\" value={scope.days} onChange={event => filter({ days: Number(event.target.value) })}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
+      "key": "fe8a43fd544caa31:0",
+      "file": "web/src/machine-activity.tsx",
+      "owner": "MachineActivity",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Activity provider\" value={scope.provider} onChange={event => filter({ provider: event.target.value })}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6197,33 +6771,6 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "65d7aab91be944e1:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "select",
-      "control": "aria-label=\"Analytics grouping\" value={grouping} onChange={event => setGrouping(event.target.value as MachineGrouping)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "68280cfb9b6944e6:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "details",
-      "control": "",
-      "contract": "legacy",
-      "reason": "Legacy Analyze/Tools migration is explicitly deferred."
-    },
-    {
-      "key": "863ec13b6e5ff014:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "summary",
-      "control": "",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
       "key": "8c34e6240865923f:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
@@ -6242,11 +6789,29 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
+      "key": "b4230493e933ecec:0",
+      "file": "web/src/machine-time.tsx",
+      "owner": "MachineTimeDashboard",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Trend command family\" value={operation} onChange={event => event.target.value ? filter([{ field: \"operation_key\", op: \"=\", value: event.target.value }]) : restore(where.filter(term => \"any\" in term || term.field !== \"operation_key\"))}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
       "key": "b44709cc2703e580:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
       "tag": "button",
       "control": "onClick={clear}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
+      "key": "b8d5399df513af1e:0",
+      "file": "web/src/machine-time.tsx",
+      "owner": "MachineTimeDashboard",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Trend measure\" value={metric} onChange={event => setMetric(event.target.value as TimeMetric)}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6260,11 +6825,11 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "e5bf6a8c53241a5c:0",
+      "key": "d516ddeae252c053:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
-      "tag": "select",
-      "control": "aria-label=\"Trend measure\" value={metric} onChange={event => setMetric(event.target.value as TimeMetric)}",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Analytics grouping\" value={grouping} onChange={event => setGrouping(event.target.value as MachineGrouping)}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6296,13 +6861,15 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "f2dd1f2c9e0ae2f7:0",
+      "key": "f4a107185d2da9e2:0",
       "file": "web/src/machine-time.tsx",
       "owner": "MachineTimeDashboard",
-      "tag": "select",
-      "control": "aria-label=\"Trend command family\" value={operation} onChange={event => event.target.value ? filter([{ field: \"operation_key\", op: \"=\", value: event.target.value }]) : restore(where.filter(term => \"any\" in term || term.field !== \"operation_key\"))}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"machine:methodology\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "f70936d71de07004:0",
@@ -6368,22 +6935,15 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "52563376148bd135:0",
+      "key": "74a2b7ae3e65a048:0",
       "file": "web/src/message-table-search.tsx",
       "owner": "MessageTableSearch",
-      "tag": "details",
-      "control": "",
-      "contract": "legacy",
-      "reason": "Legacy Analyze/Tools migration is explicitly deferred."
-    },
-    {
-      "key": "b54ae5085928c49e:0",
-      "file": "web/src/message-table-search.tsx",
-      "owner": "MessageTableSearch",
-      "tag": "summary",
-      "control": "",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`query:${api.schema?.name ?? \"messages\"}:layout`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "1cd6c49e2f9528e1:0",
@@ -6621,15 +7181,6 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "8888c0b5e4acdf7b:0",
-      "file": "web/src/record-search-editor.tsx",
-      "owner": "RecordSearchEditor",
-      "tag": "summary",
-      "control": "",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
       "key": "96d1e8bc1bde663d:0",
       "file": "web/src/record-search-editor.tsx",
       "owner": "RecordSearchEditor",
@@ -6654,6 +7205,7 @@
       "tag": "ViewDisclosure",
       "control": "viewKey={`query:${dataset}:layout`}",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
     },
@@ -6710,6 +7262,7 @@
       "tag": "ViewDisclosure",
       "control": "viewKey={`safety:${detail.id}:evidence:${entry.id}`}",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
     },
@@ -6738,26 +7291,9 @@
       "tag": "ViewDisclosure",
       "control": "viewKey=\"safety:coverage\"",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "c350839c450d64cf:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyPage",
-      "tag": "summary",
-      "control": "",
-      "contract": "view.disclosures",
-      "reason": "Toggles the containing ViewDisclosure, keyed by stable safety case/evidence identity or the coverage section."
-    },
-    {
-      "key": "c350839c450d64cf:1",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyPage",
-      "tag": "summary",
-      "control": "",
-      "contract": "view.disclosures",
-      "reason": "Toggles the containing ViewDisclosure, keyed by stable safety case/evidence identity or the coverage section."
     },
     {
       "key": "df39f809cdc2c8c1:0",
@@ -6813,6 +7349,7 @@
       "owner": "HomeSearch",
       "tag": "button",
       "control": "aria-label={expanded ? \"Collapse search\" : \"Search past work\"} onClick={() => setExpanded(!expanded)}",
+      "disclosure": true,
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -7060,40 +7597,26 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "2f91675836e01850:0",
+      "key": "85efc2b35d82ffac:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "Diagnostics",
-      "tag": "summary",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"sync:diagnostics\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "2f91675836e01850:1",
+      "key": "b7c3718efd13c5a0:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "Diagnostics",
-      "tag": "summary",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "f98f6d3ab624137c:0",
-      "file": "web/src/sync-tables.tsx",
-      "owner": "Diagnostics",
-      "tag": "details",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
-    },
-    {
-      "key": "f98f6d3ab624137c:1",
-      "file": "web/src/sync-tables.tsx",
-      "owner": "Diagnostics",
-      "tag": "details",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`sync:forecast:${runKey(run)}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "09b4b8093e48d3ee:0",
@@ -7245,6 +7768,7 @@
       "owner": "SearchPopover",
       "tag": "button",
       "control": "aria-label={label} onClick={() => setOpen(!open)}",
+      "disclosure": true,
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -7281,6 +7805,7 @@
       "owner": "TextSearchEditor",
       "tag": "button",
       "control": "onClick={() => setWorkspaceOpen(!workspaceOpen)}",
+      "disclosure": true,
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -7398,6 +7923,7 @@
       "owner": "TextSearchEditor",
       "tag": "button",
       "control": "aria-label=\"Edit workspace filters\" onClick={() => setWorkspaceOpen(!workspaceOpen)}",
+      "disclosure": true,
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -7454,6 +7980,230 @@
       "control": "onClick={() => addDateBound(field.key === \"from\" ? \"to\" : \"from\")}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "ea08a43f1bf2ce23:0",
+      "file": "web/src/thinking-charts.tsx",
+      "owner": "Brush",
+      "tag": "svg",
+      "control": "aria-label={ onBrush ? \"Chart. Drag to select dates; use Range for keyboard date selection.\" : \"Chart\" } onPointerDown={(e) => { if (!onBrush || e.button !== 0) return; const p = coordinate(e); start.current = p; setDrag([p, p]); e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={(e) => { if (start.current !== null) setDrag([start.current, coordinate(e)]); }} onPointerCancel={() => { start.current = null; setDrag(null); }} onPointerUp={(e) => { if (start.current === null) return; const a = start.current, b = coordinate(e); start.current = null; setDrag(null); if (Math.abs(a - b) > 4) onBrush?.( (a / (vertical ? plotHeight : plotWidth)) * count, (b / (vertical ? plotHeight : plotWidth)) * count, ); }}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "21b981f8da9180cc:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ComparisonHeatmap",
+      "tag": "button",
+      "control": "onClick={() => change({ sortBy: key as ThinkingState[\"sortBy\"], sortDirection: state.sortBy === key && state.sortDirection === \"desc\" ? \"asc\" : \"desc\", }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "f51212849f3ab641:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "Methodology",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:methodology\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "015cd9065ff86555:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:coverage\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "0572b5fafef6e2f4:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "PeriodControl",
+      "control": "onChange={(next) => change(next)}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "1fac7c724e757e67:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "RangeControl",
+      "control": "onPresetChange={(range, oldest) => change(presetPeriod(range, oldest))} onChange={(from, to, preset) => change({ range: preset ?? \"custom\", from: preset ? undefined : from?.toISOString(), to: preset ? undefined : to?.toISOString(), }) }",
+      "contract": "view.thinking",
+      "reason": "Range and preset-driven time buckets update the shared Thinking URL state. Date inputs use the viewer’s local zone; custom and brushed boundaries remain half-open ISO instants."
+    },
+    {
+      "key": "27abd21aa517ce02:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:conversation\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "283453809ca78e30:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.model} onChange={(model) => change({ model })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "396a6ea92106f794:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.traceScale} onChange={(v) => change({ traceScale: v as ThinkingState[\"traceScale\"], }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "538df922144bc619:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setNativeFilters(\"\")}",
+      "contract": "view.thinking_filters",
+      "reason": "Clears the native population token through the shared view binding."
+    },
+    {
+      "key": "5757d2d092a88056:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => change({ hiddenPercentiles: state.hiddenPercentiles.includes( r.key, ) ? state.hiddenPercentiles.filter((k) => k !== r.key) : [...state.hiddenPercentiles, r.key], }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "59b4e8b59a53da9e:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.groupBy} onChange={(groupBy) => change({ groupBy: groupBy as ThinkingState[\"groupBy\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "5d6904418ef58251:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ThinkingDistribution",
+      "control": "onChange={change}",
+      "contract": "view.thinking",
+      "reason": "The reviewed composite forwards this control to ThinkingDashboard.change/setLinked, which writes the registered thinking field through useViewState. Chart brushing commits the shared range; pointer motion alone is transient."
+    },
+    {
+      "key": "5e087c6ac78c7728:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={String(state.hourB)} onChange={(v) => change({ hourB: Number(v) })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "668776650eb34bff:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={fixed ? \"fixed\" : state.sortBy + \":\" + state.sortDirection} onChange={(v) => { const [sortBy, sortDirection] = v.split(\":\"); change({ sortBy: sortBy as ThinkingState[\"sortBy\"], sortDirection: sortDirection as ThinkingState[\"sortDirection\"], }); }}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "6b7f6a1ac85dd29f:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={String(state.hourA)} onChange={(v) => change({ hourA: Number(v) })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "6ce50e01d3b8c063:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.calendarMetric} onChange={(v) => change({ calendarMetric: v as ThinkingState[\"calendarMetric\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "6dc080c69a0eb8ad:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.view} onChange={(view) => change({ view: view as ThinkingState[\"view\"], ...((view === \"reasoning\" || view === \"wait-box\") && state.groupBy === \"none\" ? { groupBy: \"model_effort\" } : {}), }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "7486c8b23f279860:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={trace?.ID ?? \"\"} onChange={(session) => change({ session })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "9252aa783492e0ed:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:validation\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a8e71e144d56b31d:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.effort} onChange={(effort) => change({ effort })}",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "c64385755bdd4887:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.calendarRows} onChange={(v) => change({ calendarRows: v as ThinkingState[\"calendarRows\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "ec957894002037b5:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={state.normalization} onChange={(v) => change({ normalization: v as ThinkingState[\"normalization\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "fe037810cdd7016d:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setRefresh((n) => n + 1)}",
+      "contract": "editing",
+      "reason": "Refresh retries a read without changing the applied view."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",
@@ -7519,6 +8269,17 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "223b29a03f54ed7c:0",
+      "file": "web/src/uifeedback/inbox.tsx",
+      "owner": "Inbox",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`feedback:logs:${detail.id}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "3ab624bb21fc766b:0",
       "file": "web/src/uifeedback/inbox.tsx",
       "owner": "Inbox",
@@ -7535,15 +8296,6 @@
       "control": "onClick={() => void navigator.clipboard.writeText(JSON.stringify(detail, null, 2)).then(() => setNotice(\"Report copied.\"), () => setError(\"Could not copy. Download the report instead.\"))}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "46ff68ef3ac98306:0",
-      "file": "web/src/uifeedback/inbox.tsx",
-      "owner": "Inbox",
-      "tag": "details",
-      "control": "",
-      "contract": "editing",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
     },
     {
       "key": "bf4af4572732eeea:0",
@@ -7578,15 +8330,6 @@
       "owner": "Inbox",
       "tag": "button",
       "control": "onClick={() => { setDetail(null); history.replaceState(null, \"\", \"/\"); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "ffccbbf922994fc3:0",
-      "file": "web/src/uifeedback/inbox.tsx",
-      "owner": "Inbox",
-      "tag": "summary",
-      "control": "",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -7686,8 +8429,8 @@
       "owner": "Composer",
       "tag": "summary",
       "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "editing",
+      "reason": "Expands editable logs attached to an unapplied feedback submission."
     },
     {
       "key": "bc04d601aade6832:0",
@@ -7726,10 +8469,10 @@
       "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
     },
     {
-      "key": "2432438d27b1f55a:0",
+      "key": "57c08b857d8535fe:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "ChartSelect",
-      "tag": "select",
+      "tag": "DashboardSelect",
       "control": "aria-label={ariaLabel} value={value} onChange={event => onChange(event.target.value as T)}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
@@ -7780,13 +8523,13 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "5c889dfea8ddaf94:0",
+      "key": "4811596f82fa8c4f:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "RangeControl",
       "tag": "ChartSelect",
-      "control": "value={mode ?? active!} onChange={range => { if (range === \"custom\" || range === \"custom-times\") { setCustom(range); const fixed = range === \"custom\" ? customDateBounds(bounds) : bounds; onChange(fixed.from, fixed.to); } else { setCustom(null); selectChartRange(range as ChartRange | \"all\", onChange, preset => onPresetChange?.(preset, history.oldest)); } }}",
+      "control": "value={mode ?? active!} onChange={range => { if (range === \"custom\" || range === \"custom-times\") { setCustom(range); const fixed = range === \"custom\" ? customDateBounds(bounds, timezone) : bounds; onChange(fixed.from, fixed.to); } else { setCustom(null); selectChartRange(range as ChartRange | \"all\", onChange, preset => onPresetChange?.(preset, history.oldest)); } }}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "The owning dashboard applies the range callback to its canonical state: Thinking uses view.thinking; other dashboards use analyze_chart/analyze_filters. Custom date/time drafts use the selected IANA zone when supplied, with absolute ISO bounds preserved in the URL."
     },
     {
       "key": "76e9a6585f9788fa:0",
@@ -7795,7 +8538,7 @@
       "tag": "CustomDates",
       "control": "onChange={onChange}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "The owning dashboard applies the range callback to its canonical state: Thinking uses view.thinking; other dashboards use analyze_chart/analyze_filters. Custom date/time drafts use the selected IANA zone when supplied, with absolute ISO bounds preserved in the URL."
     },
     {
       "key": "76fef118d5cb3303:0",
@@ -7870,22 +8613,15 @@
       "reason": "Selecting a query idea replaces the native query definition; the ideas disclosure is content view state."
     },
     {
-      "key": "48b14983f30f8bdc:0",
+      "key": "e3fd4247c78ece38:0",
       "file": "web/src/usage-query-ideas.tsx",
       "owner": "UsageQueryIdeas",
-      "tag": "details",
-      "control": "open={open} onToggle={event => { const next = event.currentTarget.open; // The initial native toggle event is not a user preference change. if (next === open) return; setOpen(next); preferences().set(key, next); }}",
-      "contract": "native-query",
-      "reason": "Selecting a query idea replaces the native query definition; the ideas disclosure is content view state."
-    },
-    {
-      "key": "eb523844bb966e52:0",
-      "file": "web/src/usage-query-ideas.tsx",
-      "owner": "UsageQueryIdeas",
-      "tag": "summary",
-      "control": "",
-      "contract": "native-query",
-      "reason": "Selecting a query idea replaces the native query definition; the ideas disclosure is content view state."
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`query:${dataset}:ideas`} defaultOpen={queryIdeasOpen(preferences().get<unknown>(key, undefined))} onOpenChange={open => preferences().set(key, open)}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "24c69b6e95905991:0",
@@ -7894,17 +8630,9 @@
       "tag": "ViewDisclosure",
       "control": "viewKey={`row:${dataset}:${row.id}:${field.name}`}",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "386a1469865bafcc:0",
-      "file": "web/src/usage-row-renderers.tsx",
-      "owner": "usageRowRenderers",
-      "tag": "summary",
-      "control": "",
-      "contract": "native-query",
-      "reason": "Native item properties and source navigation; retained payload disclosures use stable dataset/row/field keys."
     },
     {
       "key": "8220224cf207d9e3:0",
@@ -7970,14 +8698,37 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "57caf41b2abf1980:0",
+      "key": "544791efe8e78dee:0",
       "file": "web/src/view-disclosure.tsx",
       "owner": "ViewDisclosure",
       "tag": "details",
-      "control": "open={open} data-view-field=\"disclosures\" onToggle={event=>{ if(event.currentTarget.open!==open)setOpen(event.currentTarget.open); onToggle?.(event); }}",
+      "control": "open={open} data-view-field=\"disclosures\" onToggle={event=>{ if(event.currentTarget.open!==open){setOpen(event.currentTarget.open);onOpenChange?.(event.currentTarget.open);} }}",
       "binding": "disclosures",
+      "sharedDisclosure": true,
       "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "6a450f095032a1fd:0",
+      "file": "web/src/view-disclosure.tsx",
+      "owner": "ViewDisclosure",
+      "tag": "summary",
+      "control": "",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "9e47eb17ed5bcdc9:0",
+      "file": "web/src/view-state.ts",
+      "owner": "apply",
+      "tag": "aria-expanded",
+      "control": "element",
+      "disclosure": true,
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared native/button disclosure runtime reads and writes the canonical disclosures map."
     },
     {
       "key": "7de8a568866fa911:0",
@@ -7987,6 +8738,26 @@
       "control": "\"button\"",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "88124ff6389629b0:0",
+      "file": "web/src/workspace-inbox.ts",
+      "owner": "mountInbox",
+      "tag": "aria-expanded",
+      "control": "sessions",
+      "disclosure": true,
+      "contract": "view.sidebar_visible",
+      "reason": "Workspace session pane visibility uses the shared sidebar_visible URL field."
+    },
+    {
+      "key": "d91066140391c046:0",
+      "file": "web/src/workspace-inbox.ts",
+      "owner": "update",
+      "tag": "aria-expanded",
+      "control": "sessions",
+      "disclosure": true,
+      "contract": "view.sidebar_visible",
+      "reason": "Workspace session pane visibility uses the shared sidebar_visible URL field."
     }
   ]
 }

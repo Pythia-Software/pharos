@@ -168,6 +168,9 @@ func TestWorkConversationUsesReconciledSessionUsage(t *testing.T) {
 			if len(parts) != 1 || parts[0]["excerpt"] != excerpt(text[len(text)-100:len(text)-2], 120) {
 				t.Fatalf("clip=%v: authorship must use the original text: %v", clip, parts)
 			}
+			if integer(parts[0]["start"]) != int64(len(text)-100) || integer(parts[0]["end"]) != int64(len(text)-2) {
+				t.Fatalf("clip=%v: authorship offsets must refer to the original body: %v", clip, parts)
+			}
 			if (message["text_clipped"] == true) != clip {
 				t.Fatalf("clip=%v: preview markers: %v", clip, message["text_clipped"])
 			}

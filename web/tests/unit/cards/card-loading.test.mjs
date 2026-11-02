@@ -47,6 +47,8 @@ test("daily covers reserve their headline and calendar bars, and nonmetrics use 
   assert.equal(spec.count, 8);
   assert.equal(spec.headline, true);
   assert.equal(spec.height, 208);
+  const log = queryRecipes.find(recipe => recipe.id === "token-volume-log");
+  assert.equal(cardLoadingPresentation(instantiateRecipe(log, 30).query, { recipe: log }).kind, "line");
   assert.equal(cardLoadingPresentation(core.EMPTY_QUERY).kind, "text");
   assert.equal(cardLoadingPresentation({ ...core.EMPTY_QUERY, grouping: { source: core.EMPTY_QUERY, keys: ["group"], summaries: [] } }).kind, "table");
 });

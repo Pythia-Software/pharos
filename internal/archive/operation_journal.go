@@ -3,11 +3,13 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -400,22 +402,33 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 		release()
 		j.recordHold(time.Since(held))
 	}()
-	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busy.Milliseconds())); err != nil {
+	// Statements never run under the round's deadline, which is checked
+	// between them instead: an interrupt that lands on a statement of an open
+	// transaction, or just after it (a COMMIT waiting for an external drive's
+	// flush), can leave the transaction open on the pooled connection, holding
+	// the catalog's write lock for every later writer.
+	run := context.WithoutCancel(ctx)
+	if _, err := conn.ExecContext(run, fmt.Sprintf("PRAGMA busy_timeout=%d", busy.Milliseconds())); err != nil {
 		return err
 	}
 	defer conn.ExecContext(context.Background(), fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeoutMS))
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		// A connection whose transaction cannot be rolled back is discarded,
+		// never lent out with its lock.
+		if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil && !strings.Contains(err.Error(), "no transaction is active") {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
+	if _, err := conn.ExecContext(run, "BEGIN IMMEDIATE"); err != nil {
 		if catalogBusy(err) {
 			return errJournalBusy
 		}
 		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
-		}
-	}()
 	yield := func() bool { return wait == 0 && !priority && c.writersWaiting() }
 	host := currentHost().ID
 	pid := os.Getpid()
@@ -425,6 +438,9 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 		}
 		if yield() {
 			return errJournalBusy
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		var total any
 		if image.stepKnown {
@@ -437,7 +453,7 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 		if image.stepCount > 0 {
 			count = image.stepCount
 		}
-		if _, err := conn.ExecContext(ctx, `INSERT INTO operation_journal(id,parent_id,root_id,kind,variant,subject,trigger,host_id,process,pid,instance,state,reason,error,
+		if _, err := conn.ExecContext(run, `INSERT INTO operation_journal(id,parent_id,root_id,kind,variant,subject,trigger,host_id,process,pid,instance,state,reason,error,
  step_index,step_count,step_name,step_unit,step_done,step_total,started_at,updated_at,ended_at,legacy_ref,detail_json)
  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(id) DO UPDATE SET state=excluded.state,reason=excluded.reason,error=excluded.error,step_index=excluded.step_index,
@@ -457,8 +473,11 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 		if yield() {
 			return errJournalBusy
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// The row and its open children, only while they are still open.
-		if _, err := conn.ExecContext(ctx, `UPDATE operation_journal SET state=?,reason=?,error=?,ended_at=?,updated_at=?
+		if _, err := conn.ExecContext(run, `UPDATE operation_journal SET state=?,reason=?,error=?,ended_at=?,updated_at=?
  WHERE (id=? OR root_id=?) AND instance=? AND ended_at IS NULL`, entry.State, nilIfEmpty(entry.Reason), nilIfEmpty(entry.Error), entry.EndedAt, now(),
 			entry.ID, entry.ID, entry.Instance); err != nil {
 			if catalogBusy(err) {
@@ -469,7 +488,7 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 	}
 	if prune {
 		cutoff := formatTime(time.Now().AddDate(0, 0, -journalKeepDays))
-		if _, err := conn.ExecContext(ctx, `DELETE FROM operation_journal WHERE host_id=? AND root_id IN (
+		if _, err := conn.ExecContext(run, `DELETE FROM operation_journal WHERE host_id=? AND root_id IN (
  SELECT id FROM operation_journal WHERE host_id=? AND parent_id IS NULL AND ended_at IS NOT NULL AND (ended_at<? OR id NOT IN (
   SELECT id FROM operation_journal WHERE host_id=? AND parent_id IS NULL AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT ?)))`,
 			host, host, cutoff, host, journalKeepRows); err != nil {
@@ -482,7 +501,10 @@ func (j *journalWriter) write(ctx context.Context, wait time.Duration, priority 
 	if yield() {
 		return errJournalBusy
 	}
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(run, "COMMIT"); err != nil {
 		if catalogBusy(err) {
 			return errJournalBusy
 		}

@@ -10,6 +10,7 @@ import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQuer
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
+  dashboard?: boolean;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
 };
 

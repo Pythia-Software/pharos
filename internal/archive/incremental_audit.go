@@ -36,27 +36,48 @@ type verificationSummary struct {
 }
 
 type auditResult struct {
-	Outcome     string   `json:"outcome"`
-	Source      string   `json:"source,omitempty"`
-	Unit        string   `json:"unit,omitempty"`
-	Detail      string   `json:"detail,omitempty"`
-	Differences []string `json:"differences,omitempty"`
-	Seconds     float64  `json:"seconds"`
-	Discovered  int      `json:"discovered_units"`
-	Deferred    int      `json:"deferred_units"`
+	Outcome       string         `json:"outcome"`
+	Source        string         `json:"source,omitempty"`
+	Unit          string         `json:"unit,omitempty"`
+	Detail        string         `json:"detail,omitempty"`
+	Differences   []string       `json:"differences,omitempty"`
+	Seconds       float64        `json:"seconds"`
+	Discovered    int            `json:"discovered_units"`
+	Deferred      int            `json:"deferred_units"`
+	Reason        string         `json:"reason,omitempty"`
+	EvidenceBytes int64          `json:"evidence_bytes,omitempty"`
+	Attempts      []auditAttempt `json:"attempts,omitempty"`
+}
+
+type auditDeferral struct {
+	Reason, Detail string
+}
+
+func (e *auditDeferral) Error() string { return e.Detail }
+
+type auditAttempt struct {
+	Source        string  `json:"source"`
+	Unit          string  `json:"unit"`
+	Outcome       string  `json:"outcome"`
+	Reason        string  `json:"reason,omitempty"`
+	Detail        string  `json:"detail,omitempty"`
+	Seconds       float64 `json:"seconds"`
+	EvidenceBytes int64   `json:"evidence_bytes,omitempty"`
 }
 
 type auditPool struct {
-	catalog    *Catalog
-	units      []syncUnit
-	checks     map[string]string
-	outcomes   map[string]string
-	issues     map[string]auditIssue
-	retries    map[string]bool
-	versions   map[string]string
-	discovered int
-	deferred   int
-	failure    error
+	catalog        *Catalog
+	units          []syncUnit
+	checks         map[string]string
+	outcomes       map[string]string
+	issues         map[string]auditIssue
+	retries        map[string]bool
+	versions       map[string]string
+	progress       map[string]auditProgress
+	sourceAttempts map[string]string
+	discovered     int
+	deferred       int
+	failure        error
 }
 
 // auditIssue is what an open mismatch was found against.
@@ -66,12 +87,26 @@ type auditIssue struct {
 }
 
 func newAuditPool(catalog *Catalog) *auditPool {
-	pool := &auditPool{catalog: catalog, checks: map[string]string{}, outcomes: map[string]string{}, issues: map[string]auditIssue{}, retries: map[string]bool{}, versions: map[string]string{}}
-	rows, err := queryMaps(catalog.DB, "SELECT source_name,unit,checked_at,outcome FROM sync_verifications WHERE host_id=? ORDER BY checked_at DESC LIMIT 20000", currentHost().ID)
+	pool := &auditPool{catalog: catalog, checks: map[string]string{}, outcomes: map[string]string{}, issues: map[string]auditIssue{}, retries: map[string]bool{}, versions: map[string]string{}, progress: map[string]auditProgress{}, sourceAttempts: map[string]string{}}
+	rows, err := catalog.reader().Query(`SELECT v.source_name,v.unit,v.outcome,
+		COALESCE(p.verified_at,CASE WHEN v.outcome IN ('passed','mismatch') THEN v.checked_at END,''),
+		COALESCE(p.attempted_at,v.checked_at),COALESCE(p.next_at,''),COALESCE(p.heavy,0),COALESCE(p.signature,'')
+		FROM sync_verifications v LEFT JOIN sync_verification_progress p USING(host_id,source_name,unit)
+		WHERE v.host_id=?`, currentHost().ID)
 	pool.failure = err
-	for _, row := range rows {
-		key := firstString(row["source_name"]) + "/" + firstString(row["unit"])
-		pool.checks[key], pool.outcomes[key] = firstString(row["checked_at"]), firstString(row["outcome"])
+	if err == nil {
+		for rows.Next() {
+			var source, unit, outcome, verified, attempted, next, signature string
+			var heavy int
+			if err = rows.Scan(&source, &unit, &outcome, &verified, &attempted, &next, &heavy, &signature); err != nil {
+				break
+			}
+			key := source + "/" + unit
+			pool.checks[key], pool.outcomes[key] = verified, outcome
+			pool.progress[key] = auditProgress{attempted: attempted, next: next, signature: signature, heavy: heavy != 0}
+			pool.sourceAttempts[source] = max(pool.sourceAttempts[source], attempted)
+		}
+		pool.failure = errors.Join(err, rows.Err(), rows.Close())
 	}
 	issues, err := queryMaps(catalog.DB, "SELECT source_name,unit,detail_json FROM sync_integrity_issues WHERE host_id=? AND state='open'", currentHost().ID)
 	if pool.failure == nil {
@@ -87,11 +122,9 @@ func newAuditPool(catalog *Catalog) *auditPool {
 
 // retry reports whether a unit's open mismatch was found by other code or in
 // another version of its input. Auditing it again may now pass and resolve
-// it, so it goes before the least recently checked units: one unit is
-// audited per run, and an open mismatch would otherwise wait for every unit
-// never checked. A mismatch nothing has changed for would only be confirmed
-// again, and one audited since without a verdict (deferred) has had its turn;
-// both wait like any other unit.
+// it, so it goes before the least recently verified units. An unchanged
+// mismatch stays in the normal rotation. Attempts without a verdict have
+// separate backoff and do not advance completed verification.
 func (pool *auditPool) retry(unit syncUnit) bool {
 	key := unit.Source.Name + "/" + unit.ID
 	issue, open := pool.issues[key]
@@ -113,6 +146,13 @@ func (pool *auditPool) consider(unit syncUnit) {
 		return
 	}
 	key := func(unit syncUnit) string { return unit.Source.Name + "/" + unit.ID }
+	progress := pool.progress[key(unit)]
+	if progress.signature == partsSignature(unit.Parts) {
+		if next, ok := parseTime(progress.next); progress.heavy || ok && time.Now().Before(next) {
+			pool.deferred++
+			return
+		}
+	}
 	if pool.retry(unit) {
 		pool.retries[key(unit)] = true
 	}
@@ -122,25 +162,51 @@ func (pool *auditPool) consider(unit syncUnit) {
 		if pool.retries[first] != pool.retries[second] {
 			return pool.retries[first]
 		}
-		return pool.checks[first] < pool.checks[second]
+		if a, b := pool.sourceAttempts[pool.units[left].Source.Name], pool.sourceAttempts[pool.units[right].Source.Name]; a != b {
+			return a < b
+		}
+		if pool.checks[first] != pool.checks[second] {
+			return pool.checks[first] < pool.checks[second]
+		}
+		return pool.progress[first].attempted < pool.progress[second].attempted
 	})
 	if len(pool.units) > 64 {
-		pool.units = pool.units[:64]
+		seen := map[string]bool{}
+		first, rest := []syncUnit{}, []syncUnit{}
+		for _, candidate := range pool.units {
+			if !seen[candidate.Source.Name] {
+				seen[candidate.Source.Name] = true
+				first = append(first, candidate)
+			} else {
+				rest = append(rest, candidate)
+			}
+		}
+		pool.units = append(first, rest...)[:64]
 	}
 }
 
 func (pool *auditPool) preflightSkipped(source SourceConfig) {
-	rows, err := queryMaps(pool.catalog.DB, `SELECT p.item,p.size,p.version,COALESCE(p.signal,'') signal FROM source_item_states p
+	rows, err := pool.catalog.reader().Query(`SELECT p.item,p.size,p.version,COALESCE(p.signal,'') signal FROM source_item_states p
 		LEFT JOIN sync_verifications v ON v.host_id=p.host_id AND v.source_name=p.source_name AND v.unit=p.item
 		LEFT JOIN sync_integrity_issues i ON i.host_id=p.host_id AND i.source_name=p.source_name AND i.unit=p.item AND i.state='open'
-		WHERE p.host_id=? AND p.source_name=? ORDER BY i.id IS NULL,COALESCE(v.checked_at,''),p.item LIMIT 64`, currentHost().ID, source.Name)
+		LEFT JOIN sync_verification_progress a ON a.host_id=p.host_id AND a.source_name=p.source_name AND a.unit=p.item
+		WHERE p.host_id=? AND p.source_name=? ORDER BY i.id IS NULL,COALESCE(a.verified_at,CASE WHEN v.outcome IN ('passed','mismatch') THEN v.checked_at END,''),COALESCE(a.attempted_at,v.checked_at,''),p.item`, currentHost().ID, source.Name)
 	if err != nil {
 		pool.failure = err
 		return
 	}
-	for _, row := range rows {
-		pool.consider(unitOf(source, []sourcePart{{item: firstString(row["item"]), size: integer(row["size"]), version: integer(row["version"]), signal: firstString(row["signal"])}}, false))
+	defer rows.Close()
+	// Stream past queued/backed-off inputs so they cannot fill a SQL LIMIT
+	// and hide eligible work. consider retains only the bounded candidate set.
+	for rows.Next() {
+		var part sourcePart
+		if err := rows.Scan(&part.item, &part.size, &part.version, &part.signal); err != nil {
+			pool.failure = err
+			return
+		}
+		pool.consider(unitOf(source, []sourcePart{part}, false))
 	}
+	pool.failure = errors.Join(pool.failure, rows.Err())
 }
 
 func (c *Catalog) auditPool(ctx context.Context, pool *auditPool, runID string) auditResult {
@@ -148,20 +214,39 @@ func (c *Catalog) auditPool(ctx context.Context, pool *auditPool, runID string) 
 		return auditResult{Outcome: "read_error", Detail: pool.failure.Error(), Discovered: pool.discovered, Deferred: pool.deferred}
 	}
 	if len(pool.units) == 0 {
-		return auditResult{Outcome: "deferred", Detail: "no stable eligible unit; actively streaming inputs remain eligible later", Discovered: pool.discovered, Deferred: pool.deferred}
+		return auditResult{Outcome: "deferred", Reason: "no_eligible_input", Detail: "no eligible input; changing inputs, queued checks and retries remain pending", Discovered: pool.discovered, Deferred: pool.deferred}
 	}
-	unit := pool.units[0]
 	ctx, cancel := context.WithTimeout(ctx, automaticAuditWall)
 	defer cancel()
-	result := c.auditUnit(ctx, unit, runID, automaticAuditBytes)
-	result.Discovered, result.Deferred = pool.discovered, pool.deferred
-	if result.Outcome == "deferred" {
-		result.Deferred++
+	started := time.Now()
+	attempts := []auditAttempt{}
+	deferred := pool.deferred
+	result := auditResult{}
+	for _, unit := range pool.units[:min(automaticAuditAttempts, len(pool.units))] {
+		if ctx.Err() != nil {
+			break
+		}
+		result = c.auditUnit(ctx, unit, runID, automaticAuditBytes)
+		attempts = append(attempts, auditAttempt{Source: result.Source, Unit: result.Unit, Outcome: result.Outcome, Reason: result.Reason, Detail: result.Detail, Seconds: result.Seconds, EvidenceBytes: result.EvidenceBytes})
+		if result.Outcome == "deferred" {
+			deferred++
+		}
+		if err := c.recordVerification(unit, result); err != nil {
+			result.Outcome, result.Detail = "read_error", err.Error()
+			break
+		}
+		if result.Outcome != "deferred" {
+			break
+		}
 	}
-	err := c.recordVerification(unit, result)
-	if err != nil {
-		result.Outcome, result.Detail = "read_error", err.Error()
+	if len(attempts) == 0 {
+		reason := "time_budget"
+		if ctx.Err() == context.Canceled {
+			reason = "cancelled"
+		}
+		result = auditResult{Outcome: "deferred", Reason: reason, Detail: "verification did not start before cancellation or deadline"}
 	}
+	result.Discovered, result.Deferred, result.Attempts, result.Seconds = pool.discovered, deferred, attempts, time.Since(started).Seconds()
 	return result
 }
 
@@ -183,12 +268,29 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 			result.Outcome = "deferred"
 			result.Detail = "verification budget or cancellation"
 		}
+		if result.Outcome == "deferred" && result.Reason == "" {
+			switch {
+			case ctx.Err() == context.DeadlineExceeded:
+				result.Reason = "time_budget"
+			case ctx.Err() != nil:
+				result.Reason = "cancelled"
+			case strings.Contains(result.Detail, "budget") || strings.Contains(result.Detail, "large group"):
+				result.Reason = "evidence_size"
+			case strings.Contains(result.Detail, "rollout") || strings.Contains(result.Detail, "requires sqlite_record_capture"):
+				result.Reason = "unsupported_capture"
+			default:
+				result.Reason = "source_changed"
+			}
+		}
+		if result.Outcome == "read_error" && result.Reason == "" {
+			result.Reason = "read_error"
+		}
 	}()
 	if budget > 0 && (unit.Bytes > budget || (budget == automaticAuditBytes && (len(unit.Parts) > 64 || (unit.Source.Kind == "conductor" && unit.Bytes > automaticAuditConductorMessages)))) {
-		result.Outcome, result.Detail = "deferred", "large group queued for manual verification"
+		result.Outcome, result.Detail = "deferred", "selected input exceeds quick verification budget"
 		return
 	}
-	if (unit.Reader == nil || captureViewOf(unit.Reader) == nil) && retainedAcquisitionEnabled(unit.Source) {
+	if !scopedCodexAudit(unit) && (unit.Reader == nil || captureViewOf(unit.Reader) == nil) && retainedAcquisitionEnabled(unit.Source) {
 		adapter := unit.Reader
 		var err error
 		if adapter == nil {
@@ -294,7 +396,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 			unit.Reader, unit.Source = input.Adapter, input.Adapter.Config()
 		}
 	}
-	if budget > 0 && unit.Reader != nil {
+	if budget > 0 && unit.Reader != nil && !scopedCodexAudit(unit) {
 		if view := captureViewOf(unit.Reader); view != nil {
 			var bytes int64
 			for _, file := range view.manifest.Files {
@@ -349,7 +451,11 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		}
 	} else {
 		var record *WorkspaceRecord
-		record, read, err = freezeAuditRecord(ctx, unit, filepath.Join(dir, "evidence"), budget)
+		if scopedCodexAudit(unit) {
+			record, read, result.EvidenceBytes, err = freezeCodexAuditRecord(ctx, unit, filepath.Join(dir, "evidence"), budget)
+		} else {
+			record, read, err = freezeAuditRecord(ctx, unit, filepath.Join(dir, "evidence"), budget)
+		}
 		if err == nil && record == nil {
 			err = errAuditUnstable
 		}
@@ -362,7 +468,11 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 	}
 	if err != nil {
 		result.Detail = err.Error()
-		if errors.Is(err, errAuditUnstable) || errors.Is(err, errOlderCopy) || ctx.Err() != nil {
+		var deferred *auditDeferral
+		if errors.As(err, &deferred) {
+			result.Reason = deferred.Reason
+		}
+		if deferred != nil || errors.Is(err, errAuditUnstable) || errors.Is(err, errOlderCopy) || ctx.Err() != nil {
 			result.Outcome = "deferred"
 		}
 		return
@@ -716,6 +826,9 @@ func copyStableAuditFile(ctx context.Context, path, destination string, info os.
 var auditCategories = []string{"workspaces", "workspace_names", "conversations", "conversation_group_membership", "messages", "search", "conversation_documents", "agent_sessions", "agent_session_usage", "agent_session_messages", "model_requests", "tool_calls", "tool_commands", "tool_urls", "metrics", "metric_ledger", "summaries"}
 var auditSearchWord = regexp.MustCompile(`[\p{L}\p{N}]{3,24}`)
 
+// Optional read-only probe observer; production leaves it nil.
+var auditQueryTiming func(string, time.Duration, int)
+
 func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceRecord, budget int64) (map[string][]map[string]any, error) {
 	tx, err := catalog.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -753,7 +866,9 @@ func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceR
 		if name == "text_search_documents" {
 			continue
 		}
-		if strings.HasPrefix(name, "sqlite_") || strings.HasPrefix(name, "messages_fts") || strings.HasPrefix(name, "messages_trigram") || strings.HasPrefix(name, "sync_") || name == "source_item_states" || name == "source_record_states" || name == "tool_call_cube" || name == "tool_usage_daily" {
+		// These deferred projections are rebuilt from tool_calls. In particular,
+		// tool_query_facts uses physical tool rowids, reassigned during seeding.
+		if strings.HasPrefix(name, "sqlite_") || strings.HasPrefix(name, "messages_fts") || strings.HasPrefix(name, "messages_trigram") || strings.HasPrefix(name, "sync_") || name == "source_item_states" || name == "source_record_states" || name == "tool_call_cube" || name == "tool_usage_daily" || name == "tool_query_facts" {
 			continue
 		}
 		columns, err := tableColumns(tx, name)
@@ -822,6 +937,12 @@ func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceR
 }
 
 func queryAuditRows(ctx context.Context, query queryer, statement string, budget int64, used *int64, args ...any) ([]map[string]any, error) {
+	started, count := time.Now(), 0
+	defer func() {
+		if auditQueryTiming != nil {
+			auditQueryTiming(statement, time.Since(started), count)
+		}
+	}()
 	rows, err := query.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
@@ -857,6 +978,7 @@ func queryAuditRows(ctx context.Context, query queryer, statement string, budget
 			return nil, fmt.Errorf("%w: catalog scope exceeds memory budget", errAuditUnstable)
 		}
 		result = append(result, row)
+		count++
 	}
 	return result, rows.Err()
 }
@@ -906,6 +1028,11 @@ func normalizeAuditRows(table string, rows []map[string]any) string {
 	for _, row := range rows {
 		fields := map[string]any{}
 		for key, value := range row {
+			// Older writers serialized a nil aliases slice as JSON null. It
+			// represents the same empty list as []; keep nonempty aliases checked.
+			if table == "conversations" && key == "aliases_json" && value == "null" {
+				value = "[]"
+			}
 			// A unit audit verifies source naming evidence. The resolved title
 			// also depends on linked works and global authorship classification,
 			// neither of which an isolated reference ingest can reconstruct.
@@ -1267,8 +1394,5 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 }
 
 func (c *Catalog) recordVerification(unit syncUnit, result auditResult) error {
-	_, err := c.DB.Exec(`INSERT INTO sync_verifications(host_id,source_name,unit,checked_at,outcome,detail,signature)
-		VALUES(?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name,unit) DO UPDATE SET checked_at=excluded.checked_at,
-		outcome=excluded.outcome,detail=excluded.detail,signature=excluded.signature`, unit.hostID(), unit.Source.Name, unit.ID, now(), result.Outcome, nilIfEmpty(result.Detail), partsSignature(unit.Parts))
-	return err
+	return c.recordAuditProgress(unit, result)
 }

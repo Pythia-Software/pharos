@@ -89,7 +89,7 @@ var leadingHarnessReasons = func() map[string]bool {
 }()
 
 // unrecognizedHarnessTags are app-supplied blocks that open user messages but
-// that authorship-v8 does not recognize, so it counts them as typed.
+// that authorship (v8, v9) does not recognize, so it counts them as typed.
 // Labeling drops them like harness.
 var unrecognizedHarnessTags = []string{"in-app-browser-context"}
 

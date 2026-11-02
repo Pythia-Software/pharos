@@ -1,6 +1,6 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { sourceNames, syncTables, runTables } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
 import { applyQuery, EMPTY_QUERY } from "@pythia-software/query-table-core";
 import { test } from "node:test";
@@ -10,7 +10,7 @@ import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
 // Relative times are measured from a fixed clock.
 const reference = Date.parse("2026-10-01T18:00:00Z");
 class FixedDate extends Date { static now() { return reference; } }
-const { pharosSync } = loadClassicScript("sync.js", { Date: FixedDate }).window;
+const { pharosSync, document: syncDocument } = loadClassicScript("sync.js", { Date: FixedDate }).window;
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
 
@@ -52,6 +52,38 @@ test("empty-library status keeps polling until the first content arrives", async
   await script.window.pharosSync.refresh();
   assert.equal(reads, 3, "populated libraries use the usual background activity poll");
   assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 3);
+});
+
+test("settings history stays still during activity polls and refreshes on request or navigation", async () => {
+  for (const library_empty of [false, true]) {
+    let reads = 0, activityReads = 0;
+    const timers = [];
+    const script = loadClassicScript("sync.js", {
+      document: { ...syncDocument, getElementById: id => id === "settings" ? { classList: { contains: () => true } } : null },
+      setTimeout: callback => { timers.push(callback); return timers.length; },
+      fetch: async path => ({ ok: true, json: async () => {
+        if (path === "/api/sync/status") return { settings: {}, library_empty, source_states: [{ source_name: 'codex', attempted_at: ++reads }], history: [{ run_id: `run-${reads}` }] };
+        if (path === "/api/activity") { activityReads++; return { runs: [] }; }
+        return { issues: [] };
+      } }),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1);
+    const history = script.window.pharosSync.status().history;
+    await timers.shift()();
+    assert.equal(activityReads, 2, "activity keeps polling while the table is static");
+    assert.equal(reads, 2);
+    assert.equal(script.window.pharosSync.status().source_states[0].attempted_at, 2, "source status stays live");
+    assert.equal(script.window.pharosSync.status().history, history, "automatic polling retains the same history snapshot");
+    await script.window.pharosSync.refresh();
+    assert.equal(reads, 3, "manual Refresh loads a new snapshot");
+    assert.equal(script.window.pharosSync.status().history[0].run_id, "run-3");
+    script.window.dispatchEvent(new script.window.Event("pharos:route"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 4, "returning to the page loads a new snapshot");
+    assert.equal(script.window.pharosSync.status().history[0].run_id, "run-4");
+    assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 4);
+  }
 });
 
 // Each step: the runs /api/activity reports, and whether Home refreshes.
@@ -145,6 +177,19 @@ test('run history queries use measured values across the entire retained history
   assert.equal(history.rows[5].cpu_seconds, 5);
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'finished_at', op: '>=', value: new Date(reference - 60000).toISOString() }] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id).sort(), ['run-0', 'run-1']);
+});
+
+test('run results distinguish postponed verification from errors and indexing failures', () => {
+  for (const [outcome, label] of [["deferred", "Success without verification"], ["read_error", "Verification failed"], ["mismatch", "Needs attention"], ["unknown", "Verification incomplete"]]) {
+    const record = { state: "complete", conversations: 3, audit: { outcome } };
+    assert.equal(resultLabel(record), label);
+    assert.equal(syncTables({ history: [record] }).history.rows[0].result, label);
+    assert.equal(resultLabel({ ...record, state: "failed" }), "Failed");
+    assert.equal(resultLabel({ ...record, state: "interrupted" }), "Stopped");
+  }
+  assert.equal(resultLabel({ state: "complete", conversations: 3, audit: { outcome: "passed" } }), "Indexed");
+  assert.equal(resultLabel({ state: "complete", conversations: 0, audit: { outcome: "passed" } }), "No changes");
+  assert.equal(resultLabel({ state: "complete", conversations: 3 }), "Indexed");
 });
 
 test('source status keeps error and preservation state while missing dates stay null', () => {

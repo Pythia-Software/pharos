@@ -670,7 +670,7 @@ PY
   const reviewActions=node('div',null,'cloud-actions'),copyCommands=button('Copy Bash commands',()=>copy(setup(raw)),'primary'),copyPrompt=button('Copy setup prompt',()=>copy(prompt(raw))),copyConfig=button('Copy configuration JSON',()=>copy(JSON.stringify(destination(raw),null,2))),save=button('Save configuration to Pharos',()=>savePlan());reviewActions.append(copyCommands,copyPrompt,copyConfig,save);panels[2].append(reviewActions,node('p','Setup uses your signed-in cloud administrator. If a command fails, repair that step using the private setup files rather than rerunning the whole script.','cloud-note'));
   panels[2].append(node('p','After running the setup commands, continue to Test to connect the private setup folder. Pharos reads the credential locally and stores it directly in its database.','cloud-note'));
   let cloudState={destinations:[],runs:[],schedules:[]},cloudBusy=false,cloudError='',cloudPoll,setupPathEdited=false;
-  const terminalCommands=new Map(),scheduleDrafts=new Map(),expandedSchedules=new Set();let selectedRestore='';
+  const terminalCommands=new Map(),scheduleDrafts=new Map();let selectedRestore='';
   function scheduleFor(d){return (cloudState.schedules||[]).find(s=>s.destination_id===d?.id);}
   function scheduleSpec(input){return {cadence:Number(input.cadence),time:input.time,weekday:Number(input.weekday),timezone:input.timezone};}
   function scheduleStatus(d){
@@ -711,7 +711,7 @@ PY
       if(cloudState.active_run_id&&runs.some(r=>r.id===cloudState.active_run_id)){row.append(button('Cancel backup',async()=>{try{await cloudRequest('/cancel',{run_id:cloudState.active_run_id});await loadCloud();}catch(error){cloudError=error.message;refresh();}}));}
       item.append(row);
       if(!d.restore_verified)item.append(node('p','Complete a full restore test to enable scheduled backups.','cloud-note'));
-      const details=node('details',null,'cloud-schedule-settings');details.open=expandedSchedules.has(d.id);details.ontoggle=()=>{if(details.open)expandedSchedules.add(d.id);else expandedSchedules.delete(d.id);};details.append(node('summary','Schedule settings'));
+      const details=node('details',null,'cloud-schedule-settings');details.dataset.viewKey='cloud:schedule:'+d.id;details.append(node('summary','Schedule settings'));
       const grid=node('div',null,'cloud-fields'),draft=scheduleDrafts.get(d.id)||scheduleSpec(s?.host_id?s:p),controls={};
       for(const[key,label,type,options]of [['cadence','Backup frequency','select',[[1,'Daily'],[7,'Weekly'],[30,'Every 30 days']]],['time','Start at','time'],['weekday','Weekly day','select',['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((day,i)=>[i,day])],['timezone','Time zone','text']]){
         const wrap=node('label',null,'cloud-field'),input=node(type==='select'?'select':'input');if(type!=='select')input.type=type;

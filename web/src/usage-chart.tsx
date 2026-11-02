@@ -1,9 +1,10 @@
 import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { chartRanges, rangeStart, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
-import { columnScale, defaultChartScale, type ChartScale } from "./chart-scale";
-import { cumulativeBuckets, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
+import { createPortal } from "react-dom";
+import { chartPeriods, isHourly, nextPeriod, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
+import { chartRanges, rangeStart, rangeInputValue, parseRangeInput, rangeHasTime, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
+import { defaultChartScale, type ChartScale } from "./chart-scale";
+import { cumulativeBuckets, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
 import { type LegendAction } from "./chart-selection";
@@ -11,10 +12,11 @@ import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
 import { PageLink } from "./nested-pages";
+import { DashboardSelect } from "./dashboard-select";
+import { SearchHelp } from "./search-help";
 
 export { chartSpan, smoothingWhere, timeBounds, usageTime, withTimeRange, writingTime, type ChartRange, type FilterChange, type TimeBounds, type TimeFields } from "./chart-range";
 
-const pad2 = (value: number) => String(value).padStart(2, "0");
 export const chartPeriodCount = (view: { period: ChartPeriod; hours: number; days: number }) => view.period === "hours" ? view.hours : view.period === "days" ? view.days : 1;
 
 // Preset changes reset manual bucket choices to a readable calendar grid.
@@ -75,32 +77,30 @@ export function finerPeriod(period: ChartPeriod, from: Date, to: Date, count = 1
   return period;
 }
 
-export function rangeLabel(bounds: TimeBounds): string {
+export function rangeLabel(bounds: TimeBounds, timezone?: string): string {
   if (bounds.preset === "today") return "Today";
-  const year = new Date().getFullYear();
-  const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds()));
+  const year = Number(rangeInputValue(new Date(), false, timezone).slice(0, 4));
+  const timed = [bounds.from, bounds.to].some(date => date && rangeHasTime(date, timezone));
   if (timed) {
-    const stamp = (date: Date) => date.toLocaleString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== year ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit" });
+    const stamp = (date: Date) => date.toLocaleString(undefined, { timeZone: timezone, month: "short", day: "numeric", ...(Number(rangeInputValue(date, false, timezone).slice(0, 4)) !== year ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit" });
     if (bounds.from && bounds.to) return `${stamp(bounds.from)} – ${stamp(bounds.to)} (end exclusive)`;
     return bounds.from ? `Since ${stamp(bounds.from)}` : bounds.to ? `Before ${stamp(bounds.to)}` : "";
   }
-  const day = (date: Date) => date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== year ? { year: "numeric" } : {}) });
+  const day = (date: Date) => date.toLocaleDateString(undefined, { timeZone: timezone, month: "short", day: "numeric", ...(Number(rangeInputValue(date, false, timezone).slice(0, 4)) !== year ? { year: "numeric" } : {}) });
   const last = bounds.to ? new Date(bounds.to.getTime() - 1) : undefined;
-  if (bounds.from && last) return localDay(bounds.from) === localDay(last) ? day(last) : `${day(bounds.from)} – ${day(last)}`;
+  if (bounds.from && last) return rangeInputValue(bounds.from, false, timezone) === rangeInputValue(last, false, timezone) ? day(last) : `${day(bounds.from)} – ${day(last)}`;
   return bounds.from ? `Since ${day(bounds.from)}` : last ? `Through ${day(last)}` : "";
 }
 
 // Calendar dates include the whole last day, even when switching from times.
-export function customDateBounds(bounds: TimeBounds): TimeBounds {
-  const from = bounds.from ? new Date(bounds.from) : undefined;
-  const to = bounds.to ? new Date(bounds.to.getTime() - 1) : undefined;
-  from?.setHours(0, 0, 0, 0);
-  if (to) { to.setHours(0, 0, 0, 0); to.setDate(to.getDate() + 1); }
+export function customDateBounds(bounds: TimeBounds, timezone?: string): TimeBounds {
+  const from = bounds.from ? parseRangeInput(rangeInputValue(bounds.from, false, timezone), timezone) : undefined;
+  const to = bounds.to ? parseRangeInput(rangeInputValue(new Date(bounds.to.getTime() - 1), false, timezone), timezone, true) : undefined;
   return { from, to };
 }
 
 // A date selection from the chart or table remains visible alongside presets.
-export function RangeControl({ bounds, onChange, onPresetChange, editable = true }: { bounds: TimeBounds; onChange: RangeChange; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean }) {
+export function RangeControl({ bounds, onChange, onPresetChange, editable = true, timezone }: { bounds: TimeBounds; timezone?: string; onChange: RangeChange; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean }) {
   const needsHistory = Boolean(onPresetChange);
   const [history, setHistory] = useState<{ ready: boolean; oldest?: Date }>({ ready: !needsHistory });
   useEffect(() => {
@@ -116,29 +116,29 @@ export function RangeControl({ bounds, onChange, onPresetChange, editable = true
     window.addEventListener("pharos:usage-refresh", load);
     return () => { mounted = false; window.removeEventListener("pharos:usage-refresh", load); };
   }, [needsHistory]);
-  const active = bounds.preset ?? (!bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined);
+  const active = bounds.preset ?? (!bounds.from && !bounds.to ? "all" : !timezone && bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined);
   const [custom, setCustom] = useState<"custom" | "custom-times" | null>(null);
   useEffect(() => { if (bounds.preset || !bounds.from && !bounds.to) setCustom(null); }, [bounds.preset, bounds.from?.getTime(), bounds.to?.getTime()]);
-  const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds() || date.getMilliseconds()));
+  const timed = [bounds.from, bounds.to].some(date => date && rangeHasTime(date, timezone));
   const mode = custom ?? (active ? null : timed ? "custom-times" : "custom");
   const picker = <ChartSelect label="Range" value={mode ?? active!}
-    options={[...chartRanges.map(([range, text]): [string, string] => [range, range === "today" ? text : `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
+    options={[...chartRanges.map(([range, text]): [string, string] => [range, range === "today" ? text : `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds, timezone), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
     title="Dates included in this usage view. Choose All time to clear the date filter."
     onChange={range => {
       if (range === "custom" || range === "custom-times") {
         setCustom(range);
-        const fixed = range === "custom" ? customDateBounds(bounds) : bounds;
+        const fixed = range === "custom" ? customDateBounds(bounds, timezone) : bounds;
         onChange(fixed.from, fixed.to);
       } else {
         setCustom(null);
         selectChartRange(range as ChartRange | "all", onChange, preset => onPresetChange?.(preset, history.oldest));
       }
     }} />;
-  return editable ? <div className={`usage-date-range${mode ? " custom" : ""}`}>{picker}{mode ? <CustomDates key={mode} bounds={bounds} onChange={onChange} includeTime={mode === "custom-times"} /> : null}</div> : picker;
+  return editable ? <div className={`usage-date-range${mode ? " custom" : ""}`}>{picker}{mode ? <CustomDates key={mode} bounds={bounds} timezone={timezone} onChange={onChange} includeTime={mode === "custom-times"} /> : null}</div> : picker;
 }
 
-function CustomDates({ bounds, onChange, includeTime }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; includeTime: boolean }) {
-  const inputValue = (date: Date) => includeTime ? `${localDay(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}` : localDay(date);
+function CustomDates({ bounds, onChange, includeTime, timezone }: { bounds: TimeBounds; timezone?: string; onChange: (from?: Date, to?: Date) => void; includeTime: boolean }) {
+  const inputValue = (date: Date) => rangeInputValue(date, includeTime, timezone);
   const from = bounds.from ? inputValue(bounds.from) : "", to = bounds.to ? inputValue(includeTime ? bounds.to : new Date(bounds.to.getTime() - 1)) : "";
   const [draft, setDraft] = useState({ from, to });
   useEffect(() => setDraft({ from, to }), [from, to]);
@@ -148,10 +148,9 @@ function CustomDates({ bounds, onChange, includeTime }: { bounds: TimeBounds; on
     const next = { ...draft, [key]: value };
     setDraft(next);
     if (invalidRange(next)) return;
-    const parse = (value: string) => includeTime ? new Date(value) : parseDay(value);
-    const start = next.from ? parse(next.from) : undefined, end = next.to ? parse(next.to) : undefined;
+    const start = next.from ? includeTime && next.from === from ? bounds.from : parseRangeInput(next.from, timezone) : undefined;
+    const end = next.to ? includeTime && next.to === to ? bounds.to : parseRangeInput(next.to, timezone, !includeTime) : undefined;
     if (start && !Number.isFinite(start.getTime()) || end && !Number.isFinite(end.getTime())) return;
-    if (end && !includeTime) end.setDate(end.getDate() + 1);
     onChange(start, end);
   }
   return <div className="usage-custom-dates">
@@ -167,15 +166,16 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
   title?: string; disabled?: boolean; note?: string;
 }) {
   return <label className="usage-chart-field usage-chart-picker">
-    <span className="usage-preset-label">{label}</span>
-    <span className="usage-chart-select">
-      <select data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
-        {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
-      </select>
-      <Icon name="chevron-down" className="usage-chart-caret" />
-    </span>
-    {note ? <span className="usage-chart-control-note">{note}</span> : null}
+    <span className="usage-preset-label">{label}{note ? <ControlNote label={label}>{note}</ControlNote> : null}</span>
+    <DashboardSelect data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
+      {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
+    </DashboardSelect>
   </label>;
+}
+
+// A control's caveat sits in an info circle beside its label.
+function ControlNote({ label, children }: { label: string; children: React.ReactNode }) {
+  return <span className="usage-chart-control-note"><SearchHelp label={label}>{children}</SearchHelp></span>;
 }
 
 export type PeriodView = { period: ChartPeriod; hours: number; days: number };
@@ -221,13 +221,12 @@ export function SmoothingControl({ value, unit, onChange, disabled = false, note
   const enabled = value > 0;
   return <div className="usage-chart-field usage-smoothing-control" role="group" aria-label="Chart smoothing">
     <div className="usage-smoothing-row">
-      <ChartSelect label="Smoothing" value={enabled ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={disabled}
+      <ChartSelect label="Smoothing" value={enabled ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={disabled} note={enabled || disabled ? note : undefined}
         onChange={next => onChange(next === "off" ? 0 : previous.current)} />
       {enabled ? <label className="usage-smoothing-input"><input type="number" aria-label="Smoothing window" min={2} step={1} value={draft} disabled={disabled}
         title="Trailing average window in intervals, including history before the selected range."
         onChange={event => { setDraft(event.target.value); if (validRollingPeriods(event.target.valueAsNumber) && event.target.valueAsNumber >= 2) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))} /><span>{unit}</span></label> : null}
     </div>
-    {enabled || disabled ? <span className="usage-chart-control-note">{note}</span> : null}
   </div>;
 }
 
@@ -247,12 +246,14 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // shares as fractions, and are only drawn: a pooled ratio or a rolling sum
 // must not be averaged again. Series that do not add up (lines) are drawn as
 // lines with no total, and a reference value draws a labelled level line.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, rolling = "average", reference, onSelect, onExpand, onRange, seriesHref }: {
-  title: string; controls: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, rolling = "average", reference, action, titleSlot, onSelect, onExpand, onRange, seriesHref }: {
+  title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
   selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
   prepared?: boolean; lines?: boolean; additive?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
+  /** Draws the title and action there instead, such as in a page's heading. */
+  titleSlot?: HTMLElement | null;
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number; pinned: boolean; focus: boolean } | null>(null);
@@ -263,7 +264,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const dragRef = useRef(drag);
   const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
   const drawn = selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  const cumulative = display === "cumulative", linear = cumulative || lines;
+  const cumulative = display === "cumulative";
   // A cumulative line always shows exact totals. Retain the interval smoothing
   // setting in view state, but don't average away the accumulated amounts.
   const averagedBuckets = useMemo(() => (prepared ? sourceBuckets : cumulative ? cumulativeBuckets(sourceBuckets) : rollingAverageBuckets(sourceBuckets, rollingPeriods, { period, count: periodCount })).filter(bucket => !bucket.history), [sourceBuckets, rollingPeriods, cumulative, period, periodCount, prepared]);
@@ -278,8 +279,9 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     return { ...bucket, values, parts };
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-  const peaks = (linear ? buckets.map(bucket => drawn.reduce((peak, item) => Math.max(peak, bucket.values[item.key] ?? 0), 0)) : buckets.map(total)).concat(reference ? [reference.value] : []);
-  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(peaks, scale);
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, percent, reference: reference?.value });
+  const lineChart = geometry.lines;
+  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;
   const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
   const averageLabel = !cumulative && rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling ${rolling}` : "";
@@ -298,20 +300,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
     + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
     + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + (reference ? `; ${reference.label} ${format(reference.value)}` : "") + (bucket.detail ? `; ${bucket.detail}` : "");
-  // Additive running totals start at zero; a series that does not add up
-  // breaks its line where it has no value.
-  const path = (key: string) => {
-    let pen = "M";
-    const steps = buckets.flatMap((bucket, index) => {
-      const value = bucket.values[key] ?? (additive ? 0 : undefined);
-      if (value === undefined) { pen = "M"; return []; }
-      const step = `${pen} ${1000 * (index + .5) / buckets.length} ${100 - y(value)}`;
-      pen = "L";
-      return [step];
-    });
-    const lone = buckets.length === 1 && steps.length ? ` L 1000 ${100 - y(buckets[0].values[key] ?? 0)}` : "";
-    return (additive && steps.length ? `M ${500 / buckets.length} ${100 - y(buckets[0].values[key] ?? 0)} ` : "") + steps.join(" ").replace(/^M/, additive ? "L" : "M") + lone;
-  };
+  const path = (key: string) => timelinePath(buckets, key, y, additive);
   const columnAt = (index: number) => bars.current?.querySelectorAll<HTMLButtonElement>(":scope > button")[index];
   useLayoutEffect(() => {
     const element = tipRef.current, box = root.current;
@@ -385,9 +374,10 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const density = buckets.length > 300 ? "denser" : buckets.length > 120 ? "dense" : "";
   const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
+  const titleText = <>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</>;
   return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
-    <div className="usage-chart-head"><h3>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</h3><div className="usage-chart-controls">{controls}</div></div>
-    {series.length > 1 || legend || onRange || reference ? <div className="usage-chart-legend">
+    <div className="usage-chart-head">{titleSlot ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{titleText}</h2>{action}</div>, titleSlot) : <div className="usage-chart-title"><h3>{titleText}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
+    {series.length > 1 || legend || reference ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {
         const items = series.filter(item => item.group === group).map(item => {
           const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
@@ -401,14 +391,13 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       }) : null}
       {reference ? <span className="usage-legend-item usage-legend-reference" title={reference.label}><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
-      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · " : ""}Click to inspect · drag across 2+ {linear ? "points" : "columns"} to filter dates</span> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>
       {split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
       {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
       <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""} ${drag ? "picking" : ""}`} role="group" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
-        {linear && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+        {lineChart && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
           {drawn.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke" d={path(item.key)} />)}
         </svg> : null}
         {reference ? <div className="usage-chart-reference" style={{ bottom: `${y(reference.value)}%` }} aria-hidden="true" /> : null}
@@ -416,7 +405,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", tip?.pinned && tip.bucket.key === bucket.key && !drag ? "inspected" : "", picked && index >= picked.first && index <= picked.last ? "picked" : ""].filter(Boolean).join(" ");
           return <button key={bucket.key} type="button" aria-label={describe(bucket)} aria-pressed={Boolean(tip?.pinned && tip.bucket.key === bucket.key)} className={className} onMouseEnter={() => show(index)} onFocus={() => show(index)} onMouseLeave={hidePreview} onBlur={hidePreview}
             onClick={event => { if (event.detail === 0) show(index, true, true); }}>
-            {linear ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
+            {lineChart ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
               {drawn.filter(item => additive || bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="usage-chart-line-point" style={{ bottom: `${y(bucket.values[item.key] ?? 0)}%`, background: item.color }} />)}
             </span> : null}</> : <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />}
           </button>;

@@ -114,3 +114,85 @@ test("relative windows round trip through search URLs and disappear after a manu
  const edited = new URL(m.searchURL(restored), "http://localhost").searchParams;
  for (const key of ["window_mode", "window_days", "window_field", "window_dataset"]) assert.equal(edited.has(key), false);
 });
+
+test("conversation card facts follow selected columns, order, accessors and display formats", async () => {
+ const React = await import("react"), { renderToStaticMarkup } = await import("react-dom/server");
+ const { selectedFields } = await import("@pythia-software/query-table-core");
+ const { defaultRenderers } = await import("@pythia-software/query-table-ui");
+ const { ConversationFacts } = await import("../../../src/conversation-results");
+ const fields = [
+  { name: "title", label: "Work", type: "text", source: { kind: "backend" } },
+  { name: "branch", label: "Branch", type: "text", source: { kind: "backend" } },
+  { name: "tool_use_count", label: "Tool uses", type: "number", source: { kind: "backend" }, render: "number" },
+  { name: "computed", label: "Computed total", type: "number", source: { kind: "derived", accessor: row => row.tool_use_count * 2 }, render: "number" },
+  { name: "missing", label: "Missing value", type: "text", source: { kind: "backend" } },
+ ];
+ const row = { title: "A work", branch: "feature/search", tool_use_count: 12 };
+ const render = select => {
+  const query = { ...m.freshSearch(schema).query, select };
+  return renderToStaticMarkup(React.createElement(ConversationFacts, { row, fields: selectedFields({ ...schema, fields }, query), query, renderers: defaultRenderers }));
+ };
+ const initial = render([{ field: "title" }, { field: "branch" }, { field: "tool_use_count" }]);
+ assert.ok(initial.includes("feature/search")); assert.ok(initial.includes("12")); assert.ok(!initial.includes("A work"));
+ const customized = render([{ field: "computed" }, { field: "missing" }, { field: "tool_use_count", display: { kind: "text" } }]);
+ assert.ok(customized.includes("24")); assert.ok(!customized.includes("Missing value"));
+ assert.ok(customized.indexOf("Computed total") < customized.indexOf("Tool uses"));
+ assert.ok(!customized.includes("feature/search"));
+ const customFormat = { ...m.freshSearch(schema).query, select: [{ field: "tool_use_count", display: { kind: "text" } }] };
+ const formatted = renderToStaticMarkup(React.createElement(ConversationFacts, { row, fields: [fields[2]], query: customFormat, renderers: { ...defaultRenderers, number: () => "numeric renderer" } }));
+ assert.ok(formatted.includes("12")); assert.ok(!formatted.includes("numeric renderer"), "column display overrides the field renderer");
+ for (const value of [undefined, null, "", "   ", []]) {
+  row.missing = value;
+  const empty = render([{ field: "missing" }]);
+  assert.ok(!empty.includes("Missing value"), `empty fact has no label: ${JSON.stringify(value)}`);
+  assert.ok(!empty.includes("—"));
+ }
+ const noPresentation = renderToStaticMarkup(React.createElement(ConversationFacts, { row, fields: [fields[2]], query: { ...m.freshSearch(schema).query, select: [{ field: "tool_use_count" }] }, renderers: { ...defaultRenderers, number: () => null } }));
+ assert.ok(!noPresentation.includes("Tool uses"));
+ row.tool_use_count = 0; assert.ok(render([{ field: "tool_use_count" }]).includes(">0<"));
+});
+
+test("conversation outlines retain child conversations, orphaned sessions and malformed parent links", async () => {
+ const { conversationForest, conversationSelection, findOutlineEntry, initialOutlineEntry } = await import("../../../src/conversation-results");
+ const child = { id: "child", parent_id: "root" }, nested = { id: "nested", parent_id: "child" };
+ const roots = conversationForest([nested, child, { id: "root" }, { id: "orphan", parent_id: "absent" }, { id: "cycle-a", parent_id: "cycle-b" }, { id: "cycle-b", parent_id: "cycle-a" }]);
+ assert.deepEqual(roots.map(node => node.conversation.id), ["root", "orphan", "cycle-a", "cycle-b"]);
+ assert.equal(roots[0].children[0].conversation, child);
+ assert.equal(roots[0].children[0].children[0].conversation, nested);
+ const setup = { id: "setup", kind: "turn", human: null, children: [{ id: "setup-agent", kind: "agent", human: { role: "user", text: "Initialize" }, children: [] }] };
+ const firstTurn = { id: "first", kind: "turn", human: { role: "user", text: "Review the change" }, children: [] };
+ assert.equal(initialOutlineEntry([setup, firstTurn]), firstTurn, "browsing starts at the first user turn, beyond session setup and its agents");
+ assert.equal(initialOutlineEntry([firstTurn]), firstTurn);
+ assert.equal(initialOutlineEntry([setup]), setup, "setup-only conversations remain inspectable");
+ assert.equal(initialOutlineEntry([]), undefined);
+ const sessions = [{ id: "first" }, { id: "second" }], loaded = {};
+ const ready = entries => ({ loading: false, error: "", entries });
+ const secondTurn = { ...firstTurn, id: "second-prompt" };
+ let selection = conversationSelection(sessions, loaded, "", secondTurn.id);
+ assert.equal(selection.pending, true); assert.equal(selection.id, ""); assert.equal(selection.loadID, "first");
+ loaded.first = ready([firstTurn]);
+ selection = conversationSelection(sessions, loaded, "", secondTurn.id);
+ assert.equal(selection.pending, true); assert.equal(selection.id, "", "restoration must not preview the wrong session while searching");
+ assert.equal(selection.loadID, "second");
+ loaded.second = ready([secondTurn]);
+ selection = conversationSelection(sessions, loaded, "", secondTurn.id);
+ assert.equal(selection.id, "second"); assert.equal(selection.pending, false);
+ assert.equal(findOutlineEntry(loaded[selection.id].entries, secondTurn.id), secondTurn);
+ assert.equal(conversationSelection(sessions, loaded, "", firstTurn.id).id, "first", "Back restores a turn in the earlier session");
+ assert.equal(conversationSelection(sessions, loaded, "first", secondTurn.id).id, "first", "an explicit session remains authoritative");
+ assert.equal(conversationSelection(sessions, {}, "", "").id, "first", "fresh browsing keeps the first session default");
+ assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /no longer available/);
+ loaded.first = { ...ready([]), error: "Unavailable" };
+ assert.equal(conversationSelection(sessions, loaded, "", secondTurn.id).id, "second", "a failed session must not hide a later match");
+ assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /Could not load/);
+});
+
+test("compact conversation activity describes counts and elapsed time without inventing missing values", async () => {
+ const { conversationActivitySummary } = await import("../../../src/conversation-results");
+ assert.equal(conversationActivitySummary({ turn_count: 12, subagent_count: 2, preview_elapsed_ms: 4800000 }), "12 turns · 2 sub-agents · 1h 20m elapsed");
+ assert.equal(conversationActivitySummary({ turn_count: 1, subagent_count: 1, preview_elapsed_ms: 1000 }), "1 turn · 1 sub-agent · 1s elapsed");
+ assert.equal(conversationActivitySummary({ turn_count: 0, subagent_count: 0, preview_elapsed_ms: 0 }), "0 turns · 0 sub-agents · 0s elapsed");
+ assert.equal(conversationActivitySummary({ turn_count: 3, subagent_count: 0 }), "3 turns · 0 sub-agents");
+ assert.equal(conversationActivitySummary({ turn_count: null, subagent_count: -1, preview_elapsed_ms: NaN }), "Conversation details");
+ assert.equal(conversationActivitySummary({ preview_elapsed_ms: null }), "Conversation details");
+});

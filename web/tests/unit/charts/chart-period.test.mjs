@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, periodIndex, shiftPeriod, validPeriodCount } from '../../../src/chart-period';
 import { calendarPresetPeriod, chartPeriodCount, presetPeriod, selectChartRange, customDateBounds, timeBounds, usageTime, withTimeRange } from '../../../src/usage-chart';
+import { rangeInputValue, parseRangeInput, rangeHasTime } from '../../../src/chart-range';
 import { loadUsageHistory, sharedUsageHistory } from '../../../src/usage-history';
 
 test('range presets reset the time bucket while custom dates preserve it', () => {
@@ -63,6 +64,28 @@ test('date-only custom ranges cover full local dates and retain an exclusive upp
     assert.deepEqual(customDateBounds(original), { from: expectedFrom, to: expectedTo });
     assert.deepEqual(original, before);
   }
+});
+
+test('custom dates and times use the pinned zone and preserve DST day lengths', () => {
+  for (const [zone, day, start, end] of [
+    ['Asia/Tokyo', '2026-10-20', '2026-10-19T15:00:00.000Z', '2026-10-20T15:00:00.000Z'],
+    ['America/Denver', '2026-03-08', '2026-03-08T07:00:00.000Z', '2026-03-09T06:00:00.000Z'],
+    ['America/Denver', '2026-11-01', '2026-11-01T06:00:00.000Z', '2026-11-02T07:00:00.000Z'],
+    ['Asia/Kathmandu', '2026-10-20', '2026-10-19T18:15:00.000Z', '2026-10-20T18:15:00.000Z'],
+  ]) {
+    const from = parseRangeInput(day, zone), to = parseRangeInput(day, zone, true);
+    assert.equal(from.toISOString(), start); assert.equal(to.toISOString(), end);
+    assert.equal(rangeInputValue(from, false, zone), day);
+    assert.equal(rangeInputValue(new Date(to.getTime()-1), false, zone), day);
+    assert.equal(rangeHasTime(from, zone), false); assert.equal(rangeHasTime(to, zone), false);
+    assert.deepEqual(customDateBounds({from, to}, zone), {from, to});
+    const midday = parseRangeInput(day+'T12:34', zone);
+    assert.equal(rangeInputValue(midday, true, zone), day+'T12:34');
+    assert.equal(rangeHasTime(midday, zone), true);
+    assert.deepEqual(customDateBounds({from: midday, to: midday}, zone), {from, to});
+  }
+  assert.equal(parseRangeInput('2026-03-08T02:30','America/Denver').toISOString(), '2026-03-08T09:30:00.000Z');
+  assert.equal(parseRangeInput('2026-11-01T01:30','America/Denver').toISOString(), '2026-11-01T07:30:00.000Z');
 });
 
 test('bounded range presets use readable intervals with daily detail for 90 days', () => {

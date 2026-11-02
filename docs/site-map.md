@@ -158,7 +158,26 @@ The kinds are:
 - `window`: rolling days;
 - `dashboard_chart`: an Analyze chart (see `analyze`);
 - `text_search`: the Library's `text_builder` (see Library);
-- `range`: a pair of epoch-millisecond parameters.
+- `range`: a pair of epoch-millisecond parameters;
+- `days` (with `key: "range"`): a Thinking dashboard's Range.
+
+An option with a `key` is one member of a JSON parameter. The Thinking
+dashboards (`analyze/thinking-overview`, `analyze/thinking-detail`) keep every
+control in `thinking`; their options (view, breakdown, model, effort, order …)
+and `days` are its keys, so `site_link` takes them as on the other dashboards,
+for example
+`{page:"analyze/thinking-detail",options:{view:"wait-box",groupBy:"model_effort"},days:30}`.
+`site_link` writes them into `view.thinking`, which takes the remaining
+controls (custom from/to, percentiles, calendar hours), and reads them back
+out of it. A key given both ways must agree.
+
+Every Analyze topic declares how its controls reach `site_link` in
+`dashboardLinks` (`site-map.ts`): its analysis catalog, or keyed options with
+`days`. The table is typed over every topic, so a new dashboard does not
+compile until it says, and generation fails if the declaration and
+`analysisCatalogs` disagree. `TestSiteLinkEveryDashboardTakesItsOptionsAndDays`
+then links every dashboard page with `days` and with each option value (each
+view, for a catalog) and reads the arguments back.
 
 Carbon and Parallelism use the viewer's saved assumptions unless the link
 supplies `view.carbon` or `view.parallelism`. These view overrides travel to

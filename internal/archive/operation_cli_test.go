@@ -30,6 +30,7 @@ var cliCommandCoverage = map[string]string{
 	"mcp":           "an MCP stdio server: query-only opens (§3.4 metrics are in memory only); not yet leased",
 	"probe":         "a read; leased for its open, Initialize and close",
 	"volume-id":     "a read of the volume; never opens the catalog",
+	"labels":        "labels run is the leased analysis.labels operation (cliCatalogOperation); status and explain only read; fetch writes only this Mac's support directory, never a library",
 	"labeling":      "reads only a static backup copy of a catalog (immutable) and writes only its own dataset directory; never opens a live catalog",
 }
 

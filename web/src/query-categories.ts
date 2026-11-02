@@ -9,6 +9,7 @@ export const queryCategories = {
   errors: { label: "Error Patterns", tone: "var(--bad)" },
   context: { label: "Context", tone: "var(--gold)" },
   models: { label: "Model Choice", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
+  thinking: { label: "Waiting and Thinking", tone: "color-mix(in srgb,var(--sea) 60%,var(--heat-2))" },
   usage: { label: "Token Usage", tone: "var(--heat-1)" },
   cost: { label: "API Cost", tone: "var(--query-cost-tone)" },
   research: { label: "Research", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
@@ -38,6 +39,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "findings") return "findings";
   if (dataset === "safety") return "safety";
   if (dataset === "parallelism") return "machines";
+  if (dataset === "model_requests") return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";

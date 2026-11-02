@@ -9,6 +9,7 @@ import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, 
 import { analysisCatalogs } from "./analysis-catalogs";
 import { analysisCycles, analysisDefaults, analysisReductions, analysisVersion, analysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
+import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
 import { chartDisplays } from "./chart-series";
 import { chartScales } from "./chart-scale";
@@ -466,7 +467,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -475,6 +476,7 @@ export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const sample = at(probe), plain = recipe.period ? sample : at(null);
   if ([recipe.title, recipe.description, sample.search].some(text => decodeURIComponent(text).includes(placeholder))) fail(`${recipe.id} already holds ${placeholder}`);
   const card: SiteCard = { id: recipe.id, title: recipe.title, description: recipe.description, category: recipe.category, dataset: recipe.dataset, kind: cardKind(recipe), page: cardPage(recipe), url: { path: sample.pathname, params: [] } };
+  if(recipe.thinking) card.filters=decode(plain.searchParams.get("analyze_filters")!).where;
   if (recipe.destination) {
     const chart = JSON.parse(plain.searchParams.get("analyze_chart")!), topic = recipe.destination.topic;
     const drawn = normalizeAnalysis(analysisCatalogs[topic]!, canonicalState(analysisCatalogs[topic]!, { ...dashboardDefaults[topic], ...chart })) as Record<string, unknown>;
@@ -563,6 +565,47 @@ const values = (entries: ReadonlyArray<readonly [string, string]> | ReadonlyArra
   entries.map(entry => typeof entry === "string" ? { value: entry, ...describe?.(entry) ? { description: describe(entry) } : {} } : { value: entry[0], label: entry[1] });
 const windowOption = (param: string, days: readonly number[], description: string): Option => ({ name: "days", param, kind: "window", values: days.map(day => ({ value: day, ...optionLabels.window[String(day)] ? { label: optionLabels.window[String(day)] } : {} })), description });
 
+// The Thinking dashboards keep every control in one JSON parameter, thinking.
+// Each option is one of its keys, so site_link takes the same options and
+// days there as on the other dashboards; view.thinking holds the rest.
+const thinkingOption = (name: keyof typeof defaultThinking, description: string, entries?: ReadonlyArray<readonly [string, string]> | ReadonlyArray<string>, requires?: Requirement[]): Option =>
+  ({ name, param: "thinking", key: name, kind: entries ? "enum" : "text", ...entries ? { values: values(entries) } : {}, default: defaultThinking[name], ...requires ? { requires } : {}, description });
+const thinkingOptions = (detail: boolean): Option[] => [
+  ...detail ? [thinkingOption("view", "The chart. Box-plot views split by model + effort when breakdown is none.", thinkingViews)] : [],
+  thinkingOption("model", "A recorded model name (model_requests.model), or all."),
+  thinkingOption("effort", "A recorded effort (model_requests.effort), or all."),
+  ...detail ? [
+    thinkingOption("groupBy", "The breakdown: one panel, box or row per group.", thinkingBreakdowns),
+    thinkingOption("normalization", "Distributions as shares of each group or as counts.", ["share", "count"]),
+    thinkingOption("sortBy", "Group order. Effort keeps low to high, Unreported last.", [["median", "Median wait"], ["p95", "95th percentile"], ["volume", "Requests"]]),
+    thinkingOption("sortDirection", "Group order direction.", [["desc", "Descending"], ["asc", "Ascending"]]),
+    thinkingOption("period", "Time bucket for distributions over time; range presets choose one when left out.", ["hour", "hours", "day", "days", "week", "month"]),
+    thinkingOption("calendarRows", "Time-of-day rows.", ["day", "week", "month"], [needs("view", "calendar")]),
+    thinkingOption("calendarMetric", "Time of day: raw waits, or observed ÷ workload-estimated waits.", [["raw", "Raw wait"], ["ratio", "Adjusted ratio"]], [needs("view", "calendar")]),
+  ] : [],
+];
+const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "range", kind: "days", values: [{ value: "today", label: "Today since local midnight" }, ...Object.keys(thinkingRangeDays).map(Number).map(day => ({ value: day, ...optionLabels.window[String(day)] ? { label: optionLabels.window[String(day)] } : {} })), { value: "all", label: "All time" }],
+  description: "site_link's days: the dashboard's Range, written as thinking.range. All time when left out; view.thinking takes a custom from/to range." };
+
+// How each Analyze dashboard's controls reach site_link: its analysis
+// catalog's chart and window, or options keyed into the parameter that holds
+// its state, with days for its range. Every topic must say, so that a new
+// dashboard cannot become a page that takes only filters.
+type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
+const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
+  activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
+  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
+  "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
+};
+function checkDashboardLinks(topic: UsageTopic, links: DashboardLinks) {
+  if ("catalog" in links !== Boolean(analysisCatalogs[topic])) fail(`${topic}: dashboardLinks says catalog ${"catalog" in links}, but analysisCatalogs ${analysisCatalogs[topic] ? "has" : "lacks"} it`);
+  if ("catalog" in links) return;
+  if (!links.options.length) fail(`${topic}: a dashboard without a catalog needs options for its controls`);
+  for (const option of [...links.options, links.days]) if (!option.key || option.param !== links.days.param) fail(`${topic}: option ${option.name} is not a key of ${links.days.param}`);
+  if (links.days.name !== "days" || links.days.kind !== "days") fail(`${topic}: its range is the days option`);
+}
+
 // The shell's page titles (VIEW_TITLES in ui.py): key: 'Title' pairs.
 export function viewTitles(uiPy: string): Record<string, string> {
   const literal = /VIEW_TITLES=\{([^}]*)\}/.exec(uiPy)?.[1] ?? fail("no VIEW_TITLES in ui.py");
@@ -586,7 +629,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);
   const cards = queryRecipes.filter(recipe => !recipe.retired).map(recipe => siteCard(recipe, clock));
   const topics = Object.keys(usageTopics) as UsageTopic[];
-  const dashboards = Object.fromEntries(topics.map(topic => [topic, dashboardFacts(topic)]));
+  const dashboards = Object.fromEntries(topics.filter(topic=>analysisCatalogs[topic]).map(topic => [topic, dashboardFacts(topic)]));
   // host_params: the parameters the page's table keeps as host query state
   // (host-query-state.ts). The app's query tokens carry that state, mirrored
   // in these parameters; a link's token may carry it only as they say it.
@@ -632,7 +675,15 @@ export function buildSiteMap(inputs: SiteInputs) {
       });
     }
     if (section.path === "analyze") {
-      for (const topic of topics) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
+      for (const topic of topics) checkDashboardLinks(topic, dashboardLinks[topic]);
+      for (const topic of topics) {
+        const links = dashboardLinks[topic];
+        if ("catalog" in links) continue;
+        child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
+          fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic],
+          options: [...links.options, whereOption("analyze_filters", usageTopicDatasets[topic]), links.days] });
+      }
+      for (const topic of topics.filter(topic => "catalog" in dashboardLinks[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,
         ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns need agent counting.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [

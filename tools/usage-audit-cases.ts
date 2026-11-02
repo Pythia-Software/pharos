@@ -2,6 +2,7 @@
 // stay in the private run directory; this file contains no catalog data.
 import { EMPTY_QUERY, encodeQuery, loadSchema, type QueryState, type WhereTerm } from "../web/node_modules/@pythia-software/query-table-core/dist/index.js";
 import { usageDatasets, usageTopics, usageDatasetTopics, usageTopicDatasets, usageWorkspaceURL } from "../web/src/usage-workspace-model";
+import { defaultThinking,thinkingViews,thinkingBreakdowns,isThinkingTopic } from "../web/src/thinking-model";
 import { defaultConcurrencySettings } from "../web/src/concurrency-settings";
 export { usageDatasets, usageTopics, usageWorkspaceURL, encodeQuery, EMPTY_QUERY, loadSchema };
 export type AuditCase = { id: string; page: string; label: string; url: string; dataset?: string; query?: QueryState; where?: WhereTerm[]; interaction?: string; expectedEmpty?: boolean };
@@ -10,7 +11,7 @@ export function fieldsFor(document: any) {
   const names = document.fields.map((field: any) => field.name);
   const choose = (candidates: string[]) => candidates.find(field => names.includes(field));
   return {
-    time: choose(["first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
+    time: choose(["requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
     group: choose(["provider", "root_provider", "tool_name", "repository_name", "root_model_family", "skill_name", "model"]),
     text: choose(["command", "text", "title", "arguments_json", "tool_name", "skill_name", "model", "root_model_family"]),
     number: choose(["total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_input_tokens"]),
@@ -66,6 +67,7 @@ export function queryCases(dataset: keyof typeof usageDatasets, document: any, s
 }
 export function dashboardCases(topic: keyof typeof usageTopics, documents: Record<string, any>, samples: Record<string, any[]>, concurrency: any): AuditCase[] {
   const dataset = usageTopicDatasets[topic];
+  if(isThinkingTopic(topic))return Array.from({length:25},(_,i)=>({id:`dashboard-${topic}-${String(i+1).padStart(2,"0")}`,page:`dashboard:${topic}`,label:`Thinking combination ${i+1}`,dataset,url:usageWorkspaceURL({mode:"dashboards",topic,dataset},new URLSearchParams({thinking:JSON.stringify({...defaultThinking,view:thinkingViews[i%thinkingViews.length][0],groupBy:thinkingBreakdowns[Math.floor(i/thinkingViews.length)][0],range:i%2?"30d":"all"})}))}));
   const f = fieldsFor(documents[dataset]), sample = samples[dataset] ?? [], category = f.group!, value = String(sample.find(row => row[category] != null)?.[category] ?? "codex");
   const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - 29);
   const time = topic === "tools" ? "day" : f.time!;

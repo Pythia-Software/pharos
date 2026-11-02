@@ -11,10 +11,84 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
+const markdownLinkText = `## Implementation links
+
+[GitHub pull request](https://github.com/gbdubs/pharos/pull/42) · [Project documentation](https://example.com/docs)
+
+- [Source file](internal/archive/api.go:12)
+- [Missing file](/Users/previous-mac/project/report.md)
+- [Running dev server](http://localhost:5173/)
+- [Stopped dev server](http://localhost:59999/)
+- [Library view](/library?view=conversation)
+- [Filtered usage](/analyze?analyze_topic=tokens)
+`;
+const markdownLinkAPI = {
+  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "codex", messages: [
+    {id:"link-question",native_id:"link-question",role:"user",kind:"message",text:"Review [the source file](internal/archive/api.go:12) and [the change](https://github.com/gbdubs/pharos/pull/42)."},
+    {id:"link-response",native_id:"link-response",role:"assistant",kind:"message",text:markdownLinkText},
+  ]},
+  "GET /api/markdown-link": ({query}) => {
+    const href=query.get("href");
+    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12"};
+    if(href==="http://localhost:5173/")return {status:"server",detail:"Local server returned HTTP 200"};
+    return {status:"unavailable",detail:href.startsWith('http')?"Local server unavailable on this Mac":"File unavailable on this Mac"};
+  },
+};
 const work = `/work/${workID}`;
+const conversationResultAPI = {
+  "POST /api/query/library/:operation": request => {
+    const result = defaultApi["* /api/query/:dataset/:operation"]({ ...request, params: { dataset: "library", operation: request.params.operation } });
+    if (!result?.rows) return result;
+    return { ...result, total: 1, rows: result.rows.length ? [{ ...result.rows[0], id: workID, title: "Investigate the incremental indexer", repository_name: "pharos", models: "claude-opus-5-5", efforts: "high", token_count: 190000, turn_count: 12, subagent_count: 2, preview_elapsed_ms: 4800000, cost_usd: 3.3, pr_numbers: "", first_input: `<system_instruction>Initialize the workspace</system_instruction>\n\nReview **the incremental indexer** and its nested agents. ${"Check the recovery path after sleep and preserve the existing index. ".repeat(12)}`, last_response: `The review is **complete**. ${"The index resumes after sleep without replaying retained captures. ".repeat(20)}` }] : [] };
+  },
+  "GET /api/work/:id": request => {
+    const work = defaultApi["GET /api/work/:id"](request);
+    return { ...work, conversations: work.conversations.map(conversation => ({ ...conversation,
+      ...(conversation.id === rootConversation ? { first_prompt: `<system_instruction>${"Initialize the workspace and load the project settings. ".repeat(80)}</system_instruction>` } : {}),
+      parent_id: conversation.id === "conv-child" ? rootConversation : conversation.id === "conv-nested" ? "conv-child" : null })) };
+  },
+  "GET /api/work/:id/conversations/:conversation": request => {
+    const conversation = defaultApi["GET /api/work/:id/conversations/:conversation"](request);
+    return request.params.conversation === rootConversation ? { ...conversation, messages: [{ id: "session-setup", native_id: "session-setup", role: "system", kind: "context", text: "Session context" }, ...conversation.messages] } : conversation;
+  },
+};
+
+// Mixed provenance in the same prompt: only the classified typed spans glow.
+const humanPromptParts = [
+  ["<system_instruction>Workspace context supplied by Conductor. Keep generated setup separate from the user's own request.</system_instruction>\n\n", "harness"],
+  ["Please **keep the sub-agents nested** inside the parent turn. I want to see which review belongs to which request.\n\n", "typed"],
+  ["Here is the output from the previous run:\n\n```text\n5 review workers started\n1 worker is checking the conversation reader\n```\n\n", "pasted"],
+  ["Make the relationship clear, and keep my written instructions easy to spot. The café example should still render correctly.", "typed"],
+];
+function classifiedPrompt(id, parts) {
+  let end=0;
+  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
+}
+const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
+const authoredTurnMessages = [authoredPrompt,
+  ...Array.from({length:5},(_,index)=>[
+    {id:`review-${index}`,native_id:`review-${index}`,role:"assistant",kind:"delegation",call_id:`reviewer-${index}`,text:JSON.stringify({name:"Task",input:{subagent_type:`Reviewer ${index+1}`,prompt:["Review the parent turn structure","Check nested review groups","Verify human-written text highlighting","Check keyboard navigation","Check the narrow screen layout"][index]}})},
+    {id:`review-reply-${index}`,native_id:`review-reply-${index}`,role:"assistant",kind:"message",parent_native_id:`reviewer-${index}`,text:`Review ${index+1} complete. The assigned check passed.`},
+  ]).flat(),
+  {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
+  {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
+  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1."},
+  classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
+  {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
+];
+const authoredTurnAPI = {
+  ...conversationResultAPI,
+  "POST /api/query/library/:operation": request => {
+    const result=conversationResultAPI["POST /api/query/library/:operation"](request);
+    return !result?.rows?result:{...result,rows:result.rows.map(row=>({...row,title:"Review the conversation reader",first_input:authoredPrompt.text,last_response:"All five reviews are complete.",turn_count:2,subagent_count:6}))};
+  },
+  "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request),title:"Review the conversation reader",conversations:[{id:rootConversation,provider:"codex",title:"Keep reviews inside the parent turn"}]}),
+  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages},
+};
+
 async function publishAppUpdate(page, state) {
   await page.evaluate(state => {
     window.pharosUpdateFixture = state;
@@ -55,6 +129,8 @@ const storageBreakdown = defaultApi["GET /api/health/storage/breakdown"];
 const compactableBreakdown = { ...storageBreakdown, catalog_free_bytes: 31e9, compact_needs_bytes: 70e9,
   parts: storageBreakdown.parts.flatMap(part => part.key === "catalog_database" ? [{ ...part, bytes: 63e9 }, { key: "catalog_free", label: "Free space in the catalog", bytes: 31e9 }] : [part]) };
 const ROUTES = [
+  {name:"Waiting and Compaction",url:"/analyze?analyze_topic=thinking-overview&analyze_data=model_requests",ready:'.thinking-dashboard[aria-busy="false"] .thinking-overview-stats'},
+  ...['time','heatmap','histogram','reasoning','wait-box','calendar'].map(view=>({name:'Thinking '+view,url:'/analyze?'+new URLSearchParams({analyze_topic:'thinking-detail',analyze_data:'model_requests',thinking:JSON.stringify({view,groupBy:'model_effort'})}),ready:'.thinking-dashboard[aria-busy="false"] .thinking-population'})),
   {name:'Library settings expanded',url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:{id:'local',name:'Pending history',config:'/Users/test/Libraries/Pending/library.toml'},open:async page=>{
     await page.locator('#library-settings-transfer-panel summary').click();
     await page.locator('#library-settings-delivery-toggle').click();
@@ -121,8 +197,17 @@ const ROUTES = [
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
-  {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI},
-  {name:"Ask Pharos activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
+  {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
+    const visible=await page.locator('.pharos-user-question').first().evaluate(message=>{
+      const viewport=message.closest('.pharos-thread-viewport');
+      if(viewport.scrollHeight>parseFloat(getComputedStyle(viewport).maxHeight)+1)return true;
+      const box=message.getBoundingClientRect(),bounds=viewport.getBoundingClientRect();
+      return box.top>=bounds.top&&box.bottom<=bounds.bottom;
+    });
+    assert.ok(visible,'the first message must fit completely when the conversation fits on screen');
+  }},
+  ...['',' \n '].map(reply=>({name:`Ask Pharos destinations with ${reply?'blank':'empty'} intro`,url:'/?ask_chat=saved-chat',ready:'#pharos-ask .pharos-destinations:not([hidden])',api:{...askAPI,'GET /api/ask/session':{...askSession,conversation:askSession.conversation.map(turn=>({...turn,reply}))}}})),
+  {name:"Ask Pharos error activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,status:'error',cards:[],reply:'Could not finish checking the destination. Try again.',activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
@@ -198,13 +283,57 @@ const ROUTES = [
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
+  { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
+  { name: "Markdown links in Search", url: "/library?view=conversation", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
+  { name: "Search nested reviews and human writing", url: "/library?view=conversation", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
+  { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
+  ...["turn", "sub-agent", "accordion", "summary"].map(selection => ({
+    name: `Search conversation outline ${selection}`, url: "/library?view=conversation", api: conversationResultAPI, ready: ".conversation-result-card",
+    open: async page => {
+      await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse", exact: true }).click();
+      if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Collapse turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
+      const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
+      await outline.getByRole("button", { name: /^Turn 1/ }).first().waitFor();
+      if (selection === "sub-agent") {
+        await outline.locator("summary").filter({ hasText: "Sub-agent session · codex" }).click();
+        await outline.getByRole("button", { name: /Turn 1.*Review the change/ }).click();
+      } else await outline.getByRole("button", { name: /^Turn 3/ }).first().click();
+      await page.getByRole("region", { name: "Selected turn preview" }).locator(".result-message").first().waitFor();
+      if (selection === "accordion") {
+        const toggle = page.getByRole("button", { name: /^(Browse|Collapse turns)$/ });
+        await toggle.focus();
+        await page.keyboard.press("Enter");
+        assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+        assert.ok(await toggle.evaluate(button => button === document.activeElement), "collapsing keeps focus on the disclosure control");
+        await page.keyboard.press("Enter");
+        assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+        await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
+        assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "reopening preserves the selected turn");
+        await page.reload();
+        await page.getByRole("button", { name: "Collapse turns", exact: true }).waitFor();
+        await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
+        assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "the URL restores the selected turn after reload");
+      }
+    }, shown: ".conversation-outline",
+  })),
+  { name: "Search compact conversation previews", url: "/library?view=conversation", api: conversationResultAPI, ready: ".conversation-result-preview" },
   { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
   { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
-  { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
+  { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row", check: async (page, app) => {
+    for (const [name, longer, shorter] of [['Activity period', '90', '0'], ['Trend measure', 'average', 'calls'], ['Analytics grouping', 'operation', 'activity']]) {
+      const select = page.getByRole('combobox', { name, exact: true });
+      await select.selectOption(longer);
+      await app.settled();
+      const expanded = await select.boundingBox();
+      await select.selectOption(shorter);
+      await app.settled();
+      assert.ok((await select.boundingBox()).width < expanded.width, `${name} shrinks with its selected label`);
+    }
+  } },
   { name: "Analyze parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
   { name: "Analyze parallelism prototype", concurrency: true, url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
   { name: "Human Words", url: "/analyze?analyze_view=writing", ready: ".writing-panel .usage-chart" },
@@ -362,8 +491,17 @@ const ROUTES = [
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Background updates", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
-  { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail" },
+  ...[false, true].map(details => ({ name: `Background updates deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
+    "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
+  }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
+  { name: "Background updates schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background updates message labels waiting", url: "/settings/sync", ready: "#labelsEnabled", api: {
+    "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
+      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." } },
+  } },
+  { name: "Background updates temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background updates sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
+  { name: "Background updates queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background updates diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
   { name: "Background updates run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
   { name: "Background updates empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
@@ -624,6 +762,64 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
   }
 });
 
+test('Ask Pharos suggestions stay readable, prefill the editor and remember being hidden', { skip }, async t => {
+  const {page,settled,shot,calls}=await open(t,{url:'/',ready:'.pharos-idea-toggle',viewport:{width:2133,height:1070},api:{
+    ...askAPI,
+    'POST /api/ask/session':({body,state})=>state.suggestionDraft={...askSession,...body,conversation:[]},
+    'GET /api/ask/session':({query,state})=>state.suggestionDraft||{...askSession,id:query.get('id'),conversation:[]},
+    'GET /api/query/library/distinct':({query})=>query.get('field')==='repository_name'?{values:['pharos','query-table'],hasMore:false}:undefined,
+  }});
+  const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
+  const viewport=page.getByRole('region',{name:'Browse prompt suggestions',exact:true});
+  const toggle=suggestions.getByRole('button',{name:'Hide suggestions',exact:true});
+  const readable=async()=>{
+    const clipped=await viewport.locator('[data-reading] .pharos-idea-text').evaluateAll(labels=>labels.some(label=>{
+      const text=document.createRange();text.selectNodeContents(label);
+      const rect=text.getBoundingClientRect(),box=label.closest('button').getBoundingClientRect();
+      return rect.left<box.left||rect.right>box.right||rect.top<box.top||rect.bottom>box.bottom;
+    }));
+    assert.equal(clipped,false,'suggestion questions fit their cards');
+  };
+  for(const theme of ['dark','light']){
+    await page.evaluate(theme=>window.pharosPrefs.set('pharos-theme',theme),theme);
+    await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+    for(const width of [2133,390,320]){
+      await page.setViewportSize({width,height:1070});await settled();
+      assert.deepEqual(await layoutProblems(page),[]);
+      await readable();
+      await shot(`expanded-${theme}-${width}`);
+    }
+  }
+  await page.setViewportSize({width:2133,height:1070});await settled();
+  for(let step=0;step<7;step++){
+    await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
+    await readable();
+  }
+  await suggestions.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
+  await readable();
+  const card=viewport.locator('[data-reading]').filter({hasText:'repository'}).first();
+  const prompt=await card.locator('.pharos-idea-text').textContent();
+  await card.click();
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  assert.equal(await editor.evaluate(element=>element.value),prompt);
+  assert.ok(await editor.evaluate(element=>element===document.activeElement));
+  assert.ok(!calls.some(call=>call.path==='/api/ask/send'),'choosing an idea does not send a question');
+  await toggle.focus();await page.keyboard.press('Enter');
+  await viewport.waitFor({state:'hidden'});
+  const show=suggestions.getByRole('button',{name:'Show suggestions',exact:true});
+  assert.equal(await show.getAttribute('aria-expanded'),'false');
+  assert.ok(await show.evaluate(element=>element===document.activeElement));
+  assert.equal(await editor.evaluate(element=>element.value),prompt,'collapsing preserves the draft');
+  await page.evaluate(()=>window.pharosPrefs.flush());await settled();
+  await page.reload();await show.waitFor();await settled();
+  assert.ok(await viewport.isHidden(),'the library preference survives reload');
+  await shot('collapsed');
+  await show.click();await viewport.waitFor();await settled();
+  await page.evaluate(()=>window.pharosPrefs.flush());
+  await page.reload();await toggle.waitFor();await viewport.waitFor();await settled();
+  assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+});
+
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
   const bookmarks = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
   const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': bookmarks } });
@@ -718,7 +914,7 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
 for (const dashboard of [
   { name: "Human Words", topic: "human", card: "human-words", dataset: "writing_messages", field: "sent_at", first: "first_message_at", last: "last_message_at", summary: "Human Words summary", chart: { period: "day" } },
   { name: "Tokens and Cost", topic: "tokens", card: "cost-repos", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Machine token summary", chart: { period: "day", metric: "cost", split: "repository_name" } },
-  { name: "Agent Time", topic: "time", card: "machine-time", dataset: "tool_calls", field: "started_at", first: "started_at", last: "started_at", summary: "Agent Time summary", chart: { period: "day", metric: 0, split: "activity" } },
+  { name: "Tool Time", topic: "time", card: "machine-time", dataset: "tool_calls", field: "started_at", first: "started_at", last: "started_at", summary: "Tool Time summary", chart: { period: "day", metric: 0, split: "activity" } },
   { name: "Skills", topic: "skills", card: "skill-evidence", dataset: "skill_usages", field: "created_at", first: "created_at", last: "created_at", chart: { period: "day", metric: 0, split: "skill_name" } },
   { name: "Tools", topic: "tools", card: "tool-failure-rates", dataset: "tool_calls", field: "started_at", first: "day", last: "day", graph: ".usage-tools-dashboard .usage-analysis-dashboard .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
   { name: "Pharos MCP", topic: "mcp", card: "mcp-response-size", dataset: "mcp_calls", field: "called_at", first: "called_at", last: "called_at", graph: ".usage-mcp-dashboard .usage-analysis-dashboard .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
@@ -757,6 +953,14 @@ for (const dashboard of [
     }
     await app.shot(mode);
   }
+  const longer = await range.boundingBox();
+  await range.selectOption('7d');
+  await app.settled();
+  const shorter = await range.boundingBox();
+  // A narrow row holds one control, which stretches across it.
+  if (width === 1504) assert.ok(shorter.width < longer.width, 'the range selector shrinks with a shorter selected label');
+  assert.deepEqual(await layoutProblems(page), []);
+  await app.shot('shorter-selected-range');
 });
 
 for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ranges fit at ${width}px`, { skip }, async t => {
@@ -771,6 +975,11 @@ for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ran
   assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
   assert.deepEqual(await layoutProblems(page), []);
   await app.shot('relative-card-range');
+  const counting = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Count by', exact: true });
+  const longer = await counting.boundingBox();
+  await counting.selectOption('agent');
+  await app.settled();
+  assert.ok((await counting.boundingBox()).width < longer.width, 'the counting selector shrinks from workspaces to sessions');
   // The ribbon's Range; the engine views below have their own.
   const range = page.getByRole('region', { name: 'Parallelism chart', exact: true }).getByRole('combobox', { name: 'Range', exact: true });
   await range.selectOption('custom');
@@ -813,7 +1022,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
             if (size.scroll > size.client + 1) fitting.push(`fitted table still scrolls sideways: ${size.scroll}px wide in ${size.client}px`);
           });
         }
-        if (route.check) await route.check(app.page);
+        if (route.check) await route.check(app.page, app);
         await app.shot("top");
         const problems = await layoutProblems(app.page);
         if (!route.open) {
@@ -1014,4 +1223,34 @@ test('Older card dashboard restoration cannot overwrite a later route', { skip }
   await app.settled();
   assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
   await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+});
+
+test("Markdown local destinations become navigable only after availability is confirmed", { skip }, async t => {
+  const app=await open(t,{url:`${work}/conversation/${rootConversation}`,api:markdownLinkAPI,ready:".markdown-link"});
+  const {page}=app;
+  await page.waitForFunction(()=>!document.querySelector('[data-link-status="checking"]'));
+  const source=page.getByRole("link",{name:"Source file",exact:true});
+  assert.ok(await source.getAttribute("href"));
+  assert.equal(await source.getAttribute("aria-disabled"),null);
+  assert.equal(await page.getByRole("link",{name:"Running dev server",exact:true}).getAttribute("href"),"http://localhost:5173/");
+  for(const name of ["Missing file","Stopped dev server"]){
+    const link=page.getByRole("link",{name,exact:true});
+    assert.equal(await link.getAttribute("aria-disabled"),"true");
+    assert.equal(await link.getAttribute("href"),null);
+    await link.focus();await page.keyboard.press("Enter");
+    assert.equal(new URL(page.url()).pathname,`${work}/conversation/${rootConversation}`);
+  }
+  const checks=app.calls.filter(call=>call.path==='/api/markdown-link'&&call.query.get('href')==='internal/archive/api.go:12');
+  assert.equal(checks.length,1,"repeated file links share one check");
+  assert.equal(checks[0].query.get('workspace'),workID);
+  for(const [name,href] of [["Library view","/library?view=conversation"],["Filtered usage","/analyze?analyze_topic=tokens"]]){
+    const link=page.getByRole("link",{name,exact:true});
+    assert.equal(await link.getAttribute("href"),href);
+    assert.equal(await link.getAttribute("aria-disabled"),null);
+    assert.equal(app.calls.some(call=>call.path==='/api/markdown-link'&&call.query.get('href')===href),false,"Pharos routes must not be probed as files");
+  }
+  await app.shot("link-states");
+  await page.getByRole("link",{name:"Library view",exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/library'&&url.searchParams.get('view')==='conversation');
+  await page.locator('.conversation-result-card').first().waitFor();
 });

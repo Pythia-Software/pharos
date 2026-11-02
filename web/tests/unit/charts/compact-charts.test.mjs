@@ -1,5 +1,9 @@
 // Geometry and labels shared by the compact card covers: pies and box plots.
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { formatMetricOutput } from "@pythia-software/query-table-ui";
+import { CompactBoxPlot } from "../../../src/compact-box-plot";
 import assert from "node:assert/strict";
 import * as core from "@pythia-software/query-table-core";
 import { boxBytes, boxDetails, boxDuration, boxOutliers, boxWhiskerExtent, sharedBoxScale } from "../../../src/compact-box-model";
@@ -70,4 +74,23 @@ test("duration and byte boxes show readable units with exact values in hover, wi
   assert.equal(boxBytes(0),"0 B");
   assert.equal(boxBytes(1536),"1.5 KiB");
   assert.equal(boxBytes(1073741824),"1 GiB");
+});
+
+
+test("percentage boxes format medians, means, quartiles, extremes and fractional axis ticks", () => {
+  const buckets = [.5, 1].map((value, index) => ({ keys: [String(index)], value, count: 3, distribution: { kind: "box", summary: core.boxSummary([value, value, value], "tukey") } }));
+  const before = structuredClone(buckets);
+  const format = value => formatMetricOutput(value, { kind: "percent", decimals: 1 }).text;
+  for (const scale of ["linear", "log"]) {
+    const html = renderToStaticMarkup(React.createElement(CompactBoxPlot, { buckets, budget: 2, colors: ["red", "blue"], labels: ["Half", "Whole"], scale, unit: "percent", format }));
+    const visible = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+    assert.match(visible, /Median 50.0% .*Mean 50.0%/);
+    assert.match(visible, /Median 100.0% .*Mean 100.0%/);
+    if (scale === "linear") assert.match(visible, /25.0%.*50.0%.*75.0%.*100.0%/);
+  }
+  const details = boxDetails("Rate", core.boxSummary([0, .5, 1], "tukey"), "percent", format);
+  assert.match(details, /Median: 50.0% · Mean: 50.0%/);
+  assert.match(details, /Q1: 25.0% · Q3: 75.0%/);
+  assert.match(details, /Min: 0.0% · Max: 100.0%/);
+  assert.deepEqual(buckets, before, "formatting preserves the fractions used for geometry");
 });

@@ -1,4 +1,4 @@
-// Small record ledgers for the Tools, Pharos MCP, Agent Time and Skills
+// Small record ledgers for the Tools, Pharos MCP, Tool Time and Skills
 // dashboards: tool calls, the daily tools rollup the service derives from
 // them, Pharos MCP requests and skill evidence. Calls spread over 40 days, so
 // trailing windows and norms have history; days and weeks are local dates of

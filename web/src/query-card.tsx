@@ -32,7 +32,7 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
       <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
       {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
     </span> : null}
-    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} />
+    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} {...preview.dashboardTrend} />
       : preview.metrics ? <CompactMetric preview={preview} />
       : preview.insights ? <span className="query-findings">
       <span className="query-finding-heading">{preview.headline}</span>

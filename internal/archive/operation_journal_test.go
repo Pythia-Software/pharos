@@ -544,3 +544,33 @@ func measureJournalGateHold(t *testing.T) {
 		op.Finish(nil)
 	}
 }
+
+// A round whose deadline interrupts a statement in the middle of its
+// transaction (a slow insert on a large, busy catalog) leaves no
+// transaction behind on the pooled connection: the catalog stays writable.
+func TestJournalRoundInterruptedMidTransactionReleasesTheLock(t *testing.T) {
+	catalog, reg, journal := testJournal(t)
+	for range 3 {
+		reg.begin(context.Background(), OperationSpec{Kind: "backup.local", Trigger: triggerUser})
+	}
+	override(t, &journalRoundDeadline, 30*time.Millisecond)
+	// Each journal row now takes far longer than the round's deadline.
+	execTx(t, catalog.DB, `CREATE TRIGGER slow_journal AFTER INSERT ON operation_journal BEGIN
+		INSERT INTO meta(key,value) SELECT 'slow-journal', (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<30000000) SELECT SUM(i) FROM n)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value; END`)
+	if err := journal.round(context.Background(), 0); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a round slower than its deadline: %v", err)
+	}
+	execTx(t, catalog.DB, `DROP TRIGGER slow_journal`)
+	for attempt := range 5 {
+		if err := catalog.writeTransaction(context.Background(), "after the journal", func(tx *sql.Tx) error {
+			_, err := tx.Exec("INSERT INTO meta(key,value) VALUES('journal-test',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", attempt)
+			return err
+		}); err != nil {
+			t.Fatalf("write %d after an interrupted round: %v", attempt, err)
+		}
+	}
+	if err := journal.round(context.Background(), 0); err != nil {
+		t.Fatalf("the next round: %v", err)
+	}
+}

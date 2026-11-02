@@ -3729,7 +3729,7 @@
         "showLegend": true,
         "showHeadline": false
       },
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output.",
       "where": [
         {
@@ -5429,7 +5429,7 @@
           "duration_source"
         ]
       },
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "days": [
         7
       ],
@@ -5546,7 +5546,7 @@
         "minSamples": 3,
         "density": "compact"
       },
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output. Each nonempty recorded call is one observation. Require three calls per tool/source cohort before selecting six cohorts by observation count. All cohorts remain in the destination. Shared logarithmic token axis; median, quartiles, Tukey whiskers, sampled outliers and extremes. Hover supplies mean, range, and sample size. Zero-size calls are excluded from this size comparison.",
       "where": [
         {
@@ -12847,7 +12847,7 @@
       "measures": [],
       "title": "Failures per conversation",
       "description": "Error calls per affected agent conversation over the last {days} days; tools with three or more affected conversations.",
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. One observation is the error-call count for one tool in one recorded agent conversation. Only affected conversations contribute; zero-error conversations are excluded. A conversation using several failing tools contributes one observation under each. Require three affected conversations per tool before selecting six tools by observation count. All individual affected conversations remain inspectable, including tools below the cover cutoff. Boxes share a logarithmic count axis with quartiles, median, Tukey whiskers, sampled outliers, and extremes. Counts do not establish consecutive retries or recovery.",
       "exploration": {
         "keys": [
@@ -13014,7 +13014,7 @@
       ],
       "unit": "calls",
       "measures": [],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "exploration": {
         "keys": [
           "repository_name",
@@ -14260,7 +14260,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Count retained web-category calls with a nonempty extracted search_query, including errors and calls without retained results. Exclude SQL, metadata, and other non-web queries. One parent call counts once; only the first supported query may be extracted from a batched request. Stored query text is trimmed and capped at 500 characters, without topic or near-duplicate normalization. Missing capture is not absence of research. Calls use start-time selection. These are observed search attempts, not effort, useful results, knowledge gained, or research quality. One repository/recorded agent-conversation pair is one sample, including single-search conversations. Zero-search conversations are absent, missing IDs are excluded, and missing repositories remain Unspecified. Require three searching conversations per repository before selecting six cohorts by sample count. Sparse cohorts stay in the destination. Boxes share a log-count axis. This is individual agent-transcript activity, not whole top-level conversations including delegation.",
       "exploration": {
         "keys": [
@@ -18652,15 +18652,15 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools.",
       "id": "machine-time",
-      "title": "Recorded machine time",
+      "title": "Recorded tool time",
       "description": "Tool and command time over the last {days} days, by the kind of work.",
       "days": [
         7,
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "where": [
         {
           "field": "duration_ms",
@@ -18678,7 +18678,7 @@
             "activity"
           ],
           "groupLimit": 10000,
-          "label": "Recorded machine time by day"
+          "label": "Recorded tool time by day"
         }
       ],
       "cover": {
@@ -18700,7 +18700,7 @@
             "id": "card_duration_ms",
             "op": "sum",
             "field": "duration_ms",
-            "label": "Recorded machine time by day"
+            "label": "Recorded tool time by day"
           },
           {
             "id": "card_count",
@@ -18721,7 +18721,7 @@
             "activity"
           ],
           "groupLimit": 10000,
-          "label": "Recorded machine time by day"
+          "label": "Recorded tool time by day"
         }
       },
       "destination": {
@@ -18736,7 +18736,7 @@
           "seriesLimit": 6
         },
         "dataset": "tool_calls",
-        "detailAction": "Explore machine time"
+        "detailAction": "Explore tool time"
       }
     },
     {
@@ -18745,15 +18745,15 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools.",
       "id": "machine-activities",
-      "title": "Where machine time goes",
+      "title": "Where tool time goes",
       "description": "Share of recorded tool time by kind of work over the last {days} days.",
       "days": [
         7,
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "where": [
         {
           "field": "duration_ms",
@@ -18771,7 +18771,7 @@
             "id": "mt_time",
             "op": "sum",
             "field": "duration_ms",
-            "label": "Recorded machine time"
+            "label": "Recorded tool time"
           },
           {
             "id": "mt_calls",
@@ -18811,7 +18811,7 @@
             "activity"
           ],
           "groupLimit": 10000,
-          "label": "Recorded machine time by activity",
+          "label": "Recorded tool time by activity",
           "display": {
             "kind": "pie"
           }
@@ -18848,7 +18848,7 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools. Operations group a program and subcommand (for example “go test”) or a named tool.",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools. Operations group a program and subcommand (for example “go test”) or a named tool.",
       "id": "machine-operations",
       "title": "Longest-running operations",
       "description": "Commands and tools with the most recorded time over the last {days} days.",
@@ -18856,7 +18856,7 @@
         7,
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "where": [
         {
           "field": "duration_ms",
@@ -18875,7 +18875,7 @@
             "id": "mt_time",
             "op": "sum",
             "field": "duration_ms",
-            "label": "Recorded machine time"
+            "label": "Recorded tool time"
           },
           {
             "id": "mt_calls",
@@ -20404,7 +20404,7 @@
       "idea": "cost-01",
       "id": "token-volume-log",
       "title": "Token volume across scales",
-      "description": "Daily repository tokens over the last {days} days on a logarithmic scale, keeping smaller workloads visible.",
+      "description": "Daily tokens over the last {days} days, with a separate line for each repository on a logarithmic scale.",
       "days": [
         30,
         90
@@ -20443,7 +20443,7 @@
         }
       },
       "action": "Explore Tokens and Cost",
-      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
+      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Each line shows one repository’s daily tokens independently. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
       "exploration": {
         "keys": [
           "day",
@@ -20727,6 +20727,262 @@
         "dataset": "mcp_calls",
         "detailAction": "Explore Pharos request trends"
       }
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "seconds",
+      "id": "thinking-wait-distribution",
+      "title": "Model wait distribution",
+      "description": "Post-tool request gaps over the last {days} days. Missing timing stays missing.",
+      "measures": [
+        {
+          "id": "waits",
+          "display": {
+            "kind": "histogram"
+          },
+          "op": "count",
+          "groupBy": [],
+          "distribution": {
+            "kind": "histogram",
+            "input": "[gap_seconds]",
+            "bins": 16
+          },
+          "label": "Observed post-tool wait"
+        }
+      ],
+      "thinking": {
+        "overview": true,
+        "state": {}
+      },
+      "action": "Explore Waiting and Compaction",
+      "note": "Same request population as Waiting and Compaction, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "compactions",
+      "id": "thinking-compactions",
+      "title": "Context compactions",
+      "description": "Requests that follow a context compaction, day by day by model, over the last {days} days.",
+      "where": [
+        {
+          "field": "compacted_before",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "measures": [
+        {
+          "id": "compactions_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "model"
+          ],
+          "groupLimit": 10000,
+          "label": "Compactions by day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "compactions_daily",
+        "kind": "auto",
+        "maxGroups": 6,
+        "showOther": true,
+        "showLegend": true,
+        "height": 240
+      },
+      "thinking": {
+        "overview": true,
+        "state": {},
+        "open": "thinking:conversation",
+        "coverWhere": true
+      },
+      "action": "Explore Waiting and Compaction",
+      "note": "One compaction is a request whose stream compacted its context since the previous request. Waiting and Compaction pairs the waits, context and output before and after each compaction within one stream, model and effort."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "seconds",
+      "id": "thinking-model-effort",
+      "title": "Wait by model and effort",
+      "description": "Observed wait distributions by recorded model and effort over the last {days} days.",
+      "measures": [
+        {
+          "id": "wait_efforts",
+          "display": {
+            "kind": "box"
+          },
+          "op": "count",
+          "groupBy": [
+            "model_effort"
+          ],
+          "distribution": {
+            "kind": "box",
+            "input": "[gap_seconds]",
+            "whiskers": "tukey"
+          },
+          "label": "Wait by model and effort"
+        }
+      ],
+      "thinking": {
+        "state": {
+          "view": "wait-box",
+          "groupBy": "model_effort"
+        }
+      },
+      "action": "Explore Thinking",
+      "note": "Individual post-tool gaps. Compact native boxes use Tukey whiskers; Thinking uses p10–p90 whiskers. The full dashboard keeps every model/effort pair and exposes support counts."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "seconds",
+      "id": "thinking-preceding-tool",
+      "title": "Wait by preceding tool",
+      "description": "Observed waits after each tool's result, by the tool that ran, over the last {days} days.",
+      "measures": [
+        {
+          "id": "wait_tools",
+          "display": {
+            "kind": "box"
+          },
+          "op": "count",
+          "groupBy": [
+            "preceding_tool"
+          ],
+          "distribution": {
+            "kind": "box",
+            "input": "[gap_seconds]",
+            "whiskers": "tukey"
+          },
+          "label": "Wait by preceding tool"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "wait_tools",
+        "kind": "box",
+        "maxGroups": 8,
+        "density": "compact",
+        "minSamples": 20
+      },
+      "thinking": {
+        "state": {
+          "view": "wait-box",
+          "groupBy": "preceding_tool",
+          "sortBy": "median",
+          "sortDirection": "desc"
+        }
+      },
+      "action": "Explore Thinking",
+      "note": "The gap from a tool result to the next response, grouped by the tool whose result arrived last. A large result adds context to read, so tools differ in more than speed. The cover keeps tools with at least 20 timed requests; Thinking shows every tool with its support counts."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "tokens",
+      "id": "thinking-reasoning-effort",
+      "title": "Reported reasoning by effort",
+      "description": "Positive reasoning reports across models and effort in the last {days} days, including requests without timing.",
+      "measures": [
+        {
+          "id": "reasoning_efforts",
+          "display": {
+            "kind": "box"
+          },
+          "op": "count",
+          "groupBy": [
+            "model_effort"
+          ],
+          "distribution": {
+            "kind": "box",
+            "input": "IF([reasoning_output_tokens]>0,[reasoning_output_tokens],NULL)",
+            "whiskers": "tukey"
+          },
+          "label": "Positive reasoning tokens"
+        }
+      ],
+      "thinking": {
+        "state": {
+          "view": "reasoning",
+          "groupBy": "model_effort"
+        }
+      },
+      "action": "Explore Thinking",
+      "note": "Only positive reports; zero cannot distinguish no reasoning from unreported reasoning. The full dashboard reports retained and eligible populations separately."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "requests",
+      "id": "thinking-timing-coverage",
+      "title": "Timing evidence coverage",
+      "description": "Retained requests grouped by timing evidence over the last {days} days.",
+      "measures": [
+        {
+          "id": "timing_quality",
+          "display": {
+            "kind": "bar-horizontal"
+          },
+          "op": "count",
+          "groupBy": [
+            "timing_quality"
+          ],
+          "label": "Timing evidence coverage"
+        }
+      ],
+      "thinking": {
+        "overview": true,
+        "state": {},
+        "open": "thinking:coverage"
+      },
+      "action": "Explore Waiting and Compaction",
+      "note": "Includes missing timestamps, stale anchors, cross-stream links and excluded durations. The overview explains how timing is reconstructed and provides source-specific validation."
     },
     {
       "id": "human-words-weekday",

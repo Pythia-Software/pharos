@@ -44,7 +44,7 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 	}
 	// The child thread was spawned from the parser conversation, so its
 	// prompt counts toward the Parser work.
-	if _, err := catalog.DB.Exec(`UPDATE conversations SET parent_id=(SELECT id FROM conversations WHERE native_id='parser') WHERE native_id='child'`); err != nil {
+	if _, err := catalog.DB.Exec(`UPDATE conversations SET parent_id=(SELECT id FROM conversations WHERE native_id='parser'),agent_depth=1,agent_path='/root/worker' WHERE native_id='child'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {

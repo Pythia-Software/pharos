@@ -89,6 +89,40 @@ func (cache *derivedCache) pruneDelegationEntries(version int64, now time.Time) 
 	}
 }
 
+// Thinking shares one full population. Bound its fits, native selections and
+// numeric validation separately to four completed cohorts each. Pending work
+// remains shared; old generations and idle cohorts are discarded.
+func (cache *derivedCache) pruneThinkingEntries(version int64, now time.Time) {
+	for _, prefix := range []string{"thinking:fit:", "thinking:selection:", "thinking:validation:"} {
+		completed := map[string]*derivedEntry{}
+		for key, e := range cache.entries {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			select {
+			case <-e.ready:
+			default:
+				continue
+			}
+			if e.version != version || now.Sub(e.usedAt) >= delegationCacheIdle {
+				delete(cache.entries, key)
+				continue
+			}
+			completed[key] = e
+		}
+		for len(completed) > 4 {
+			oldest := ""
+			for k, e := range completed {
+				if oldest == "" || e.usedAt.Before(completed[oldest].usedAt) {
+					oldest = k
+				}
+			}
+			delete(cache.entries, oldest)
+			delete(completed, oldest)
+		}
+	}
+}
+
 func (cache *derivedCache) close() {
 	cache.versions.close()
 	cache.entries = nil
@@ -161,6 +195,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			}
 		}
 		cache.pruneDelegationEntries(version, time.Now())
+		cache.pruneThinkingEntries(version, time.Now())
 		// A published tool cube changes independently of the input generation.
 		// Retain only its current completed Machine Time projection; in-flight
 		// readers continue to own their immutable snapshots after eviction.
@@ -225,6 +260,11 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			value, err := compute(context.WithoutCancel(ctx))
 			cache.mu.Lock()
 			entry.value, entry.err = value, err
+			if isThinkingCohortKey(key) {
+				// These entries rebuild on demand, never in warmCaches. Release the
+				// closure's selected request slice once its result is ready.
+				entry.compute = nil
+			}
 			if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
 				delete(cache.entries, key)
 			}
@@ -233,6 +273,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			// Use the monitor's latest observed version, so an old completion does
 			// not evict snapshots built for a newer commit.
 			cache.pruneDelegationEntries(cache.version, time.Now())
+			cache.pruneThinkingEntries(cache.version, time.Now())
 		} else if request {
 			entry.usedAt = time.Now()
 		}
@@ -276,6 +317,7 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 		cache := &c.derived
 		cache.mu.Lock()
 		cache.pruneDelegationEntries(cache.version, time.Now())
+		cache.pruneThinkingEntries(cache.version, time.Now())
 		cache.mu.Unlock()
 	}
 	if err != nil || version != c.quietVersion {
@@ -303,7 +345,7 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 	cache.mu.Lock()
 	stale := map[string]func(context.Context) (any, error){}
 	for key, entry := range cache.entries {
-		if strings.HasPrefix(key, "delegation:") || strings.HasPrefix(key, "machine-time:") {
+		if strings.HasPrefix(key, "delegation:") || strings.HasPrefix(key, "machine-time:") || isThinkingCohortKey(key) {
 			continue
 		}
 		if entry.version != version && time.Since(entry.usedAt) < recentUse {
@@ -317,4 +359,8 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 		}
 		_, _ = c.derivedValue(ctx, key, compute, false)
 	}
+}
+
+func isThinkingCohortKey(key string) bool {
+	return strings.HasPrefix(key, "thinking:fit:") || strings.HasPrefix(key, "thinking:selection:") || strings.HasPrefix(key, "thinking:validation:")
 }

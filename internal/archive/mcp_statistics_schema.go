@@ -46,6 +46,7 @@ func init() {
 		for k, v := range statisticsProperties() {
 			properties[k] = v
 		}
+		properties["offset"] = map[string]any{"type": "integer", "minimum": 0, "description": "For cards, copy next_offset with the original filters; metadata uses next_cursor instead."}
 		properties["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 500}
 		properties["max_output_tokens"] = map[string]any{"type": "integer", "minimum": 200, "maximum": 8000}
 		cardMax := 100

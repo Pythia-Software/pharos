@@ -16,7 +16,7 @@ import { analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-
 import { tokenAnalysisCatalog } from "../../src/token-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
 import { cardDashboardWhere, cardDetailsURL } from "../../src/card-exploration";
 import { windowedChart } from "../../src/card-windows";
 
@@ -55,7 +55,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
     if (Object.hasOwn(usageDatasetTopics, recipe.dataset)) {
       assert.equal(url.pathname, "/analyze", `Analyze route @${days}d`);
       assert.equal(readUsageWorkspace(url.searchParams).dataset, recipe.destination?.dataset ?? recipe.dataset);
-      if (!recipe.retired && recipe.dataset !== "tl1_attempts") assert.ok(recipe.destination, "analysis cards start exploration on a dashboard");
+      if (!recipe.retired && recipe.dataset !== "tl1_attempts") assert.ok(recipe.destination || recipe.thinking, "analysis cards start exploration on a dashboard");
     }
     if (recipe.destination) {
       const { topic, chart } = recipe.destination;

@@ -832,7 +832,7 @@ func TestQueryV2LibraryCompactRequests(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || len(page.Rows) != 1 {
 		t.Fatal("page", err, w.Body.String())
 	}
-	for _, name := range []string{"purpose", "outcome", "pr_details", "cost_usd", "first_input"} {
+	for _, name := range []string{"purpose", "outcome", "pr_details", "cost_usd", "first_input", "preview_elapsed_ms"} {
 		if _, found := page.Rows[0][name]; !found {
 			t.Fatalf("page enrichment lost %s", name)
 		}

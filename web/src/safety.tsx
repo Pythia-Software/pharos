@@ -86,8 +86,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <h3>Questions for your agent</h3><ul>{detail.questions.map(question => <li key={question}>{question}</li>)}</ul>
           <h3>Archived evidence</h3>
           <p className="findings-muted">{detail.calls} distinct calls in the latest discovery window; up to 20 examples below. Selection identifies commands to review, not confirmed harm or authorization.</p>
-          {detail.evidence.map(entry => <ViewDisclosure key={entry.id} viewKey={`safety:${detail.id}:evidence:${entry.id}`} className="safety-evidence">
-            <summary>{date(entry.at)} · {entry.outcome}</summary>
+          {detail.evidence.map(entry => <ViewDisclosure key={entry.id} viewKey={`safety:${detail.id}:evidence:${entry.id}`} className="safety-evidence" summary={<>{date(entry.at)} · {entry.outcome}</>}>
             <pre>{entry.command}</pre><p>Working directory: <code>{entry.cwd || "Unresolved"}</code></p><p className="findings-muted">{entry.cwd_basis}{entry.conditional ? ". Compound or conditional call: individual execution needs context." : ""}</p>
             <a href={entry.path}>Open archived conversation ↗</a>
           </ViewDisclosure>)}
@@ -114,7 +113,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <CartPanel safety cart={overview.cart} targets={overview.targets} act={act} onReview={next => setReview(next.target)} />
         </div>
       </>}
-      {view !== "table" ? <ViewDisclosure viewKey="safety:coverage" className="safety-coverage"><summary>What Pharos reviewed{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</summary><p>{overview.built_at ? `${Number(overview.scanned_calls).toLocaleString()} retained shell calls examined. ` : "Risky action discovery runs with the next full Findings refresh. "}{overview.coverage}</p><p>Checks cover selected deletions, credential copies, SQL mutations, Git history, publication, cloud deletion, process selectors, permissions, HTTP mutations, and system or disk-image operations. These are deterministic heuristics; no agent investigation runs inside Pharos.</p><a href={safetyURL("settings")}>Risky action settings and refresh</a></ViewDisclosure> : null}
+      {view !== "table" ? <ViewDisclosure viewKey="safety:coverage" className="safety-coverage" summary={<>What Pharos reviewed{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}><p>{overview.built_at ? `${Number(overview.scanned_calls).toLocaleString()} retained shell calls examined. ` : "Risky action discovery runs with the next full Findings refresh. "}{overview.coverage}</p><p>Checks cover selected deletions, credential copies, SQL mutations, Git history, publication, cloud deletion, process selectors, permissions, HTTP mutations, and system or disk-image operations. These are deterministic heuristics; no agent investigation runs inside Pharos.</p><a href={safetyURL("settings")}>Risky action settings and refresh</a></ViewDisclosure> : null}
     </>}
     {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>{table}</div> : null}
     {group ? <ReviewDialog key={group.target} safety group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); window.dispatchEvent(new Event("pharos:safety-changed")); setNotice("Copied. Reviews moved to Handed off."); }} /> : null}

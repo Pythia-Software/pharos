@@ -99,23 +99,70 @@ export function useViewEntry<T>(name: string, key: string, fallback: T, active =
   return [value, update];
 }
 
-/** Classic-script content opts into the same disclosure map with a stable key. */
+/** Classic content uses stable keys for both native and button disclosures. */
 export function installClassicDisclosures() {
-  const known=new WeakMap<HTMLDetailsElement,boolean>();
-  const defaults=new WeakMap<HTMLDetailsElement,boolean>();
-  const restore=(root: ParentNode=document, force=false)=>{
-    const values=readViewState<Record<string,boolean>>("disclosures",{});
-    const elements=[...(root instanceof HTMLDetailsElement && root.dataset.viewKey ? [root] : []),...root.querySelectorAll<HTMLDetailsElement>("details[data-view-key]")];
-    for(const element of elements){if(!force&&known.has(element))continue;if(!defaults.has(element))defaults.set(element,element.open);const key=element.dataset.viewKey!;element.open=Object.hasOwn(values,key)?values[key]:defaults.get(element)!;known.set(element,element.open);}
+  type Disclosure = HTMLDetailsElement | HTMLButtonElement;
+  const selector = "details[data-view-key],button[data-view-key][aria-controls]";
+  const known = new WeakMap<Disclosure, boolean>(), defaults = new WeakMap<Disclosure, boolean>();
+  const isOpen = (element: Disclosure) => element instanceof HTMLDetailsElement ? element.open : element.getAttribute("aria-expanded") === "true";
+  const apply = (element: Disclosure, value: boolean) => {
+    const open = value && !(element instanceof HTMLButtonElement && element.disabled);
+    const changed = !known.has(element) || isOpen(element) !== open;
+    known.set(element, open);
+    if (element instanceof HTMLDetailsElement) element.open = open;
+    else {
+      element.setAttribute("aria-expanded", String(open));
+      const panel = document.getElementById(element.getAttribute("aria-controls")!);
+      if (panel) panel.hidden = !open;
+      const action = element.querySelector("[data-view-action]");
+      if (action) action.textContent = open ? "Collapse" : "Expand";
+      if (element.dataset.viewLabel) element.setAttribute("aria-label", `${open ? "Collapse" : "Expand"} ${element.dataset.viewLabel}`);
+    }
+    if (changed) element.dispatchEvent(new Event("pharos:disclosure"));
   };
-  document.addEventListener("toggle",event=>{
-    const element=event.target;if(!(element instanceof HTMLDetailsElement)||!element.dataset.viewKey)return;
-    if(known.get(element)===element.open)return;known.set(element,element.open);
-    const values=readViewState<Record<string,boolean>>("disclosures",{}),key=element.dataset.viewKey;
-    if(values[key]!==element.open)writeViewState("disclosures",{...values,[key]:element.open});
-  },true);
-  const observer=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node instanceof Element)restore(node);});
-  observer.observe(document.body,{subtree:true,childList:true});
-  for(const event of ["popstate","pharos:route","pharos:view"])window.addEventListener(event,()=>restore(document,true));
+  const restore = (root: ParentNode = document, force = true) => {
+    const values = readClassicViewState<Record<string,boolean>>("disclosures", {});
+    const elements = [...(root instanceof Element && root.matches(selector) ? [root as Disclosure] : []), ...root.querySelectorAll<Disclosure>(selector)];
+    for (const element of elements) {
+      if (!element.isConnected) continue;
+      const key = element.dataset.viewKey!;
+      // A collapsed button still exposes its control. Never put its section
+      // target on the panel that apply() hides.
+      const target = element instanceof HTMLDetailsElement ? element : document.getElementById(key) ?? element;
+      if (!target.dataset.pharosTarget) target.dataset.pharosTarget = `section:${key}`;
+      // Reconciliation can remove runtime-owned attributes on retained nodes.
+      // Repair identity even when their disclosure state is already known.
+      if (!force && known.has(element)) continue;
+      if (!defaults.has(element)) defaults.set(element, element.dataset.viewDefault === undefined ? isOpen(element) : element.dataset.viewDefault === "true");
+      const fallback = defaults.get(element)!;
+      apply(element, Object.hasOwn(values, key) ? values[key] : fallback);
+      const view = element.closest(".view");
+      const active = !element.closest("[hidden],[inert]") && (!view || view.classList.contains("active"));
+      if (active && element.hasAttribute("data-view-capture-initial") && !Object.hasOwn(values, key)) captureViewEntry("disclosures", key, fallback);
+    }
+  };
+  const write = (element: Disclosure, open: boolean) => {
+    const values = readClassicViewState<Record<string,boolean>>("disclosures", {}), key = element.dataset.viewKey!;
+    if (values[key] !== open) writeViewState("disclosures", {...values, [key]: open});
+  };
+  document.addEventListener("toggle", event => {
+    const element = event.target;
+    if (!(element instanceof HTMLDetailsElement) || !element.dataset.viewKey || !element.isConnected || known.get(element) === element.open) return;
+    known.set(element, element.open); write(element, element.open);
+  }, true);
+  document.addEventListener("click", event => {
+    const element = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button[data-view-key][aria-controls]") : null;
+    if (!element || element.disabled || event.defaultPrevented) return;
+    const open = !isOpen(element); apply(element, open); write(element, open);
+  });
+  const observer = new MutationObserver(records => {
+    for (const record of records) {
+      if (record.type === "attributes" && record.target instanceof Element) restore(record.target, false);
+      for (const node of record.addedNodes) if (node instanceof Element) restore(node, false);
+    }
+  });
+  observer.observe(document.body, {subtree:true, childList:true, attributes:true, attributeFilter:["data-pharos-target"]});
+  for (const event of ["popstate", "pharos:route", "pharos:view", "pharos:uri-changed"]) window.addEventListener(event, () => restore());
   restore();
+  return restore;
 }

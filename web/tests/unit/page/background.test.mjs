@@ -46,6 +46,15 @@ test("one column per cadence, each with its state, its description and its items
   assert.equal(background.scheduleModel({}, at), null);
 });
 
+test("label settings remain available when no labeling work is scheduled", () => {
+  for (const enabled of [false, true]) {
+    const labels = { enabled, can_change: true, status: enabled ? 'Waiting for model' : 'Off' };
+    const model = plain(background.scheduleModel({ ...document, labels }, at));
+    assert.deepEqual(model.labels, labels);
+    assert.ok(!model.columns.some(column => column.items.some(item => item.id === 'labels')));
+  }
+});
+
 test("an item carries its cost class, its choices and its state line", () => {
   const writing = plain(background.scheduleModel(document, at)).columns[1].items[0];
   assert.deepEqual(writing.cost, { class: "heavy", text: "Cost B" });
@@ -58,6 +67,13 @@ test("an item carries its cost class, its choices and its state line", () => {
   const filtered = plain(background.itemModel({ ...document.view.items[0], sources: [{ name: "claude", selected: true }, { name: "codex", selected: false }] }, at));
   assert.deepEqual(filtered.sources, [{ name: "claude", selected: true }, { name: "codex", selected: false }], "the sources scheduled indexing reads, to choose from");
   assert.equal(plain(background.scheduleModel(document, at)).columns[2].items[0].cost, null);
+  const temporary = { cadence: "hourly", expires_at: "2026-11-05T12:00:00Z" };
+  const moves = [{ cadence: "frequent", label: "Promote" }, { cadence: "daily", label: "Demote" }];
+  const promoted = plain(background.itemModel({ ...document.view.items[1], cadence_moves: moves, temporary_cadence: temporary }, at));
+  assert.deepEqual(promoted.moves, moves);
+  assert.deepEqual(promoted.temporary, temporary);
+  assert.deepEqual(writing.moves, []);
+  assert.equal(writing.temporary, null);
 });
 
 test("state lines: an age and the next time when current, the retry when failed, the run when missed", () => {

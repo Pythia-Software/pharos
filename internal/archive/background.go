@@ -19,8 +19,8 @@ import (
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
-// cost allows, so it moves as it gets faster or slower. An override can only
-// move an item to a slower cadence, or to only when you ask.
+// cost allows, so it moves as it gets faster or slower. Permanent overrides
+// slow work down; a temporary override can also promote adaptive work.
 
 const (
 	cadenceFrequent = "frequent"
@@ -78,6 +78,8 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
+	// requiresLabels items exist only where labels_enabled is on.
+	requiresLabels bool
 }
 
 // backgroundItems in the order they run within a pass: new data first, then
@@ -97,8 +99,12 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
 	{ID: "writing", Label: "Your writing", Verb: "Updating your writing", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Decides which messages you wrote. Today it reads all of your messages each time."},
+	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying queued inputs", Feeds: "Integrity checks deferred by quick indexing", Cadence: cadenceHourly,
+		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
+	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
+		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
@@ -108,7 +114,7 @@ var backgroundItems = []backgroundItem{
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
-var stageOrder = []string{"identities", "git", "tools", "authorship", "findings"}
+var stageOrder = []string{"identities", "git", "tools", "authorship", "findings", "labels"}
 
 func backgroundItemByID(id string) (backgroundItem, bool) {
 	for _, item := range backgroundItems {
@@ -122,19 +128,26 @@ func backgroundItemByID(id string) (backgroundItem, bool) {
 // backgroundSettings is this Mac's schedule. Mode is on, paused or manual
 // ("only when I ask"); manual is scheduled indexing turned off.
 type backgroundSettings struct {
-	Mode         string            `json:"mode"`
-	PausedUntil  string            `json:"paused_until,omitempty"`
-	Interval     int               `json:"interval_seconds"`
-	DailyAt      string            `json:"daily_at"`
-	HoldWhenBusy bool              `json:"hold_when_busy"`
-	Overrides    map[string]string `json:"overrides"`
-	Placements   map[string]string `json:"placements"`
+	Mode         string                      `json:"mode"`
+	PausedUntil  string                      `json:"paused_until,omitempty"`
+	Interval     int                         `json:"interval_seconds"`
+	DailyAt      string                      `json:"daily_at"`
+	HoldWhenBusy bool                        `json:"hold_when_busy"`
+	Overrides    map[string]string           `json:"overrides"`
+	Placements   map[string]string           `json:"placements"`
+	Temporary    map[string]temporaryCadence `json:"temporary_cadences"`
 	// Battery is what each cadence does on battery (power.go).
 	Battery batteryPolicy `json:"battery"`
 	sync    syncSettings
 }
 
 const defaultDailyAt = "03:00"
+const temporaryCadenceDuration = 7 * 24 * time.Hour
+
+type temporaryCadence struct {
+	Cadence   string `json:"cadence"`
+	ExpiresAt string `json:"expires_at"`
+}
 
 // backgroundSettings reads this Mac's schedule. A catalog without the table
 // (an older catalog opened read-only) has the defaults.
@@ -159,6 +172,19 @@ func (c *Catalog) backgroundSettings(ctx context.Context, at time.Time) (backgro
 		_ = json.Unmarshal([]byte(battery), &settings.Battery)
 	case !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table"):
 		return settings, err
+	}
+	settings.Temporary = map[string]temporaryCadence{}
+	rows, err := queryMapsContext(ctx, c.reader(), "SELECT item,cadence,expires_at FROM background_temporary_cadences WHERE host_id=?", currentHost().ID)
+	if err != nil && !strings.Contains(err.Error(), "no such table") {
+		return settings, err
+	}
+	for _, row := range rows {
+		id, cadence := asString(row["item"]), asString(row["cadence"])
+		item, known := backgroundItemByID(id)
+		until := asString(row["expires_at"])
+		if expiry, ok := parseTime(until); known && item.Adaptive && slices.Contains(cadences, cadence) && ok && at.Before(expiry) {
+			settings.Temporary[id] = temporaryCadence{Cadence: cadence, ExpiresAt: until}
+		}
 	}
 	settings.Mode = "on"
 	if until, ok := parseTime(settings.PausedUntil); ok && at.Before(until) {
@@ -190,9 +216,12 @@ func (settings backgroundSettings) placed(item backgroundItem) string {
 	return item.Cadence
 }
 
-// cadence is where an item runs: an opt-in item only when chosen; an
-// override only when it is slower than the placement.
+// cadence is where an item runs: a live temporary schedule takes precedence
+// for adaptive work; permanent overrides only slow down the placement.
 func (settings backgroundSettings) cadence(item backgroundItem) string {
+	if temporary, ok := settings.Temporary[item.ID]; item.Adaptive && ok {
+		return temporary.Cadence
+	}
 	override := settings.Overrides[item.ID]
 	if item.OptIn {
 		if override == cadenceDaily {
@@ -241,9 +270,11 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 		}
 		total, runs := 0.0, -1
 		for _, kind := range item.Kinds {
-			name, variant, _ := strings.Cut(kind, "/")
+			// "kind/variant" is that variant; "kind/" only the plain kind
+			// (labels' bounded share, not its backlog runs); "kind" all.
+			name, variant, exact := strings.Cut(kind, "/")
 			rows, err := c.reader().QueryContext(ctx, `SELECT (julianday(ended_at)-julianday(started_at))*86400 FROM operation_journal
-				WHERE host_id=? AND kind=? AND (?='' OR variant=?) AND state='succeeded' AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT ?`, currentHost().ID, name, variant, variant, costRuns)
+				WHERE host_id=? AND kind=? AND (NOT ? OR COALESCE(variant,'')=?) AND state='succeeded' AND ended_at IS NOT NULL ORDER BY started_at DESC LIMIT ?`, currentHost().ID, name, exact, variant, costRuns)
 			if err != nil {
 				runs = 0
 				break
@@ -420,11 +451,17 @@ type backgroundInputs struct {
 	lastBackup                   string
 	requested                    map[string]bool
 	// power is this Mac's power source, for the battery policy.
-	power powerState
+	power            powerState
+	verificationNext time.Time
+	// labels is whether labels_enabled is on; labelsWaiting why labeling
+	// waits for a download.
+	labels        bool
+	labelsWaiting string
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
+	in.verificationNext = c.queuedVerificationNext(ctx)
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -474,6 +511,9 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
+		if item.requiresLabels && !in.labels {
+			continue
+		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
 		run := in.runs[item.ID]
 		if value, ok := parseTime(run.succeeded); ok {
@@ -499,6 +539,19 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				plan.Next = next
 			}
 		case item.continuous:
+		case item.ID == "verification":
+			plan.Pending = !in.verificationNext.IsZero()
+			if plan.Pending {
+				if plan.Cadence == cadenceDaily {
+					daily()
+				} else {
+					plan.Next = maxTime(quiet, plan.LastDone.Add(hourlyEvery))
+					if !plan.LastDone.IsZero() && at.Sub(plan.LastDone) > 3*hourlyEvery {
+						plan.Next, plan.Overdue = at, true
+					}
+				}
+				plan.Next = maxTime(plan.Next, in.verificationNext)
+			}
 		case len(item.Stages) > 0:
 			plan.LastDone = time.Time{}
 			first := true
@@ -728,6 +781,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	in.backupDestination, in.lastBackup = s.cachedBackup(config)
 	in.requested = requested
 	in.power = s.cachedPower(ctx)
+	if config.Labels.Enabled {
+		in.labels, in.labelsWaiting = true, config.Labels.labelsWaiting()
+	}
 	return in
 }
 
@@ -1031,4 +1087,4 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 }
 
 // stageItems is the background item each chain stage belongs to.
-var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings"}
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "findings": "findings", "labels": "labels"}

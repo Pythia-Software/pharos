@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
+import { encodeViewValue, parseViewValue, viewFields } from '../../../src/view-contract';
+
+test('Quick Stats configuration uses the shared disclosure and reveal URL conventions', () => {
+  const stats = loadClassicScript('quick-stats.js');
+  const url = new URL(stats.quickStatsSettingsURL(), 'http://pharos.test');
+  assert.equal(url.pathname, '/settings/layout');
+  const entries = parseViewValue(viewFields.disclosures, url.searchParams.get('disclosures'));
+  assert.deepEqual(entries, {quickStatsSettings: true});
+  assert.equal(encodeViewValue(viewFields.disclosures, entries), url.searchParams.get('disclosures'));
+  assert.equal(url.searchParams.get('reveal'), 'section:quickStatsSettings');
+});
 
 test('Quick Stats defaults preserve the existing card and gate parallelism', () => {
   const stats = loadClassicScript('quick-stats.js');

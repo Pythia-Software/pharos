@@ -81,6 +81,16 @@ main > #home { padding-bottom:28px; }
 .home-discovery-empty svg { width:13px; height:13px; }
 .home-editor { width:370px; max-width:calc(100vw - 32px); margin:18vh auto auto; padding:22px; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:9px; box-shadow:0 20px 70px #0007; }
 .home-editor::backdrop { background:#0007; }
+/* Create card sits beside a chart's title: inline after a trend's heading,
+   and over the top-right corner of a Query Table metric, whose head it pads. */
+.dashboard-card-actions { display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:var(--fs-sm); font-weight:400; }
+.dashboard-card-create { display:inline-grid; place-items:center; width:26px; height:26px; padding:0; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--muted); }
+.dashboard-card-create:hover { color:var(--ink); }
+.dashboard-card-create svg { width:14px; height:14px; }
+.usage-chart-title { display:flex; align-items:center; gap:8px; min-width:0; }
+.dashboard-card-anchor { position:relative; display:flex; }
+.dashboard-card-anchor>.dashboard-card-actions { position:absolute; top:-5px; right:0; flex-direction:row-reverse; background:var(--bg); }
+.dashboard-card-anchor>.qt-metric .qt-metric-head { padding-right:34px; }
 .home-editor h2 { margin:0 0 17px; font:400 24px Charter,Georgia,serif; }
 .home-editor label { display:block; margin:13px 0; font-size:12px; color:var(--muted); }
 .home-editor input,.home-editor textarea,.home-editor select { display:block; width:100%; box-sizing:border-box; padding:9px 10px; margin-top:5px; background-color:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:5px; font:14px "Avenir Next",Avenir,sans-serif; }

@@ -17,6 +17,7 @@ import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { canonicalState, normalizeAnalysis, readAnalysisLink, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { readDashboardLink } from "../../../src/usage-dashboard-model";
+import { initialThinking,isThinkingTopic } from "../../../src/thinking-model";
 import { readUsageWorkspace, usageTopics } from "../../../src/usage-workspace-model";
 import { queryFromURL, readRollingWindow } from "../../../src/query-links";
 import { restoreSearch } from "../../../src/search-composer-state";
@@ -97,7 +98,7 @@ test("the site map's rules judge every dashboard case, partial charts included, 
   // Charts the page writes itself carry keys their view does not draw.
   for (const kind of ["switchView", "card"]) assert.ok(chartCases.some(item => item.written?.startsWith(kind) && item.verdict === "valid" && Object.keys(item.chart).some(key => !map.analyze.dashboards[item.topic].views[merged(item.topic, item.chart).view ?? "trend"].keys.includes(key) && key !== "selection")), `${kind} charts with keys their view does not draw`);
   assert.equal(chartCases.filter(item => item.written?.startsWith("card")).length, map.cards.items.filter(card => card.chart).length, "every card's own chart");
-  for (const topic of Object.keys(usageTopics)) assert.ok(chartCases.some(item => item.topic === topic && item.verdict === "valid" && item.url), topic);
+  for (const topic of Object.keys(analysisCatalogs)) assert.ok(chartCases.some(item => item.topic === topic && item.verdict === "valid" && item.url), topic);
   for (const [topic, facts] of Object.entries(map.analyze.dashboards)) for (const [name, view] of Object.entries(facts.views)) {
     assert.equal(judgeChart(facts, map.analyze.version, view.defaults), "valid", `${topic} ${name} defaults`);
     for (const rule of view.rules) for (const constraint of rule.constraints) {
@@ -149,6 +150,9 @@ test("the sampled card links rebuild from the site map and open their dashboards
     const card = cards.get(item.id), name = `${item.id} at ${item.days}`;
     assert.equal(cardURL(card, item.days), item.url, name);
     if (!card.page.startsWith("analyze/") || card.page.startsWith("analyze/query/")) continue;
+    if(isThinkingTopic(readUsageWorkspace(params(item.url)).topic)) {
+      const opened=initialThinking(params(item.url));assert.equal(opened.range,item.days===null?"all":({180:"6m",365:"1y"}[item.days]??item.days+"d"),name);assert.ok(card.page.startsWith("analyze/thinking-"));continue;
+    }
     const opened = openDashboard(item.url);
     assert.equal(`analyze/${opened.workspace.topic}`, card.page, name);
     assert.equal(opened.error, "", name);
