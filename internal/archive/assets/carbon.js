@@ -868,7 +868,7 @@
   function syncSettingsURL() {
     if (typeof location === 'undefined' || typeof history === 'undefined') return;
     const url = new URL(location.href);
-    if (url.pathname !== '/analyze' || !(url.searchParams.get('analyze_topic') === 'carbon' || url.searchParams.get('analyze_view') === 'carbon')) return;
+    if (url.pathname !== '/analyze' || url.searchParams.get('analyze_topic') !== 'carbon') return;
     url.searchParams.set('analyze_carbon', JSON.stringify(settingsSnapshot()));
     if (url.href !== location.href) {
       history.replaceState(history.state, '', url);

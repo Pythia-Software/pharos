@@ -9,7 +9,6 @@ import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, ca
 import { trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
-import { usageChartPresets } from "../../../src/usage-presets";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { usageDashboardReturn } from "../../../src/usage-workspace-model";
@@ -24,7 +23,7 @@ function draw(state, { where = range, data = rows } = {}) {
 }
 const localDay = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
-test("legacy Tokens trend destinations and Usage chart presets retain their chart state", () => {
+test("legacy Tokens trend destinations retain their chart state", () => {
   // The old Token chart: tokens or cost, as amounts or percentages, summed
   // by the period's field and the split; cost by token type is by provider.
   const legacy = chart => {
@@ -34,7 +33,6 @@ test("legacy Tokens trend destinations and Usage chart presets retain their char
       clauses: split === "type" ? tokenTypes.map(type => [type.key, [field]]) : [[cost ? "cost_usd" : "total_tokens", [field, split]]] };
   };
   const charts = [...queryRecipes.filter(recipe => recipe.destination?.topic === "tokens" && (!recipe.destination.chart.view || recipe.destination.chart.view === "trend") && ["tokens", "cost", "percent", "percent_cost"].includes(recipe.destination.chart.metric)).map(recipe => [recipe.id, recipe.destination.chart]),
-    ...usageChartPresets.map(preset => [preset.label, { ...base, ...preset.chart }]),
     ...["tokens", "cost", "percent", "percent_cost"].map(metric => [`type ${metric}`, { ...base, metric, split: "type" }])];
   assert.ok(charts.length > 10);
   for (const [name, chart] of charts) {

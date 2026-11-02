@@ -154,24 +154,15 @@ Sources: [reader controls in ui.py](../internal/archive/assets/ui.py), [reader c
 
 There are two different controls called sessions visibility: the explorer's existing `sessions=hidden` and the workspace navigator sidebar's visibility. They need distinct ownership/names if both are made linkable.
 
-### Still-reachable legacy views
+### Removed legacy views
 
-These are reachable through explicit old URLs and current “Legacy view” links. The site map deliberately excludes their route vocabulary, so equivalent canonical topics do not imply parity of controls.
-
-Legacy view-state migration is now explicitly excluded from this project. Retain the rows as known gaps, preserve compatibility, and record the exclusion by page/surface in the completeness manifest. An exclusion must not mask a missing control on a canonical page.
-
-| Surface | Existing URL support | Missing view state |
-|---|---|---|
-| Legacy Analyze tabs | `analyze_view`, `machine_view` | Agent help excludes these modes |
-| Machine Activity shared scope | `activity_days/repo/provider/model` plus origin dimensions | Agent help excludes it |
-| Legacy token trend | Table filters in `q_usage`; chart stored in `pharos-usage-chart` | Chart measure/split/period/smoothing/display/scale/legend/series settings do not travel with the table |
-| Legacy Human Words | `writing`, `messages`, `q_writing/q_writing_messages`, `message_query`, `message_cursor` | Writing chart stored in `pharos-writing-view`; advanced message search absent from agent interface |
-| Legacy Agent Time | Source calls/query scope can travel | Hours/share, trend measure, analytics grouping local; `MachineAnalyticsTable` has URL sync off by default |
-| Legacy parallelism | `q_machine_parallelism` and shared scope | No general agent construction; prototype modal settings differ |
-| Legacy Carbon | Chart reads `analyze_chart` on entry | Chart edits only save preference, so an existing chart URL can become stale |
-| `/tools` Calls/Summary/Skills | `tools_view`, relevant `q_*` | Agent uses canonical query pages; custom selected-call dialog is local |
-
-Sources: [legacy components](../web/src/index.tsx), [machine-activity.tsx](../web/src/machine-activity.tsx), [machine-time.tsx](../web/src/machine-time.tsx), [machine-analytics-table.tsx](../web/src/machine-analytics-table.tsx), [legacy routes](../web/src/site-routes.ts).
+The legacy Analyze tabs (`analyze_view`, `machine_view`, `writing`) and the
+`/tools` pages were removed on 2026-11-02. Their links open what replaced
+them (`canonicalAnalyzeURL` in
+[usage-workspace-model.ts](../web/src/usage-workspace-model.ts)): the query
+table whose `q_*` the link holds, or otherwise the page's dashboard with the
+link's `analyze_chart`. Machine Activity's shared scope (`activity_*`) and
+`q_machine_parallelism` are dropped.
 
 ### Global/Settings boundary
 

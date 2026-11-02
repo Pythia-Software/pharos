@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState, toMetricQuery } from '@pythia-software/query-table-core';
 import toolCalls from '../../../../schemas/tool_calls.schema.json';
-import { refreshTodayHost, canonicalDraft, changeLibrarySearch, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
+import writingMessages from '../../../../schemas/writing_messages.schema.json';
+import { refreshTodayHost, canonicalDraft, changeLibrarySearch, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, readLibraryHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
 import { hostQueryV3Transport } from '../../../src/host-query-transport';
 import { execution, queryCapabilities, answerQuery } from '../../support/query-server.mjs';
 import { freshRecordKeywordSearch } from '../../../src/record-keyword-model';
@@ -133,19 +134,18 @@ test('Search file and URL searches, and older keyword links, normalize to their 
     assert.throws(() => normalized(libraryHostQuery, { version: 1, params }));
 });
 
-test('the older Human messages search keeps its definition and leaves its cursor out', () => {
-  const draft = emptyTextSearch();
-  draft.scope.surface = 'user';
-  draft.root.children = [newRule('deploy')];
-  const state = normalized(messageHostQuery, withMessageSearch(draft));
-  assert.deepEqual(Object.keys(state.params), ['message_query']);
-  assert.equal(readMessageSearchHost(state).root.children[0].text, 'deploy');
-  const find = new URLSearchParams(messageFind(state));
-  assert.equal(find.get('find_surface'), 'user');
-  assert.equal(find.has('find_cursor'), false);
-  assert.deepEqual(normalized(messageHostQuery, withMessageSearch(null)), emptyHostState());
-  assert.throws(() => normalized(messageHostQuery, { version: 1, params: { message_query: ['nope'] } }));
-  assert.throws(() => normalized(messageHostQuery, { version: 1, params: { message_cursor: ['abc'] } }), /unknown setting/);
+test('an older Human messages search opens as a keyword filter on the message text, or says why it cannot', () => {
+  const messages = recordKeywordHostQuery('writing_messages', loadSchema(writingMessages).fields);
+  const older = change => { const draft = emptyTextSearch(); draft.scope.surface = 'user'; draft.root.children = [newRule('deploy')]; change?.(draft); return { version: 1, params: { message_query: [canonicalDraft(draft)] } }; };
+  const state = normalized(messages, older());
+  assert.deepEqual(Object.keys(state.params), ['record_writing_messages']);
+  const keyword = readRecordKeyword(state, 'writing_messages', loadSchema(writingMessages).fields);
+  assert.deepEqual([keyword.field, keyword.draft.root.children[0].text, keyword.draft.scope], ['text', 'deploy', emptyTextSearch().scope]);
+  assert.deepEqual(normalized(messages, state), state);
+  for (const [change, reason] of [[draft => { draft.scope.surface = 'pasted'; }, /pasted text/], [draft => { draft.scope.from = '2026-10-01'; }, /dates/], [draft => { draft.fuzzy = true; }, /fuzzy/]])
+    assert.throws(() => normalized(messages, older(change)), reason);
+  assert.throws(() => normalized(messages, { version: 1, params: { message_cursor: ['abc'] } }), /unknown setting/);
+  assert.throws(() => normalized(host, older()), /unknown setting "message_query"/, 'only the messages table reads it');
 });
 
 test('query links mirror host state in its own parameters and keep it in the encoded query', () => {
@@ -162,7 +162,6 @@ test('Today host searches normalize stably and renew only at execution boundarie
   const draft = withSearchDateWindow(emptyTextSearch(), 'today', clock); draft.root.children[0].text = 'migration';
   for (const [host, initial, read] of [
     [libraryHostQuery, libraryHostState({ kind: 'text', text: draft, file: '', fileCase: false, view: 'table' }), state => readLibraryHost(state).text],
-    [messageHostQuery, withMessageSearch(draft), readMessageSearchHost],
   ]) {
     const state = normalized(host, initial);
     assert.deepEqual(normalized(host, state), state);

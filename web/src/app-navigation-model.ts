@@ -1,7 +1,7 @@
 import { nestedPageTrail, type NestedPage } from "./nested-pages-model";
 import { safetyURL } from "./safety-route";
 import { agentEventDatasets, agentEventTopics, agentEventsEnabled } from "./agent-events-flag";
-import { isUsageWorkspace, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageMode } from "./usage-workspace-model";
+import { canonicalAnalyzeURL, readUsageWorkspace, usageDatasets, usageDatasetTopics, usageTopics, usageWorkspaceURL, type UsageMode } from "./usage-workspace-model";
 
 export const findingsPages: readonly NestedPage[] = [
   { id: "findings:dashboard", label: "Dashboard", href: "/findings" },
@@ -59,18 +59,10 @@ export function appLocation(path: string, params: URLSearchParams) {
   if (path === "/settings/optimization") return { section: "findings", current: "findings:settings" };
   if (path.startsWith("/findings")) return { section: "findings", current: `${params.get("optimize_area") === "safety" ? "safety" : "findings"}:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
   if (path.startsWith("/settings")) return { section: "settings", current: path };
-  if (path === "/tools") return { section: "analyze", current: `query:${params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"}` };
-  if (path === "/analyze" || path === "/mcp") {
-    if (path === "/mcp") return { section: "analyze", current: "dashboards:mcp" };
-    if (isUsageWorkspace(params)) {
-      const state = readUsageWorkspace(params);
-      return { section: "analyze", current: `${state.mode}:${state.mode === "dashboards" ? state.topic : state.dataset}` };
-    }
-    const view = params.get("analyze_view"), machine = params.get("machine_view");
-    const current = view === "conversations" ? "query:conversation_activity" : view === "writing"
-      ? params.get("writing") === "messages" ? "query:writing_messages" : "dashboards:human"
-      : `dashboards:${view === "carbon" ? "carbon" : machine === "time" ? "time" : machine === "parallelism" ? "parallelism" : "tokens"}`;
-    return { section: "analyze", current };
+  if (path === "/mcp") return { section: "analyze", current: "dashboards:mcp" };
+  if (path === "/analyze" || path === "/tools") {
+    const state = readUsageWorkspace(new URL(canonicalAnalyzeURL(path, params), "http://localhost").searchParams);
+    return { section: "analyze", current: `${state.mode}:${state.mode === "dashboards" ? state.topic : state.dataset}` };
   }
   return { section: path === "/" || path === "/home" ? "home" : "library", current: "" };
 }

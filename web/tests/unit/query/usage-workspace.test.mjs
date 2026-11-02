@@ -16,7 +16,7 @@ import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
-import { isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
+import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
 import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
@@ -278,7 +278,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
 });
 
-test("Analyze defaults to its sidebar layout while explicit older analyses remain reachable", () => {
+test("Analyze defaults to its sidebar layout and older analyses open what replaced them", () => {
   assert.equal(isUsageWorkspace(new URLSearchParams()), true);
   assert.equal(isUsageWorkspace(new URLSearchParams("analyze_view=tokens&machine_view=time")), false);
   assert.equal(isUsageWorkspace(new URLSearchParams("analyze_view=writing&writing=messages")), false);
@@ -288,6 +288,29 @@ test("Analyze defaults to its sidebar layout while explicit older analyses remai
   assert.equal(url.searchParams.has("analyze_chart"), false);
   assert.equal(url.searchParams.has("analyze_filters"), false);
   assert.equal(readUsageWorkspace(url.searchParams).topic, "mcp");
+  const canonical = (path, query) => new URL(canonicalAnalyzeURL(path, new URLSearchParams(query)), "http://localhost").searchParams;
+  const workspace = "analyze_mode=dashboards&analyze_data=usage&analyze_topic=tokens&analyze_chart=x";
+  assert.equal(canonical("/analyze", workspace).toString(), workspace, "a workspace link is unchanged");
+  // A link holding its table's query opens that table, without the other pages' state.
+  const usageQuery = encodeQuery({ ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "codex" }] });
+  const table = canonical("/analyze", new URLSearchParams({ analyze_view: "tokens", q_usage: usageQuery, q_writing: "other", analyze_chart: "{}", activity_days: "7" }).toString());
+  assert.deepEqual([...table.keys()].sort(), ["analyze_data", "analyze_mode", "analyze_topic", "q_usage"]);
+  assert.deepEqual([table.get("analyze_mode"), table.get("analyze_data"), table.get("q_usage")], ["query", "usage", usageQuery]);
+  // Otherwise the page's dashboard opens with the link's chart, which the dashboard reads in its terms.
+  const carbon = canonical("/analyze", 'analyze_view=carbon&analyze_chart={"metric":"energy"}');
+  assert.deepEqual([carbon.get("analyze_mode"), carbon.get("analyze_topic"), carbon.get("analyze_chart"), carbon.has("analyze_view")], ["dashboards", "carbon", '{"metric":"energy"}', false]);
+  // Carbon's population and Today window move to the dashboard's parameters.
+  const carbonWhere = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "provider", op: "=", value: "codex" }];
+  const filtered = canonical("/analyze", new URLSearchParams({ analyze_view: "carbon", q_carbon: encodeQuery({ ...EMPTY_QUERY, where: carbonWhere }), carbon_window: "today" }).toString());
+  assert.deepEqual(decodeQueryStrict(filtered.get("analyze_filters")).where, carbonWhere);
+  assert.deepEqual([filtered.get("analyze_window"), filtered.has("q_carbon"), filtered.has("carbon_window")], ["today", false, false]);
+  assert.deepEqual(readDashboardLink(filtered, { metric: "co2" }, () => true, usageTime, undefined, new Date(2026, 10, 2, 12)).where.filter(term => term.field !== usageTime.first && term.field !== usageTime.last), carbonWhere);
+  assert.equal(canonical("/analyze", "analyze_view=carbon&q_carbon=broken").has("analyze_filters"), false);
+  assert.equal(canonical("/analyze", "analyze_view=concurrency").get("analyze_topic"), "parallelism");
+  assert.equal(canonical("/analyze", "analyze_view=tokens&machine_view=parallelism&q_parallelism=x").get("analyze_data"), "parallelism");
+  assert.equal(isUsageWorkspace(canonical("/tools", "tools_view=calls")), true);
+  // The shell moves /tools to /analyze before the page reads it.
+  for (const path of ["/tools", "/analyze"]) assert.deepEqual([canonical(path, "tools_view=summary&q_tools=x&q_library=y").get("analyze_data"), canonical(path, "tools_view=summary&q_tools=x&q_library=y").get("q_tools")], ["tools", "x"]);
 });
 
 

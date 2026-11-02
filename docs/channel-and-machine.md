@@ -331,10 +331,8 @@ parallelism, conversation activity, and Library. Update those contracts, their
 generated Go schemas, and the corresponding row producers together.
 
 Schemas alone do not cover the UI. For example,
-[usage-presets.ts](../web/src/usage-presets.ts),
 [usage-chart.tsx](../web/src/usage-chart.tsx),
 [tools-dashboard-model.ts](../web/src/tools-dashboard-model.ts),
-[machine-activity.tsx](../web/src/machine-activity.tsx),
 [carbon-impact.tsx](../web/src/carbon-impact.tsx),
 [card-exploration.ts](../web/src/card-exploration.ts), and the recipe/chart helpers
 have explicit dimension lists or provider-specific labels. Introduce one small

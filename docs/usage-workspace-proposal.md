@@ -64,13 +64,11 @@ separate lines for the six busiest groups by call volume, with a
 day/week/month control. Its grouped and record links preserve that exact
 selected population. Rates are not stacked or averaged
 across daily summaries. Grouped queries include the relevant numerators and
-call-count denominators. Bars and points open matching daily summary records;
-Legacy view keeps the existing specialized presets available.
+call-count denominators. Bars and points open matching daily summary records.
 Parallelism reuses the original Threaded / Model activity ribbon with workspace/session counting,
 turn gap, repository, captured date selection, zoom, and conversation details.
 It uses only the real captured timing snapshot. Analyze views have no example-data source or selector; older demo links also use library data.
-Skills and Agent time retain their focused time series, with the richer Machine
-Time explorer still available through Legacy view. Carbon reuses the
+Skills and Agent time retain their focused time series. Carbon reuses the
 calculator and graph. Graphs and controls sit directly on the page, without a
 central card frame.
 
@@ -88,7 +86,6 @@ measures and sort order, omitting empty clauses. Bold grammatical cues such as
 competing with the query name.
 Relative dates keep signed offsets such as `-30 days`; fixed dates stay fixed.
 All four open Query with search and filters expanded.
-**Legacy view** opens the older specialized analysis and labels any filter reset.
 `analyze_search=1` persists this panel, and old prototype `analyze_mode=search`
 links resolve to Query with search open. Back to dashboard retains graph state.
 
@@ -218,9 +215,10 @@ query route. Header navigation, history titles, summaries, Settings links,
 the macOS menu bar, and shared exports use the Analyze page name. `/usage`
 and its page parameters have been replaced without compatibility aliases.
 
-The specialized full analyses remain reachable under
+The specialized full analyses were removed on 2026-11-02. Links to
 `/analyze?analyze_view=…`, `machine_view`, `writing`, and
-`/tools?tools_view=…`, retaining their query, scope, chart, and search state.
+`/tools?tools_view=…` open the query table or dashboard that replaced them,
+keeping their table query and chart.
 Explicit URL state must outrank saved preferences. Dataset names such as
 `usage`, query codecs such as `q_usage`, and usage data API endpoints keep
 their domain names.

@@ -316,24 +316,9 @@ const ROUTES = [
   { name: "Search content editor", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
   { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
-  { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
-  { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row", check: async (page, app) => {
-    for (const [name, longer, shorter] of [['Activity period', '90', '0'], ['Trend measure', 'average', 'calls'], ['Analytics grouping', 'operation', 'activity']]) {
-      const select = page.getByRole('combobox', { name, exact: true });
-      await select.selectOption(longer);
-      await app.settled();
-      const expanded = await select.boundingBox();
-      await select.selectOption(shorter);
-      await app.settled();
-      assert.ok((await select.boundingBox()).width < expanded.width, `${name} shrinks with its selected label`);
-    }
-  } },
-  { name: "Analyze parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
-  { name: "Analyze parallelism prototype", concurrency: true, url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
-  { name: "Human Words", url: "/analyze?analyze_view=writing", ready: ".writing-panel .usage-chart" },
-  { name: "Human Words messages", url: "/analyze?analyze_view=writing&writing=messages", ready: "#queryTableUsage .qt-row" },
-  { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
-  { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
+  // Older Analyze and Tools links open what replaced their pages.
+  { name: "Analyze legacy link", url: '/analyze?analyze_view=carbon&analyze_chart={"metric":"energy"}', ready: ".usage-dashboard #carbonSummary" },
+  { name: "Tools legacy link", url: "/tools?tools_view=summary", ready: ".usage-workspace-table .qt-row" },
   { name: "Conversations dashboard", url: "/analyze?analyze_topic=activity", ready: '.dashboard-stats[aria-label="Conversations summary"][aria-busy="false"]' },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
   // One route per chart kind and dashboard component; the numbers each
@@ -400,11 +385,7 @@ const ROUTES = [
     name: `Analyze workspace ${label} query`, url: `/analyze?${new URLSearchParams({ analyze_mode: "query", analyze_data: "tool_calls", q_tool_calls: encodeQuery(query) })}`, ready: ".usage-workspace-table .qt-qb",
     open: page => page.getByRole("button", { name: "Run Now", exact: true }).click(), shown: ".usage-workspace-table .qt-row",
   })),
-  { name: "Analyze fresh", url: "/analyze?fresh=1&analyze_view=tokens&machine_view=tokens&activity_days=0&activity_repo=&activity_provider=&activity_model=", preferences: { "pharos-usage-view": "writing", "pharos-machine-view": "time", "pharos-machine-scope": { days: 7, repository: "missing", provider: "missing", model: "missing" } }, ready: "#queryTableUsage .qt-row" },
-  { name: "Analyze query recovery", url: "/analyze?analyze_view=tokens&machine_view=tokens&q_usage=invalid", ready: ".query-recovery", open: page => page.getByRole("button", { name: "Reset table", exact: true }).click(), shown: "#queryTableUsage .qt-row" },
-  { name: "Tool calls", url: "/tools", ready: "#toolsPage .qt-row" },
-  { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
-  { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
+  { name: "Analyze query recovery", url: "/analyze?analyze_mode=query&analyze_data=usage&q_usage=invalid", ready: ".query-recovery", open: page => page.getByRole("button", { name: "Reset table", exact: true }).click(), shown: ".usage-workspace-table .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
   { name: "Safety reviews", url: "/findings?optimize_area=safety", ready: ".safety-card" },
   { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .qt-row" },

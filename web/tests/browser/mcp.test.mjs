@@ -22,7 +22,7 @@ async function navigate(page, href) {
 // The fallback without AbortSignal.any is unit-tested (metric-request.test.mjs).
 test("MCP opens and reopens after Tools and a Library text search", { skip }, async t => {
     const app = await open(t, { url: `/library?${carried}`, ready: "#queryTableLibrary .qt-table" });
-    for (const [href, ready] of [[`/tools?${carried}`, "#toolsPage .qt-row"], [queryURL, `${table} .qt-row`], [`/library?${carried}`, "#queryTableLibrary .qt-row"], [queryURL, `${table} .qt-row`]]) {
+    for (const [href, ready] of [[`/tools?${carried}`, `${table} .qt-row`], [queryURL, `${table} .qt-row`], [`/library?${carried}`, "#queryTableLibrary .qt-row"], [queryURL, `${table} .qt-row`]]) {
       await navigate(app.page, href);
       await app.page.locator(ready).first().waitFor();
     }

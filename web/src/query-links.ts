@@ -1,7 +1,7 @@
 import { schemaDocuments } from "./schema-documents";
 import { todayBounds, type WindowChoice } from "./day-window";
 import { EMPTY_QUERY, decodeQueryStrict, predicatesOf, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
-import { isUsageWorkspace, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
+import { canonicalAnalyzeURL, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
 import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { windowedChart } from "./card-windows";
@@ -143,16 +143,15 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
   try {
     const parsed = new URL(url, location.origin);
     if (parsed.origin !== location.origin) return;
-    const params = parsed.searchParams, path = parsed.pathname;
-    const workspace = path === "/analyze" && isUsageWorkspace(params) ? readUsageWorkspace(params) : null;
+    const path = parsed.pathname, analyze = path === "/analyze" || path === "/tools";
+    // An older Analyze or Tools link reads as the workspace link it opens.
+    const params = analyze ? new URL(canonicalAnalyzeURL(path, parsed.searchParams), parsed.origin).searchParams : parsed.searchParams;
+    const workspace = analyze ? readUsageWorkspace(params) : null;
     // Older URLs can carry offscreen tables' state as well. The route and
     // selected tab decide the dataset, rather than the first q_* parameter.
     const dataset: QueryDataset | undefined = workspace ? workspace.mode === "dashboards" ? cardSourceDataset(params) : workspace.dataset
       : path === "/library" || path === "/" ? "library"
-      : path === "/analyze" && params.get("machine_view") === "parallelism" && params.has("q_parallelism") ? "parallelism"
       : path === "/findings" ? params.get("view") === "table" ? params.get("optimize_area") === "safety" ? "safety" : "findings" : undefined
-      : path === "/analyze" ? params.get("analyze_view") === "conversations" ? "conversation_activity" : params.get("analyze_view") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
-      : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
       : path === "/mcp" ? "mcp_calls" : undefined;
     if (dataset) {
       const token = params.get(`q_${dataset}`);
