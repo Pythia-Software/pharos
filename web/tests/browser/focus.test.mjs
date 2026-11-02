@@ -266,7 +266,7 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
@@ -306,7 +306,7 @@ async function holdsFocus(page, surface, opener) {
 // across a pushed snapshot. Stop and Eject decisions are unit tested in
 // web/tests/unit/page/status-panel.test.mjs.
 test("Unified activity panel holds focus and its disclosure across refreshes", { skip }, async t => {
-  const app = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
+  const app = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
     "GET /api/status/stream": eventStream(busyStatus),
     "GET /api/status": busyStatus,
   } });
@@ -341,7 +341,7 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
     blockers: [{ label: "Indexing sources", on_eject: "Not registered.", verdict: "unsafe" }], checked: "polled" };
   let fresh = { ...unsafe, checked: "fresh" };
   const snapshot = { ...busyStatus, eject: unsafe };
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", api: {
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
     "GET /api/status/stream": eventStream(snapshot),
     "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...snapshot, eject: fresh } : snapshot,
   } });
@@ -454,7 +454,7 @@ async function useSearchMenus(page, dialog) {
 }
 
 test("quick search takes focus from the header button and from the keyboard shortcut, and returns it", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row" });
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row" });
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
   await useSearchMenus(page, dialog);
@@ -550,7 +550,7 @@ test('navigation and header focus stay reachable when resizing between layouts',
 });
 
 test("Search content search takes focus and returns it to the query builder @ 390", { skip }, async t => {
-  const { page } = await open(t, { url: "/library", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
+  const { page } = await open(t, { url: "/library?view=table", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
   const button = page.getByRole("button", { name: "Messages", exact: true });
   await press(button);
   const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
@@ -566,7 +566,7 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     root: { id: "long-query", kind: "group", join: "all", exclude: false,
       children: Array.from({ length: 12 }, (_, index) => ({ id: `rule-${index}`, kind: "words", text: `condition ${index + 1}`, other: "", distance: "8", exclude: false })) },
   };
-  const app = await open(t, { url: `/library?${new URLSearchParams({ text_builder: JSON.stringify(draft) })}`, viewport: { width, height: 600 }, ready: "#queryTableLibrary .qt-row",
+  const app = await open(t, { url: `/library?view=table&${new URLSearchParams({ text_builder: JSON.stringify(draft) })}`, viewport: { width, height: 600 }, ready: "#queryTableLibrary .qt-row",
     api: { "POST /api/search/text/validate": ({ body }) => ({ where: body.where }) } });
   const { page } = app;
   await press(page.getByRole("button", { name: "Edit messages search", exact: true }));
@@ -615,7 +615,7 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
 {
   const viewport = { width: 390, height: 844 };
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row',
+    const { page } = await open(t, { url: '/library?view=table', viewport, ready: '#queryTableLibrary .qt-row',
       preferences: { 'pharos-header-tools-v1': ['summary', 'theme', 'history', 'library', 'search', 'settings'] },
     });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
@@ -697,7 +697,7 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
 // Both drawers share setDrawer; History stands for them, inline and in More.
 const [toggle, close] = ["historyToggle", "historyClose"];
 for (const width of [1440, 390]) test(`History close restores reachable focus at ${width}px`, { skip }, async t => {
-  const { page } = await open(t, { url: "/library", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
+  const { page } = await open(t, { url: "/library?view=table", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
   await activateHeaderTool(page, "navigatorToggle");
   await press(page.locator(`#${toggle}`));
   await press(page.locator(`#${close}`));
@@ -1885,7 +1885,7 @@ for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their 
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
   let session;
-  const {page,shot}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},api:{
+  const {page,shot}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
@@ -1919,7 +1919,7 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const cards=Array.from({length:count},(_,index)=>({id:'chart-'+index,title:index?'Tokens by model':'Tokens by provider',description:'Explore the selected token usage.',href:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'tokens',...view==='trend'?{analyze_window:'today',analyze_timezone:'America/Denver'}:{},analyze_chart:JSON.stringify({v:2,view,metric:'tokens',split:index?'model':'provider',unit:'conversation',minSamples:0,...view==='trend'?{rollingPeriods:3,norm:true}:{}}),analyze_filters:encodeQuery({...EMPTY_QUERY,where:[]})})}));
   let session;
-  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'body>header',viewport:{width,height:900},api:{
+  const {page,shot,settled,calls}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),

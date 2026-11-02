@@ -774,8 +774,8 @@ func libraryPreviewSelect(filter string) string {
 		FROM workspaces w WHERE ` + filter
 }
 
-// attachLibraryPreviews adds the first request and latest response text to
-// page rows. The text is large, so only displayed rows carry it.
+// attachLibraryPreviews adds the first request and latest response, with
+// their message IDs, to page rows. The text is large, so only displayed rows carry it.
 func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]any) error {
 	if len(page) == 0 {
 		return nil
@@ -817,6 +817,13 @@ func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]a
 	for _, row := range page {
 		preview := byWorkspace[firstString(row["id"])]
 		row["first_input"], row["last_response"] = texts[firstString(preview["first_input_id"])], texts[firstString(preview["last_response_id"])]
+		// The card view opens its conversation browser at these messages.
+		for _, field := range []string{"first_input_id", "last_response_id"} {
+			row[field] = nil
+			if id := firstString(preview[field]); texts[id] != nil {
+				row[field] = id
+			}
+		}
 		row["preview_elapsed_ms"] = nil
 		first, firstOK := timestamps[firstString(preview["first_input_id"])]
 		last, lastOK := timestamps[firstString(preview["last_response_id"])]

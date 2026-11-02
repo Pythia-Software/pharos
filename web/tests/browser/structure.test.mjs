@@ -40,11 +40,14 @@ const markdownLinkAPI = {
   },
 };
 const work = `/work/${workID}`;
+// The root session's last reply, which the card previews as its latest response.
+const latestResponseID = defaultApi["GET /api/work/:id/conversations/:conversation"]({ params: { id: workID, conversation: rootConversation } }).messages
+  .filter(message => message.role === "assistant" && message.kind === "message" && !message.parent_native_id).at(-1).id;
 const conversationResultAPI = {
   "POST /api/query/library/:operation": request => {
     const result = defaultApi["* /api/query/:dataset/:operation"]({ ...request, params: { dataset: "library", operation: request.params.operation } });
     if (!result?.rows) return result;
-    return { ...result, total: 1, rows: result.rows.length ? [{ ...result.rows[0], id: workID, title: "Investigate the incremental indexer", repository_name: "pharos", models: "claude-opus-5-5", efforts: "high", token_count: 190000, turn_count: 12, subagent_count: 2, preview_elapsed_ms: 4800000, cost_usd: 3.3, pr_numbers: "", first_input: `<system_instruction>Initialize the workspace</system_instruction>\n\nReview **the incremental indexer** and its nested agents. ${"Check the recovery path after sleep and preserve the existing index. ".repeat(12)}`, last_response: `The review is **complete**. ${"The index resumes after sleep without replaying retained captures. ".repeat(20)}` }] : [] };
+    return { ...result, total: 1, rows: result.rows.length ? [{ ...result.rows[0], id: workID, title: "Investigate the incremental indexer", repository_name: "pharos", models: "claude-opus-5-5", efforts: "high", token_count: 190000, turn_count: 12, subagent_count: 2, preview_elapsed_ms: 4800000, cost_usd: 3.3, pr_numbers: "", first_input: `<system_instruction>Initialize the workspace</system_instruction>\n\nReview **the incremental indexer** and its nested agents. ${"Check the recovery path after sleep and preserve the existing index. ".repeat(12)}`, last_response: `The review is **complete**. ${"The index resumes after sleep without replaying retained captures. ".repeat(20)}`, last_response_id: latestResponseID }] : [] };
   },
   "GET /api/work/:id": request => {
     const work = defaultApi["GET /api/work/:id"](request);
@@ -237,7 +240,7 @@ const ROUTES = [
   // The unified activity panel, idle and busy, in the browser and in the app
   // (other libraries).
   ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
-    name: `Unified activity panel ${state}`, url: '/library', ready: '#queryTableLibrary .qt-row',
+    name: `Unified activity panel ${state}`, url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
     managedLibrary: managed ? {id: 'local', name: 'Pending history', config: '/Users/test/Libraries/Pending/library.toml'} : null,
     api: managed ? {'GET /api/app/status/stream': eventStream(managedStatus(snapshot)), 'GET /api/app/status': managedStatus(snapshot)}
       : {'GET /api/status/stream': eventStream(snapshot), 'GET /api/status': snapshot},
@@ -264,15 +267,24 @@ const ROUTES = [
   { name: "All-time writing hours", url: "/cards?cards=library&card_search=writing-hours", ready: '[data-card-id="writing-hours"] .human-study-hour-bars' },
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
-  { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
+  { name: "Search table", url: "/library?view=table", ready: "#queryTableLibrary .qt-row" },
   { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
-  { name: "Markdown links in Search", url: "/library?view=conversation", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
-  { name: "Search nested reviews and human writing", url: "/library?view=conversation", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
+  { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
+  { name: "Search nested reviews and human writing", url: "/library", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
-  { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
-  ...["turn", "sub-agent", "accordion", "summary"].map(selection => ({
-    name: `Search conversation outline ${selection}`, url: "/library?view=conversation", api: conversationResultAPI, ready: ".conversation-result-card",
+  { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
+  ...["turn", "sub-agent", "accordion", "summary", "preview"].map(selection => ({
+    name: `Search conversation outline ${selection}`, url: "/library", api: conversationResultAPI, ready: ".conversation-result-card",
     open: async page => {
+      if (selection === "preview") {
+        // Clicking a preview message opens Browse at its turn and reveals it.
+        await page.locator(".conversation-result-preview .result-message.assistant").click({ position: { x: 40, y: 30 } });
+        const current = page.getByRole("navigation", { name: "Conversation outline", exact: true }).locator('[aria-current="true"]');
+        await current.waitFor();
+        assert.match(await current.innerText(), /^Turn 12/);
+        await page.locator(".result-turn-content .result-message.assistant.pharos-highlight").waitFor();
+        return;
+      }
       await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse", exact: true }).click();
       if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Collapse turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
       const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
@@ -299,9 +311,9 @@ const ROUTES = [
       }
     }, shown: ".conversation-outline",
   })),
-  { name: "Search compact conversation previews", url: "/library?view=conversation", api: conversationResultAPI, ready: ".conversation-result-preview" },
-  { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
-  { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
+  { name: "Search compact conversation previews", url: "/library", api: conversationResultAPI, ready: ".conversation-result-preview" },
+  { name: "Search display switch", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
+  { name: "Search content editor", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
   { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
@@ -479,11 +491,11 @@ const ROUTES = [
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
-  { name: "Quick search", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
-  { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
-  { name: "Extended Quick Stats", url: "/library", preferences: { "pharos-quick-stats-v1": {metrics:['active_conversations','message_count','user_messages','assistant_messages','tool_calls','failed_tool_calls','tool_failure_rate','delegated_runs','active_repositories','tool_time_ms','agent_time_ms','active_time_ms'], windows:['5m','15m','yesterday','week','month','all']}, "pharos-usage-summary-links":true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page,"usageSummaryToggle"), shown: "#usageSummary" },
-  { name: "Customized Quick Stats", url: "/library", preferences: { "pharos-quick-stats-v1": { metrics: ['cost_usd', 'tokens'], windows: ['today', '6h'] } }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
-  { name: "Clickable Analyze summary", url: "/library", preferences: { "pharos-usage-summary-links": true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Quick search", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
+  { name: "Analyze summary", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Extended Quick Stats", url: "/library?view=table", preferences: { "pharos-quick-stats-v1": {metrics:['active_conversations','message_count','user_messages','assistant_messages','tool_calls','failed_tool_calls','tool_failure_rate','delegated_runs','active_repositories','tool_time_ms','agent_time_ms','active_time_ms'], windows:['5m','15m','yesterday','week','month','all']}, "pharos-usage-summary-links":true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page,"usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Customized Quick Stats", url: "/library?view=table", preferences: { "pharos-quick-stats-v1": { metrics: ['cost_usd', 'tokens'], windows: ['today', '6h'] } }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Clickable Analyze summary", url: "/library?view=table", preferences: { "pharos-usage-summary-links": true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "App navigation", url: "/analyze", ready: ".usage-dashboard .usage-chart", open: async page => {
     if (await page.locator('#appNavigationToggle').isVisible()) await page.locator('#appNavigationToggle').click();
     else {
@@ -491,8 +503,8 @@ const ROUTES = [
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
     }
   }, shown: '#appNavigationRail:not([hidden]), #appNavigationDialog[open]' },
-  { name: "Bookmarks drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#bookmarksToggle").click(); }, shown: "#bookmarksDrawer.open" },
-  { name: "History drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#historyToggle").click(); }, shown: "#historyDrawer.open" },
+  { name: "Bookmarks drawer", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#bookmarksToggle").click(); }, shown: "#bookmarksDrawer.open" },
+  { name: "History drawer", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#historyToggle").click(); }, shown: "#historyDrawer.open" },
 ];
 // A desktop and the narrowest phone. The header and sidebar breakpoints in
 // between have their own standalone tests below.
@@ -545,7 +557,7 @@ for (const width of [1440, 320]) test(`Search filter suggestions stay readable a
 });
 
 test('header centers navigation and collects actions before adding a dropdown row', { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  const { page, settled, shot } = await open(t, { url: '/library?view=table', ready: '#queryTableLibrary .qt-row' });
   const more = page.getByRole('button', { name: 'More tools', exact: true });
   // One width per regime: centered, collected actions, phone header, the
   // narrowest phone, and back to a width where every tool fits.
@@ -633,7 +645,7 @@ test('header fit responds to tool choices and label changes without resizing', {
 // Inline at 1440; collected into More at 320.
 for (const width of [1440, 320]) test(`Pharos release action fits through download and relaunch @ ${width}`, {skip}, async t => {
   const {page, settled, shot} = await open(t, {
-    url: '/library', viewport: {width, height: width < 500 ? 844 : 900}, ready: '#queryTableLibrary .qt-row',
+    url: '/library?view=table', viewport: {width, height: width < 500 ? 844 : 900}, ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'],
       drive: {...defaultApi['GET /api/library/status'].drive, ejectable: true, name: 'My portable Pharos library with a long drive name'}}},
   });
@@ -677,7 +689,7 @@ for (const width of [1440, 320]) test(`Pharos release action fits through downlo
 test("macOS window controls stay clear of the lighthouse when resizing", { skip }, async t => {
   const source = readFileSync(new URL("../../../macos/PharosApp.swift", import.meta.url), "utf8");
   const chromeCSS = source.match(/static let windowChromeScript = """[\s\S]*?style.textContent = `([\s\S]*?)`;/)[1];
-  const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  const { page, settled, shot } = await open(t, { url: '/library?view=table', ready: '#queryTableLibrary .qt-row' });
   await page.addStyleTag({ content: chromeCSS });
   await page.evaluate(() => {
     document.documentElement.classList.add('pharos-window');
@@ -874,7 +886,7 @@ test('pages without section menus use the full window', { skip }, async t => {
   await page.locator('.card-library-entry .query-card').first().waitFor();
   await fillsWindow();
   await primary.getByRole('button', { name: 'Search', exact: true }).click();
-  await page.locator('#queryTableLibrary .qt-row').first().waitFor();
+  await page.locator('.conversation-result-card').first().waitFor();
   await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
@@ -1121,6 +1133,6 @@ test("Markdown local destinations become navigable only after availability is co
   }
   await app.shot("link-states");
   await page.getByRole("link",{name:"Library view",exact:true}).click();
-  await page.waitForURL(url=>url.pathname==='/library'&&url.searchParams.get('view')==='conversation');
+  await page.waitForURL(url=>url.pathname==='/library');
   await page.locator('.conversation-result-card').first().waitFor();
 });

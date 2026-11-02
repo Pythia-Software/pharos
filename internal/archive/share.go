@@ -231,7 +231,7 @@ func (c *Catalog) sharedDatasets(ctx context.Context, ids []string) (map[string]
 // sharedRowExtras are Library fields the tables' cells read beyond the schema's
 // columns: pull requests, merge links, and the previews of the card view.
 var sharedRowExtras = map[string][]string{
-	"library": {"pr_details", "canonical_remote", "main_merge_commit", "main_merge_url", "main_merge_method", "first_input", "last_response", "preview_elapsed_ms"},
+	"library": {"pr_details", "canonical_remote", "main_merge_commit", "main_merge_url", "main_merge_method", "first_input", "last_response", "first_input_id", "last_response_id", "preview_elapsed_ms"},
 }
 
 // sharedRowExcluded are schema fields whose values stay out of shared files.

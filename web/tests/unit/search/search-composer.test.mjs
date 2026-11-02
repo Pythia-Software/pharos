@@ -153,7 +153,7 @@ test("conversation card facts follow selected columns, order, accessors and disp
 });
 
 test("conversation outlines retain child conversations, orphaned sessions and malformed parent links", async () => {
- const { conversationForest, conversationSelection, findOutlineEntry, initialOutlineEntry } = await import("../../../src/conversation-results");
+ const { conversationForest, conversationSelection, findOutlineEntry, initialOutlineEntry, outlineEntryForMessage, targetBlock, messageKey } = await import("../../../src/conversation-results");
  const child = { id: "child", parent_id: "root" }, nested = { id: "nested", parent_id: "child" };
  const roots = conversationForest([nested, child, { id: "root" }, { id: "orphan", parent_id: "absent" }, { id: "cycle-a", parent_id: "cycle-b" }, { id: "cycle-b", parent_id: "cycle-a" }]);
  assert.deepEqual(roots.map(node => node.conversation.id), ["root", "orphan", "cycle-a", "cycle-b"]);
@@ -178,6 +178,20 @@ test("conversation outlines retain child conversations, orphaned sessions and ma
  selection = conversationSelection(sessions, loaded, "", secondTurn.id);
  assert.equal(selection.id, "second"); assert.equal(selection.pending, false);
  assert.equal(findOutlineEntry(loaded[selection.id].entries, secondTurn.id), secondTurn);
+ // A preview message opens the innermost entry that owns it.
+ const agent = { id: "agent", kind: "agent", messages: [{ id: "delegated" }, { id: "agent-reply" }], children: [] };
+ const owner = { ...firstTurn, id: "owner", messages: [{ id: "ask" }, { id: "tool-output" }, { id: "delegated" }], children: [agent] };
+ assert.equal(outlineEntryForMessage([setup, owner], "tool-output"), owner);
+ assert.equal(outlineEntryForMessage([setup, owner], "agent-reply"), agent);
+ assert.equal(outlineEntryForMessage([setup, owner], "delegated"), agent, "a sub-agent's call opens the sub-agent");
+ assert.equal(outlineEntryForMessage([setup, owner], "elsewhere"), undefined);
+ // Blocks split from one stored message share its ID; the search picks the block.
+ const ask = { id: "ask", native_id: "ask" }, early = { id: "reply", native_id: "reply/block-0", text: "The cache key changed." }, late = { id: "reply", native_id: "reply/block-1", text: "Done." };
+ const turn = { ...firstTurn, human: ask, response: late, messages: [ask, early, late] };
+ assert.equal(targetBlock(turn, "reply", /cache/giu), early, "the matching block, not the turn's final block");
+ assert.equal(targetBlock(turn, "reply", /absent/giu), late, "without a matching block, the turn's own reply");
+ assert.equal(targetBlock(turn, "reply", null), late);
+ assert.equal(messageKey(early), "reply/block-0");
  assert.equal(conversationSelection(sessions, loaded, "", firstTurn.id).id, "first", "Back restores a turn in the earlier session");
  assert.equal(conversationSelection(sessions, loaded, "first", secondTurn.id).id, "first", "an explicit session remains authoritative");
  assert.equal(conversationSelection(sessions, {}, "", "").id, "first", "fresh browsing keeps the first session default");
