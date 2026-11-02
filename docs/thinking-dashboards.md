@@ -126,7 +126,7 @@ loop rebuilds it in the background when it was used recently. See
 measurements and remaining costs.
 
 The specialized domain aggregation and SVGs are host-owned. Native evidence
-queries and compact cards use published Query Table 0.9.8 APIs. No local package
+queries and compact cards use published Query Table 0.9.9 APIs. No local package
 patches, generated-bundle edits or dependency replacements are used.
 
 ## Statistical support and limits
