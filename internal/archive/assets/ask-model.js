@@ -207,8 +207,10 @@ function askRestorePresentation(href, saved) {
 function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
   return pending&&!browsing&&['home','modal'].includes(presentation);
 }
-function askFloatingState(turn) {
+function askFloatingState(turn, {navigated = false} = {}) {
   if (!turn) return {message: 'Ask a question', ready: false};
+  // The answer is the page now on screen, so the panel invites a follow-up instead of calling for attention.
+  if (navigated && turn.status === 'single') return {message: 'Opened · Ask a follow-up', ready: false};
   if (turn.status === 'loading') return {message: askWaitStatus(turn).message, ready: false};
   if (turn.status === 'error') return {message: 'Question failed · Review or retry', ready: true};
   if (turn.status === 'canceled') return {message: 'Question canceled', ready: false};
