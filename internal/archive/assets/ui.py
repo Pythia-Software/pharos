@@ -1417,7 +1417,6 @@ const header=node('header','work-heading'),context=node('div','meta'),appendCont
 if(w.repository_name){const repository=node('button','work-repository-link',w.repository_name);repository.type='button';repository.title=`Search work for ${w.repository_name}`;repository.onclick=()=>{window.pharosQueryTables?.filterRepository?.(w.repository_name);show('library')};appendContext(repository)}else appendContext('Repository not identified');appendContext(w.branch);appendContext(w.activity_at?timeLabel(w.activity_at):null);
 const workspaceStats=node('div','delegation-workspace-stats');header.append(node('h1','',w.title),context,workspaceStats);
 const controls=node('div','work-controls');
-const searchWorkspace=node('button','button-with-icon','Search this workspace');searchWorkspace.type='button';searchWorkspace.onclick=()=>window.dispatchEvent(new CustomEvent('pharos:open-search',{detail:{workspaceID:w.id,title:w.title}}));controls.append(searchWorkspace);
 for(const pr of workPullRequests(w)){const link=node(pr.url?'a':'span','chip',pr.title?`${pr.title} · #${pr.number}`:`PR #${pr.number}`);link.title=pr.relationship||pr.title||'';if(pr.url){link.href=pr.url;link.target='_blank';link.rel='noreferrer'}controls.append(link)}
 if(w.main_merge_commit)controls.append(mainIntegrationLink(w));
 const disclosure=(label,className)=>{const d=node('details',className);d.append(node('summary','',label));return d};
@@ -1484,7 +1483,7 @@ for(const file of w.files||[]){const entry=pathEntry(file.path);entry.conversati
 if(paths.size){const files=disclosure(`Files · ${paths.size}`,'work-disclosure file-index');files.dataset.viewKey='work:'+id+':files';files.append(node('p','meta','Recorded file actions; not necessarily the final working-tree state.'));
 for(const [path,{changes,conversation}] of paths){const row=node('div','file-index-row'),button=node('button','file-index-link',path);button.title='Find actions for this file in the conversation';button.disabled=!conversations.length;
 button.onclick=async()=>{let index=conversations.findIndex(c=>c.id===conversation);if(index<0)index=(await findConversations(path))[0]??-1;if(index<0){button.disabled=true;button.title='No retained conversation mentions this file';return}files.open=false;await selectConversation(index);window.pharosFind?.open(path);host.scrollIntoView({behavior:'smooth',block:'start'})};row.append(button);if(changes.length)row.append(node('span','meta',changes.map(c=>[c.classification,c.status,c.complete?'':'excerpt/incomplete'].filter(Boolean).join(' · ')).join('; ')));files.append(row)}controls.append(files)}
-header.append(controls);root.append(header);
+if(controls.childNodes.length)header.append(controls);root.append(header);
 const warnings=conversations.filter(c=>/partial|incomplete|missing|truncat|failed/i.test(c.coverage||''));
 if(warnings.length)root.append(node('div','coverage-warning',`Transcript coverage: ${warnings.map(c=>`${c.provider||'Agent'} · ${c.coverage}`).join('; ')}. Some activity may be unavailable.`));
 if(/partial|incomplete|failed/i.test(w.preservation_completeness||''))root.append(node('div','coverage-warning',`Preservation · ${w.preservation_completeness}. See Archive details.`));
