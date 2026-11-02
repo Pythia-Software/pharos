@@ -143,6 +143,17 @@ test('chart series compare a growing library with an explicitly flat baseline', 
   assert.deepEqual(plain(zero.projected.months),plain(zero.flat.months));
 });
 
+test('the forecast chart steps through months with the arrow keys and jumps with Home and End', () => {
+  const key=(name,selected)=>cloud.chartKeyMonth(name,selected,11);
+  assert.equal(key('ArrowRight',3),4);
+  assert.equal(key('ArrowLeft',3),2);
+  assert.equal(key('Home',7),0);
+  assert.equal(key('End',2),11);
+  assert.equal(key('ArrowLeft',0),0);
+  assert.equal(key('ArrowRight',11),11);
+  for(const name of ['ArrowUp','ArrowDown','Escape','a'])assert.equal(key(name,3),null);
+});
+
 test('detailed calculator choices survive normalization and exported setup settings', () => {
   const p=configured({region:'eu-central-1',tier:'aws-ia',cadence:1,retentionMode:'days',retentionDays:45,growthBasis:'custom',growthGBPerMonth:12,compression:40,partMiB:128});
   const exported=cloud.destination(p);

@@ -1032,7 +1032,7 @@
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
-  window.pharosCarbon = {show, pending, estimate, mass, energy, settingsSnapshot};
+  window.pharosCarbon = {show, pending, estimate, mass, energy, settingsSnapshot, updatePreferences};
   window.addEventListener('pharos:route', () => {
     for (const key of Object.keys(prefs)) delete prefs[key];
     Object.assign(prefs, routeSettings() || load());

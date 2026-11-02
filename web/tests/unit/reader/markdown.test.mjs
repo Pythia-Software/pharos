@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
 
-const { markdownLinkAllowed, markdownLinkKind, markdownTree } = reader;
+const { markdownLinkAllowed, markdownLinkChecker, markdownLinkKind, markdownLinkProbed, markdownTree } = reader;
 const escape = text => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 // The HTML the page's markdownView produces for a tree.
 function html(item) {
@@ -109,6 +109,29 @@ test("Markdown links distinguish local files, local servers, websites and page a
   for (const href of ["https://me:secret@example.com", "https://", "//evil.test", "javascript:alert(1)", "data:text/html,x", "x\\y.md", "./x\u0000.md"]) assert.equal(markdownLinkKind(href), null, href);
   const links = elements(markdownTree('[Report](</Users/me/My Report.md:12>) and [docs](docs/readme.md)')).filter(item => item.tag === 'a');
   assert.deepEqual(links.map(link => [link.href, link.link.kind]), [["/Users/me/My Report.md:12", "file"], ["docs/readme.md", "file"]]);
+});
+
+test("only local destinations are probed, each once a minute and four at a time", async () => {
+  for (const href of ["docs/readme.md", "/Users/me/report.md:12", "http://localhost:5173/"]) assert.equal(markdownLinkProbed(markdownLinkKind(href)), true, href);
+  for (const href of ["/library?view=conversation", "/analyze?analyze_topic=tokens", "#notes", "mailto:me@example.com", "https://example.com"]) assert.equal(markdownLinkProbed(markdownLinkKind(href)), false, href);
+  assert.equal(markdownLinkProbed(null), false);
+  const calls = [];
+  let clock = 0;
+  const check = markdownLinkChecker((href, workspace) => new Promise((resolve, reject) => calls.push({ href, workspace, resolve, reject })), { now: () => clock });
+  const first = check("internal/archive/api.go:12", "w1");
+  assert.equal(check("internal/archive/api.go:12", "w1"), first, "a repeated link shares its check");
+  check("internal/archive/api.go:12", "w2");
+  for (const href of ["a.md", "b.md", "c.md"]) check(href, "w1");
+  assert.deepEqual(calls.map(call => [call.href, call.workspace]), [["internal/archive/api.go:12", "w1"], ["internal/archive/api.go:12", "w2"], ["a.md", "w1"], ["b.md", "w1"]], "a workspace has its own check, and only four run at once");
+  calls[0].resolve({ status: "available", href: "file:///x" });
+  assert.deepEqual(await first, { status: "available", href: "file:///x" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(calls.length, 5, "a finished check starts the next");
+  calls[1].reject(new Error("offline"));
+  assert.equal((await check("internal/archive/api.go:12", "w2")).status, "unknown", "a failed check reports unknown");
+  clock = 60001;
+  check("internal/archive/api.go:12", "w1");
+  assert.equal(calls.length, 6, "after a minute the link is checked again");
 });
 
 test("human writing follows UTF-8 authorship spans through Markdown formatting", () => {

@@ -2,41 +2,15 @@ import { libraryHostParameters } from "./host-query-state";
 import { readViewState, readClassicViewState, writeViewState, installClassicDisclosures } from "./view-state";
 import { attentionTargets, viewContract, viewFields, retainPageView, viewPageForURL } from "./view-contract";
 import { adoptTextTargets, installPageFind } from "./page-find";
+import { attentionMutationMatters, createDetailLanding } from "./view-attention-model";
 import "./view-attention.css";
 
 type Resolver = (target: string, initial: boolean) => HTMLElement | null;
 const resolvers = new Set<Resolver>();
 export function registerAttentionResolver(resolve: Resolver): () => void { resolvers.add(resolve); schedule(); return () => { resolvers.delete(resolve); }; }
-type DetailResolver = (reference: string, signal: AbortSignal) => Promise<"revealed" | "unavailable" | "cancelled">;
-const detailResolvers = new Set<DetailResolver>();
-let detailLanding: { reference: string; controller: AbortController; status: string } | undefined;
-function cancelDetailLanding() { detailLanding?.controller.abort(); detailLanding = undefined; }
-export function registerDetailAttentionResolver(resolve: DetailResolver): () => void {
-  // A changed provider can make a previously unavailable/cancelled target
-  // resolvable. Retry on registration, not on every observation pass.
-  if (detailLanding && !["pending", "revealed"].includes(detailLanding.status)) cancelDetailLanding();
-  detailResolvers.add(resolve); schedule();
-  return () => {
-    detailResolvers.delete(resolve);
-    // A data refresh can temporarily withdraw its provider. Preserve a
-    // successful landing so registration cannot replay scrolling afterwards.
-    if (detailLanding && detailLanding.status !== "revealed") cancelDetailLanding();
-    schedule();
-  };
-}
-function resolveDetail(reference: string): boolean {
-  if (detailLanding?.reference !== reference) cancelDetailLanding();
-  if (!detailLanding && detailResolvers.size) {
-    const resolver = [...detailResolvers].at(-1)!;
-    const request = { reference, controller: new AbortController(), status: "pending" };
-    detailLanding = request;
-    void resolver(reference, request.controller.signal).catch(() => "unavailable").then(status => {
-      if (detailLanding !== request || request.controller.signal.aborted) return;
-      request.status = status; schedule();
-    });
-  }
-  return detailLanding?.status === "revealed";
-}
+const detailLanding = createDetailLanding(() => schedule());
+const cancelDetailLanding = detailLanding.cancel;
+export const registerDetailAttentionResolver = detailLanding.register;
 export function targetReference(kind: string, id: string): string {
   if (!attentionTargets.some(target => target.pattern.startsWith(`${kind}:<`)) || !id || id.length > 4000) throw new Error("Unknown attention target.");
   return `${kind}:${id}`;
@@ -91,7 +65,7 @@ function update() {
   if (!reveal.startsWith("detail:")) cancelDetailLanding();
   for(const reference of [...highlights,...(reveal?[reveal]:[])]) {
     if(reference.startsWith("detail:")) {
-      if (reference !== reveal || !resolveDetail(reference)) missing.push(reference);
+      if (reference !== reveal || !detailLanding.resolve(reference)) missing.push(reference);
       continue;
     }
     const element=resolve(reference);if(!element){missing.push(reference);continue;}
@@ -108,7 +82,7 @@ function update() {
   }else{status?.remove();status=statusText=undefined;}
   // The pending list is observable without blocking the rest of the page.
   document.documentElement.dataset.pharosAttentionMissing=missing.join("\n");
-  document.documentElement.dataset.pharosAttentionPending=detailLanding?.status === "pending" ? "1" : "";
+  document.documentElement.dataset.pharosAttentionPending=detailLanding.pending ? "1" : "";
   document.documentElement.dataset.pharosNativeReveal=reveal.startsWith("detail:") ? "true" : "";
 }
 function schedule(){if(!frame) frame=requestAnimationFrame(update);}
@@ -119,16 +93,7 @@ export function installViewAttention() {
   window.addEventListener("pharos:uri-changed",schedule);
   const observer=new MutationObserver(records=>{
     const attention=currentAttention();if(!attention.reveal&&!attention.highlights.length)return;
-    const ordinaryClasses = (value: string) => value.split(/\s+/).filter(name => name && !["pharos-highlight", "pharos-reveal"].includes(name)).sort().join(" ");
-    if(records.some(record => {
-      // Find and the status UI must not schedule another attention pass.
-      const owned=(node:Node)=>node instanceof Element && !!node.closest(".pharos-find,.pharos-attention-status");
-      if(owned(record.target) || record.target.parentElement && owned(record.target.parentElement))return false;
-      if(record.type==="childList"&&[...record.addedNodes,...record.removedNodes].every(owned))return false;
-      if(record.type !== "attributes" || record.attributeName !== "class") return true;
-      const element = record.target as HTMLElement;
-      return ordinaryClasses(record.oldValue ?? "") !== ordinaryClasses(element.getAttribute("class") ?? "") || marked.has(element) && !element.matches(".pharos-highlight,.pharos-reveal");
-    })) schedule();
+    if(records.some(record => attentionMutationMatters(record, marked))) schedule();
   });
   observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeOldValue:true,attributeFilter:["class","hidden","open","data-pharos-target","data-view-field"]});
   installPageFind();

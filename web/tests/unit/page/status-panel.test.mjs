@@ -72,6 +72,22 @@ test("Stop stays disabled once pressed, until the operations it stopped change",
   assert.equal(model(view({ operations: [operation("a"), operation("c")] }), { stopRequested: new Set(["a"]) }).stop.stopping, false, "a new stoppable operation enables it again");
 });
 
+test("a Stop the server refuses leaves Stop enabled for that operation and says why", async () => {
+  const operations = [operation("a"), operation("b")], requested = new Set(["a", "b"]), sent = [], reported = [];
+  const targets = model(view({ operations })).stop.targets;
+  await panel.sendStops(targets, requested, async (path, request) => {
+    const { id } = JSON.parse(request.body);
+    sent.push([path, request.method, id]);
+    return id === "b" ? { ok: false, status: 409, statusText: "Conflict", json: async () => ({ error: "Refused" }) } : { ok: true, json: async () => ({ stopping: true }) };
+  }, message => reported.push(message));
+  assert.deepEqual(sent, [["/api/operations/stop", "POST", "a"], ["/api/operations/stop", "POST", "b"]]);
+  assert.deepEqual([...requested], ["a"]);
+  assert.deepEqual(reported, ["Refused"]);
+  assert.equal(model(view({ operations }), { stopRequested: requested }).stop.stopping, false);
+  await panel.sendStops([{ id: "a", path: "/x", method: "POST", body: {} }], requested, async () => { throw Error("offline"); }, message => reported.push(message));
+  assert.equal(requested.size, 0, "a failed request also lets the user try again");
+});
+
 test("the verdict row is the server's short headline, with the full sentence in its tooltip", () => {
   const verdict = model(view({ eject: { verdict: "safe-in", headline: "Short", summary: "Long sentence", blockers: [{ label: "L", on_eject: "O" }] } })).verdict;
   assert.equal(verdict.text, "Short");
