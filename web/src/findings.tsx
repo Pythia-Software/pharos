@@ -3,7 +3,7 @@ import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "./findings.css";
 import { Icon } from "./icons";
-import { findingDetailURL, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
+import { findingDetailURL, findingsRank, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
 import { SafetyPage } from "./safety";
 import { findingsDiscoveryChanged } from "./dataset-refresh";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
@@ -1137,11 +1137,12 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
     } catch (failure) { say(`Couldn't do that: ${(failure as Error).message}`); return false; }
   }, [reload, say]);
 
-  useEffect(()=>{if(area!=="safety" && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(overview.settings?.rank||"usd");},[overview?.settings?.rank,rankOverride,route.view,area]);
-  const rank: Rank = rankOverride || overview?.settings?.rank || "usd";
+  useEffect(()=>{if(area!=="safety" && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(findingsRank("", overview.settings?.rank).rank);},[overview?.settings?.rank,rankOverride,route.view,area]);
+  const rank: Rank = findingsRank(rankOverride, overview?.settings?.rank).rank;
   const setRank = (next: Rank) => {
-    setRankOverride(next);
-    void request("/api/findings/settings",{rank:next}).then(()=>reload()).catch(failure=>say(`Couldn’t save rank: ${failure.message}`));
+    const choice = findingsRank(rankOverride, overview?.settings?.rank, next);
+    setRankOverride(choice.rank);
+    if (choice.save) void request("/api/findings/settings",choice.save).then(()=>reload()).catch(failure=>say(`Couldn’t save rank: ${failure.message}`));
   };
   const group = review ? overview?.cart?.find(item => item.target === review) : undefined;
 

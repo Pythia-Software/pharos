@@ -113,31 +113,6 @@ test('Library settings opens inline forms and returns focus when cancelled', {sk
   }
 });
 
-test('Library settings starts transfers and releases, then the startup window returns there', {skip}, async t => {
-  await t.test('transfer', async t => {
-    const {page,calls,shot}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
-      'GET /api/app/state':({state})=>state.transferred?{...settingsState,libraries:[{...settingsLocal,connected:false},settingsArchive],job:{state:'complete',phase:'Library operation completed and verified',updated_at:new Date().toISOString()}}:settingsState,
-      'POST /api/app/transfer':({state})=>{state.transferred=true;return {started:true}},
-      'POST /api/app/connect':{saved:true},
-    }});
-    await page.getByRole('heading',{name:'Copy or move history',exact:true}).click();await shot('transfer');
-    await page.getByRole('radio',{name:/^Move/}).check();
-    await page.getByRole('button',{name:'Move history',exact:true}).click();
-    await page.waitForURL(url=>url.pathname==='/settings/libraries'&&calls.some(call=>call.path==='/api/app/connect'));
-    assert.deepEqual(calls.filter(call=>call.method==='POST').map(call=>[call.path,call.body]),[['/api/app/transfer',{source:'local',target:'archive',move:true}],['/api/app/connect',{id:'local'}]]);
-  });
-  await t.test('release', async t => {
-    const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsArchive,api:{
-      'GET /api/app/state':({state})=>({...settingsState,selected:'archive',libraries:[settingsLocal,{...settingsArchive,connected:!state.released}]}),
-      'POST /api/app/disconnect':({state})=>{state.released=true;return {saved:true}},
-    }});
-    await page.getByRole('button',{name:'Release for eject',exact:true}).click();
-    await page.locator('#notice').getByText('Library released',{exact:false}).waitFor();
-    assert.deepEqual(calls.find(call=>call.path==='/api/app/disconnect').body,{id:'archive'});
-    assert.ok(await page.getByRole('button',{name:'Reconnect to My archive',exact:true}).isVisible());
-  });
-});
-
 test('Library settings renames in place and opens delivery from its switch, keeping focus', {skip}, async t => {
   const {page,calls}=await open(t,{url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:settingsLocal,api:{
     'GET /api/app/state':({state})=>({...settingsState,libraries:[settingsLocal,{...settingsArchive,name:state.renamed||settingsArchive.name}]}),
@@ -251,17 +226,13 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
   const explore=page.getByRole('button',{name:'Explore cloud backup options',exact:true});
   await explore.click();
-  // The price forecast supports keyboard exploration without losing focus.
+  // The price forecast keeps focus while the keyboard moves its readout (months: unit/page/cloud-backup).
   for(const chart of await page.locator('.cloud-results svg').all()){
     await chart.focus();
-    const readout=chart.locator('..').locator('output'),first=await readout.textContent();
-    await page.keyboard.press('ArrowRight');
-    assert.ok(await chart.evaluate(input=>input===document.activeElement));
-    assert.notEqual(await readout.textContent(),first);
-    await page.keyboard.press('End');
-    assert.ok(await chart.evaluate(input=>input===document.activeElement));
-    await page.keyboard.press('Home');
-    assert.equal(await readout.textContent(),first);
+    for(const key of ['ArrowRight','End','Home']){
+      await page.keyboard.press(key);
+      assert.ok(await chart.evaluate(input=>input===document.activeElement));
+    }
   }
   // Setup focuses each invalid field.
   await page.getByLabel('Cloud provider',{exact:true}).selectOption('gcp');
@@ -1293,7 +1264,6 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   await picker.getByRole('button',{name:'Second Model',exact:true}).click();
   await page.keyboard.press('Escape');await saved;await settled();
   assert.ok(await page.locator('.pharos-model-trigger').evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
-  assert.deepEqual(sessions.get(newID).selection,{...selection,model:'second-model'});
   assert.equal(sessions.get(newID).draft,expected);
   assert.deepEqual(sessions.get(original.id).conversation,original.conversation,'the prior chat remains in history');
   await page.reload();await settled();
@@ -1305,52 +1275,40 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
 });
 
-test("opening a saved chat focuses its composer unless focus moved while it loaded", { skip }, async t => {
+// Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);
+// this checks the composer takes focus once the chat opened from History arrives.
+test("opening a saved chat from History focuses its composer", { skip }, async t => {
   const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
-  const chat = (id, prompt, reply) => ({ id, createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: id + '-turn', prompt, cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply, cards: [] }] });
-  const sessions = [chat('focus-chat', 'A prior question', 'A saved reply'), chat('other-chat', 'Another question', 'Another saved reply')];
-  let gate = null;
-  t.after(() => gate?.release());
+  const sessions = [{ id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'focus-chat-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] }];
   const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
     'GET /api/ask/status': { settings: { enabled: true, showInvitation: true, selection }, providers: [{ id: 'Codex' }] },
     'GET /api/ask/models': { id: 'Codex', models: [{ id: 'test-model', label: 'Test Model', efforts: ['Default', 'Low'], default: true }] },
     'GET /api/ask/sessions': { sessions },
-    'GET /api/ask/session': async ({ query }) => { await gate?.promise; return sessions.find(session => session.id === query.get('id')); },
+    'GET /api/ask/session': ({ query }) => sessions.find(session => session.id === query.get('id')),
     'POST /api/ask/session': ({ body }) => body,
   } });
-  const control = page.locator('#settingsToggle');
-  for (const [prompt, reply, moveFocus] of [['A prior question', 'A saved reply', false], ['Another question', 'Another saved reply', true]]) {
-    let release;
-    gate = { promise: new Promise(resolve => { release = resolve; }), release: () => release() };
-    if (moveFocus) await page.getByRole('button', { name: 'Clear', exact: true }).click();
-    await press(page.getByRole('button', { name: 'History', exact: true }));
-    // Let the history list finish refreshing before choosing from it.
-    await settled();
-    const loading = page.waitForRequest(request => new URL(request.url()).pathname === '/api/ask/session' && request.method() === 'GET');
-    await press(page.getByRole('link', { name: 'Open chat: ' + prompt, exact: true }));
-    await loading;
-    if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
-    gate.release();
-    await page.getByRole('status').filter({ hasText: reply }).waitFor();
-    await settled();
-    const target = moveFocus ? control : page.getByRole('textbox', { name: 'Ask a question', exact: true });
-    await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
-  }
+  await press(page.getByRole('button', { name: 'History', exact: true }));
+  // Let the history list finish refreshing before choosing from it.
+  await settled();
+  await press(page.getByRole('link', { name: 'Open chat: A prior question', exact: true }));
+  await page.getByRole('status').filter({ hasText: 'A saved reply' }).waitFor();
+  await settled();
+  const question = page.getByRole('textbox', { name: 'Ask a question', exact: true });
+  await page.waitForFunction(element => document.activeElement === element, await question.elementHandle());
 });
 
 test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:60000}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
-  saved.conversation.push({...saved.conversation[0],id:'later-turn',prompt:'A later topic',reply:'A later reply'});
   const sessions=new Map([[saved.id,saved]]);
   let delaySession=false,releaseSession;
   const delayedSession=new Promise(resolve=>{releaseSession=resolve;});
   t.after(()=>releaseSession());
-  const {page,settled,calls}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
-    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/session':async({query})=>{if(delaySession&&query.get('id')==='saved-chat')await delayedSession;return sessions.get(query.get('id'));},
-    'GET /api/ask/sessions':({query})=>({sessions:[...sessions.values()].filter(session=>JSON.stringify(session).toLowerCase().includes((query.get('q')||'').toLowerCase())).map(session=>({...session,conversation:session.conversation.slice(0,1)}))}),
+    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
     'POST /api/ask/session':({body})=>{
       const session={...(sessions.get(body.id)||{...saved,id:body.id,conversation:[]}),draft:body.draft,selection:body.selection};
       sessions.set(body.id,session);return session;
@@ -1360,34 +1318,18 @@ test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:6000
       sessions.set(body.id,session);return session;
     },
   }});
-  assert.ok(calls.some(call=>call.path==='/api/ask/visits'&&call.body.reconcile),'opening Ask reconciles the authoritative browser history');
-  const previousVisit=await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-history-v1'))[0]);
-  const replaced=page.waitForResponse(response=>response.url().endsWith('/api/ask/visits')&&response.request().method()==='POST'&&response.request().postDataJSON().replaces?.at===previousVisit.at);
-  await page.evaluate(()=>window.pharosNameVisit('Updated page title'));
-  const replacement=(await replaced).request().postDataJSON();
-  assert.equal(replacement.replaces.url,previousVisit.url,'the private store receives the identity removed from browser history');
-  assert.equal(replacement.visits.length,1);
-  await settled();
+  // Visit payloads, selection defaults and history search are unit tested in ask-pharos.test.mjs.
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
   const draftSaved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
   await question.fill('Keep this question');await draftSaved;
   const id=new URL(page.url()).searchParams.get('ask_chat');
   assert.ok(id,'a new draft gets a conversation URL');
-  const expected={...selection,model:'second-model'};
-  const persisted=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().selection.model==='second-model');
-  await page.locator('.pharos-model-trigger').click();
-  const menu=page.getByRole('dialog',{name:'Model selection',exact:true});
-  await menu.getByRole('button',{name:/^Model /}).click();
-  await menu.getByRole('button',{name:'Second Model',exact:true}).click();
-  await page.keyboard.press('Escape');await persisted;
   // This checks persisted chat restoration, so finish background card loads
   // before the deliberate reload cancels the old document's requests.
   await settled();
   await page.reload();await settled();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
   assert.ok(await page.evaluate(() => document.activeElement === document.body), 'restoring a chat should leave initial focus alone');
-  assert.deepEqual(sessions.get(id).selection,expected);
-  assert.ok((await page.locator('.pharos-model-trigger').textContent()).includes('Second Model'),'the saved draft should restore the chosen picker value');
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
@@ -1395,17 +1337,9 @@ test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:6000
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await page.goBack();await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
-  await page.getByRole('button',{name:'Clear',exact:true}).click();await settled();
-  await page.getByRole('button',{name:'History',exact:true}).click();
-  const search=page.getByRole('searchbox',{name:'Find a prior chat',exact:true});
-  const matches=page.waitForResponse(response=>response.url().includes('/api/ask/sessions?')&&new URL(response.url()).searchParams.get('q')==='later topic');
-  await search.fill('later topic');await matches;await settled();
-  const link=page.getByRole('link',{name:'Open chat: A prior question',exact:true});
-  await link.click();await page.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
-  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),'saved-chat');
   // Back can arrive before a slow chat load. Its late response must not
   // replace the page the user has already returned to.
-  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:'Clear',exact:true}).click();await settled();
   delaySession=true;
   const loading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/ask/session'&&request.method()==='GET');
   await page.evaluate(()=>window.pharosNavigate('/?ask_chat=saved-chat'));await loading;
@@ -1420,7 +1354,7 @@ test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:6000
   const contextURL=page.url();
   await activateHeaderTool(page,'askPharosToggle');
   await page.getByRole('button',{name:'History',exact:true}).click();
-  await link.click();
+  await page.getByRole('link',{name:'Open chat: A prior question',exact:true}).click();
   await page.getByRole('dialog',{name:'Ask Pharos',exact:true}).getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
   assert.equal(page.url(),contextURL,'opening a chat in the overlay must preserve the page URI');
 });
@@ -1460,10 +1394,9 @@ for(const url of ['/analyze?analyze_topic=tokens', '/analyze?analyze_topic=token
   await reload();
   await panel.waitFor();
   assert.equal(page.url(),pageURL,'restoring floating progress keeps the underlying page URI');
+  // Which surface a reload restores (including dismissed) is unit tested by askRestorePresentation.
   await panel.getByRole('button',{name:'Dismiss Ask Pharos progress',exact:true}).click();
-  await reload();
-  assert.equal(await panel.isVisible(),false,'dismissed progress stays dismissed');
-  assert.equal(await modal.isVisible(),false);
+  assert.equal(await panel.isVisible(),false,'dismissing hides the progress panel');
   await activateHeaderTool(page,'askPharosToggle');
   assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();

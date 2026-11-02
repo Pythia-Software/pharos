@@ -165,3 +165,20 @@ test("result outlines unwrap a delegation result when no child reply is retained
  assert.equal(outline[0].children[0].response.role, "assistant");
  assert.equal(outline[0].children[0].response.text, "Audit complete.");
 });
+
+test("linked disclosure and content overrides change only the identities they name", () => {
+ const { readerDisclosureOpen, readerDisclosureToggle, readerContentShown } = reader;
+ // ui.py reads an absent parameter as [] or {}; both keep every native default.
+ for (const initial of [true, false]) assert.equal(readerDisclosureOpen("message:a:turn", new Set(), new Set(), initial), initial);
+ const expanded = new Set(["message:a:turn"]), collapsed = new Set(["call:b:tool"]);
+ assert.equal(readerDisclosureOpen("message:a:turn", expanded, collapsed, false), true);
+ assert.equal(readerDisclosureOpen("call:b:tool", expanded, collapsed, true), false);
+ assert.equal(readerDisclosureOpen("section:other", expanded, collapsed, true), true);
+ const closed = readerDisclosureToggle("message:a:turn", false, ["message:a:turn", "section:z"], []);
+ assert.deepEqual(plain(closed), { expanded: ["section:z"], collapsed: ["message:a:turn"] }, "a toggle moves its identity between the lists");
+ assert.deepEqual(plain(readerDisclosureToggle("message:c", true, ["section:z"], ["message:c"])), { expanded: ["message:c", "section:z"], collapsed: [] }, "lists stay sorted");
+ for (const state of [undefined, null, {}]) for (const fallback of [true, false]) assert.equal(readerContentShown(state, "m-1", fallback), fallback);
+ assert.equal(readerContentShown({ "m-1": false }, "m-1", true), false, "an explicit false overrides an open default");
+ assert.equal(readerContentShown({ "m-1": true }, "m-1", false), true);
+ assert.equal(readerContentShown({ "m-1": true }, "toString", false), false, "only the state's own keys count");
+});

@@ -280,6 +280,79 @@ test('private visit writes preserve deletion order and recover after a failed up
   await assert.rejects(failed,/offline/);await clear;
   assert.equal(events.at(-1),'clear');
 });
+test('a single visit replaces one entry, while a full history write reconciles the private store', () => {
+  const visit={url:'/analyze',at:2,title:'Analyze'};
+  const one=plain(model.askVisitInput({entry:visit,replaced:{url:'/',at:1}}));
+  assert.equal(one.reconcile,false);
+  assert.deepEqual(one.visits.map(entry=>entry.url),['/analyze']);
+  assert.deepEqual(one.replaces,{url:'/',at:1},'the private store receives the identity removed from browser history');
+  assert.equal(plain(model.askVisitInput({entry:visit})).replaces,null);
+  const stored=[{url:'/',at:1,title:'Stored title'},{url:'/library',page:'library',at:2},{url:'/settings',at:3,title:'x'.repeat(900)}];
+  const full=plain(model.askVisitInput({stored,titleFor:url=>url==='/'?'Home':''}));
+  assert.equal(full.reconcile,true);
+  assert.equal(full.replaces,null);
+  assert.deepEqual(full.visits.map(entry=>entry.url),['/','/library','/settings'],'every stored visit is sent');
+  assert.equal(full.visits[0].title,'Home','current page titles replace stored ones');
+  assert.equal(full.visits[1].title,'Visited page','untitled visits get a readable fallback');
+  assert.equal(full.visits[2].title.length,500,'titles are clipped to the server limit');
+  assert.equal(stored[2].title.length,900,'browser history is not modified');
+});
+test('a provider change starts from its default and a model change keeps only an effort it offers', () => {
+  const catalogs={
+    Codex:{models:[{id:'fast',efforts:['Default']},{id:'deep',efforts:['Default','Low','High'],default:true}]},
+    Claude:{models:[{id:'opus',efforts:['Default','High']},{id:'sonnet',efforts:['Default']}]},
+    Gemini:{models:[{id:'pro'}],defaultSelection:{provider:'Gemini',model:'pro',effort:'High'}},
+  };
+  assert.deepEqual(plain(model.askDefaultSelection('Codex',catalogs.Codex)),{provider:'Codex',model:'deep',effort:'Default'},'the marked default model wins');
+  assert.deepEqual(plain(model.askDefaultSelection('Claude',catalogs.Claude)).model,'opus','without a marked default the first model is used');
+  assert.deepEqual(plain(model.askDefaultSelection('Gemini',catalogs.Gemini)),catalogs.Gemini.defaultSelection,"a provider's own default wins");
+  assert.equal(model.askDefaultSelection('Empty',{models:[]}).model,'','a provider without models has no model to send with');
+  const start={provider:'Codex',model:'deep',effort:'High'};
+  const pick=(page,value)=>plain(model.askPickSelection(start,page,value,catalogs));
+  assert.deepEqual(pick('provider','Claude'),{provider:'Claude',model:'opus',effort:'Default'});
+  assert.deepEqual(pick('model','fast'),{provider:'Codex',model:'fast',effort:'Default'},'an effort the new model lacks resets');
+  assert.deepEqual(pick('effort','Low'),{...start,effort:'Low'});
+  assert.deepEqual(plain(model.askPickSelection({provider:'Claude',model:'sonnet',effort:'Default'},'model','opus',catalogs)).effort,'Default');
+  assert.deepEqual(plain(model.askPickSelection({provider:'Claude',model:'sonnet',effort:'High'},'model','opus',catalogs)).effort,'High','an offered effort is kept');
+  assert.deepEqual(start,{provider:'Codex',model:'deep',effort:'High'},'picking returns a new selection');
+  assert.deepEqual(plain(model.askEffortChoices(catalogs.Codex,'missing')),['Default'],'an unknown model offers only the default effort');
+});
+test('a saved selection is used while its provider exists, otherwise the first provider loads', () => {
+  const providers=[{id:'Codex'},{id:'Claude'}];
+  const saved={provider:'Claude',model:'retired-model',effort:'High'};
+  assert.equal(model.askSelectionProvider(saved,providers),'Claude');
+  assert.equal(model.askSelectionProvider({...saved,provider:'Gone'},providers),'Codex');
+  assert.equal(model.askSelectionProvider(null,providers),'Codex');
+  assert.equal(model.askValidSelection(saved,providers),true,'a model missing from the catalog stays selected; the server validates it');
+  assert.equal(model.askValidSelection({...saved,provider:'Gone'},providers),false);
+  assert.equal(model.askValidSelection({provider:'Codex'},providers),false);
+  assert.equal(model.askValidSelection(null,providers),false);
+  assert.equal(model.askIsDefaultSelection(saved,{...saved}),true);
+  assert.equal(model.askIsDefaultSelection(saved,{...saved,effort:'Default'}),false);
+  assert.equal(model.askIsDefaultSelection(saved,null),false);
+});
+test('a later or invalidated chat load makes an earlier slow load stale', async () => {
+  const loads=model.askLoadSequence(),applied=[];
+  const open=async(id,wait)=>{const token=loads.next();await wait;if(loads.current(token))applied.push(id);};
+  let finishSlow;
+  const slow=open('slow',new Promise(resolve=>{finishSlow=resolve;}));
+  await open('fast',Promise.resolve());
+  finishSlow();await slow;
+  assert.deepEqual(applied,['fast'],'a late response must not replace the chat opened after it');
+  const token=loads.next();
+  assert.equal(loads.current(token),true);
+  loads.invalidate();
+  assert.equal(loads.current(token),false,'a new chat or route change cancels a pending load');
+});
+test('an opened chat focuses its composer only if focus stayed put while it loaded', () => {
+  const body={},link={},elsewhere={};
+  const focus=state=>model.askFocusAfterLoad({navigate:true,current:true,before:link,active:link,body,...state});
+  assert.equal(focus({}),true);
+  assert.equal(focus({active:body}),true,'focus dropped to the page while loading');
+  assert.equal(focus({active:elsewhere}),false,'the user moved focus while it loaded');
+  assert.equal(focus({navigate:false}),false,'restoring from the URL leaves focus alone');
+  assert.equal(focus({current:false}),false,'a superseded load does not take focus');
+});
 test('the transcript fits the latest exchange with a little prior context, within its window budget', () => {
   const height=state=>model.askThreadHeight({total:2000,latest:300,previous:250,gap:26,available:600,...state});
   assert.equal(height({}),390);

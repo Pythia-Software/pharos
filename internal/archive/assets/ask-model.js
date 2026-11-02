@@ -221,3 +221,47 @@ function askFloatingState(turn, {navigated = false} = {}) {
 function askFloatingPosition({x, y, width, height, viewportWidth, viewportHeight}) {
   return {x: Math.max(8, Math.min(x, viewportWidth - width - 8)), y: Math.max(8, Math.min(y, viewportHeight - height - 8))};
 }
+
+// A provider's own default wins; otherwise its marked (or first) model.
+function askDefaultSelection(provider, catalog) {
+  const models = catalog?.models || [], model = models.find(m => m.default) || models[0];
+  return catalog?.defaultSelection || {provider, model: model?.id || '', effort: 'Default'};
+}
+// A saved selection stays usable while its provider exists. Its model is not
+// checked against the catalog here; the server validates what it runs.
+function askValidSelection(value, providers = []) {
+  return !!value && providers.some(p => p.id === value.provider) && typeof value.model === 'string';
+}
+function askSelectionProvider(saved, providers = []) {
+  return providers.some(p => p.id === saved?.provider) ? saved.provider : providers[0]?.id;
+}
+function askEffortChoices(catalog, model) {
+  return catalog?.models.find(m => m.id === model)?.efforts || ['Default'];
+}
+function askIsDefaultSelection(selection, defaultSelection) {
+  return !!defaultSelection && ['provider', 'model', 'effort'].every(key => defaultSelection[key] === selection[key]);
+}
+// A new provider starts from its default; a new model keeps the effort only if it offers it.
+function askPickSelection(selection, page, value, catalogs = {}) {
+  const next = {...selection, [page]: value};
+  if (page === 'provider') Object.assign(next, askDefaultSelection(value, catalogs[value]));
+  if (page === 'model' && !askEffortChoices(catalogs[next.provider], next.model).includes(next.effort)) next.effort = 'Default';
+  return next;
+}
+// One visit updates or replaces an entry; without one, the whole browser
+// history is sent so the private store can reconcile with it.
+function askVisitInput({entry = null, replaced = null, stored = [], titleFor = null} = {}) {
+  const visits = (entry ? [entry] : stored.map(visit => ({...visit, title: titleFor?.(visit.url, visit.page) || visit.title})))
+    .map(visit => ({...visit, title: String(visit.title || 'Visited page').slice(0, 500)}));
+  return {visits, replaces: replaced || null, reconcile: !entry};
+}
+// Only the latest chat load may apply; starting another or invalidating
+// (a new chat, a route change) makes every earlier token stale.
+function askLoadSequence() {
+  let latest = 0;
+  return {next: () => ++latest, invalidate() { latest++; }, current: token => token === latest};
+}
+// A chat the user opened takes the keyboard unless they moved focus while it loaded.
+function askFocusAfterLoad({navigate = false, current = false, before = null, active = null, body = null}) {
+  return navigate && current && (active === before || active === body);
+}
