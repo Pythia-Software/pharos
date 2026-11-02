@@ -49,14 +49,14 @@ split only additive measures, so this panel computes the rate from two grouped c
 
 ### In the reader
 
-A conversation the pass has read has an **Events** toggle beside Show and Labels (view field `reader_events`; the
-dashboard's example links turn it on). It marks each event's sentence in its kind group's hue and underlines what the
+A conversation the pass has read offers **Agent events** in the reader's Highlight row, beside Human writing and
+Message labels (view field `reader_events`; the dashboard's example links turn it on). It marks each event's sentence in its kind group's hue and underlines what the
 event was about and what the agent did; hovering a marked sentence names its events, with probability and those
 sentences. Thinking is marked inside its Reasoning row, which shows a count of its events.
 
 - `agentEventsAttacher` (`agent_events.go`) attaches each agent message's events at or above the threshold to the
   live reader's conversation, with ranges converted from UTF-8 bytes to UTF-16 code units (JavaScript's string
-  indexes) in one pass per message, and a summary for the toggle. An event whose stored sentence is not where it was
+  indexes) in one pass per message, and a summary for the checkbox's note. An event whose stored sentence is not where it was
   found is left out.
 - `messageEventView`, `eventMask` and `eventsAtMark` (`reader-model.js`) turn them into marks and pick the events
   under a hovered mark: each marked sentence is a mark of its own whose class names its span (`event-at-N`). Events

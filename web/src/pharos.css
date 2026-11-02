@@ -618,3 +618,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .sync-run-dialog { width: min(1100px, calc(100vw - 32px)); }
 .sync-run-dialog h3 { margin: 22px 0 8px; }
 .sync-run-dialog p { font-size: var(--fs-sm); }
+
+/* The reader's Highlight row (ui.py) above a Browse preview's selected turn. */
+.result-highlights:empty { display: none; }
+.result-highlights .transcript-highlights { margin-top: 0; }

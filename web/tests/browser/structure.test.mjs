@@ -80,7 +80,9 @@ const authoredTurnMessages = [authoredPrompt,
   ]).flat(),
   {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
   {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
-  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1."},
+  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1.",
+    labels:{segment:"AR",ids:["C","C.report","C.report.completion"],probs:{"C.report.completion":0.93}},
+    agent_events:[{kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[],response:[]}]},
   classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
   {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
 ];
@@ -91,7 +93,8 @@ const authoredTurnAPI = {
     return !result?.rows?result:{...result,rows:result.rows.map(row=>({...row,title:"Review the conversation reader",first_input:authoredPrompt.text,last_response:"All five reviews are complete.",turn_count:2,subagent_count:6}))};
   },
   "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request),title:"Review the conversation reader",conversations:[{id:rootConversation,provider:"codex",title:"Keep reviews inside the parent turn"}]}),
-  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages},
+  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages,
+    labels:{labeled:true,pending:false,taxonomy:[{id:"C.report.completion",name:"Completion",definition:"Reports finished work."}]},agent_events:{messages_read:8}},
 };
 
 async function publishAppUpdate(page, state) {

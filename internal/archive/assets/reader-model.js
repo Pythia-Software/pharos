@@ -532,6 +532,43 @@ function markClass(flag){
   const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
   const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
 }
+// Highlights: the kinds of marks the reader can show, each switched on or
+// off on its own. Each is a boolean view field, so a link keeps the choice,
+// with the last choice saved as the fallback for links without it. Human
+// writing is shown unless turned off; the classifiers' marks are opt-in.
+// Showing a highlight only toggles a class on the panel (show-<id>); the
+// marks are always rendered. Where a message's labels and its human writing
+// cover the same text, the label's hue wins.
+const READER_HIGHLIGHTS=[
+  {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
+  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Each message in the hue of what it does (message classifier). Hover highlighted text for its labels.'}];
+// The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
+// each has anything to show (available, else why not in title), a note on
+// its coverage, and a legend of the hues it uses here (label families or
+// event groups). Human writing is offered only where there is some; a
+// classifier only once it has run on the library, so its row can say why a
+// conversation has nothing to show.
+function readerHighlightOptions(conversation,messages,taxonomy=[]){
+  const options=[];
+  for(const option of READER_HIGHLIGHTS){
+    if(option.id==='writing'){if(messages.some(hasHumanWriting))options.push({...option,available:true,note:'',legend:[]});continue}
+    if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
+      const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
+      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:`${count} event${count===1?'':'s'} in ${views.length} of ${summary.messages_read??0} agent messages read`,
+        legend:EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)}))});continue}
+    const summary=conversation?.labels;if(!summary)continue;
+    const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
+    options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',
+      legend:[...LABEL_FAMILIES,['','Other']].filter(([key])=>families.has(key)).map(([key,name])=>({name,family:key}))});
+  }
+  return options;
+}
+// The ids of the highlights shown: a linked value (true or false) wins, then
+// the saved choice, then the option's fallback. One with nothing to show is off.
+function readerHighlightsShown(options,linked=()=>null,saved=(pref,fallback)=>fallback){
+  return new Set(options.filter(option=>{if(!option.available)return false;const value=linked(option.field);return typeof value==='boolean'?value:saved(option.pref,option.fallback)===true}).map(option=>option.id));
+}
 function markdownText(text,mask=''){
   if(!/[^0]/.test(mask))return [text];
   const result=[];let start=0;
