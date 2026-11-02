@@ -42,9 +42,12 @@
 .pharos-status-load>span>span{display:inline-flex;align-items:center;gap:4px}
 .pharos-status-load .app-icon{width:13px;height:13px;flex:none}
 .pharos-status-load b{font-size:13px;font-weight:600;color:var(--ink,#000);font-variant-numeric:tabular-nums}
-.pharos-status-panel .pharos-dot.pulse{animation:pharos-status-pulse 1.6s ease-in-out infinite}
-@keyframes pharos-status-pulse{50%{opacity:.55;box-shadow:0 0 0 5px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent)}}
-@media(prefers-reduced-motion:reduce){.pharos-status-panel .pharos-dot.pulse{animation:none}}
+/* Opacity only, with the ring on ::after: see .pharos-drive .pharos-dot.busy. */
+.pharos-status-panel .pharos-dot.pulse{position:relative;animation:pharos-status-pulse 1.6s ease-in-out infinite}
+.pharos-status-panel .pharos-dot.pulse::after{content:'';position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 5px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent);opacity:0;animation:pharos-status-ring 1.6s ease-in-out infinite}
+@keyframes pharos-status-pulse{50%{opacity:.55}}
+@keyframes pharos-status-ring{50%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.pharos-status-panel .pharos-dot.pulse,.pharos-status-panel .pharos-dot.pulse::after{animation:none}}
 .pharos-status-cadences{border-top:1px solid var(--line,#ddd)}
 .pharos-status-cadences details{border-bottom:1px solid var(--line,#ddd)}
 .pharos-status-cadences summary{list-style:none;display:grid;grid-template-columns:18px minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;padding:8px 0;cursor:pointer}

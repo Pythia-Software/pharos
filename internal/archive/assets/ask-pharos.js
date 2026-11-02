@@ -739,10 +739,13 @@ window.initPharosAsk = function(root, {previews} = {}) {
     }
   }
   function ideaHeld(){return frozenAt!==null||ideaPaused||suggestions.hidden||ideasHidden||document.hidden||pending||question.value.trim()||!picker.hidden||!chatHistory.hidden||consent.open||ideaMoving||ideaViewport.matches(':hover,:focus-within')||matchMedia('(prefers-reduced-motion: reduce)').matches;}
+  // This runs four times a second on every page, so write only changes: each
+  // DOM write makes the page restyle and, in WebKit, composite again.
+  const setIdeaText=(element,text)=>{if(element.textContent!==text)element.textContent=text;};
   function updateIdeaClock(){
-    const held=ideaHeld();find('.pharos-idea-countdown-label').textContent=held?(ideaPaused||frozenAt!==null||matchMedia('(prefers-reduced-motion: reduce)').matches?'Paused':'Waiting'):'More in '+Math.ceil((ideaCycleMs-ideaElapsed)/1000)+'s';
-    find('.pharos-idea-countdown-track i').style.transform=`scaleX(${Math.max(0,1-ideaElapsed/ideaCycleMs)})`;
-    const play=find('.pharos-idea-play');play.textContent=ideaPaused?'\u25b6 Play':'\u2161 Pause';play.setAttribute('aria-label',ideaPaused?'Play suggestions':'Pause suggestions');play.setAttribute('aria-pressed',String(ideaPaused));
+    const held=ideaHeld();setIdeaText(find('.pharos-idea-countdown-label'),held?(ideaPaused||frozenAt!==null||matchMedia('(prefers-reduced-motion: reduce)').matches?'Paused':'Waiting'):'More in '+Math.ceil((ideaCycleMs-ideaElapsed)/1000)+'s');
+    const bar=find('.pharos-idea-countdown-track i'),transform=`scaleX(${Math.max(0,1-ideaElapsed/ideaCycleMs)})`;if(bar.style.transform!==transform)bar.style.transform=transform;
+    const play=find('.pharos-idea-play');setIdeaText(play,ideaPaused?'\u25b6 Play':'\u2161 Pause');play.setAttribute('aria-label',ideaPaused?'Play suggestions':'Pause suggestions');play.setAttribute('aria-pressed',String(ideaPaused));
   }
   function markReading(){
     if(ideasHidden||suggestions.hidden||!ideaViewport.clientWidth)return;
