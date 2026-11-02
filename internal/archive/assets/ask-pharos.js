@@ -67,6 +67,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const ideaToggle=find('.pharos-idea-toggle'),ideaActions=find('.pharos-idea-actions');
   const ideaHiddenKey='pharos-ask-suggestions-hidden';
   let ideasHidden=window.pharosPrefs?.get(ideaHiddenKey,false)===true;
+  const browseHintKey='pharos-ask-browse-hint-snoozed';
   let ideaContextRequested=false;
   const ideaContextController=new AbortController();
   const defaultIdeaCorners=[[0],[2],[1,3],[3],[0,2],[1],[0,2],[1,3],[2]];
@@ -138,7 +139,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const composerGlow=createPharosGlow(find('.pharos-ai-frame'));
   const glows=[composerGlow,createPharosGlow(floating,{radius:13})];
   if(headerButton)glows.push(createPharosGlow(headerButton.querySelector('.ask-pharos-icon'),{outline:document.querySelector('#ph-icon-chat path').getAttribute('d')}));
-  const browseButton=find('.pharos-browse'),windowClose=find('.pharos-window-close'),composerHeader=find('.pharos-composer-header');
+  const browseButton=find('.pharos-browse'),browseHint=find('.pharos-browse-hint'),windowClose=find('.pharos-window-close'),composerHeader=find('.pharos-composer-header');
   let presentation='home',returnFocus=null,contextURI='',floatPosition=null,drag=null,suppressReopen=false,navigatedTurn=null,popOutMotion=null;
   function updateSurface() {
     const turn=turns.at(-1),state=askFloatingState(turn,{navigated:!!turn&&turn.id===navigatedTurn});
@@ -146,10 +147,10 @@ window.initPharosAsk = function(root, {previews} = {}) {
     floating.hidden=presentation!=='floating';
     floating.dataset.ready=String(state.ready);
     floating.querySelector('.pharos-floating-open span').textContent=state.message;
-    browseButton.hidden=ai.hidden;
-    const browseHint=find('.pharos-browse-hint'),showBrowseHint=askShowBrowseHint({pending:!!pending&&!ai.hidden,browsing:!!pending?.browsing,presentation});
+    browseButton.parentElement.hidden=ai.hidden;
+    const showBrowseHint=askShowBrowseHint({pending:!!pending&&!ai.hidden,browsing:!!pending?.browsing,presentation,hint:!!pending?.hint});
     browseHint.hidden=!showBrowseHint;
-    if(showBrowseHint)browseButton.setAttribute('aria-describedby',browseHint.id);else browseButton.removeAttribute('aria-describedby');
+    if(showBrowseHint)browseButton.setAttribute('aria-describedby','pharos-browse-hint');else browseButton.removeAttribute('aria-describedby');
     browseButton.title=showBrowseHint?'':'Picture in picture · keep browsing';
     windowClose.hidden=presentation!=='modal';
     // Keep the same close control available when switching to regular search.
@@ -245,7 +246,9 @@ window.initPharosAsk = function(root, {previews} = {}) {
   }
   listen(window,'pharos:ask-open',()=>openOverlay(true));
   windowClose.addEventListener('click',closeOverlay);
-  browseButton.addEventListener('click',()=>browse());
+  function snoozeBrowseHint(){window.pharosPrefs?.set(browseHintKey,askBrowseHintSnooze());if(pending)pending.hint=false;}
+  browseButton.addEventListener('click',()=>{snoozeBrowseHint();browse();});
+  find('.pharos-browse-hint-dismiss').addEventListener('click',()=>{snoozeBrowseHint();updateSurface();browseButton.focus();});
   overlay.addEventListener('cancel',event=>{if(event.defaultPrevented)return;event.preventDefault();closeOverlay();});
   // Nested model/history menus consume Escape before closing the whole search.
   root.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.defaultPrevented)event.stopPropagation();});
@@ -482,7 +485,6 @@ window.initPharosAsk = function(root, {previews} = {}) {
     // the page itself never changes the transcript's size.
     const top=frame.getBoundingClientRect().top+(main?.scrollTop||0);
     const outside=overlay.open?overlayPadding()+Math.max(0,root.getBoundingClientRect().height-frame.getBoundingClientRect().height):0;
-    const browseHint=find('.pharos-browse-hint');
     const bottomSpace=browseHint.hidden?20:Math.max(20,browseHint.getBoundingClientRect().bottom-frame.getBoundingClientRect().bottom+12);
     const available=overlay.open?Math.max(0,overlayViewport().height-chrome-outside):Math.max(0,window.innerHeight-Math.max(80,top)-chrome-bottomSpace);
     // A first exchange includes the transcript's top padding, too; otherwise
@@ -965,7 +967,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
     announcement.textContent='';
     turn.status='loading';turn.reply='';turn.cards=[];delete turn.omitted;delete turn.clarification;turn.elapsedMs=0;turn.activity=[];
     turn.message='Starting '+turn.cli+'…';
-    const controller=new AbortController();pending={request,turnId:turn.id,started:Date.now(),controller,edited:false,browsing:presentation==='floating'||presentation==='dismissed'};
+    const browseHintStart=askStartBrowseHint(window.pharosPrefs?.get(browseHintKey,0));window.pharosPrefs?.set(browseHintKey,browseHintStart.snoozed);
+    const controller=new AbortController();pending={request,turnId:turn.id,started:Date.now(),controller,edited:false,browsing:presentation==='floating'||presentation==='dismissed',hint:browseHintStart.hint};
     turns.forEach(updateTurn);syncComposer();writeHistory();
     ticker=setInterval(()=>tickRequest(request),1000);
     try {

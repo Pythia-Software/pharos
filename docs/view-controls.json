@@ -788,6 +788,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:a9ad79f64dbaf85e:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-browse-hint-dismiss cursor-interaction\" aria-label=\"Dismiss browse hint\" title=\"Don’t show for a while\">",
+      "contract": "settings",
+      "reason": "Snoozes the Ask browse hint in UI preferences; not view state."
+    },
+    {
       "key": "fragment:ad63fe0a924cd37a:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",

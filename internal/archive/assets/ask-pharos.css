@@ -298,15 +298,17 @@
 .pharos-ask-dialog #pharos-ask{margin:0;width:100%}
 .pharos-ask-dialog #pharos-ask .pharos-product{--pharos-product-padding:0px;max-width:none;padding:0;border:0;border-radius:0;background:transparent}
 .pharos-ask-dialog #pharos-ask .pharos-suggestions{display:none}
-#pharos-ask .pharos-browse{position:relative}
-#pharos-ask .pharos-browse-hint{position:absolute;right:0;top:calc(100% + 7px);z-index:5;width:max-content;max-width:calc(100vw - 48px);padding:8px 11px;border:1px solid color-mix(in srgb,var(--pharos-gold) 45%,var(--pharos-line));border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 4px 16px color-mix(in srgb,var(--pharos-ink) 12%,transparent);font-size:12px;font-weight:400;line-height:1.4;white-space:nowrap;pointer-events:none}
+#pharos-ask .pharos-browse-anchor{display:flex;position:relative}
+#pharos-ask .pharos-browse-hint{position:absolute;right:0;top:calc(100% + 7px);z-index:5;width:max-content;max-width:calc(100vw - 48px);padding:8px 11px;border:1px solid color-mix(in srgb,var(--pharos-gold) 45%,var(--pharos-line));border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 4px 16px color-mix(in srgb,var(--pharos-ink) 12%,transparent);font-size:12px;font-weight:400;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px}
+#pharos-ask .pharos-browse-hint[hidden]{display:none}
+/* Outranks the coarse-pointer button minimum so the bubble keeps one line; ::before supplies the touch target. */
+#pharos-ask .pharos-product .pharos-browse-hint-dismiss{position:relative;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;min-height:18px!important;margin:-2px -5px -2px 0;padding:0;border:0;border-radius:5px;background:transparent;color:var(--pharos-muted);font-size:15px;line-height:1}
+#pharos-ask .pharos-browse-hint-dismiss:hover{background:color-mix(in srgb,var(--pharos-muted) 12%,transparent);color:var(--pharos-ink)}
+#pharos-ask .pharos-browse-hint-dismiss:focus-visible{outline:2px solid var(--pharos-violet);outline-offset:1px}
+@media(pointer:coarse){#pharos-ask .pharos-browse-hint-dismiss::before{content:"";position:absolute;inset:-13px}}
 #pharos-ask .pharos-browse-hint::after{content:"";position:absolute;right:12px;top:-5px;width:8px;height:8px;border-left:inherit;border-top:inherit;background:inherit;transform:rotate(45deg)}
-#pharos-ask .pharos-browse:has(.pharos-browse-hint:not([hidden]))::after{display:none}
+#pharos-ask .pharos-browse-anchor:has(.pharos-browse-hint:not([hidden])) .pharos-browse::after{display:none}
 #pharos-ask .pharos-browse:focus-visible{outline:2px solid var(--pharos-violet);outline-offset:2px}
-#pharos-ask .pharos-browse{position:relative}
-#pharos-ask .pharos-browse-hint{position:absolute;right:0;top:calc(100% + 7px);z-index:5;width:max-content;max-width:calc(100vw - 48px);padding:8px 11px;border:1px solid color-mix(in srgb,var(--pharos-gold) 45%,var(--pharos-line));border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 4px 16px color-mix(in srgb,var(--pharos-ink) 12%,transparent);font-size:12px;font-weight:400;line-height:1.4;white-space:nowrap;pointer-events:none}
-#pharos-ask .pharos-browse-hint::after{content:"";position:absolute;right:12px;top:-5px;width:8px;height:8px;border-left:inherit;border-top:inherit;background:inherit;transform:rotate(45deg)}
-#pharos-ask .pharos-browse:has(.pharos-browse-hint:not([hidden]))::after{display:none}
 #pharos-ask .pharos-page-context{display:inline-flex;align-items:center;gap:4px;max-width:100%;margin:0 5px 0 0;padding:0 2px 0 7px;border:1px solid var(--pharos-line);border-radius:6px;background:color-mix(in srgb,var(--pharos-muted) 8%,var(--pharos-panel));font-size:12px;line-height:22px;color:var(--pharos-muted);vertical-align:baseline;white-space:nowrap;user-select:none;-webkit-user-drag:element;cursor:grab;touch-action:none}
 #pharos-ask .pharos-page-context:active{cursor:grabbing}
 #pharos-ask .pharos-chip-dragging{opacity:.4}
