@@ -410,7 +410,7 @@ The browser loads the canonical store and capability handshake, passes both to
 catalogue. Saves refresh capabilities before publishing the new local definition
 so the next request uses its current execution revision. Library v2 requests
 retain keyword match summaries/hits and semantic
-search explanations. Shared HTML documents continue using the local executor.
+search explanations.
 
 Home previews use the same v2 capability handshake, canonical computed revisions,
 row projection and metric execution. Compatible cards share requests of up to

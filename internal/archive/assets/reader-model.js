@@ -3,9 +3,8 @@
 // turns, file paths, the Show filter's categories, Find, harness XML blocks,
 // message summaries, local labels, agent events, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
-// it before its inline script, which renders with them, and a shared export
-// inlines it (sharedPage in share.go). Node tests load it with vm
-// (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
+// it before its inline script, which renders with them. Node tests load it
+// with vm (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
 // of it for the service; testdata/ holds the fixtures both must agree on.
 
 // Wall-clock ages shared by the reader and the session hierarchy. Accept both

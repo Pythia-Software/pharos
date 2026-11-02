@@ -125,12 +125,6 @@ func (c *Catalog) workFileTargets(workspaceID string) ([]map[string]any, error) 
 // such messages carry text_clipped/raw_clipped and are fetched whole with
 // MessageOriginal when the reader expands them.
 func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[string]any, error) {
-	return c.workConversation(workspaceID, conversationID, true)
-}
-
-// workConversation is WorkConversation, optionally leaving every body whole
-// (a shared export carries the full text, so its reader never asks for more).
-func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool) (map[string]any, error) {
 	rows, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE id=? AND workspace_id=?", conversationID, workspaceID)
 	if err != nil || len(rows) == 0 {
 		return nil, err
@@ -144,22 +138,19 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	if err != nil {
 		return nil, err
 	}
-	// Local labels are for the live reader; a shared export leaves them out.
-	attachLabels, labelsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
-	attachEvents, eventsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
-	if clip {
-		if attachLabels, labelsSummary, err = c.messageLabelsAttacher(conversationID); err != nil {
-			return nil, err
-		}
-		// Agent events (agent_events.go), likewise only in the live reader.
-		if attachEvents, eventsSummary, err = c.agentEventsAttacher(conversationID); err != nil {
-			return nil, err
-		}
+	attachLabels, labelsSummary, err := c.messageLabelsAttacher(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// Agent events (agent_events.go).
+	attachEvents, eventsSummary, err := c.agentEventsAttacher(conversationID)
+	if err != nil {
+		return nil, err
 	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
-	previewRows := clip && len(sessions) > 0
+	previewRows := len(sessions) > 0
 	prepare := func(message map[string]any) {
 		attach(message)
 		attachLabels(message)
@@ -224,7 +215,7 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 		}
 		conversation["token_usage"] = conversationTokenCounts(records)
 	}
-	if clip && !previewRows {
+	if !previewRows {
 		for _, message := range messages {
 			clipReaderMessage(message)
 		}

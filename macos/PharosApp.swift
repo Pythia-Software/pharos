@@ -1405,7 +1405,7 @@ struct ArchiveWebView: NSViewRepresentable {
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
             guard let url = navigationAction.request.url, !isArchivePage(url) else {
-                // A link with a `download` attribute, such as a conversation's Share.
+                // A link with a `download` attribute.
                 decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
                 return
             }

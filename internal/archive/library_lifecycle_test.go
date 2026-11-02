@@ -770,13 +770,6 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/settings/libraries" {
 			t.Fatal("the startup window opened over an open library", w.Code, w.Header().Get("Location"))
 		}
-		w = httptest.NewRecorder()
-		r = httptest.NewRequest(http.MethodGet, "/api/share?id=work", nil)
-		r.Header.Set("Authorization", "Bearer "+app.token)
-		app.ServeHTTP(w, r)
-		if w.Code != http.StatusOK || w.Body.String() != appHTML() {
-			t.Fatal("HTML exports received this Mac's library controls or metadata")
-		}
 		// Readiness: the broker's own, or, scoped to the library, its
 		// service's (the app's window asks before reloading a failed page).
 		ready := func(scope string) string {

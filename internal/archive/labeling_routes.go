@@ -850,3 +850,14 @@ func labelingCLIVersion(path string) string {
 	}
 	return strings.TrimSpace(string(output))
 }
+
+// pick copies the given keys of row that it has.
+func pick(row map[string]any, keys ...string) map[string]any {
+	picked := make(map[string]any, len(keys))
+	for _, key := range keys {
+		if value, ok := row[key]; ok {
+			picked[key] = value
+		}
+	}
+	return picked
+}

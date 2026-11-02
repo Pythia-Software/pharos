@@ -3,7 +3,6 @@ import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
 import { changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
-import type { LocalRows } from "./analysis-request";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, type LegendAction } from "./chart-selection";
 import { dashboardChartURL } from "./dashboard-chart-links";
@@ -24,9 +23,9 @@ const percent = (value: number) => `${value.toLocaleString(undefined, { maximumF
 // legend, drill-downs and range picking, and draws prepared buckets.
 // Without onView it has no View control, and with links={false} no
 // supporting-query links.
-export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, onTimeFilter = onFilter, local, format, tick = format, links = true, children }: {
+export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, onTimeFilter = onFilter, format, tick = format, links = true, children }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
-  onChange: (next: Partial<T>) => void; onView?: (view: AnalysisView) => void; onFilter: FilterChange; onTimeFilter?: FilterChange; local?: LocalRows;
+  onChange: (next: Partial<T>) => void; onView?: (view: AnalysisView) => void; onFilter: FilterChange; onTimeFilter?: FilterChange;
   format: AmountFormat; tick?: AmountFormat; links?: boolean; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
@@ -36,7 +35,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   // Relative bounds resolve to period boundaries, so the query is stable
   // between renders within one period.
   const trend = trendQuery(catalog, view, where);
-  const result = useAnalysisResult(dataset, schema, trend.query, local, catalog.request?.params);
+  const result = useAnalysisResult(dataset, schema, trend.query, catalog.request?.params);
   const labels = useMemo(() => optionLabels(schema.fields), [schema]);
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(String(value)) ?? String(value);
   const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { label }),

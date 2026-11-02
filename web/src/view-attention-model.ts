@@ -44,8 +44,8 @@ export function createDetailLanding(changed: () => void) {
 
 // A table offers native details only once its first result page has loaded:
 // otherwise a detail can land in an off-page fallback the rows then replace.
-export function nativeDetailsReady(table: { visible: boolean; shared: boolean; restored: boolean; loading: boolean; rows?: string; schema?: string }): boolean {
-  return table.visible && !table.shared && table.restored && !table.loading && Boolean(table.rows && table.rows !== "running") && Boolean(table.schema);
+export function nativeDetailsReady(table: { visible: boolean; restored: boolean; loading: boolean; rows?: string; schema?: string }): boolean {
+  return table.visible && table.restored && !table.loading && Boolean(table.rows && table.rows !== "running") && Boolean(table.schema);
 }
 
 const attentionClasses = ["pharos-highlight", "pharos-reveal"];

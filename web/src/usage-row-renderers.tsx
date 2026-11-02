@@ -18,16 +18,16 @@ export function UsageRowActions({ dataset, row }: { dataset: UsageDataset; row: 
   const links = usageRowLinks(dataset, row, new URLSearchParams(location.search));
   return links.length ? <span className="usage-row-links">{links.map(link => <UsageSourceLink key={link.label} link={link} />)}</span> : dataset === "mcp_calls" ? <span className="muted">No direct archive target in the recorded arguments.</span> : null;
 }
-export function usageRowRenderers(dataset: UsageDataset, shared = false): RenderRegistry<Record<string, any>> {
+export function usageRowRenderers(dataset: UsageDataset): RenderRegistry<Record<string, any>> {
   return {
     ...originRenderers<Record<string, any>>(),
     ...Object.fromEntries(usageDrilldownColumns[dataset].map(column => [usageDrilldownField(column.kind), ({ row }: { row: Record<string, any> }) => {
-      const link = !shared && usageRowLinks(dataset, row, new URLSearchParams(location.search)).find(link => link.kind === column.kind);
+      const link = usageRowLinks(dataset, row, new URLSearchParams(location.search)).find(link => link.kind === column.kind);
       return link ? <span className="usage-drilldown"><UsageSourceLink link={link}>{column.label}</UsageSourceLink></span> : <span className="muted">—</span>;
     }])),
     usage_conversation: ({ row, value }) => {
       const text = String(value || row.conversation_id || "Untitled conversation");
-      const href = !shared && primaryUsageSource(dataset, row);
+      const href = primaryUsageSource(dataset, row);
       return <span className="usage-row-title">{href ? <UsageSourceLink link={{ href, label: dataset === "parallelism" ? href.startsWith("/library?") ? "Works at this checkout" : "Conversation near this hour" : "Open source conversation" }}>{text}</UsageSourceLink> : text}</span>;
     },
     usage_code_snippet: ({ value, presentation }) => presentation === "property" ? <pre className="usage-row-code">{String(value ?? "")}</pre> : <span className="usage-row-snippet" title={String(value ?? "")}>{String(value ?? "")}</span>,
@@ -49,7 +49,7 @@ export function usageRowRenderers(dataset: UsageDataset, shared = false): Render
       if (text.length <= 600 && text.split("\n").length <= 8) return <pre className="usage-row-code">{text}</pre>;
       return <div><pre className="usage-payload-preview">{text.split("\n").slice(0, 4).join("\n").slice(0, 350)}…</pre><ViewDisclosure viewKey={`row:${dataset}:${row.id}:${field.name}`} className="usage-payload" summary={<>Read retained {field.name === "input_text" ? "input" : "result"} · {text.length.toLocaleString()} characters{truncated ? " · excerpt truncated" : ""}</>}><pre className="usage-row-code">{text}</pre></ViewDisclosure></div>;
     },
-    usage_sources: ({ row }) => shared ? null : <UsageRowActions dataset={dataset} row={row} />,
+    usage_sources: ({ row }) => <UsageRowActions dataset={dataset} row={row} />,
     usage_timestamp: ({ value }) => {
       const date = new Date(value as string);
       return value && Number.isFinite(date.getTime()) ? <time dateTime={date.toISOString()} title={date.toISOString()}>{date.toLocaleString()} <span className="muted">({date.toISOString()})</span></time> : "—";

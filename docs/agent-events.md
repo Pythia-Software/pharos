@@ -57,7 +57,7 @@ sentences. Thinking is marked inside its Reasoning row, which shows a count of i
 - `agentEventsAttacher` (`agent_events.go`) attaches each agent message's events at or above the threshold to the
   live reader's conversation, with ranges converted from UTF-8 bytes to UTF-16 code units (JavaScript's string
   indexes) in one pass per message, and a summary for the toggle. An event whose stored sentence is not where it was
-  found is left out. A shared export carries none.
+  found is left out.
 - `messageEventView`, `eventMask` and `eventsAtMark` (`reader-model.js`) turn them into marks and pick the events
   under a hovered mark: each marked sentence is a mark of its own whose class names its span (`event-at-N`). Events
   apply only where the reader shows the stored text they were scored on: a reply's card, or a thinking block's own

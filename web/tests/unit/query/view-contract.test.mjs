@@ -369,10 +369,10 @@ test('native detail landings wait for a provider, retry when one registers, and 
 });
 
 test('native details wait for the first result page of a visible, restored table',()=>{
- const ready={visible:true,shared:false,restored:true,loading:false,rows:'succeeded',schema:'pharos_mcp_calls'};
+ const ready={visible:true,restored:true,loading:false,rows:'succeeded',schema:'pharos_mcp_calls'};
  assert.equal(nativeDetailsReady(ready),true);
  assert.equal(nativeDetailsReady({...ready,rows:'failed'}),true);
- for(const waiting of [{rows:'running'},{rows:undefined},{loading:true},{restored:false},{visible:false},{shared:true},{schema:undefined}])
+ for(const waiting of [{rows:'running'},{rows:undefined},{loading:true},{restored:false},{visible:false},{schema:undefined}])
   assert.equal(nativeDetailsReady({...ready,...waiting}),false,JSON.stringify(waiting));
 });
 
