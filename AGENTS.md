@@ -102,7 +102,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | JS unit tests (`web/tests/unit`, node only, seconds) | `npm --prefix web test` from any directory |
 | One JS unit file or test | `npm --prefix web test -- card-recipes --test-name-pattern=wishlist` (arguments are file-path filters, plus `--test-*` flags) |
 | JS unit tests, full matrix | `npm --prefix web run test:full` (every window, chart kind and edit in `card-parity`/`cover-parity`) |
-| Browser structure suite (every page at 1440, 390 and 320 px; under 90 s) | `npm --prefix web run test:browser` (`PHAROS_BROWSER=webkit` for WebKit; `-- --test-name-pattern=Findings` for one page) |
+| Browser suite (about 470 cases; a few minutes) | `npm --prefix web run test:browser` (`-- focus` for one file, `-- --test-name-pattern=Findings` for one page, `PHAROS_BROWSER=webkit` for WebKit). Runs on one machine take turns; `PHAROS_BROWSER_LOCK=0` skips the queue |
 | Library drive end to end (macOS, slow) | `npm --prefix web run test:e2e` (real build, disk image and service) |
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
@@ -124,13 +124,18 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   `playwright-core` with the installed Google Chrome (or `CHROME_PATH`);
   `PHAROS_BROWSER=webkit` uses Playwright's WebKit, installed once with
   `npx playwright-core install webkit` in `web/`. Without a browser they
-  skip and say what to install. `structure.test.mjs` loads every page
-  against stubbed data (`fixtures.mjs`) and checks only what a browser can:
-  no errors or unstubbed API calls, no horizontal overflow, the header stays
-  put, and cards hold their content. A new page is one line in its `ROUTES`;
-  a new endpoint needs a default stub in `fixtures.mjs`. `focus.test.mjs`
-  checks dialogs' focus. Known layout bugs are listed in `KNOWN` and run as
-  todo. `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
+  skip and say what to install. `structure.test.mjs` loads one route per
+  distinct page state against stubbed data (`fixtures.mjs`) at 1440 and
+  320 px and checks only what a browser can: no errors or unstubbed API
+  calls, no horizontal overflow, the header stays put, cards hold their
+  content, and loading leaves focus alone. A new page or component is one
+  line in its `ROUTES`; a new endpoint needs a default stub in
+  `fixtures.mjs`. `focus.test.mjs` checks dialogs' focus and
+  `view-state.test.mjs` keeps one restoration test per URL-state mechanism.
+  Known layout bugs are listed in `KNOWN` and run as todo.
+  `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
+  Run the browser tier when you change page markup, CSS, classic scripts or
+  focus behaviour, filtered to the files and pages you touched.
 - **Manual only:** on macOS with Xcode Command Line Tools,
   `macos/test/run-light.sh` checks `MenuBar.swift` and `UpdateChecker.swift`
   (AppKit needs a GUI session; no images or service).
@@ -157,6 +162,12 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 
   The UI changes often, so do not assert on exact CSS values, pixels,
   colours or copy, on DOM structure, or on a removed control staying absent.
+- **Every browser case is a fresh page load; earn each one.** Add a
+  `ROUTES` entry per distinct component or state, not per topic, dataset or
+  theme that draws the same component. Loop over widths only across the
+  breakpoint the behaviour depends on. Check several steps on one page in
+  one test rather than reloading for each. When a browser test would assert
+  a computed value, move that logic into a function a unit test can call.
 - **No fixed sleeps.** Wait for a condition. Take screenshots only behind an
   environment variable, and never assert on them.
 - **Do not freeze an implementation.** A test should survive a refactor that

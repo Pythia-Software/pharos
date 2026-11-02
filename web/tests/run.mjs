@@ -12,9 +12,12 @@
 // contains any of them. Flags go to `node --test` before the file list, so
 // `--test-name-pattern=x` works. Each tier's timeout bounds each test, unless
 // the test sets its own. The 10 slowest tests are listed at the end, and the
-// exit status is non-zero on failure. Needs the Node in .nvmrc or later.
+// exit status is non-zero on failure. Browser and e2e runs on one machine
+// take turns (see browserTurn); PHAROS_BROWSER_LOCK=0 skips the queue. Needs
+// the Node in .nvmrc or later.
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRoot, buildUnitTests, unitEntries, unitSource, web } from "./build.mjs";
@@ -88,6 +91,37 @@ function run(tier, files, timingsFile) {
   return new Promise(resolve => spawn(process.execPath, argv, { cwd: tier.cwd, env: { ...env, ...tier.env }, stdio: "inherit" }).on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0))));
 }
 
+// Browser runs from several workspaces at once starve each other's page
+// waits into timeouts, so the browser and e2e tiers hold a lock in the temp
+// directory while they run. A lock whose owner has exited is taken over.
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } };
+async function browserTurn() {
+  if (process.env.PHAROS_BROWSER_LOCK === "0") return () => {};
+  const lock = join(tmpdir(), "pharos-browser-tests.lock"), ownerFile = join(lock, "owner.json");
+  const started = Date.now();
+  let waiting = "";
+  while (!interrupted) {
+    try {
+      mkdirSync(lock);
+      writeFileSync(ownerFile, JSON.stringify({ pid: process.pid, repo }));
+      if (waiting) console.log(`# Waited ${Math.round((Date.now() - started) / 1000)} s for the browser tests in ${waiting}.`);
+      return () => rmSync(lock, { recursive: true, force: true });
+    } catch (error) { if (error.code !== "EEXIST") throw error; }
+    let owner = null;
+    try { owner = JSON.parse(readFileSync(ownerFile, "utf8")); } catch {}
+    // No owner yet is a lock being taken; a few seconds without one is a crash.
+    let age = 0;
+    try { age = Date.now() - statSync(lock).mtimeMs; } catch { continue; }
+    if (owner ? !alive(owner.pid) : age > 5000) { rmSync(lock, { recursive: true, force: true }); continue; }
+    if (owner && !waiting) {
+      waiting = owner.repo;
+      console.log(`# Waiting for the browser tests running in ${owner.repo} (pid ${owner.pid}); PHAROS_BROWSER_LOCK=0 runs alongside them.`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  return null;
+}
+
 let failed = false, interrupted = false;
 const timings = [];
 // Ctrl-C reaches the test processes too; stop after them and clean up.
@@ -110,7 +144,9 @@ try {
     }
     if (selected.length > 1) console.log(`\n# ${tier.name} tests (${files.length} files)`);
     const timingsFile = join(scratch, `${tier.name}-timings.jsonl`);
-    failed = (await run(tier, files, timingsFile)) !== 0 || failed;
+    const release = tier.name === "unit" ? () => {} : await browserTurn();
+    if (!release) continue;
+    try { failed = (await run(tier, files, timingsFile)) !== 0 || failed; } finally { release(); }
     try { timings.push(...readFileSync(timingsFile, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))); } catch {}
   }
   const slowest = timings.sort((a, b) => b.duration - a.duration).slice(0, 10);
