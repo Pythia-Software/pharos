@@ -892,8 +892,10 @@ func (s *Server) runBackgroundPass(parent context.Context, cadence string, ids [
 	s.auto.mu.Unlock()
 	// A run in /api/activity (not shadowing the operation, which has its
 	// own steps), so open pages refresh once a pass changed something, as
-	// after an index (sync.js, finishedRunsChanged).
+	// after an index (sync.js, finishedRunsChanged). The operation names it,
+	// so the eject verdict and Stop treat the run as the operation's.
 	run := s.startRunNamed(backgroundRunKind, ids)
+	handle.linkLegacy(run.ID)
 	registered, end := s.beginIngest(run.ID)
 	stop := context.AfterFunc(registered, cancel)
 	var failure error

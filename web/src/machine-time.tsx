@@ -129,8 +129,8 @@ function MachineTimeDashboard({ api, scope, window, onRepository }: { api: Query
       <span className="machine-zoom-status" aria-live="polite">{zoomed ? `${extraFilters.length} active call filter${extraFilters.length === 1 ? "" : "s"}` : "Full view"}</span>
     </ZoomNavigation>
     <div className="machine-time-dashboard" aria-busy={result.loading}>
-    <div className="machine-section-heading"><div><h2>Where machine time goes</h2><p className="muted">Compare total work with time per run. Every selection filters the calls below.</p></div><button type="button" className="machine-text-button" onClick={() => api.refresh()}>Refresh</button></div>
-    {result.error && !result.loading ? <div className="machine-error" role="alert"><strong>Machine time could not be loaded.</strong><p>{result.error}</p><button type="button" onClick={() => api.refresh()}>Try again</button></div> : null}
+    <div className="machine-section-heading"><div><h2>Where tool time goes</h2><p className="muted">Compare total work with time per run. Every selection filters the calls below.</p></div><button type="button" className="machine-text-button" onClick={() => api.refresh()}>Refresh</button></div>
+    {result.error && !result.loading ? <div className="machine-error" role="alert"><strong>Tool time could not be loaded.</strong><p>{result.error}</p><button type="button" onClick={() => api.refresh()}>Try again</button></div> : null}
     {result.loading ? <p className="machine-loading" role="status">Reading recorded machine activity…</p> : !result.error ? <>
       <div className="machine-stats">
         <div><span>Total recorded tool time</span><strong>{timeLabel(total.duration)}</strong><small>{result.compared ? `${relativeChange(total.duration, previousTotal.duration)} vs previous period` : "Sum of timed tool calls"}</small></div>
@@ -167,5 +167,5 @@ export function MachineTime({ scope, window, onRepository, calls }: { scope: Mac
   const appliedScope = useRef<WhereTerm[]>([]);
   const where = useMemo(() => machineWhere(scope, window), [scope, window]);
   const header = (api: QueryTableApi<Row>) => <MachineTimeDashboard api={api} scope={scope} window={window} onRepository={onRepository} />;
-  return <section className="machine-time" aria-label="Machine Time">{calls({ scopeWhere: where, appliedScope, header })}</section>;
+  return <section className="machine-time" aria-label="Tool Time">{calls({ scopeWhere: where, appliedScope, header })}</section>;
 }
