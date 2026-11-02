@@ -2114,6 +2114,15 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:0bab6dfe661d5b94:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "input",
+      "control": "<input id=\"feedbackContactEmail\" type=\"email\" maxlength=\"254\" autocomplete=\"email\" placeholder=\"you@example.com\" aria-labelledby=\"feedbackContactEmailTitle\" aria-describedby=\"feedbackContactEmailDescription\">",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
       "key": "html:2de3664badf0dd59:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -7317,11 +7326,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "81f40ca237262854:0",
+      "key": "3f3b82cf10958266:0",
       "file": "web/src/search-help.tsx",
       "owner": "SearchHelp",
       "tag": "button",
-      "control": "aria-label={`${label} help`} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}",
+      "control": "aria-label={text ? undefined : `${label} help`} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -8162,20 +8171,11 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "06de8071311bc23f:0",
+      "key": "0b44ca3da1ae991b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
       "tag": "input",
-      "control": "value={draft.email} onChange={e => update({ email: e.target.value })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "0c97059d4406d606:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "button",
-      "control": "onClick={() => { update({ email: \"\", remember: false }); localStorage.removeItem(contactKey); }}",
+      "control": "value={email} onChange={e => { setEmail(e.target.value); saveContact(e.target.value.trim()); }}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8189,11 +8189,20 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "214dd45712932f85:0",
+      "key": "21c546ddb1da3f5d:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "input",
-      "control": "checked={logs} onChange={() => void collect()}",
+      "tag": "details",
+      "control": "",
+      "contract": "editing",
+      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+    },
+    {
+      "key": "22fa336466ad9c3b:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void keepDraft(() => window.pharosNavigate?.(\"/settings/preferences\"))} aria-label=\"Contact email settings\"",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8203,33 +8212,6 @@
       "owner": "Composer",
       "tag": "button",
       "control": "onClick={() => void keepDraft()} aria-label=\"Close feedback\"",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "49f738c3387665ad:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => update({ kind: e.target.value as Draft[\"kind\"] })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "5db26489d5d87a77:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "button",
-      "control": "onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "6b58402d298c6458:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "input",
-      "control": "checked={draft.remember} onChange={e => update({ remember: e.target.checked })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8261,11 +8243,29 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "d50ef63da5300b1e:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "select",
+      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (kind === \"bug\" && !logs) void includeLogs(true); }}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
       "key": "d548e27480346e5b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
       "tag": "button",
       "control": "onClick={() => void keepDraft()}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "e28978a9f272d38d:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))} aria-label={`Exclude ${a.label} from this report`}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8279,13 +8279,13 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "f152a1ffe5ba736d:0",
+      "key": "eefcab6e11e3e40c:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "details",
-      "control": "open",
-      "contract": "editing",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+      "tag": "input",
+      "control": "checked={logs} onChange={e => void includeLogs(e.target.checked)}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
       "key": "57c08b857d8535fe:0",
