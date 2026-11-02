@@ -1600,7 +1600,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
-  if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} />;
+  if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} summary={where => <ConversationsSummary where={where} />} />;
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
@@ -1723,14 +1723,14 @@ const readHumanWhere: ReadWhere = (where, state) => {
 // The dashboard's population, whatever the chart draws.
 const humanSummaryMetrics: AggregationClause[] = [
   { id: "typed", op: "sum", field: "typed_words", groupBy: [] },
+  { id: "words", op: "sum", field: "words", groupBy: [] },
   { id: "typed_messages", op: "sum", expression: "SUM(IF([typed_words]>0,1,0))", groupBy: [] },
   { id: "messages", op: "count", groupBy: [] },
-  { id: "works", op: "count_distinct", field: "work_id", groupBy: [] },
 ];
 function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: AuthorshipStatus | null }) {
   const result = useMetrics("writing_messages", where, humanSummaryMetrics);
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
-  const typed = value("typed"), typedMessages = value("typed_messages");
+  const typed = value("typed"), words = value("words"), typedMessages = value("typed_messages");
   const building = status !== null && !status.built_at;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <>
@@ -1738,10 +1738,31 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
       {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
       {card("Messages with your writing", typedMessages.toLocaleString(), `of ${value("messages").toLocaleString()} classified user messages`)}
       {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average over messages containing your writing")}
-      {card("Works with input", value("works").toLocaleString(), "works with classified messages in this period")}
+      {card("Typed share", words ? `${Math.round(typed / words * 100)}%` : "—", `of ${compactNumber(words)} words in your messages`)}
     </div>
     {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Classification update failed: ${status.error}` : status.running ? "Updating text classifications…" : status.stale ? "Text classifications need an update." : status.built_at ? `Text classified ${new Date(status.built_at).toLocaleString()}` : "Waiting for text classification."}</p> : null}
   </>;
+}
+
+// Conversations' population, whatever the chart draws.
+const conversationSummaryMetrics: AggregationClause[] = [
+  { id: "conversations", op: "count_distinct", field: "root_conversation_id", groupBy: [] },
+  { id: "messages", op: "sum", field: "human_messages", groupBy: [] },
+  { id: "output", op: "sum", field: "output_tokens", groupBy: [] },
+  { id: "repositories", op: "count_distinct", field: "repository_name", groupBy: [] },
+];
+function ConversationsSummary({ where }: { where: WhereTerm[] }) {
+  const result = useMetrics("conversation_activity", where, conversationSummaryMetrics);
+  const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
+  const conversations = value("conversations"), messages = value("messages"), output = value("output");
+  const per = (amount: number) => { const mean = amount / conversations; return conversations ? `${mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)} per conversation` : "none in this range"; };
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  return <div className="mcp-metrics dashboard-stats" aria-label="Conversations summary" aria-busy={result.loading}>
+    {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
+    {card("Your messages", messages.toLocaleString(), per(messages))}
+    {card("Output tokens", compactNumber(output), per(output))}
+    {card("Repositories", value("repositories").toLocaleString(), "with conversation activity")}
+  </div>;
 }
 
 // An engine dashboard: Over time, or Compare, Distribution, Scatter and Cycle
@@ -1941,7 +1962,7 @@ function LegacyUsagePage() {
         ? "Understand how your agents use tokens, work in parallel, and spend their time across repositories."
         : view === "writing"
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
-          : view === "conversations" ? "Compare human-supplied text estimates and recorded output across whole conversations, including delegated work. Human text is estimated once per classified message, excluding harness and automated spans; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
+          : view === "conversations" ? "Compare conversations, your messages and recorded output across whole conversations, including delegated work. Messages exclude harness and automated prompts; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
         {!shared ? <ResetPage /> : null}
         {shared ? null : <div className="library-view-toggle" role="group" aria-label="Analyze view">

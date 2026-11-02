@@ -12,7 +12,7 @@ export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model
 // exhaustive without inventing engine metrics for those pages.
 export const dashboardDefaults: Record<string, AnalysisState> = {
   calls: { metric: "calls", split: "tool_name", view: "compare" },
-  activity: { metric: "human_input", split: "provider_model", period: "day" },
+  activity: { metric: "conversations", split: "provider_model", period: "day" },
   tokens: { ...defaultTokenChart, period: "day" },
   human: { metric: "typed", split: "none", period: "day" },
   parallelism: { metric: "agent_hours", split: "level_band", period: "day" },

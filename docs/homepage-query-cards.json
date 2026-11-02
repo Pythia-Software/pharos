@@ -10128,7 +10128,7 @@
         "chart": {
           "v": 2,
           "view": "trend",
-          "metric": "correction_share",
+          "metric": "typed_messages",
           "split": "none",
           "period": "day",
           "scale": "linear",
@@ -10864,8 +10864,8 @@
     },
     {
       "id": "session-human-output",
-      "title": "Human input and output",
-      "description": "Estimated human-supplied text tokens versus recorded output per whole conversation over the last {days} days; log–log axes.",
+      "title": "Messages and output",
+      "description": "Your messages versus recorded output per whole conversation over the last {days} days; log–log axes.",
       "dataset": "conversation_activity",
       "field": "event_at",
       "category": "models",
@@ -10882,7 +10882,7 @@
         {
           "id": "session-human-output",
           "op": "sum",
-          "expression": "SUM([human_input_tokens_estimate])",
+          "expression": "SUM([human_messages])",
           "expressionY": "SUM([output_tokens])",
           "groupBy": [
             "root_provider",
@@ -10900,7 +10900,7 @@
           "display": {
             "kind": "scatter",
             "maxGroups": 2000,
-            "xLabel": "Est. human text tokens (log)",
+            "xLabel": "Human messages (log)",
             "yLabel": "Recorded output tokens (log)",
             "xScale": {
               "mode": "log"
@@ -10931,28 +10931,22 @@
         ],
         "summaries": [
           {
-            "id": "mc_human_input",
+            "id": "mc_human_messages",
             "op": "sum",
-            "field": "human_input_tokens_estimate",
-            "label": "Estimated human-supplied text tokens"
+            "field": "human_messages",
+            "label": "Human messages"
           },
           {
             "id": "mc_output",
             "op": "sum",
             "field": "output_tokens",
             "label": "Recorded output tokens"
-          },
-          {
-            "id": "mc_human_messages",
-            "op": "sum",
-            "field": "human_messages",
-            "label": "Classified human messages"
           }
         ],
-        "valueField": "mc_human_input",
+        "valueField": "mc_human_messages",
         "unit": "tokens",
         "subjects": "whole conversations",
-        "action": "Explore human input and output",
+        "action": "Explore messages and output",
         "labelFields": [
           "root_provider",
           "root_model_family",
@@ -10965,14 +10959,14 @@
         "kind": "scatter",
         "height": 300
       },
-      "action": "Explore Conversation Input and Output",
-      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X estimates human-supplied text once per classified message as ceil(retained UTF-8 bytes / 4), excluding harness and automated spans. Includes pasted/quoted text and attachment references; excludes image and unretained file bytes. This is not a tokenizer result, request context size, or cache-read volume. Human messages use their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by human input. Missing classification/lineage is not evidence of absent human effort.",
+      "action": "Explore Conversations",
+      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X counts classified user messages holding any text besides harness instructions and automated prompts, at their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by messages. Missing classification/lineage is not evidence of absent human effort.",
       "destination": {
         "topic": "activity",
         "chart": {
           "v": 2,
           "view": "scatter",
-          "metric": "human_input",
+          "metric": "messages",
           "split": "provider_model",
           "period": "day",
           "scale": "logarithmic",
@@ -10981,7 +10975,7 @@
           "scaleY": "logarithmic"
         },
         "dataset": "conversation_activity",
-        "detailAction": "Explore human input and output"
+        "detailAction": "Explore messages and output"
       }
     },
     {

@@ -50,7 +50,7 @@ func TestConversationActivityPreservesHumanGrainAndTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	totals := map[string][3]int64{}
+	totals := map[string][2]int64{}
 	for _, row := range selected {
 		if row["conversation_id"] == "child" && (row["workspace_id"] != "child-work" || row["title"] != "Delegated work" || row["root_title"] != "Work" || row["root_conversation_id"] != "root") {
 			t.Fatalf("source event lost its distinct root attribution: %#v", row)
@@ -60,18 +60,17 @@ func TestConversationActivityPreservesHumanGrainAndTime(t *testing.T) {
 		}
 		root := firstString(row["root_conversation_id"])
 		total := totals[root]
-		total[0] += integer(row["human_input_tokens_estimate"])
-		total[1] += integer(row["output_tokens"])
-		total[2] += integer(row["human_messages"])
+		total[0] += integer(row["output_tokens"])
+		total[1] += integer(row["human_messages"])
 		totals[root] = total
 		if root == "root" && (row["root_model_family"] != "gpt-6-sol" || row["root_effort"] != "high") {
 			t.Fatalf("child output changed root cohort: %#v", row)
 		}
 	}
-	if totals["root"] != [3]int64{3, 57, 2} {
+	if totals["root"] != [2]int64{57, 2} {
 		t.Fatalf("human messages must count once with their own timestamp, regardless of pricing: %v", totals)
 	}
-	if totals["human-only"] != [3]int64{2, 0, 1} || totals["unclassified"] != [3]int64{0, 2, 0} || len(totals) != 3 {
+	if totals["human-only"] != [2]int64{0, 1} || totals["unclassified"] != [2]int64{2, 0} || len(totals) != 3 {
 		t.Fatalf("missing output/classification must stay inspectable and orphan lineage excluded: %v", totals)
 	}
 }
