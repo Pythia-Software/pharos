@@ -6,7 +6,7 @@ import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL } from "./usage-workspace-model";
 import { readBookmarks, writeBookmarks, type Bookmark } from "./bookmarks";
 import type { QueryCategory } from "./query-categories";
-import type { CardLoadingSpec } from "./card-loading-model";
+import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
 import { readConcurrencySettings } from "./concurrency-settings";
 
 // The dashboard URL is the card definition. Keep requested filters relative;
@@ -67,5 +67,6 @@ export function dashboardCardPresentation(address: string): { category: QueryCat
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
     : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" ? "machines" : "tools";
   const kind = state.view === "trend" ? state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
-  return { category, loading: { kind, count: state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : 4 } };
+  const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : 4;
+  return { category, loading: { kind, count, height: fittedCoverHeight(kind, count) } };
 }

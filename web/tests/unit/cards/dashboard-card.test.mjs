@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMPTY_QUERY } from '@pythia-software/query-table-core';
-import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow } from '../../../src/dashboard-card-model';
+import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation } from '../../../src/dashboard-card-model';
+import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
 import { dashboardDefaults } from '../../../src/dashboard-defaults';
@@ -110,6 +111,29 @@ test('saved comparison, distribution and scatter previews use the dashboard popu
     assert.deepEqual(preview.metrics[0].clause,analysis.clause);
     assert.deepEqual(preview.metrics[0].result,expected);
   }
+});
+
+// A dashboard address has no authored cover; Ask and Home fit it to the chart.
+test('dashboard card covers fit the marks they draw, loading and loaded', async t => {
+  fixture(t);
+  const local = usageLedger();
+  const views = {
+    value: {view:'compare',split:'none'}, bars: {view:'compare',split:'provider'}, share: {view:'compare',compareAs:'share',split:'provider'},
+    distribution: {view:'distribution',split:'provider',unit:'conversation'}, scatter: {view:'scatter',metricY:'cost',split:'provider',unit:'conversation'},
+    hours: {view:'cycle',cycle:'hour',reduce:'median',unit:'conversation',split:'none'}, trend: {view:'trend',split:'provider'},
+  };
+  const heights = {};
+  for (const [name, view] of Object.entries(views)) {
+    const url = makeURL({metric:'tokens',minSamples:0,...view},[]);
+    const preview = await loadDashboardCardPreview(url,schemas.usage,undefined,local,now);
+    const {loading} = dashboardCardPresentation(url);
+    for (const height of [preview.coverHeight, loading.height]) assert.ok(height >= 110 && height <= 800, `${name} cover is ${height}px`);
+    heights[name] = preview.coverHeight;
+    if (name === 'hours') assert.equal(preview.density,'compact','many box groups use the dense rows the height assumes');
+  }
+  assert.ok(heights.value < heights.hours && heights.bars < heights.hours, 'a value or a short list is shorter than 24 box rows');
+  for (const kind of ['list','box','pie']) assert.ok(fittedCoverHeight(kind,2) < fittedCoverHeight(kind,12), `${kind} covers grow with their rows`);
+  assert.equal(fittedCoverHeight('columns',4),fittedCoverHeight('columns',24),'column charts keep one height');
 });
 
 test('cycle previews fold the same complete weekdays as the dashboard', async t => {
