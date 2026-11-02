@@ -238,14 +238,19 @@ function askSelectionProvider(saved, providers = []) {
 function askEffortChoices(catalog, model) {
   return catalog?.models.find(m => m.id === model)?.efforts || ['Default'];
 }
-function askIsDefaultSelection(selection, defaultSelection) {
-  return !!defaultSelection && ['provider', 'model', 'effort'].every(key => defaultSelection[key] === selection[key]);
+function askFastAvailable(catalog, model) {
+  return !!catalog?.models.find(m => m.id === model)?.fast;
 }
-// A new provider starts from its default; a new model keeps the effort only if it offers it.
+function askIsDefaultSelection(selection, defaultSelection) {
+  return !!defaultSelection && ['provider', 'model', 'effort'].every(key => defaultSelection[key] === selection[key]) && !!defaultSelection.fast === !!selection.fast;
+}
+// A new provider starts from its default with Fast off (absent); a new model
+// keeps the effort and Fast only if it offers them.
 function askPickSelection(selection, page, value, catalogs = {}) {
   const next = {...selection, [page]: value};
-  if (page === 'provider') Object.assign(next, askDefaultSelection(value, catalogs[value]));
+  if (page === 'provider') {delete next.fast; Object.assign(next, askDefaultSelection(value, catalogs[value]));}
   if (page === 'model' && !askEffortChoices(catalogs[next.provider], next.model).includes(next.effort)) next.effort = 'Default';
+  if (page === 'model' && !askFastAvailable(catalogs[next.provider], next.model) || page === 'fast' && !value) delete next.fast;
   return next;
 }
 // One visit updates or replaces an entry; without one, the whole browser
