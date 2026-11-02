@@ -220,8 +220,8 @@
 #pharos-ask .pharos-destinations:has(>.pharos-results-label[hidden]){margin-top:0}
 #pharos-ask .pharos-results-label{font-size:13px;color:var(--pharos-ink);margin:0 0 4px}
 #pharos-ask .pharos-omitted{font-size:12px;color:var(--pharos-muted);margin:2px 0 0}
-#pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);transition:transform 150ms ease}
-#pharos-ask .pharos-destination:hover{transform:translateY(-2px);border-color:var(--pharos-violet)}
+#pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink)}
+#pharos-ask .pharos-destination:hover{border-color:var(--pharos-violet)}
 #pharos-ask .pharos-destination strong{font-weight:500;font-size:15px;overflow-wrap:anywhere}
 /* Generated link summaries run to a sentence or two and may quote filter values. */
 #pharos-ask .pharos-destination>span:last-of-type{font-size:12px;line-height:1.45;color:var(--pharos-muted);overflow-wrap:anywhere;text-wrap:pretty}
