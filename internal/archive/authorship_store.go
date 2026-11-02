@@ -182,7 +182,9 @@ func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResul
 		}
 		names.filter = " WHERE workspace_id IN (SELECT value FROM json_each(?))"
 		names.args = []any{jsonText(namesIDs)}
-		tables = []authorshipTable{messages, spans, names}
+		// Launches are all derived again; history's are as stored, so only
+		// new runs' are written.
+		tables = []authorshipTable{launchTable, messages, spans, names}
 	}
 	plan := []authorshipMutation{}
 	for _, table := range tables {

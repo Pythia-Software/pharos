@@ -13,8 +13,9 @@ import (
 )
 
 // v2 invalidates checkpoints that may have dropped questions from conversations
-// without a user suffix or restored a suppressed mirror's launch message.
-const authorshipStateVersion = "authorship-state-v2/" + authorshipVersion
+// without a user suffix or restored a suppressed mirror's launch message. v3
+// hashes only the graph up to the watermark, so new conversations replay.
+const authorshipStateVersion = "authorship-state-v3/" + authorshipVersion
 
 var authorshipSuffixLimit = 2000
 
@@ -53,6 +54,7 @@ func (c *Catalog) ensureAuthorshipState() error {
 			}
 		}
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			name := "authorship_input_" + spec.table + "_" + event
 			refs := []string{"NEW"}
 			if event == "DELETE" {
 				refs = []string{"OLD"}
@@ -83,6 +85,18 @@ func (c *Catalog) ensureAuthorshipState() error {
 				if spec.table == "tool_commands" {
 					stamp = "COALESCE((SELECT started_at FROM tool_calls WHERE id=" + ref + ".tool_call_id),'')"
 				}
+				// A new conversation is history from its start, which its own
+				// rows date as well; a new workspace holds none until they come.
+				// (Versioned names replace the triggers that dated both as all
+				// history.)
+				if event == "INSERT" && spec.table == "conversations" {
+					stamp, name = "COALESCE(NEW.started_at,'')", name+"_v2"
+				}
+				if event == "INSERT" && spec.table == "workspaces" {
+					body += `UPDATE authorship_dirty SET revision=hex(randomblob(16)) WHERE id=1;`
+					name += "_v2"
+					continue
+				}
 				body += `UPDATE authorship_dirty SET revision=hex(randomblob(16)),earliest=MIN(COALESCE(earliest,` + stamp + `),` + stamp + `) WHERE id=1;`
 			}
 			generationKey := "tool_ledger_generation"
@@ -94,7 +108,12 @@ func (c *Catalog) ensureAuthorshipState() error {
 			if len(guards) > 0 {
 				when = " WHEN " + strings.Join(guards, " AND ")
 			}
-			if _, err := c.DB.Exec("CREATE TRIGGER IF NOT EXISTS authorship_input_" + spec.table + "_" + event + " AFTER " + event + " ON " + spec.table + when + " BEGIN " + body + " END"); err != nil {
+			if old := "authorship_input_" + spec.table + "_" + event; name != old {
+				if _, err := c.DB.Exec("DROP TRIGGER IF EXISTS " + old); err != nil {
+					return err
+				}
+			}
+			if _, err := c.DB.Exec("CREATE TRIGGER IF NOT EXISTS " + name + " AFTER " + event + " ON " + spec.table + when + " BEGIN " + body + " END"); err != nil {
 				return err
 			}
 		}
@@ -118,42 +137,78 @@ type authorshipCheckpoint struct {
 // Hash only classification and launch metadata. Source titles and display
 // names do not affect classification. Mirror priority includes activity through
 // the representative map, so changing the selected copy cannot reuse state.
-func (c *Catalog) authorshipGraph(ctx context.Context) (string, time.Time, error) {
+//
+// The hash covers the graph up to watermark, the latest message classified:
+// a conversation that started later, linked to no other and parent to no
+// earlier one, is new work whose rows all date after the watermark, which a
+// replay classifies (and whose launch it checks). Its workspace counts once
+// it holds an earlier one. later reports a headless run among that new work.
+func (c *Catalog) authorshipGraph(ctx context.Context, watermark time.Time) (graph string, lastRun time.Time, later bool, err error) {
 	workspaces, err := queryMapsContext(ctx, c.DB, `SELECT id,source_kind,location,activity_at FROM workspaces ORDER BY id`)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	links, err := queryMapsContext(ctx, c.DB, identityLinkWorkspacesSQL)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	representative := mirrorRepresentatives(workspaces, links)
 	identities, err := queryMapsContext(ctx, c.DB, `SELECT left_id,right_id,relationship FROM conversation_identity_links ORDER BY left_id,right_id,relationship`)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	conversations, err := queryMapsContext(ctx, c.DB, `SELECT id,workspace_id,parent_id,harness,origin_host_id,provider,account,native_id,started_at FROM conversations ORDER BY id`)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, false, err
 	}
 	claimed := map[string]bool{}
 	for _, link := range identities {
 		claimed[asString(link["left_id"])] = true
 		claimed[asString(link["right_id"])] = true
 	}
-	var lastRun time.Time
+	// An earlier conversation's parent is history too, whenever it started.
+	run := func(row map[string]any) bool {
+		return row["parent_id"] == nil && !claimed[asString(row["id"])] && headlessRun(asString(row["provider"]), asString(row["harness"])) != ""
+	}
+	isLater := func(row map[string]any) bool {
+		at, ok := parseTime(asString(row["started_at"]))
+		return ok && at.After(watermark) && !claimed[asString(row["id"])]
+	}
+	parents := map[string]bool{}
 	for _, row := range conversations {
-		if row["parent_id"] == nil && !claimed[asString(row["id"])] && headlessRun(asString(row["provider"]), asString(row["harness"])) != "" {
+		if !isLater(row) {
+			parents[asString(row["parent_id"])] = true
+		}
+	}
+	historical, works := conversations[:0], map[string]bool{}
+	for _, row := range conversations {
+		if isLater(row) && !parents[asString(row["id"])] {
+			later = later || run(row)
+			continue
+		}
+		historical = append(historical, row)
+		works[asString(row["workspace_id"])] = true
+	}
+	conversations = historical
+	for _, row := range conversations {
+		if run(row) {
 			if at, ok := parseTime(asString(row["started_at"])); ok && latestLaunch(at).After(lastRun) {
 				lastRun = latestLaunch(at)
 			}
 		}
 	}
+	held := workspaces[:0]
 	for _, work := range workspaces {
-		delete(work, "activity_at")
+		if id := asString(work["id"]); works[id] {
+			delete(work, "activity_at")
+			held = append(held, work)
+		} else {
+			delete(representative, id)
+		}
 	}
+	workspaces = held
 	zone, offset := time.Now().In(time.Local).Zone()
-	return hashBytes([]byte(jsonText([]any{workspaces, representative, identities, conversations, time.Local.String(), zone, offset}))), lastRun, nil
+	return hashBytes([]byte(jsonText([]any{workspaces, representative, identities, conversations, time.Local.String(), zone, offset}))), lastRun, later, nil
 }
 
 func (c *Catalog) authorshipCheckpoint(ctx context.Context) (authorshipCheckpoint, error) {
@@ -183,8 +238,10 @@ type authorshipIncremental struct {
 	graph, reason string
 	inputs        []authorInput
 	launches      []conversationLaunch
-	classifier    *classifier
-	since         time.Time
+	// added are the launches of runs since the watermark, not yet stored.
+	added      []conversationLaunch
+	classifier *classifier
+	since      time.Time
 }
 
 func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncremental, error) {
@@ -193,11 +250,6 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 		return nil, err
 	}
 	run := &authorshipIncremental{checkpoint: checkpoint, reason: "checkpoint unavailable"}
-	graph, lastRun, err := c.authorshipGraph(ctx)
-	if err != nil {
-		return nil, err
-	}
-	run.graph = graph
 	_, built, err := c.authorshipGenerations()
 	if err != nil {
 		return nil, err
@@ -205,12 +257,16 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 	if checkpoint.version != authorshipStateVersion || checkpoint.generation != built {
 		return run, nil
 	}
-	if graph != checkpoint.graph {
-		run.reason = "identity or launch graph changed"
-		return run, nil
-	}
 	watermark, ok := parseTime(checkpoint.watermark)
 	if !ok {
+		return run, nil
+	}
+	graph, lastRun, newRuns, err := c.authorshipGraph(ctx, watermark)
+	if err != nil {
+		return nil, err
+	}
+	if graph != checkpoint.graph {
+		run.reason = "identity or launch graph changed"
 		return run, nil
 	}
 	since, ok := parseTime(checkpoint.earliest.String)
@@ -241,18 +297,25 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 	if err != nil {
 		return nil, err
 	}
-	// A mirror's command can be attributed to its representative conversation.
-	// Match launchIndex.link: that parent cannot link to the mirror's message.
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT l.child_id,l.parent_id,l.tool_call_id,l.program,
-	 CASE WHEN t.conversation_id=l.parent_id THEN COALESCE(t.call_message_id,'') ELSE '' END message
-	 FROM conversation_launches l LEFT JOIN tool_calls t ON t.id=l.tool_call_id`)
-	if err != nil {
+	// Without new runs, history's launches are the ones stored: commands
+	// after every run cannot launch one. New runs may have joined history's
+	// streams, so launches are derived again (a scan of every headless
+	// command), and those of runs up to the watermark must be as stored.
+	representative := mirrorRepresentatives(workspaces, links)
+	if newRuns {
+		run.launches, err = c.deriveLaunches(ctx, c.DB, claimed, representative)
+		if err != nil {
+			return nil, err
+		}
+		run.added, ok, err = c.historicalLaunchesKept(ctx, run.launches, watermark)
+		if err != nil || !ok {
+			run.reason = "launch graph changed"
+			return run, err
+		}
+	} else if run.launches, err = c.storedLaunches(ctx); err != nil {
 		return nil, err
 	}
-	for _, row := range rows {
-		run.launches = append(run.launches, conversationLaunch{child: asString(row["child_id"]), parent: asString(row["parent_id"]), toolCall: asString(row["tool_call_id"]), program: asString(row["program"]), message: asString(row["message"])})
-	}
-	run.inputs, err = c.authorInputsSince(ctx, c.DB, mirrorRepresentatives(workspaces, links), claimed, run.launches, &since)
+	run.inputs, err = c.authorInputsSince(ctx, c.DB, representative, claimed, run.launches, &since)
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +339,59 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 	}
 	run.classifier, run.since, run.reason = classifier, since, "suffix"
 	return run, nil
+}
+
+// storedLaunches are conversation_launches as the classifier reads them. A
+// mirror's command can be attributed to its representative conversation;
+// matching launchIndex.link, that parent cannot link to the mirror's message.
+func (c *Catalog) storedLaunches(ctx context.Context) ([]conversationLaunch, error) {
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT l.child_id,l.parent_id,l.tool_call_id,l.program,
+	 CASE WHEN t.conversation_id=l.parent_id THEN COALESCE(t.call_message_id,'') ELSE '' END message
+	 FROM conversation_launches l LEFT JOIN tool_calls t ON t.id=l.tool_call_id`)
+	if err != nil {
+		return nil, err
+	}
+	launches := []conversationLaunch{}
+	for _, row := range rows {
+		launches = append(launches, conversationLaunch{child: asString(row["child_id"]), parent: asString(row["parent_id"]), toolCall: asString(row["tool_call_id"]), program: asString(row["program"]), message: asString(row["message"])})
+	}
+	return launches, nil
+}
+
+// historicalLaunchesKept reports whether launches, derived now, link every run
+// that started by watermark as conversation_launches does, and returns those
+// of later runs that it does not hold.
+func (c *Catalog) historicalLaunchesKept(ctx context.Context, launches []conversationLaunch, watermark time.Time) ([]conversationLaunch, bool, error) {
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT l.child_id,l.parent_id,l.tool_call_id,l.program FROM conversation_launches l`)
+	if err != nil {
+		return nil, false, err
+	}
+	stored := map[string]conversationLaunch{}
+	for _, row := range rows {
+		stored[asString(row["child_id"])] = conversationLaunch{child: asString(row["child_id"]), parent: asString(row["parent_id"]), toolCall: asString(row["tool_call_id"]), program: asString(row["program"])}
+	}
+	added, children := []conversationLaunch{}, []string{}
+	for _, launch := range launches {
+		previous, ok := stored[launch.child]
+		if !ok {
+			added, children = append(added, launch), append(children, launch.child)
+			continue
+		}
+		if previous.parent != launch.parent || previous.toolCall != launch.toolCall || previous.program != launch.program {
+			return nil, false, nil
+		}
+		delete(stored, launch.child)
+	}
+	if len(stored) > 0 {
+		return nil, false, nil
+	}
+	// A run up to the watermark that gained a launch changes history too.
+	early, err := queryMapsContext(ctx, c.DB, `SELECT COUNT(*) n FROM conversations WHERE id IN (SELECT value FROM json_each(?))
+		AND (started_at IS NULL OR started_at<=?)`, jsonText(children), formatTime(watermark))
+	if err != nil || len(early) == 0 {
+		return nil, false, err
+	}
+	return added, integer(early[0]["n"]) == 0, nil
 }
 
 type storedAuthorshipQuestion struct {
@@ -585,6 +701,15 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 	// If source rows moved while the unpinned reads or chunks ran, do not bless
 	// this auxiliary state. The requested generation remains stale and its next
 	// refresh takes the full fallback, with all dirty evidence retained.
+	watermark := run.checkpoint.watermark
+	if len(results) > 0 {
+		watermark = formatTime(results[len(results)-1].Input.SentAt)
+	}
+	at, _ := parseTime(watermark)
+	graph, _, _, err := c.authorshipGraph(ctx, at)
+	if err != nil {
+		return err
+	}
 	return c.writeTransaction(ctx, "complete authorship checkpoint", func(tx *sql.Tx) error {
 		var revision string
 		if err := tx.QueryRowContext(ctx, "SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
@@ -592,11 +717,7 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 		}
 		metadata := map[string]string{"authorship_generation": generation, "authorship_built_at": now()}
 		if revision == run.checkpoint.revision {
-			watermark := run.checkpoint.watermark
-			if len(results) > 0 {
-				watermark = formatTime(results[len(results)-1].Input.SentAt)
-			}
-			for key, value := range map[string]string{"version": authorshipStateVersion, "generation": generation, "watermark": watermark, "graph": run.graph} {
+			for key, value := range map[string]string{"version": authorshipStateVersion, "generation": generation, "watermark": watermark, "graph": graph} {
 				metadata["authorship_state_"+key] = value
 			}
 			if _, err := tx.ExecContext(ctx, "UPDATE authorship_dirty SET earliest=NULL WHERE id=1 AND revision=?", revision); err != nil {
