@@ -15,10 +15,10 @@ pending library upgrades.
 ## Controls and freshness
 
 The header button beside the library disk runs **Index changes**. Settings →
-Background updates (`/settings/sync`) runs it on a schedule, the
+Background Processing (`/settings/sync`) runs it on a schedule, the
 **Frequently** cadence, for this Mac's enabled Claude, Codex, Conductor, and
-Antigravity sources. Background updates are **On** by default (a recovered
-library starts with them off); **Pause for 1 hour** and **Only when I ask**
+Antigravity sources. Background Processing is **On** by default (a recovered
+library starts with them off); **Pause for 1 hour**, **Pause for 1 day** and **Only when I ask**
 stop them. The interval is two, five (the default), fifteen or thirty
 minutes. The schedule is retained per host; an empty source selection
 (`sync_settings.sources_json`, no longer shown) means all supported, enabled
@@ -185,7 +185,7 @@ defers verification or leaves a group eligible for the next run.
 
 ## Repair and verification
 
-Settings → Background updates and integrity issues expose:
+Settings → Background Processing and integrity issues expose:
 
 - **Full recapture & reindex…** freshly copies available selected local
   evidence, then forces parser, search, ledger, and supported derivation work

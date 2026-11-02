@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { MAX_WHERE_CLAUSES, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
-import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
+import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { MetricCard, defaultRenderers, type MetricTheme } from "@pythia-software/query-table-ui";
+import { chartSeriesStyle, colorFields } from "./chart-colors";
 import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
@@ -139,6 +140,9 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
   const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, catalog.labels), [entry, originRevision, clause, catalog]);
+  // Hours of the day take the sky's colour at that hour.
+  const hourTheme: MetricTheme | undefined = colorFields(clause)[0] === "hour_of_day" && presentation.metric ? { dimensions: { [clause.groupBy[0]]: { layer: "hours",
+    overrides: presentation.metric.buckets.map(bucket => ({ value: bucket.keys[0] as AggregationBucket["keys"][number], color: chartSeriesStyle("hour_of_day", String(bucket.keys[0])).color })) } } } : undefined;
   const empty = !result.loading && !error && entry && (!entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
   const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the minimum of ${view.minSamples.toLocaleString()} ${sampleSubject(catalog, view)}.` : "";
 
@@ -150,7 +154,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
-      : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers}
+      : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers} theme={hourTheme}
         onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));

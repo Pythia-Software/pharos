@@ -132,8 +132,8 @@ const dashboards: Record<string, CardDashboard> = {
   "human-message-lengths": human("typed", "none", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
   "human-words-per-work": human("typed", "none", { view: "compare", unit: "work", reduce: "mean" }),
   "human-example-phrases": human("words", "kind"),
-  "human-specific-feedback": human("correction_share", "none", { rollingPeriods: 7 }),
-  "session-human-output": activity("human_input", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
+  "human-specific-feedback": human("typed_messages", "none", { rollingPeriods: 7 }),
+  "session-human-output": activity("messages", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
   // Carbon: usage, under the user's assumptions.
   "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", norm: true }),
   "carbon-tiers": carbon("co2", "carbon_tier", { compareAs: "share" }),

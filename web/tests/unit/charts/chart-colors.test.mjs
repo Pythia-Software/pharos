@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
-import { chartSeriesStyle, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
+import { chartSeriesStyle, colorFields, hourOfDayColors, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
 import { foldSeries } from '../../../src/chart-series';
 const bucketKey = '2026-10-01';
 const fold = (names, limit = 5, selected = [], scope = 'model_family') => {
@@ -132,4 +132,14 @@ test('concurrency bands stack with the busiest at the bottom and warm toward red
   assert.equal(chartSeriesStyle('level_band', '4+ at once').color, chartSeriesStyle('level_band', '4+').color);
   const red = color => parseInt(color.slice(1, 3), 16) - parseInt(color.slice(3, 5), 16);
   assert.ok(red(series[0].color) > red(series[3].color));
+});
+
+test('hours of the day take a distinct sky colour, whatever form their key takes', () => {
+  assert.equal(new Set(hourOfDayColors).size, 24);
+  for (const [hour, key] of [[7, '07:00'], [7, '7'], [21, '21']]) assert.equal(chartSeriesStyle('hour_of_day', key).color, hourOfDayColors[hour]);
+  assert.equal(chartSeriesStyle('hour_of_day', 'Unspecified').color, otherSeriesColor);
+  // An hour-of-day date grouping colors its timestamp field by hour.
+  const fields = colorFields({ groupBy: ['started_at'], dateGrouping: { interval: 'hourOfDay' } });
+  assert.equal(metricSeriesColor(fields, [5]), hourOfDayColors[5]);
+  assert.deepEqual(colorFields({ groupBy: ['started_at'], dateGrouping: { interval: 'day' } }), ['started_at']);
 });

@@ -20,6 +20,53 @@ export function highlightParts(text: string, spans: unknown): HighlightPart[] {
   return parts;
 }
 
+// Markdown syntax a snippet drops, as the card's first ask and latest
+// response do: fences, heading/quote/list markers, emphasis, code ticks and
+// link targets. Each pattern's groups are the characters removed.
+const markdownSyntax = [
+  /^[ \t]*((?:`{3,}|~{3,}).*)$/gm,
+  /^[ \t]*(#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)/gm,
+  /(\*\*|__|~~|`)/g,
+  /(?<![\w*])(\*)(?=\S)[^*\n]*?\S(\*)(?![\w*])/g,
+  /(\[)[^\]\n]*(\]\([^)\s]*\))/g,
+];
+
+// A snippet's highlighted parts as plain prose: markdown syntax removed and
+// whitespace, including line breaks, collapsed to single spaces.
+export function plainSnippetParts(text: string, spans: unknown): HighlightPart[] {
+  const drop = new Uint8Array(text.length);
+  for (const pattern of markdownSyntax) for (const match of text.matchAll(pattern)) {
+    let at = match.index!;
+    for (let group = 1; group < match.length; group++) {
+      const value = match[group];
+      if (value === undefined) continue;
+      const start = text.indexOf(value, at);
+      drop.fill(1, start, start + value.length);
+      at = start + value.length;
+    }
+  }
+  const parts: HighlightPart[] = [];
+  let offset = 0, space = false;
+  for (const part of highlightParts(text, spans)) {
+    let kept = "";
+    for (let index = 0; index < part.text.length; index++, offset++) {
+      if (drop[offset]) continue;
+      const char = part.text[index];
+      if (/\s/.test(char)) { space = true; continue; }
+      // A space between parts stays outside the marks.
+      const last = parts.at(-1);
+      if (space && (kept || last && !part.match)) kept += " ";
+      else if (space && last) last.text += " ";
+      space = false; kept += char;
+    }
+    if (kept) {
+      const last = parts.at(-1);
+      if (last?.match === part.match) last.text += kept; else parts.push({ text: kept, match: part.match });
+    }
+  }
+  return parts.length ? parts : [{ text: "", match: false }];
+}
+
 // /api/work/{id}/matches: a work's newest matching messages, in order with
 // its first ask and latest response, and how many messages lie between.
 export type WorkMatchItem = { kind: "first" | "match" | "last"; message_id: string; conversation_id?: string; role?: string; message_kind?: string; snippet?: string; highlights?: [number, number][]; preview?: "first" | "last" };

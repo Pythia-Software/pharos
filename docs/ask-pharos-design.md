@@ -15,6 +15,13 @@ a default selection. Production choices must reflect the available CLI's actual
 capabilities rather than the sketch's example models.
 Use a compact star in the model picker to save that default.
 
+A Fast switch, off by default, appears only for models whose CLI advertises a
+faster mode: Claude models reporting `supportsFastMode` (sent as the
+`fastMode` flag setting) and Codex models with a service tier named Fast or the
+`fast` speed tier (sent as `service_tier`, preferring the named tier's id). Antigravity offers none. Fast belongs to the selection, so
+it is saved with the default and locked with the chat; changing the model drops
+it when the new model lacks it, and changing the CLI turns it off.
+
 Without a saved selection, prefer GPT 6.1 Sol with Low effort for Codex,
 Gemini 3.8 Flash with Default effort for Antigravity, and Sonnet 5.5 with Medium
 effort for Claude. Only select models and effort levels offered by the installed
@@ -142,7 +149,10 @@ A picture-in-picture icon moves the chat from either Home or the overlay into
 a draggable, dismissible progress panel. Keep the icon in the composer footer,
 immediately before Send/Stop. While processing, show “Browse while you wait”
 below the icon with a small gap. Clear the hint when processing ends or browsing
-is chosen, including when reopening that running request. Drag the panel itself to move it, or
+is chosen, including when reopening that running request. The hint's × dismisses
+it; dismissing it or choosing picture in picture hides it for the next five
+questions (`pharos-ask-browse-hint-snoozed` in UI preferences), so it keeps
+appearing only for people who never browse. Drag the panel itself to move it, or
 tap it once to reopen the chat; drafts and active questions stay intact.
 The panel shows only the latest streamed activity or request state
 and announces a completed response, clarification, or error. Dismissing it keeps

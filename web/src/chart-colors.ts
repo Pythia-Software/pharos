@@ -53,11 +53,23 @@ function generatedColor(key: string, provider?: Provider): string {
   }
 }
 
+// The sky at each local hour: night blues from 22:00 to 04:00, a red, orange
+// and yellow dawn, day blues deepest at noon, then a yellow, orange and red
+// dusk. Night shades lighten in dark mode so they stay visible on its panels.
+const night = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
+export const hourOfDayColors = [
+  night("#1b2549", "#3d4a86"), night("#161e3d", "#36427a"), night("#11172f", "#303b6f"), night("#151c38", "#343f76"), night("#202b54", "#40508f"),
+  "#c8433a", "#e57f35", "#f0c23a",
+  "#a3cde9", "#89bfe7", "#6daee2", "#5299db", "#3d86d0", "#4891d6", "#579cdb", "#69a9df", "#7db5e2", "#93c2e5",
+  "#e3cf86", "#efb52f", "#de6f33", "#b53a3c",
+  night("#2a3768", "#4a5a9a"), night("#222d5a", "#43528f"),
+];
+export const hourOfDayColor = (hour: number) => Number.isInteger(hour) && hour >= 0 && hour < 24 ? hourOfDayColors[hour] : otherSeriesColor;
+
 export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
   if (scope.startsWith("root_")) scope = scope.slice(5);
   // Daily covers key series by their displayed label; Machine Time's palette applies to either.
-  // Hours of the day are one measure across a clock, not categories.
-  if (scope === "hour_of_day") return { color: "var(--query-tone)", order: name };
+  if (scope === "hour_of_day") return { color: hourOfDayColor(Number.parseInt(name, 10)), order: name };
   if (scope === "activity") return { color: (activities.find(item => item.label === name) ?? activityPresentation(name)).color, order: name };
   if (scope === "model_effort") {
     const separator = name.lastIndexOf(" · ");
@@ -97,6 +109,12 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     };
   }
   return { color: generatedColor(`${scope}:${name}`) };
+}
+
+// The fields whose palettes color a clause's groups. An hour-of-day date
+// grouping keys its first group by local hour, whatever field it reads.
+export function colorFields(clause: { groupBy: string[]; dateGrouping?: { interval: string } }): string[] {
+  return clause.dateGrouping?.interval === "hourOfDay" ? ["hour_of_day", ...clause.groupBy.slice(1)] : clause.groupBy;
 }
 
 // Compound metric groups retain their model palette even when their first key

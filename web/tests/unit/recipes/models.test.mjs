@@ -166,16 +166,14 @@ test("tree metric headlines surface rare outliers and open ranked conversation d
   assert.equal(recipe.cover.minSamples,undefined);
 });
 
-test("human-input scatter sums separate human and output events without context duplication", () => {
+test("messages and output scatter sums separate human and output events without context duplication", () => {
   const common={root_provider:"one",root_model_family:"alpha",root_conversation_id:"root",event_at:now-1000};
-  const rows=[{...common,id:"human-a",human_input_tokens_estimate:5,human_messages:1,output_tokens:0},{...common,id:"human-b",human_input_tokens_estimate:3,human_messages:1,output_tokens:0},{...common,id:"output-a",human_input_tokens_estimate:0,output_tokens:30},{...common,id:"output-child",human_input_tokens_estimate:0,output_tokens:20},{...common,id:"old-human",event_at:now-8*86400000,human_input_tokens_estimate:999,output_tokens:0}];
+  const rows=[{...common,id:"human-a",human_messages:1,output_tokens:0},{...common,id:"human-b",human_messages:1,output_tokens:0},{...common,id:"output-a",human_messages:0,output_tokens:30},{...common,id:"output-child",human_messages:0,output_tokens:20},{...common,id:"old-human",event_at:now-8*86400000,human_messages:1,output_tokens:0}];
   const metric=metrics("session-human-output",rows),table=destination("session-human-output",rows);
-  assert.equal(metric.buckets[0].value,8);
+  assert.equal(metric.buckets[0].value,2);
   assert.equal(metric.buckets[0].y,50);
-  assert.equal(table[0].mc_human_input,8);
-  assert.equal(table[0].mc_output,50);
   assert.equal(table[0].mc_human_messages,2);
-  assert.match(card("session-human-output").recipe.note,/estimate|Estimat/i);
+  assert.equal(table[0].mc_output,50);
   const clause=card("session-human-output").recipe.measures[0];
   assert.equal(clause.display.xScale.mode,"log");
   assert.equal(clause.display.yScale.mode,"log");

@@ -317,6 +317,23 @@ test('a provider change starts from its default and a model change keeps only an
   assert.deepEqual(start,{provider:'Codex',model:'deep',effort:'High'},'picking returns a new selection');
   assert.deepEqual(plain(model.askEffortChoices(catalogs.Codex,'missing')),['Default'],'an unknown model offers only the default effort');
 });
+test('Fast is off by default, offered per model and dropped when the model or provider lacks it', () => {
+  const catalogs={
+    Codex:{models:[{id:'luna',efforts:['Default'],fast:true},{id:'old',efforts:['Default']}]},
+    Claude:{models:[{id:'opus',efforts:['Default'],fast:true,default:true}]},
+  };
+  assert.equal(model.askDefaultSelection('Claude',catalogs.Claude).fast,undefined,'a default selection is not fast');
+  assert.equal(model.askFastAvailable(catalogs.Codex,'luna'),true);
+  assert.equal(model.askFastAvailable(catalogs.Codex,'old'),false);
+  const fast=plain(model.askPickSelection({provider:'Codex',model:'luna',effort:'Default'},'fast',true,catalogs));
+  assert.deepEqual(fast,{provider:'Codex',model:'luna',effort:'Default',fast:true});
+  assert.deepEqual(plain(model.askPickSelection(fast,'fast',false,catalogs)),{provider:'Codex',model:'luna',effort:'Default'},'turning Fast off leaves no flag');
+  assert.equal(plain(model.askPickSelection(fast,'model','old',catalogs)).fast,undefined,'a model without Fast drops it');
+  assert.equal(plain(model.askPickSelection(fast,'effort','Default',catalogs)).fast,true,'an effort change keeps Fast');
+  assert.equal(plain(model.askPickSelection(fast,'provider','Claude',catalogs)).fast,undefined,'a new provider starts with Fast off');
+  assert.equal(model.askIsDefaultSelection(fast,{provider:'Codex',model:'luna',effort:'Default'}),false,'Fast differs from a standard-speed default');
+  assert.equal(model.askIsDefaultSelection(fast,fast),true);
+});
 test('a saved selection is used while its provider exists, otherwise the first provider loads', () => {
   const providers=[{id:'Codex'},{id:'Claude'}];
   const saved={provider:'Claude',model:'retired-model',effort:'High'};
@@ -434,6 +451,14 @@ test('browsing suppresses automatic navigation even after reopening a single res
     assert.equal(model.askShowBrowseHint({pending:false,presentation}),false);
   }
   for(const presentation of ['floating','dismissed'])assert.equal(model.askShowBrowseHint({pending:true,presentation}),false);
+  assert.equal(model.askShowBrowseHint({pending:true,presentation:'modal',hint:false}),false);
+});
+test('a dismissed or used browse hint stays away for five questions, then returns', () => {
+  assert.deepEqual(plain(model.askStartBrowseHint(undefined)),{hint:true,snoozed:0});
+  let snoozed=model.askBrowseHintSnooze(),shown=[];
+  for(let i=0;i<7;i++){const start=model.askStartBrowseHint(snoozed);shown.push(start.hint);snoozed=start.snoozed;}
+  assert.deepEqual(shown,[false,false,false,false,false,true,true]);
+  assert.deepEqual(plain(model.askStartBrowseHint('junk')),{hint:true,snoozed:0});
 });
 test('floating progress reflects the latest state and distinguishes completion from waiting or cancellation', () => {
   const running=model.askFloatingState({status:'loading',message:'Comparing model usage…'});

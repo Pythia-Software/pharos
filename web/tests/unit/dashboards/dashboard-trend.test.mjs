@@ -566,13 +566,13 @@ test("a trend without a scale resolves it once, for the Scale control and the ch
 });
 
 
-test("Conversation Input and Output trends group event timestamps into local calendar periods", () => {
+test("Conversations trends group event timestamps into local calendar periods", () => {
   const events = [
-    { id: "before", event_at: "2026-10-01T05:00:00Z", human_input_tokens_estimate: 5 },
-    { id: "after", event_at: "2026-10-01T07:00:00Z", human_input_tokens_estimate: 8 },
+    { id: "before", event_at: "2026-10-01T05:00:00Z", human_messages: 5 },
+    { id: "after", event_at: "2026-10-01T07:00:00Z", human_messages: 8 },
   ];
   for (const period of ["day", "week", "month"]) {
-    const query = trendQuery(conversationAnalysisCatalog, { metric: "human_input", split: "none", period }, [], { now, zone: "America/Denver" });
+    const query = trendQuery(conversationAnalysisCatalog, { metric: "messages", split: "none", period }, [], { now, zone: "America/Denver" });
     const result = core.evaluateMetrics(events, query.query, schemas.conversation_activity, { now }).metrics[0];
     assert.equal(result.error, undefined, period);
     assert.deepEqual(result.buckets.map(bucket => bucket.value).sort((a, b) => a - b), period === "week" ? [13] : [5, 8], period);

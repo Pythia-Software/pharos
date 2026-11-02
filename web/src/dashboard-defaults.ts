@@ -15,7 +15,7 @@ export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model
 const daily = { period: "day", nonzero: true } as const;
 export const dashboardDefaults: Record<string, AnalysisState> = {
   calls: { metric: "calls", split: "tool_name", view: "compare" },
-  activity: { metric: "human_input", split: "provider_model", ...daily },
+  activity: { metric: "conversations", split: "provider_model", ...daily },
   tokens: { ...defaultTokenChart, ...daily },
   human: { metric: "typed", split: "none", ...daily },
   parallelism: { metric: "agent_hours", split: "level_band", ...daily },

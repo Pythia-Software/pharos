@@ -2,22 +2,22 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
@@ -551,6 +551,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:069af350652f6234:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model, effort and speed as your default\">",
+      "contract": "editing",
+      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
       "key": "fragment:06f5bec8efd6e3d2:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -579,11 +588,11 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:2095e9c1516aba27:0",
+      "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model and effort as your default\">",
+      "control": "<button type=\"button\" class=\"pharos-picker-row pharos-fast-toggle cursor-interaction\" role=\"switch\" aria-checked=\"false\" data-tooltip=\"Faster answers; the CLI may bill this mode at a higher rate\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -777,6 +786,15 @@
       "disclosure": true,
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:a9ad79f64dbaf85e:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-browse-hint-dismiss cursor-interaction\" aria-label=\"Dismiss browse hint\" title=\"Don’t show for a while\">",
+      "contract": "settings",
+      "reason": "Snoozes the Ask browse hint in UI preferences; not view state."
     },
     {
       "key": "fragment:ad63fe0a924cd37a:0",
@@ -5859,15 +5877,6 @@
       "owner": "copyText",
       "tag": "textarea",
       "control": "\"textarea\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "cd30d34dcc371e1b:0",
-      "file": "web/src/index.tsx",
-      "owner": "FindMatch",
-      "tag": "button",
-      "control": "onClick={() => openFindHit(hit)}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
