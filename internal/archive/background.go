@@ -84,8 +84,10 @@ type backgroundItem struct {
 	requiresAgentEvents bool
 }
 
-// backgroundItems in the order they run within a pass: new data first, then
-// the analysis chain's stages in chain order, then the rest.
+// backgroundItems in the order they run within a pass (runBackgroundItems),
+// which is the order Settings and the status panel list them: new data and
+// the other standalone work first, then the analysis chain's items in chain
+// order.
 var backgroundItems = []backgroundItem{
 	{ID: "conversations", Label: "New conversations", Verb: "Adding new conversations", Feeds: "Search, Home and Work pages", Cadence: cadenceFrequent, Fixed: true,
 		Kinds: []string{"index.changes.automatic"}, Why: "It reads only what changed since the last check."},
@@ -95,14 +97,18 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"background.capture/sources"}, Why: "These sources can’t be checked for small changes, so each update reads them in full."},
 	{ID: "preserve", Label: "Preserve originals", Verb: "Preserving originals", Feeds: "Recovery, and history from your other Macs", Cadence: cadenceDaily,
 		Kinds: []string{"background.capture/preserve"}, Why: "Copies this Mac’s transcripts into the library, so they survive tools deleting them, and indexes what your other Macs captured."},
+	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying queued inputs", Feeds: "Integrity checks deferred by quick indexing", Cadence: cadenceHourly,
+		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
+	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
+		Kinds: []string{"library.upgrade"}, Why: "Runs only when a Pharos update needs it."},
+	{ID: "backup", Label: "Back up", Verb: "Backing up", Feeds: "Recovery", Cadence: cadenceDaily, OptIn: true,
+		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole catalog, so it is off unless you choose Daily."},
 	{ID: "repositories", Label: "Repositories & merges", Verb: "Linking repositories", Feeds: "Work pages and repository filters", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
 	{ID: "writing", Label: "Your writing", Verb: "Updating your writing", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Decides which messages you wrote. Today it reads all of your messages each time."},
-	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying queued inputs", Feeds: "Integrity checks deferred by quick indexing", Cadence: cadenceHourly,
-		Kinds: []string{"index.verify"}, Why: "Checks a bounded batch of larger inputs once the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -111,10 +117,6 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
-	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
-		Kinds: []string{"library.upgrade"}, Why: "Runs only when a Pharos update needs it."},
-	{ID: "backup", Label: "Back up", Verb: "Backing up", Feeds: "Recovery", Cadence: cadenceDaily, OptIn: true,
-		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole catalog, so it is off unless you choose Daily."},
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
