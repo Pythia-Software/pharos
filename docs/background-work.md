@@ -1479,8 +1479,13 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   planned; the sampler starts no goroutine. Measured cost: about 20 µs of CPU for a
   sample of ten processes and its summary, 0.0013 % of one core
   (`TestResourceSamplingIsCheap`).
-- **What.** CPU is the delta of own plus exited children's user and system
-  time over the wall time between two readings, as % of one core (`null`
+- **What.** On macOS the kernel process tree adds active descendants (including
+  labeling CLIs and their workers) as separate rows with process names and PIDs,
+  attributed to their owning library. CPU uses each process's own user and system
+  time so exiting workers are not counted again through their parent. Work that
+  starts and exits between samples can be missed. If the process tree is
+  unavailable, the fallback includes exited child CPU in the parent. CPU is
+  the delta over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
   Monitor's figure); disk is the delta of `ri_diskio_bytesread` plus
   `ri_diskio_byteswritten` over the same interval, in bytes per second
