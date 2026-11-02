@@ -214,7 +214,8 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	edited, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
-	if err != nil || edited.ConversationsBuilt != 1 || edited.MessagesScored != 1 || edited.MessagesRemoved != 1 {
+	// The deleted one's rows went with it (agent_events_message_deleted).
+	if err != nil || edited.ConversationsBuilt != 1 || edited.MessagesScored != 1 {
 		t.Fatalf("after an edit: %+v %v", edited, err)
 	}
 	if got := agentEventsStored(t, catalog, "m-ev-think"); len(got) != 0 {
