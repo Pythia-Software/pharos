@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState, toMetricQuery } from '@pythia-software/query-table-core';
 import toolCalls from '../../../../schemas/tool_calls.schema.json';
-import { refreshTodayHost, canonicalDraft, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
+import { refreshTodayHost, canonicalDraft, changeLibrarySearch, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
 import { hostQueryV3Transport } from '../../../src/host-query-transport';
 import { execution, queryCapabilities, answerQuery } from '../../support/query-server.mjs';
 import { freshRecordKeywordSearch } from '../../../src/record-keyword-model';
@@ -94,6 +94,19 @@ test('a Search save keeps its phrase, user-message scope and Conversations view'
   assert.deepEqual(readLibraryHost(withoutLibrarySearch(state)), { kind: 'text', text: null, file: '', fileCase: false, view: 'conversation' });
   assert.deepEqual(readLibraryHost(libraryHostQuery.defaults), { kind: 'text', text: null, file: '', fileCase: false, view: 'table' });
   assert.equal(libraryFind(libraryHostQuery.defaults), '');
+});
+
+test('adding a Search content search switches to Conversations; editing or removing it keeps the chosen view', () => {
+  const draft = text => { const value = emptyTextSearch(); value.root.children = [{ ...newRule(text), kind: 'phrase' }]; return value; };
+  const added = changeLibrarySearch(libraryHostQuery.defaults, { kind: 'text', text: draft('running the dashboard') });
+  assert.equal(readLibraryHost(added).view, 'conversation');
+  assert.equal(readLibraryHost(changeLibrarySearch(libraryHostQuery.defaults, { kind: 'file', file: 'go.mod' })).view, 'conversation');
+  // The person switched back to Table: a new phrase keeps it.
+  const table = libraryHostState({ ...readLibraryHost(added), view: 'table' });
+  assert.equal(readLibraryHost(changeLibrarySearch(table, { text: draft('browser') })).view, 'table');
+  assert.equal(readLibraryHost(changeLibrarySearch(table, { text: null })).view, 'table');
+  // No search added, no view change.
+  assert.equal(readLibraryHost(changeLibrarySearch(libraryHostQuery.defaults, { file: '' })).view, 'table');
 });
 
 test('Search file and URL searches, and older keyword links, normalize to their canonical parameters', () => {

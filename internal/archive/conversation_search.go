@@ -36,6 +36,9 @@ type libraryHit struct {
 	Role             string `json:"role,omitempty"`
 	MessageKind      string `json:"message_kind,omitempty"`
 	Snippet          string `json:"snippet,omitempty"`
+	// Highlights are the query's matches in Snippet, as UTF-16 offsets so a
+	// browser can mark them. Only Library rows carry them (attach).
+	Highlights [][2]int `json:"highlights,omitempty"`
 	Path             string `json:"path,omitempty"`
 	OldPath          string `json:"old_path,omitempty"`
 	URL              string `json:"url,omitempty"`
