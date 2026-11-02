@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-const safetyVersion = "safety-v1"
+const safetyVersion = "safety-v2"
 const safetyWindowDays = 28
 
 type safetyRule struct {
@@ -131,9 +131,10 @@ var safetyValueOptions = map[string][]string{
 	"psql":    {"-c", "-d", "-f", "-h", "-p", "-U", "-v", "-P", "-o", "--command", "--dbname", "--file", "--host", "--port", "--username", "--set", "--pset", "--output"},
 	"mysql":   {"-e", "-D", "-h", "-u", "-P", "--execute", "--database", "--host", "--user", "--port", "--password"},
 	"chmod":   {"--reference"}, "chown": {"--reference", "--from"},
-	"pkill":  {"-F", "-u", "-U", "-P", "-g", "-G", "-s", "-t", "--pidfile", "--signal"},
-	"aws":    {"--profile", "--region", "--endpoint-url", "--query", "--output", "--exclude", "--include"},
-	"gcloud": {"--project", "--account", "--configuration", "--format", "--filter", "--flags-file"},
+	"pkill":   {"-F", "-u", "-U", "-P", "-g", "-G", "-s", "-t", "-O", "--pidfile", "--signal", "--euid", "--uid", "--parent", "--pgroup", "--group", "--session", "--terminal", "--older", "--ns", "--nslist", "--cgroup", "--env"},
+	"killall": {"-u", "-t", "-s", "--user", "--signal", "--older-than", "--younger-than", "--context"},
+	"aws":     {"--profile", "--region", "--endpoint-url", "--query", "--output", "--exclude", "--include"},
+	"gcloud":  {"--project", "--account", "--configuration", "--format", "--filter", "--flags-file"},
 }
 
 func safetyParseOptions(program string, args []string) (flags, operands []string) {
@@ -176,6 +177,259 @@ func safetyParseOptions(program string, args []string) (flags, operands []string
 
 func safetyLiteralSelection(value string) bool {
 	return value != "" && !strings.ContainsAny(value, "$`*?[]{}\n\r") && !strings.HasPrefix(value, "~")
+}
+
+// Retain selection options and their values, including unknown switches.
+// Option order is retained: negations and filter sequences can change scope.
+// Files referenced by an option are never read to establish historical selection.
+type safetyOptionScope struct {
+	flags, values, operands, ordered []string
+	resolved                         bool
+}
+
+func safetyScopedOptions(program string, args []string, aliases map[string]string) safetyOptionScope {
+	out := safetyOptionScope{resolved: true}
+	add := func(name, value string, hasValue bool) {
+		if alias := aliases[name]; alias != "" {
+			name = alias
+		}
+		if hasValue {
+			entry := name + "=" + jsonText(value)
+			out.values = append(out.values, entry)
+			out.ordered = append(out.ordered, entry)
+			out.resolved = out.resolved && safetyLiteralSelection(value)
+		} else {
+			out.flags = append(out.flags, name)
+			out.ordered = append(out.ordered, name)
+			out.resolved = out.resolved && safetyLiteralSelection(name)
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out.operands = append(out.operands, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			out.operands = append(out.operands, a)
+			continue
+		}
+		value := func(attached string) string {
+			if attached != "" {
+				return attached
+			}
+			if i+1 < len(args) {
+				i++
+				return args[i]
+			}
+			out.resolved = false
+			return ""
+		}
+		if strings.HasPrefix(a, "--") {
+			name, v, attached := strings.Cut(a, "=")
+			if slices.Contains(safetyValueOptions[program], name) {
+				if !attached {
+					v = value("")
+				}
+				add(name, v, true)
+			} else {
+				add(a, "", false)
+			}
+			continue
+		}
+		for j := 1; j < len(a); j++ {
+			name := "-" + a[j:j+1]
+			if slices.Contains(safetyValueOptions[program], name) {
+				add(name, value(a[j+1:]), true)
+				break
+			}
+			add(name, "", false)
+		}
+	}
+	for _, value := range out.operands {
+		out.resolved = out.resolved && safetyLiteralSelection(value)
+	}
+	return out
+}
+
+func (scope safetyOptionScope) identity() string {
+	return "options=" + jsonText(scope.ordered)
+}
+
+var safetySignal = regexp.MustCompile(`^-(?:(?:SIG)?(?:HUP|INT|QUIT|ILL|TRAP|ABRT|IOT|BUS|FPE|KILL|USR1|SEGV|USR2|PIPE|ALRM|TERM|CHLD|CLD|CONT|STOP|TSTP|TTIN|TTOU|URG|XCPU|XFSZ|VTALRM|PROF|WINCH|IO|POLL|SYS)|[0-9]+)$`)
+
+func safetyProcessScope(program string, args []string) safetyOptionScope {
+	args = slices.Clone(args)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if safetySignal.MatchString(arg) {
+			args[i] = "--signal=" + strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "SIG")
+			continue
+		}
+		// Signal-looking option values are data (for example a PID file
+		// named -9), not another signal selector.
+		name, _, attached := strings.Cut(arg, "=")
+		if strings.HasPrefix(arg, "--") {
+			if slices.Contains(safetyValueOptions[program], name) && !attached {
+				i++
+			}
+		} else if strings.HasPrefix(arg, "-") {
+			for j := 1; j < len(arg); j++ {
+				if slices.Contains(safetyValueOptions[program], "-"+arg[j:j+1]) {
+					if j == len(arg)-1 {
+						i++
+					}
+					break
+				}
+			}
+		}
+	}
+	aliases := map[string]string{"-F": "--pidfile", "-f": "--full", "-x": "--exact", "-i": "--ignore-case", "-v": "--inverse", "-n": "--newest", "-o": "--oldest", "-u": "--euid", "-U": "--uid", "-P": "--parent", "-g": "--pgroup", "-G": "--group", "-s": "--session", "-t": "--terminal", "-O": "--older"}
+	if program == "killall" {
+		aliases = map[string]string{"-u": "--user", "-s": "--signal"}
+	}
+	scope := safetyScopedOptions(program, args, aliases)
+	for _, value := range scope.values {
+		if strings.HasPrefix(value, "--pidfile=") || strings.HasPrefix(value, "--ns=") {
+			scope.resolved = false
+		}
+	}
+	return scope
+}
+
+func (scope safetyOptionScope) processProbe() bool {
+	signal := "TERM"
+	for _, value := range scope.values {
+		if raw, ok := strings.CutPrefix(value, "--signal="); ok {
+			_ = json.Unmarshal([]byte(raw), &signal)
+		}
+	}
+	return signal != "" && strings.TrimLeft(signal, "0") == ""
+}
+
+func safetyRsyncScope(args []string, cwd, root string) safetyOptionScope {
+	scope := safetyScopedOptions("rsync", args, map[string]string{"-f": "--filter", "-e": "--rsh", "-B": "--block-size", "-T": "--temp-dir", "--del": "--delete-during"})
+	for i, src := range scope.operands[:max(0, len(scope.operands)-1)] {
+		value, resolved, _ := safetyPath(src, cwd, root)
+		// A source directory's trailing slash changes the transfer selection.
+		if strings.HasSuffix(src, "/") && value != "/" {
+			value += "/"
+		}
+		scope.operands[i] = value
+		scope.resolved = scope.resolved && resolved
+	}
+	for _, value := range scope.values {
+		name, raw, _ := strings.Cut(value, "=")
+		if slices.Contains([]string{"--exclude-from", "--include-from", "--files-from"}, name) {
+			scope.resolved = false
+		}
+		if name == "--filter" {
+			var rule string
+			_ = json.Unmarshal([]byte(raw), &rule)
+			kind := ""
+			if words := strings.Fields(rule); len(words) > 0 {
+				kind = words[0]
+			}
+			kind, _, _ = strings.Cut(kind, ",")
+			if strings.HasPrefix(kind, ".") || strings.HasPrefix(kind, ":") || kind == "merge" || kind == "dir-merge" {
+				scope.resolved = false
+			}
+		}
+	}
+	if slices.Contains(scope.flags, "-F") {
+		scope.resolved = false
+	}
+	return scope
+}
+
+// Track separate directories for successful and failed paths. Joining paths
+// with different directories yields unknown, rather than choosing one branch.
+type safetyDirectoryState struct {
+	success, failure string
+	uncertain        bool
+}
+
+func safetyDirectoryJoin(a, b string) string {
+	if a == b {
+		return a
+	}
+	return ""
+}
+func (state *safetyDirectoryState) input(op string) string {
+	if op == "&&" {
+		return state.success
+	}
+	if op == "||" {
+		return state.failure
+	}
+	return safetyDirectoryJoin(state.success, state.failure)
+}
+func (state *safetyDirectoryState) apply(op, success, failure string) {
+	if op == "&&" {
+		failure = safetyDirectoryJoin(state.failure, failure)
+	}
+	if op == "||" {
+		success = safetyDirectoryJoin(state.success, success)
+	}
+	state.success, state.failure = success, failure
+}
+
+func safetyDirectories(parsed shellCommand, cwd, root string) []string {
+	states := map[string]*safetyDirectoryState{"": {success: cwd, failure: cwd}}
+	var scopeState func(string, string) *safetyDirectoryState
+	scopeState = func(scope, op string) *safetyDirectoryState {
+		if state := states[scope]; state != nil {
+			return state
+		}
+		parentScope := strings.TrimSuffix(scope, "/")
+		parentScope = parentScope[:strings.LastIndex(parentScope, "/")+1]
+		parent := scopeState(parentScope, op)
+		input := parent.input(op)
+		// A subshell may succeed or fail, but cannot change its parent's cwd.
+		parent.apply(op, input, input)
+		state := &safetyDirectoryState{success: input, failure: input, uncertain: parent.uncertain}
+		states[scope] = state
+		return state
+	}
+	directories := make([]string, len(parsed.Segments))
+	for i, segment := range parsed.Segments {
+		state := scopeState(segment.Scope, segment.Operator)
+		words := shellWords(segment.Text)
+		if len(words) > 0 && slices.Contains([]string{"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "{", "}", "!"}, words[0]) {
+			state.uncertain = true
+		}
+		input := state.input(segment.Operator)
+		if state.uncertain {
+			input = ""
+		}
+		directories[i] = input
+		success, failure := input, input
+		argv := safetyArgv(segment)
+		if segment.Program == "cd" && len(argv) > 0 {
+			ops := safetyOperands(argv[1:])
+			success = ""
+			if len(ops) == 1 && !state.uncertain {
+				if value, resolved, _ := safetyPath(ops[0], input, root); resolved {
+					success = value
+				}
+			}
+		} else if slices.Contains([]string{"pushd", "popd", "source", ".", "eval"}, segment.Program) {
+			success, failure = "", ""
+		}
+		// Non-final pipeline stages and background launches are isolated.
+		// Some shells run the final pipeline builtin in the parent, so its
+		// directory effect is unknown without the shell's execution context.
+		if i+1 < len(parsed.Segments) && slices.Contains([]string{"|", "&"}, parsed.Segments[i+1].Operator) {
+			success, failure = input, input
+		} else if segment.Operator == "|" && segment.Program == "cd" {
+			success, failure = "", ""
+		}
+		state.apply(segment.Operator, success, failure)
+	}
+	return directories
 }
 
 // Mask strings, quoted identifiers and comments before inspecting each SQL
@@ -551,22 +805,15 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 	commands := safetyCommands(call)
 	for _, command := range commands {
 		parsed := parseShellCommand(command.text)
-		cwd := command.cwd
-		cwdConditional := false
-		for _, segment := range parsed.Segments {
+		directories := safetyDirectories(parsed, command.cwd, call.Root)
+		for index, segment := range parsed.Segments {
+			cwd := directories[index]
 			argv := safetyArgv(segment)
 			if len(argv) == 0 {
 				continue
 			}
 			program, args := segment.Program, argv[1:]
 			if program == "cd" {
-				ops := safetyOperands(args)
-				if len(ops) == 1 {
-					cwd, _, _ = safetyPath(ops[0], cwd, call.Root)
-				} else {
-					cwd = ""
-				}
-				cwdConditional = true
 				continue
 			}
 			flags, ops := safetyParseOptions(program, args)
@@ -577,9 +824,6 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				continue
 			}
 			if ((program == "git" && segment.Subcommand == "push") || program == "rsync") && safetyFlag(flags, "n", "--dry-run") {
-				continue
-			}
-			if (program == "pkill" || program == "killall") && slices.Contains(flags, "-0") {
 				continue
 			}
 			emit := func(rule, subject, breadth string, resolved bool) {
@@ -601,7 +845,7 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 					identity += ":unresolved:" + call.ID
 				}
 				id := stableID("safety", rule, target, defaultString(nilIfEmpty(call.Host), call.Workspace), identity, breadth)
-				conditional := len(parsed.Segments) > 1 || len(commands) > 1 || cwdConditional || parsed.IsBackgrounded || segment.Operator != ""
+				conditional := len(parsed.Segments) > 1 || len(commands) > 1 || parsed.IsBackgrounded || segment.Operator != ""
 				completed := !conditional && call.Status == "ok" && call.Exit.Valid && call.Exit.Int64 == 0 && call.ResultMessage != ""
 				outcome := "Execution and effects need context"
 				if completed {
@@ -614,9 +858,15 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				if call.Conversation != "" {
 					params = "?conversation=" + url.QueryEscape(call.Conversation) + "&message=" + url.QueryEscape(call.Message)
 				}
+				basis := command.basis
+				if cwd == "" {
+					basis += "; shell directory unresolved"
+				} else if cwd != command.cwd {
+					basis += "; directory selected by a successful cd path"
+				}
 				result = append(result, safetyCandidate{ID: id, Rule: rule, Target: target, Label: defaultString(nilIfEmpty(label), "Repository"), Subject: subject, Repository: call.Repository, Completion: completed,
 					Evidence: []safetyEvidence{{ID: stableID("safety-evidence", call.ID, segment.Text, cwd), CallID: call.ID, Workspace: call.Workspace, Conversation: call.Conversation, Message: call.Message, ResultMessage: call.ResultMessage, At: call.At,
-						Command: clipText(safetyRedact(segment.Text), 1000), CWD: safetyRedact(cwd), CWDBasis: command.basis, Status: call.Status, Outcome: outcome, Conditional: conditional, Path: "/work/" + call.Workspace + params}}})
+						Command: clipText(safetyRedact(segment.Text), 1000), CWD: safetyRedact(cwd), CWDBasis: basis, Status: call.Status, Outcome: outcome, Conditional: conditional, Path: "/work/" + call.Workspace + params}}})
 			}
 			emitPath := func(rule, value, breadth string) {
 				subject, resolved, _ := safetyPath(value, cwd, call.Root)
@@ -668,6 +918,19 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				if destination != "" {
 					ops = append(ops, destination)
 				}
+				var rsyncScope safetyOptionScope
+				if program == "rsync" {
+					rsyncScope = safetyRsyncScope(args, cwd, call.Root)
+					// Use parsed operands so attached filter/transport values
+					// cannot become source paths or deletion options.
+					_, ops = safetyParseOptions(program, args)
+					prunesDestination = false
+					for _, flag := range flags {
+						if slices.Contains([]string{"--delete", "--del", "--delete-before", "--delete-during", "--delete-delay", "--delete-after", "--delete-excluded", "--delete-missing-args"}, strings.SplitN(flag, "=", 2)[0]) {
+							prunesDestination = true
+						}
+					}
+				}
 				if len(ops) >= 2 {
 					for _, src := range ops[:len(ops)-1] {
 						if safetyCredential.MatchString(src) {
@@ -676,7 +939,9 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 						}
 					}
 					if prunesDestination {
-						emitPath("boundary-delete", ops[len(ops)-1], "destination-pruning")
+						subject, resolved, _ := safetyPath(ops[len(ops)-1], cwd, call.Root)
+						sources := rsyncScope.operands[:len(rsyncScope.operands)-1]
+						emit("boundary-delete", subject, "destination-pruning:"+rsyncScope.identity()+";sources="+jsonText(sources), resolved && rsyncScope.resolved)
 					}
 				}
 			case "sqlite3", "psql", "mysql":
@@ -735,6 +1000,22 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 						}
 						subject = "push " + strings.Join(refs, " ")
 					}
+					selection := []string{}
+					for _, flag := range flags {
+						if flag == "-f" {
+							flag = "--force"
+						}
+						if flag == "--branches" {
+							flag = "--all"
+						}
+						name, _, _ := strings.Cut(flag, "=")
+						if slices.Contains([]string{"--tags", "--all", "--mirror", "--follow-tags", "--prune", "--force", "--force-with-lease", "--force-if-includes", "--no-tags", "--no-all", "--no-mirror", "--no-follow-tags", "--no-prune", "--no-force", "--no-force-with-lease", "--no-force-if-includes"}, name) {
+							selection = append(selection, flag)
+						}
+					}
+					if len(selection) > 0 {
+						breadth += ":selection=" + jsonText(selection)
+					}
 					emit("remote-history", gitRoot+" · "+subject, breadth, gitResolved)
 				} else if verb == "push" && (slices.Contains(flags, "--tags") || strings.Contains(strings.Join(ops, " "), "refs/tags/")) {
 					emit("publication", gitRoot+" · "+subject, "tags", gitResolved)
@@ -777,7 +1058,11 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 					}
 				}
 			case "pkill", "killall":
-				emit("process", cwd+" · "+strings.Join(ops, " "), "name-selector", cwd != "")
+				scope := safetyProcessScope(program, args)
+				if scope.processProbe() {
+					continue
+				}
+				emit("process", cwd+" · "+strings.Join(scope.operands, " "), program+":"+scope.identity(), path.IsAbs(cwd) && scope.resolved)
 			case "chmod", "chown":
 				if len(ops) >= 2 {
 					for _, a := range ops[1:] {

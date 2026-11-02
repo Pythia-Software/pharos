@@ -46,6 +46,9 @@ func TestParseShellCommand(t *testing.T) {
 	if !parseShellCommand("sleep 10 &").IsBackgrounded || parseShellCommand("go test 2>&1").IsBackgrounded {
 		t.Fatal("background detection")
 	}
+	if !parseShellCommand("(sleep 10 &)").IsBackgrounded {
+		t.Fatal("nested background launch must retain uncertain completion")
+	}
 }
 
 func writeFixture(t *testing.T, root, name string, lines []string) {

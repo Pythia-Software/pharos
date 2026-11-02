@@ -43,6 +43,8 @@ func TestSafetySelection(t *testing.T) {
 		{"rsync --delete-missing-args source/ /outside/", "boundary-delete", "/outside"},
 		{"gsutil -m rm -r gs://example/prefix", "cloud-delete", "gs://example/prefix"},
 		{"pkill -f pharos", "process", ""},
+		{"pkill -10 worker", "process", ""},
+		{"killall -10 worker", "process", ""},
 		{"chmod 600 /Users/a/.config/secret", "permissions", "/Users/a/.config/secret"},
 		{"hdiutil detach /Volumes/Test", "disk-image", ""},
 		{"diskutil eraseDisk APFS scratch /dev/disk7", "system", ""},
@@ -92,6 +94,7 @@ func TestSafetySelection(t *testing.T) {
 		"curl -d-XDELETE -G https://example.com", "git push -o :old-branch origin HEAD", "gh -R owner/repo pr view 17", "gh --repo owner/repo release view v1",
 		"curl --help -XDELETE https://example.com", "curl -XDELETE --help https://example.com", "git clean -fd --help", "git clean -fd --dry-run", "gh pr merge 17 --help",
 		"curl -h -XDELETE https://example.com", "gh pr merge 17 -h", `sqlite3 -help /Users/a/data.db 'DROP TABLE steps;'`,
+		"pkill --signal=0 worker", "pkill --signal 0 worker", "killall --signal=0 worker",
 		`sqlite3 /Users/a/data.db "SELECT 'hello; DELETE FROM steps';"`,
 	} {
 		base.Command = command
@@ -157,6 +160,10 @@ func TestSafetyIdentityAndExecution(t *testing.T) {
 	if selectSafetyCall(call)[0].Completion {
 		t.Fatal("background launch is not command completion")
 	}
+	call.Command = "(rm -rf /outside &)"
+	if selectSafetyCall(call)[0].Completion {
+		t.Fatal("a subshell must not turn a background launch into completion")
+	}
 	call.Command = "rm -rf build"
 	call.Input = `{"input":{"cmd":"rm -rf build","workdir":"/another/checkout"}}`
 	item = selectSafetyCall(call)[0]
@@ -170,6 +177,12 @@ func TestSafetyIdentityAndExecution(t *testing.T) {
 		{"gh -R owner/repo pr merge 17", "gh pr merge 17 --repo=owner/repo", "gh -Rowner/repo pr merge 17"},
 		{"git clean -fd --exclude=keep", "git clean -fdekeep", "git clean -fd -e keep"},
 		{"cd /a && gh -R owner/repo pr merge 17", "cd /b && gh --repo owner/repo pr merge 17"},
+		{"pkill -u501 -x worker", "pkill --euid=501 --exact worker"},
+		{"pkill -TERM -x worker", "pkill --signal=TERM --exact worker"},
+		{"rsync --delete --exclude keep source/ /outside/", "rsync --delete --exclude=keep source/ /outside/"},
+		{"rsync --delete -f '- keep' source/ /outside/", "rsync --delete --filter='- keep' source/ /outside/"},
+		{"rsync --del source/ /outside/", "rsync --delete-during source/ /outside/"},
+		{"git push -f --tags origin", "git push --force --tags origin"},
 	} {
 		identity := ""
 		for _, command := range commands {
@@ -195,6 +208,17 @@ func TestSafetyIdentityAndExecution(t *testing.T) {
 		`git clean -fd -- "$PATHS"`,
 		`gh -R "$REPO" pr merge 17`,
 		`gh pr merge --squash`,
+		`pkill -F /tmp/workers.pid worker`,
+		`pkill -u "$UID" worker`,
+		`rsync --delete --exclude-from filters source/ /outside/`,
+		`rsync --delete --include-from filters source/ /outside/`,
+		`rsync --delete --files-from paths source/ /outside/`,
+		`rsync --delete --filter='. filters' source/ /outside/`,
+		`rsync --delete --filter='merge,r filters' source/ /outside/`,
+		`rsync --delete -F source/ /outside/`,
+		`rsync --delete --max-delete="$LIMIT" source/ /outside/`,
+		`cd /outside; rm -rf cache`,
+		`cd /outside && echo ok; rm -rf cache`,
 	} {
 		call.Command, call.ID = command, "first"
 		first := selectSafetyCall(call)
@@ -213,6 +237,23 @@ func TestSafetyIdentityAndExecution(t *testing.T) {
 		{`cd /other/a && gh pr merge 17 --squash`, `cd /other/b && gh pr merge 17 --squash`},
 		{`cd /other/a && gh release delete v1`, `cd /other/b && gh release delete v1`},
 		{`git -C /other/a push --force-with-lease origin HEAD`, `git -C /other/b push --force-with-lease origin HEAD`},
+		{`git push --force --tags origin`, `git push --mirror origin`},
+		{`git push --force --tags origin`, `git push --force --all origin`},
+		{`git push --force origin HEAD`, `git push --force --follow-tags origin HEAD`},
+		{`git push --force origin HEAD`, `git push --force --prune origin HEAD`},
+		{`git push --force --tags --no-tags origin`, `git push --force --no-tags --tags origin`},
+		{`pkill -u 501 -x worker`, `pkill -f worker`},
+		{`pkill -u 501 worker`, `pkill worker`},
+		{`pkill -x worker`, `pkill worker`},
+		{`pkill -TERM worker`, `pkill -KILL worker`},
+		{`killall -u 501 worker`, `killall worker`},
+		{`killall -TERM worker`, `killall -KILL worker`},
+		{`rsync --delete --exclude keep source/ /outside/`, `rsync --delete source/ /outside/`},
+		{`rsync --delete --exclude keep source/ /outside/`, `rsync --delete-excluded source/ /outside/`},
+		{`rsync --delete source/ /outside/`, `rsync --delete other/ /outside/`},
+		{`rsync --delete source/ /outside/`, `rsync --delete source /outside/`},
+		{`rsync --delete -f '- keep' -f '+ keep' source/ /outside/`, `rsync --delete -f '+ keep' -f '- keep' source/ /outside/`},
+		{`rsync --delete --recursive --no-recursive source/ /outside/`, `rsync --delete --no-recursive --recursive source/ /outside/`},
 	} {
 		call.ID, call.Command = "first", commands[0]
 		first := selectSafetyCall(call)
@@ -222,6 +263,33 @@ func TestSafetyIdentityAndExecution(t *testing.T) {
 			t.Errorf("different resources must not share a handoff: %q / %q", commands[0], commands[1])
 		}
 	}
+	t.Run("directory control flow", func(t *testing.T) {
+		for _, test := range []struct{ command, subject, rule, cwd string }{
+			{`cd /outside || rm -rf cache`, "/repo/cache", "delete", "/repo"},
+			{`cd /outside && rm -rf cache`, "/outside/cache", "boundary-delete", "/outside"},
+			{`cd /outside; rm -rf cache`, "cache", "boundary-delete", ""},
+			{`cd /outside && echo ok; rm -rf cache`, "cache", "boundary-delete", ""},
+			{`cd /outside && echo ok || rm -rf cache`, "cache", "boundary-delete", ""},
+			{`(cd /outside && echo ok); rm -rf cache`, "/repo/cache", "delete", "/repo"},
+			{`(cd /outside && rm -rf cache)`, "/outside/cache", "boundary-delete", "/outside"},
+			{`((cd /outside && echo ok)); rm -rf cache`, "/repo/cache", "delete", "/repo"},
+			{`(cd /outside && echo ok); (rm -rf cache)`, "/repo/cache", "delete", "/repo"},
+			{`cd /outside && (cd child && echo ok) && rm -rf cache`, "/outside/cache", "boundary-delete", "/outside"},
+			{`cd /outside & rm -rf cache`, "/repo/cache", "delete", "/repo"},
+			{`cd /outside | rm -rf cache`, "/repo/cache", "delete", "/repo"},
+			{`echo ok | cd /outside; rm -rf cache`, "cache", "boundary-delete", ""},
+			{`cd "$CHECKOUT" && rm -rf cache`, "cache", "boundary-delete", ""},
+			{`if test -d /outside; then cd /outside; fi; rm -rf cache`, "cache", "boundary-delete", ""},
+			{`! cd /outside || rm -rf cache`, "cache", "boundary-delete", ""},
+			{`cd /outside; rm -rf /repo/cache`, "/repo/cache", "delete", ""},
+		} {
+			call := safetyCall{ID: "directory", Root: "/repo", Command: test.command}
+			items := selectSafetyCall(call)
+			if len(items) != 1 || items[0].Subject != test.subject || items[0].Rule != test.rule || items[0].Evidence[0].CWD != test.cwd {
+				t.Errorf("%s: %+v", test.command, items)
+			}
+		}
+	})
 }
 
 func safetyTestCall(t *testing.T, c *Catalog, id, command, at string, completed bool) {
@@ -255,6 +323,11 @@ func TestSafetyHandoffLifecycle(t *testing.T) {
 		{`git -C "$CHECKOUT" push --force-with-lease origin HEAD`, `git -C "$CHECKOUT" push --force-with-lease origin HEAD`},
 		{`git push --force-with-lease origin "$REF"`, `git push --force-with-lease origin "$REF"`},
 		{`cd /other/a && gh pr merge 17 --squash`, `cd /other/b && gh pr merge 17 --squash`},
+		{`git push --force --tags origin`, `git push --mirror origin`},
+		{`pkill -u 501 -x worker`, `pkill -f worker`},
+		{`rsync --delete --exclude keep source/ /outside/`, `rsync --delete-excluded source/ /outside/`},
+		{`rsync --delete --exclude-from filters source/ /outside/`, `rsync --delete --exclude-from filters source/ /outside/`},
+		{`cd /outside && rm -rf cache`, `cd /outside || rm -rf cache`},
 	} {
 		t.Run("separate handoff for "+commands[0], func(t *testing.T) {
 			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)

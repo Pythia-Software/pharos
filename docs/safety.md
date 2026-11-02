@@ -95,6 +95,21 @@ remain scoped to their source call. GitHub CLI operations without an explicit
 repository use the effective working directory; a missing PR identifier also
 remains unresolved instead of assuming the current branch is unchanged.
 
+Force-push identities retain bulk selection (`--tags`, `--all`, `--mirror`),
+tag-following, pruning, and explicit lease scope. Process identities retain the
+program, matching options, user/group/parent restrictions, and signal. Rsync
+deletion identities retain source paths (including trailing-slash semantics),
+ordered filters and options, and deletion modes. Referenced filter/list files,
+PID files, and dynamic selections remain scoped to the source call because their
+historical contents are unknown.
+
+Directory tracking separates successful and failed `cd` paths and keeps subshell
+directories local. `cd /outside || rm -rf cache` therefore selects the original
+directory; `(cd /outside && echo ok); rm -rf cache` also uses the outer directory.
+When paths converge with different directories, or unsupported control flow or
+shell-dependent pipeline builtins prevent a reliable inference, relative targets
+remain unresolved and call-scoped. Absolute targets can still be identified.
+
 Option parsing consumes supported option values and respects `--`: a body or
 filename spelling `--help` or `--dry-run` does not suppress a mutation. Direct SQL
 arguments are checked across statement boundaries while quoted strings,
