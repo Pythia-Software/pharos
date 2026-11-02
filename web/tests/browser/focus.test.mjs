@@ -1811,7 +1811,8 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   assert.equal(page.url(),contextURL,'opening a chat in the overlay must preserve the page URI');
 });
 
-for(const url of ['/', '/analyze?analyze_topic=tokens']) test(`Ask Pharos restores its open and floating surfaces after reload (${url==='/'?'Home':'Analyze'})`,{skip},async t=>{
+// The long URI exceeds what a saved prompt chip may hold, so reload restores the context alone.
+for(const url of ['/', '/analyze?analyze_topic=tokens', '/analyze?analyze_topic=tokens&history_search='+'x'.repeat(2100)]) test(`Ask Pharos restores its open and floating surfaces after reload (${url==='/'?'Home':url.length>2000?'Analyze, long URI':'Analyze'})`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let session=null;
   const {page,settled}=await open(t,{url,ready:'#askPharosToggle:not([disabled])',api:{
@@ -1832,13 +1833,16 @@ for(const url of ['/', '/analyze?analyze_topic=tokens']) test(`Ask Pharos restor
   assert.ok(await question.evaluate(element=>element===document.activeElement),'the restored modal focuses its editor');
   const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
   await question.evaluate(element=>{element.value='Keep this open question';element.dispatchEvent(new Event('input',{bubbles:true}));});await saved;await settled();
-  await question.getByRole('group',{name:/^About/}).focus();await page.keyboard.press('Alt+ArrowRight');
+  const chip=question.getByRole('group',{name:/^About/});
+  if(url==='/')assert.equal(await chip.count(),0,'the home page is not attached as context');
+  else if(url.length<=2000){await chip.focus();await page.keyboard.press('Alt+ArrowRight');}
   const inlineDraft=await question.innerText();await question.focus();
   await reload();
   await modal.waitFor();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this open question');
   assert.equal(await question.evaluate(element=>element.value),'Keep this open question');
   assert.equal(await question.innerText(),inlineDraft,'reload preserves the context chip position within the draft');
+  if(url!=='/')assert.equal(await chip.count(),1,'reload keeps the page context');
   assert.equal(page.url(),pageURL,'restoring the overlay keeps the underlying page URI');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   const handle=panel.getByRole('button',{name:'Move Ask Pharos progress'});
@@ -1931,8 +1935,12 @@ for(const width of [1440,390])test(`Ask Pharos prompt chips drag into text and s
     'POST /api/ask/send':({body})=>{sent=body;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',reply:'Here is the breakdown.',cards:[]}]};},
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true}),chip=page.getByRole('group',{name:/^About .+ context\./});
   await activateHeaderTool(page,'askPharosToggle');
-  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true}),chip=page.getByRole('group',{name:/About Home context/});
+  assert.equal(await chip.count(),0,'the home page is not attached as context');
+  await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'Ask Pharos',exact:true}).waitFor({state:'hidden'});
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));
+  await activateHeaderTool(page,'askPharosToggle');await chip.waitFor();
   const contextURI=await page.evaluate(()=>askPageURI(location.href));
   await editor.press('End');await page.keyboard.insertText('Find usage by model');
   assert.equal(await editor.evaluate(element=>element.value),'Find usage by model');
@@ -1947,15 +1955,15 @@ for(const width of [1440,390])test(`Ask Pharos prompt chips drag into text and s
     throw new Error('The typed prompt is missing');
   });
   await chip.dragTo(editor,{sourcePosition:{x:12,y:12},targetPosition:target});
-  assert.match(await editor.innerText(),/Find .*About Home.*usage by model/s,'the chip moves between the words at the drop caret');
+  assert.match(await editor.innerText(),/Find .*About .*usage by model/s,'the chip moves between the words at the drop caret');
   assert.equal(await editor.evaluate(element=>element.value),'Find usage by model','dragging preserves the question');
   await shot('chip-between-words');
   await editor.press('Meta+z');
   assert.equal(await editor.innerText(),beforeDrag,'undo restores the chip position');
   await editor.press('Meta+Shift+z');
-  assert.match(await editor.innerText(),/Find .*About Home.*usage by model/s);
+  assert.match(await editor.innerText(),/Find .*About .*usage by model/s);
   await chip.focus();await page.keyboard.press('Alt+ArrowRight');
-  assert.match(await editor.innerText(),/Find u.*About Home.*sage by model/s,'keyboard movement relocates the same chip');
+  assert.match(await editor.innerText(),/Find u.*About .*sage by model/s,'keyboard movement relocates the same chip');
   await page.keyboard.press('Backspace');
   assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing a focused chip returns to the editor');
   assert.equal(await editor.evaluate(element=>element.value),'Find usage by model');
@@ -2076,7 +2084,9 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
-  for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
+  const home=url==='/',removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
+  if(home)assert.equal(await removeContext.count(),0,'the home page is not attached as context');
+  for(const name of ['Clear','Close Ask Pharos',...(home?[]:['Remove page context'])])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
   assert.ok(await editor.evaluate(element=>{
     const controls=[...element.closest('form').querySelectorAll('.pharos-window-controls button:not([hidden])')].map(button=>button.getBoundingClientRect());
     const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
@@ -2087,14 +2097,16 @@ for (const [width,url,theme] of [[1440,'/analyze?analyze_topic=tokens','dark'],[
     return true;
   }),'floating controls must not obscure prompt text');
   await shot('ask-overlay');
-  await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
-  assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing context returns focus to the request');
-  assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
+  if(!home){
+    await removeContext.click();
+    assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing context returns focus to the request');
+    assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
+  }
   await modal.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
   assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
   await activateHeaderTool(page,'askPharosToggle');
-  await modal.getByRole('button',{name:'Remove page context',exact:true}).waitFor();
+  if(!home)await removeContext.waitFor();else await modal.waitFor();
   await page.getByRole('button',{name:'Switch to non-AI search',exact:true}).click();
   await modal.getByRole('button',{name:'Search past work',exact:true}).click();
   await modal.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('cache');
