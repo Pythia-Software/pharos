@@ -88,8 +88,10 @@ import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
+import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
+import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
@@ -112,7 +114,7 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, humanLegacyURL, readHumanLink, writingGroups } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
-import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
+import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange } from "./dataset-refresh";
 import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
@@ -121,7 +123,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
+type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "safety";
 type MessageView = "table" | "text";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
@@ -161,7 +163,7 @@ function datasetIsVisible(dataset: Dataset | "machine_calls") {
   }
   if (dataset === "machine_calls") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
   if (dataset === "library") return path === "/library";
-  if (dataset === "findings") return path === "/findings" && params.get("view") === "table";
+  if (dataset === "findings" || dataset === "safety") return path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
   if (dataset === "parallelism") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
   const usageView = params.get("analyze_view") ?? preferences().get("pharos-usage-view", "tokens");
   if (dataset === "conversation_activity") return path === "/analyze" && usageView === "conversations";
@@ -212,6 +214,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
   parallelism: loadSchema<Row>(parallelismDocument),
   findings: loadSchema<Row>(findingsDocument),
+  safety: loadSchema<Row>(safetyDocument),
 };
 
 const tableApis = new Map<Dataset | "machine_calls", QueryTableApi<Row>>();
@@ -305,6 +308,7 @@ const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => quer
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
+  safety_state: ({ value }) => safetyStateLabels[String(value) as keyof typeof safetyStateLabels] ?? String(value ?? ""),
   machine_activity: ({ value }) => activityPresentation(String(value ?? "")).label,
   bool_check(context: CellContext<Row>) {
     return context.value ? <Icon name="check" /> : defaultRenderers.bool_check(context);
@@ -411,6 +415,7 @@ const emptyMessages: Record<Dataset, string> = {
   tl1_attempts: "No TL1 runs match this query.",
   parallelism: "No agent activity matches this query.",
   findings: "No findings match this query.",
+  safety: "No risky action reviews match this query.",
 };
 
 // query-table-ui 0.3.0 formats metric values with a field's renderer only for
@@ -618,6 +623,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
+  useEffect(() => dataset === "safety" ? onSafetyChange(() => apiRef.current.refresh()) : undefined, [dataset]);
   const priorScopeSignature = useRef(scopeSignature);
   useEffect(() => {
     if (priorScopeSignature.current !== scopeSignature) {
@@ -719,7 +725,7 @@ function QuerySurface({ dataset, host, usageActions = false, messageView = "tabl
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {!shared && !namespace && !["library", "tl1_attempts", "findings", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
+    {!shared && !namespace && !["library", "tl1_attempts", "findings", "safety", "parallelism"].includes(dataset) && rollingWindowField(dataset) ? <label className="usage-chart-field">Time window<select aria-label="Query time window" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === "today" ? "today" : choice?.mode === "relative" && choice.days === 1 ? "24h" : "saved"; })()} onChange={event => {
       if (event.target.value === "saved") return;
       const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
       const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === "today" ? "today" : 1, api.query);
@@ -2087,7 +2093,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open review</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

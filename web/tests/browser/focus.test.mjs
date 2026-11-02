@@ -1256,6 +1256,12 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
+  // A bug report is the default and includes recent logs; the contact email is an app preference.
+  assert.equal(await dialog.getByRole("combobox", { name: "Type" }).inputValue(), "bug");
+  await dialog.getByRole("checkbox", { name: /Include recent browser errors/ }).waitFor({ state: "attached" });
+  await page.waitForFunction(() => document.querySelector(".uifeedback-check input")?.checked);
+  await dialog.getByRole("textbox", { name: "Contact email (optional)" }).fill("person@example.com");
+  assert.equal(await page.evaluate(() => window.pharosPrefs.get("pharos-feedback-contact-email", "")), "person@example.com");
   await page.setViewportSize({ width: 360, height: 640 });
   assert.equal(await onScreen(dialog), true);
   await shot("feedback-review");

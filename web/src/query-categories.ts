@@ -19,6 +19,7 @@ export const queryCategories = {
   views: { label: "Work Views", tone: "var(--muted)" },
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
+  safety: { label: "Risky actions", tone: "var(--gold)" },
   findings: { label: "Findings", tone: "var(--gold)" },
   library: { label: "Search", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
   tl1: { label: "TL1", tone: "color-mix(in srgb,var(--heat-2) 70%,var(--warn))" },
@@ -36,6 +37,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   ])]);
   const has = (...names: string[]) => names.some(name => fields.has(name));
   if (dataset === "findings") return "findings";
+  if (dataset === "safety") return "safety";
   if (dataset === "parallelism") return "machines";
   if (dataset === "model_requests") return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
