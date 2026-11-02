@@ -1344,7 +1344,10 @@ func upsertRepositoryChanges(tx *sql.Tx, value map[string]any, options ...reposi
 	}
 	_, err = tx.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,owner,root_commit,forge_id,aliases_json,local_locations_json,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET canonical_remote=COALESCE(excluded.canonical_remote,repositories.canonical_remote),normalized_remote=COALESCE(excluded.normalized_remote,repositories.normalized_remote),display_name=excluded.display_name,
-		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
+		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at
+		WHERE (repositories.canonical_remote,repositories.normalized_remote,repositories.display_name,repositories.owner,repositories.root_commit,repositories.forge_id,repositories.aliases_json,repositories.local_locations_json)
+		IS NOT (COALESCE(excluded.canonical_remote,repositories.canonical_remote),COALESCE(excluded.normalized_remote,repositories.normalized_remote),excluded.display_name,
+		COALESCE(excluded.owner,repositories.owner),COALESCE(excluded.root_commit,repositories.root_commit),COALESCE(excluded.forge_id,repositories.forge_id),excluded.aliases_json,excluded.local_locations_json)`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
 	return item.ID, staleToolPaths(added, item.ID, items), err
 }
 

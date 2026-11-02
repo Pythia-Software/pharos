@@ -41,6 +41,9 @@ INSERT INTO finding_tool_revisions VALUES(%s.conversation_id,hex(randomblob(16))
 			return err
 		}
 	}
+	// UPDATE OF fires for a column an UPDATE sets, changed or not, and an
+	// upsert sets its columns whenever its row exists, so each trigger fires
+	// only for a value that changed.
 	for _, spec := range []struct{ name, table, columns, body string }{
 		{"workspace", "workspaces", "title,source_kind,repository_id,activity_at", `INSERT INTO tool_rollup_dirty VALUES(NEW.id,hex(randomblob(16))) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
 		{"session", "agent_sessions", "depth,kind,conversation_id,workspace_id,child_conversation_id", `INSERT INTO tool_rollup_dirty VALUES(OLD.workspace_id,hex(randomblob(16))) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;
@@ -53,7 +56,11 @@ ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
 		if _, err := c.DB.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS analysis_%s_update", spec.name)); err != nil {
 			return err
 		}
-		if _, err := c.DB.Exec(fmt.Sprintf("CREATE TRIGGER analysis_%s_update AFTER UPDATE OF %s ON %s BEGIN %s END", spec.name, spec.columns, spec.table, spec.body)); err != nil {
+		changed := []string{}
+		for _, column := range strings.Split(spec.columns, ",") {
+			changed = append(changed, "OLD."+column+" IS NOT NEW."+column)
+		}
+		if _, err := c.DB.Exec(fmt.Sprintf("CREATE TRIGGER analysis_%s_update AFTER UPDATE OF %s ON %s WHEN %s BEGIN %s END", spec.name, spec.columns, spec.table, strings.Join(changed, " OR "), spec.body)); err != nil {
 			return err
 		}
 	}
