@@ -89,7 +89,12 @@ for name in pharos pharos-labeler-ort PharosApp; do
     # mapped executable.
     rm -f "$target"
     if [ "${PHAROS_UNIVERSAL:-0}" = 1 ]; then
-        lipo -create $(for arch in $ARCHS; do echo "$WORK/$name-$arch"; done) -output "$target"
+        # Positional parameters keep each slice's path whole, spaces and all.
+        set --
+        for arch in $ARCHS; do
+            set -- "$@" "$WORK/$name-$arch"
+        done
+        lipo -create "$@" -output "$target"
     else
         cp "$WORK/$name-$arch" "$target"
     fi
@@ -200,9 +205,17 @@ for code in "Versions/B/Autoupdate" "Versions/B/Updater.app" \
 done
 codesign "$@" "$FRAMEWORK"
 codesign "$@" --identifier "$SERVICE_ID" "$APP/Contents/MacOS/pharos"
-# Microsoft's runtime is ad hoc signed. Re-signed with the app's identity, the
-# worker's library validation accepts it.
 codesign "$@" "$APP/Contents/MacOS/libonnxruntime.dylib"
+# The worker loads whichever ONNX Runtime it is given: the bundled one, the
+# download, or a configured labels_runtime (an Intel Mac's). Those are signed
+# by Microsoft, ad hoc, or by whoever built them, so library validation is off
+# for the worker alone; the hardened runtime still blocks DYLD_* injection.
+cat > "$WORK/worker.entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+<key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict></plist>
+PLIST
+codesign "$@" --entitlements "$WORK/worker.entitlements" --identifier "$SERVICE_ID.labeler" "$APP/Contents/MacOS/pharos-labeler-ort"
 if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ] && \
     ! codesign -dvv "$APP/Contents/MacOS/pharos" 2>&1 | grep -Eq '^Authority=(Apple Development|Developer ID Application):'; then
     # Ad hoc and self-signed development builds cannot pass library validation.
@@ -214,7 +227,6 @@ if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ] && \
 PLIST
     set -- "$@" --entitlements "$WORK/debug.entitlements"
 fi
-codesign "$@" --identifier "$SERVICE_ID.labeler" "$APP/Contents/MacOS/pharos-labeler-ort"
 codesign "$@" --identifier "$BUNDLE_ID" "$APP"
 if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
     if ! codesign -dvv "$APP" 2>&1 | grep -q 'Authority=Developer ID Application:'; then

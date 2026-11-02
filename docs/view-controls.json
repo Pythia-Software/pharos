@@ -6108,15 +6108,6 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "48b238cf5a98afa1:0",
-      "file": "web/src/index.tsx",
-      "owner": "QuerySurface",
-      "tag": "select",
-      "control": "aria-label=\"Query time window\" value={queryWindowChoice(new URLSearchParams(location.search), dataset)} onChange={event => { if (event.target.value === \"saved\") return; const selected = readRollingWindow(new URLSearchParams(location.search), dataset); const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === \"today\" ? \"today\" : 1, api.query); const adjusted = queryFromURL(address)!; const nextURL=withQueryWindow(new URL(location.href),address,dataset,registryKey); history.replaceState(history.state,\"\",nextURL);window.dispatchEvent(new Event(\"pharos:uri-changed\")); api.setQuery(adjusted.query); }}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
       "key": "4af7943147f725a8:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",

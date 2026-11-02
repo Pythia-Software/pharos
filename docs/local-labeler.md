@@ -500,11 +500,12 @@ The app release itself needs nothing new: `pharos` embeds the descriptor,
 and `macos/build-app.sh` builds the worker into
 `Contents/MacOS/pharos-labeler-ort` (universal, with cgo) and bundles the
 pinned ONNX Runtime beside it as `Contents/MacOS/libonnxruntime.dylib`, its
-license and notices in `Contents/Resources/licenses`. Microsoft's library is
-ad hoc signed, which a hardened, Developer ID signed worker's library
-validation refuses, so the build re-signs it with the app's identity; that
-is why the app bundles the runtime rather than loading the download. The
-pinned runtime is arm64 only: an Intel Mac sets `labels_runtime`.
+license and notices in `Contents/Resources/licenses`, re-signed with the
+app's identity. The worker alone is signed without library validation
+(`com.apple.security.cs.disable-library-validation`), so a hardened,
+Developer ID signed worker can still load the download or a configured
+`labels_runtime`, which Microsoft or whoever built them signed. The pinned
+runtime is arm64 only: an Intel Mac sets `labels_runtime`.
 
 ## Worker protocol `pharos-labeler/1`
 
