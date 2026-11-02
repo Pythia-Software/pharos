@@ -1,5 +1,6 @@
 import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { chartPeriods, isHourly, nextPeriod, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartRanges, rangeStart, rangeInputValue, parseRangeInput, rangeHasTime, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
 import { defaultChartScale, type ChartScale } from "./chart-scale";
@@ -12,6 +13,7 @@ import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
 import { PageLink } from "./nested-pages";
 import { DashboardSelect } from "./dashboard-select";
+import { SearchHelp } from "./search-help";
 
 export { chartSpan, smoothingWhere, timeBounds, usageTime, withTimeRange, writingTime, type ChartRange, type FilterChange, type TimeBounds, type TimeFields } from "./chart-range";
 
@@ -164,12 +166,16 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
   title?: string; disabled?: boolean; note?: string;
 }) {
   return <label className="usage-chart-field usage-chart-picker">
-    <span className="usage-preset-label">{label}</span>
+    <span className="usage-preset-label">{label}{note ? <ControlNote label={label}>{note}</ControlNote> : null}</span>
     <DashboardSelect data-pharos-target={`control:chart:${ariaLabel.toLowerCase().replace(/\s+/g,"-")}`} aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
       {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
     </DashboardSelect>
-    {note ? <span className="usage-chart-control-note">{note}</span> : null}
   </label>;
+}
+
+// A control's caveat sits in an info circle beside its label.
+function ControlNote({ label, children }: { label: string; children: React.ReactNode }) {
+  return <span className="usage-chart-control-note"><SearchHelp label={label}>{children}</SearchHelp></span>;
 }
 
 export type PeriodView = { period: ChartPeriod; hours: number; days: number };
@@ -215,13 +221,12 @@ export function SmoothingControl({ value, unit, onChange, disabled = false, note
   const enabled = value > 0;
   return <div className="usage-chart-field usage-smoothing-control" role="group" aria-label="Chart smoothing">
     <div className="usage-smoothing-row">
-      <ChartSelect label="Smoothing" value={enabled ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={disabled}
+      <ChartSelect label="Smoothing" value={enabled ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={disabled} note={enabled || disabled ? note : undefined}
         onChange={next => onChange(next === "off" ? 0 : previous.current)} />
       {enabled ? <label className="usage-smoothing-input"><input type="number" aria-label="Smoothing window" min={2} step={1} value={draft} disabled={disabled}
         title="Trailing average window in intervals, including history before the selected range."
         onChange={event => { setDraft(event.target.value); if (validRollingPeriods(event.target.valueAsNumber) && event.target.valueAsNumber >= 2) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))} /><span>{unit}</span></label> : null}
     </div>
-    {enabled || disabled ? <span className="usage-chart-control-note">{note}</span> : null}
   </div>;
 }
 
@@ -241,12 +246,14 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // shares as fractions, and are only drawn: a pooled ratio or a rolling sum
 // must not be averaged again. Series that do not add up (lines) are drawn as
 // lines with no total, and a reference value draws a labelled level line.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, rolling = "average", reference, onSelect, onExpand, onRange, seriesHref }: {
-  title: string; controls: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, rolling = "average", reference, action, titleSlot, onSelect, onExpand, onRange, seriesHref }: {
+  title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
   selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
   prepared?: boolean; lines?: boolean; additive?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
+  /** Draws the title and action there instead, such as in a page's heading. */
+  titleSlot?: HTMLElement | null;
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number; pinned: boolean; focus: boolean } | null>(null);
@@ -367,9 +374,10 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const density = buckets.length > 300 ? "denser" : buckets.length > 120 ? "dense" : "";
   const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
+  const titleText = <>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</>;
   return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
-    <div className="usage-chart-head"><h3>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</h3><div className="usage-chart-controls">{controls}</div></div>
-    {series.length > 1 || legend || onRange || reference ? <div className="usage-chart-legend">
+    <div className="usage-chart-head">{titleSlot ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{titleText}</h2>{action}</div>, titleSlot) : <div className="usage-chart-title"><h3>{titleText}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
+    {series.length > 1 || legend || reference ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {
         const items = series.filter(item => item.group === group).map(item => {
           const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
@@ -383,7 +391,6 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       }) : null}
       {reference ? <span className="usage-legend-item usage-legend-reference" title={reference.label}><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
-      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · " : ""}Click to inspect · drag across 2+ {lineChart ? "points" : "columns"} to filter dates</span> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>

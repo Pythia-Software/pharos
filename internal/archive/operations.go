@@ -323,10 +323,10 @@ type opRegistry struct {
 	// one, ended operations need not wait to be written before they are
 	// forgotten.
 	journaled bool
-	// lowerIO reports whether background-priority operations run their IO
-	// at the utility tier (§10): the unified activity flag. Nil leaves IO
-	// policy as it was before the flag existed.
-	lowerIO func() bool
+	// lowerIO runs background-priority operations' IO at the utility tier
+	// (§10). The service and the broker set it; a registry without it leaves
+	// IO policy alone.
+	lowerIO bool
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -625,7 +625,7 @@ func (op *Op) RunIO(fn func()) {
 // lowersIO reports whether RunIO lowers op's IO. The priority is fixed at
 // registration, so it needs no lock.
 func (op *Op) lowersIO() bool {
-	return op != nil && op.reg != nil && op.spec.Priority == priorityBackground && op.reg.lowerIO != nil && op.reg.lowerIO()
+	return op != nil && op.reg != nil && op.spec.Priority == priorityBackground && op.reg.lowerIO
 }
 
 // Run moves a queued operation to running; the first Step implies it.

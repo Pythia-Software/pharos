@@ -818,7 +818,7 @@ test('drive-status accordion links restore the overlay without moving focus and 
  const entries={'status:cadence:frequent':false,'status:cadence:hourly':true};
  const api={'GET /api/status':busyStatus,'GET /api/status/stream':eventStream(busyStatus)};
  const target='section:status:cadence:hourly';
- const app=await open(t,{url:'/library?'+new URLSearchParams({overlay:'drive',disclosures:JSON.stringify(entries),reveal:target}),preferences:{'pharos-unified-activity-v1':true},api,ready:'#pharosStatusPanel'}),{page}=app;
+ const app=await open(t,{url:'/library?'+new URLSearchParams({overlay:'drive',disclosures:JSON.stringify(entries),reveal:target}),api,ready:'#pharosStatusPanel'}),{page}=app;
  const expanded=()=>page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true&&document.querySelector('[data-view-key="status:cadence:frequent"]')?.open===false);
  const highlighted=()=>page.waitForFunction(target=>document.documentElement.dataset.pharosAttentionMissing===''&&[...document.querySelectorAll('.pharos-reveal')].some(element=>element.dataset.pharosTarget===target),target);
  await expanded();await highlighted();await app.settled();
@@ -830,7 +830,7 @@ test('drive-status accordion links restore the overlay without moving focus and 
   await app.settled();await expanded();await highlighted();
  }
  assert.equal(await page.evaluate(()=>window.__disclosureScrolls),0,'polling reapplies highlights without repeating reveal scrolling');
- const fresh=await open(t,{url:path(page),preferences:{'pharos-unified-activity-v1':true},api,ready:'#pharosStatusPanel'});
+ const fresh=await open(t,{url:path(page),api,ready:'#pharosStatusPanel'});
  await fresh.page.waitForFunction(()=>document.querySelector('[data-view-key="status:cadence:hourly"]')?.open===true);
  await app.shot('drive-status-portable');
 });

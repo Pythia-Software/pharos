@@ -97,7 +97,7 @@ import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-sto
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "./tools-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters } from "./tools-dashboard-model";
@@ -1230,7 +1230,7 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
 
 // The summary is of the dashboard's population: a legend selection only
 // chooses what the chart draws, and the summary says so.
-function AgentTimeSummary({ where, selected = false }: { where: WhereTerm[]; selected?: boolean }) {
+function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; selected?: boolean }) {
   const result = useMetrics("tool_calls", where, [
     { id: "duration", op: "sum", field: "duration_ms", groupBy: [] },
     { id: "calls", op: "count", groupBy: [] },
@@ -1240,7 +1240,7 @@ function AgentTimeSummary({ where, selected = false }: { where: WhereTerm[]; sel
   const duration = value("duration"), calls = value("calls"), timed = value("timed");
   const time = (ms: number) => ms >= 3600000 ? `${(ms / 3600000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : ms >= 60000 ? `${(ms / 60000).toLocaleString(undefined, { maximumFractionDigits: 1 })} min` : `${(ms / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  return <div className="mcp-metrics dashboard-stats" aria-label="Agent Time summary" aria-busy={result.loading}>
+  return <div className="mcp-metrics dashboard-stats" aria-label="Tool Time summary" aria-busy={result.loading}>
     {card("Total recorded tool time", timed ? time(duration) : "—", `all activities in range${selected ? ", not only the legend selection" : ""} · concurrent calls can overlap`)}
     {card("Call volume", calls.toLocaleString(), "all matching calls, including those without timing")}
     {card("Time per timed run", timed ? time(duration / timed) : "—", `${timed.toLocaleString()} calls with a recorded duration`)}
@@ -1530,7 +1530,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
-  if (topic === "calls") return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
+  if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} />;
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
@@ -1538,7 +1538,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
-  if (topic === "time") return <AgentTimeDashboard />;
+  if (topic === "time") return <ToolTimeDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1678,7 +1678,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
 // over one catalog, with the dashboard's own panels around it. Its link is
 // read through readAnalysisLink, so an older link opens as it always did.
 const durationText = (ms: number) => Math.abs(ms) >= 3_600_000 ? `${(ms / 3_600_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : formatDurationMS(ms);
-// Durations in hours where the measure says so (Agent Time's recorded time),
+// Durations in hours where the measure says so (Tool Time's recorded time),
 // otherwise as a duration; counts compactly.
 const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" ? measure.unit === "hours" ? compactNumber(value / 3_600_000) : durationText(value) : measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
 // readWhere reads filters an older link wrote in another dataset's fields
@@ -1738,9 +1738,9 @@ function ToolsUsageDashboard() {
     after={<p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. The legacy view includes failure kinds and the existing command and context presets.</p>} />;
 }
 
-function AgentTimeDashboard() {
-  return <CatalogDashboard catalog={agentTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
-    summary={(where, selected) => <AgentTimeSummary where={where} selected={selected} />} />;
+function ToolTimeDashboard() {
+  return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="time" defaults={dashboardDefaults.time} currentURL={currentUsageAnalyses.find(item => item.topic === "time")!.url}
+    summary={(where, selected) => <ToolTimeSummary where={where} selected={selected} />} />;
 }
 
 function SkillsDashboard() {

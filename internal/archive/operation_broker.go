@@ -66,6 +66,15 @@ type brokerLibrary struct {
 	Canonical string
 }
 
+// libraryDriveName is the external drive a library's configuration is on
+// ("euclid" for /Volumes/euclid/Pharos/…), or "" on this Mac's own disk.
+func libraryDriveName(config string) string {
+	if rest, ok := strings.CutPrefix(filepath.Clean(config), "/Volumes/"); ok {
+		return strings.SplitN(rest, "/", 2)[0]
+	}
+	return ""
+}
+
 // brokerFreshTimeout bounds the eject check's request to the selected
 // library's service (a full lock check), inside the 10 s the broker gives
 // the whole check.
@@ -90,48 +99,6 @@ type brokerOperations struct {
 	// resources samples the broker, each library's service and the
 	// Terminal commands writing them, for /api/app/status (§10).
 	resources *resourceSampler
-	// flag is the unified activity flag as the selected library's service
-	// last reported it (features.unified_activity), which decides whether
-	// broker operations lower their IO (§10). The broker has no catalog of
-	// its own to read it from.
-	flag brokerFlag
-}
-
-// brokerFlag is the flag of one library, the selected one: another
-// selection clears it, and a service that cannot confirm it makes it off.
-type brokerFlag struct {
-	mu      sync.Mutex
-	library string
-	on      bool
-}
-
-func (f *brokerFlag) lowerIO() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.on
-}
-
-// selected starts over for library when the selection changed.
-func (f *brokerFlag) selected(library string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.library != library {
-		f.library, f.on = library, false
-	}
-}
-
-// note records library's flag, from its status snapshot (nil when its
-// service did not answer: off). A library no longer selected is ignored.
-func (f *brokerFlag) note(library string, snapshot map[string]any) {
-	on := false
-	if features, ok := snapshot["features"].(map[string]any); ok {
-		on, _ = features["unified_activity"].(bool)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.library == library {
-		f.on = on
-	}
 }
 
 func brokerOperationsPath(installation string) string {
@@ -144,7 +111,9 @@ func newBrokerOperations(path string) *brokerOperations {
 	b := &brokerOperations{reg: newOpRegistry("broker"), path: path, client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}},
 		resources: newResourceSampler()}
 	b.reg.wake = make(chan struct{}, 1)
-	b.reg.lowerIO = b.flag.lowerIO
+	// Broker work in the background, such as deliveries, runs its IO at the
+	// utility tier (§10), as the services' does.
+	b.reg.lowerIO = true
 	// Ended operations stay listed (and in the state file) until newer ones
 	// push them out, not for the service's ten minutes.
 	b.reg.keepEnded = 30 * 24 * time.Hour
@@ -274,13 +243,6 @@ func (b *brokerOperations) publish(libraries []brokerLibrary) {
 	b.libraries = libraries
 	b.published++
 	b.mu.Unlock()
-	selected := ""
-	for _, library := range libraries {
-		if library.Selected {
-			selected = library.ID
-		}
-	}
-	b.flag.selected(selected)
 }
 
 // publishLocked publishes m's libraries and children; m.mu is held.
@@ -407,29 +369,6 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
-// refreshFlag asks the selected library's service for its status snapshot
-// (its shared document, cheap) and records the flag, before broker work
-// whose IO it decides: a delivery stops the services it would ask later.
-// Without an answer (no service, or it failed) the flag is off.
-func (b *brokerOperations) refreshFlag(ctx context.Context) {
-	if b == nil || ctx == nil {
-		return
-	}
-	b.mu.Lock()
-	libraries := slices.Clone(b.libraries)
-	b.mu.Unlock()
-	for _, library := range libraries {
-		if !library.Selected {
-			continue
-		}
-		var snapshot map[string]any
-		if library.Child != nil {
-			snapshot, _ = b.fetchServiceOperations(ctx, b.client, *library.Child, "/api/status")
-		}
-		b.flag.note(library.ID, snapshot)
-	}
-}
-
 // fetchServiceOperations asks a library's service for its snapshot at path
 // (/api/operations, or /api/status for the status document).
 func (b *brokerOperations) fetchServiceOperations(ctx context.Context, client *http.Client, endpoint applicationEndpoint, path string) (map[string]any, error) {
@@ -554,12 +493,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 		if snapshots[index] != nil {
 			snapshot = snapshots[index]
 		}
-		// Only the status snapshot carries the flag; the operations
-		// document does not.
-		if library.Selected && strings.HasPrefix(path, "/api/status") {
-			b.flag.note(library.ID, snapshots[index])
-		}
-		entry := map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected,
+		entry := map[string]any{"id": library.ID, "name": library.Name, "selected": library.Selected, "drive": libraryDriveName(library.Config),
 			"connected": library.Child != nil && failures[index] == nil, "service": service, "snapshot": snapshot,
 			"eject": verdict, "error": errorText}
 		if withResources {

@@ -182,6 +182,9 @@
 :is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
 :is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) > * { flex: 0 0 auto; width: max-content; min-width: 0; max-width: 100%; }
 .usage-chart-controls { width: 100%; }
+/* Controls share out each row's spare width, so a row reaches the end. */
+.usage-chart-controls > * { flex: 1 1 auto; }
+.usage-chart-controls .dashboard-select { width: 100%; }
 .usage-chart-controls .usage-presets { margin: 0; }
 .usage-chart-controls .usage-preset-label { min-width: 0; margin-right: 2px; }
 .chart-toggle button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); font-weight: 600; }
@@ -206,7 +209,6 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-legend-item.dimmed { opacity: .5; }
 .usage-legend-item.dimmed:hover { opacity: 1; }
 .usage-legend-x { margin-left: 6px; color: var(--muted); font-weight: 400; }
-.usage-chart-hint { margin-left: auto; padding-left: 12px; font-size: var(--fs-2xs); }
 .usage-chart-bars.pickable { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .usage-chart-bars.pickable > button { cursor: pointer; }
 .usage-chart-bars > button.picked > i { filter: brightness(1.15); }
@@ -526,7 +528,10 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 :root .dashboard-select select:not([multiple]) { appearance: none; background-image: none; }
 .dashboard-select select:hover:not(:disabled) { border-color: var(--accent); }
 .dashboard-select select:disabled { opacity: .55; cursor: not-allowed; }
-.usage-chart-control-note { max-width: 30ch; color: var(--muted); font-size: var(--fs-xs); line-height: 1.4; }
+.usage-chart-control-note { display: inline-flex; vertical-align: middle; margin-left: 3px; }
+.usage-chart-control-note button.search-help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; min-height: 0; padding: 0; border: 0; background: none; color: var(--muted); }
+.usage-chart-control-note button.search-help:hover { color: var(--ink); }
+.usage-chart-control-note .app-icon { width: 11px; height: 11px; }
 .usage-period-custom { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; }
 .usage-period-custom input { width: 5em; min-width: 0; height: 28px; }
 .usage-period-control { flex-direction: row; align-items: flex-end; gap: 8px; }

@@ -16,7 +16,6 @@ import (
 func TestUtilityIOPolicyIsRestored(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	server.ops.lowerIO = func() bool { return true }
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	before, err := currentIOPolicy()
