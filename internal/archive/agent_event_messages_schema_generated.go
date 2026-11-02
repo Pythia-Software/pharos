@@ -21,6 +21,7 @@ func PharosAgentEventMessagesSchema() querytable.Schema {
 			"title":           {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"repository_name": {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
 			"provider":        {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
+			"model":           {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
 			"subagent":        {Name: "subagent", Kind: querytable.FieldBool, Expr: "r.\"subagent\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"subagent\""},
 			"conversation_id": {Name: "conversation_id", Kind: querytable.FieldText, Expr: "r.\"conversation_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"conversation_id\""},
 			"workspace_id":    {Name: "workspace_id", Kind: querytable.FieldText, Expr: "r.\"workspace_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"workspace_id\""},

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -116,17 +118,113 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 	lines = lines[:2]
 	lines = append(lines, map[string]any{"kind": "event", "message_id": "m1", "message_sha256": sum(text), "family": "obstacle", "probability": 0.8,
 		"sentence": [2]int{0, first}, "subject": [][2]int{{0, first}}, "response": [][2]int{}})
-	file, _ = os.Create(path)
-	encoder = json.NewEncoder(file)
-	for _, line := range lines {
-		encoder.Encode(line)
+	// Blank lines anywhere, the end included, are not lines.
+	write := func(lines []map[string]any) {
+		t.Helper()
+		var body strings.Builder
+		for index, line := range lines {
+			data, _ := json.Marshal(line)
+			body.Write(data)
+			body.WriteString("\n")
+			if index == 0 {
+				body.WriteString("\n  \n")
+			}
+		}
+		body.WriteString("\n\n")
+		if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	file.Close()
+	write(lines)
 	if _, err := catalog.ImportAgentEvents(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
 	var families string
 	if err := catalog.DB.QueryRow(`SELECT group_concat(family) FROM agent_events`).Scan(&families); err != nil || families != "obstacle" {
 		t.Fatalf("families after reimport = %q, %v", families, err)
+	}
+
+	// Once the message's text changes, importing it again (scored on the old
+	// text) leaves none of its earlier events or its row: they described text
+	// it no longer has.
+	execTx(t, catalog.DB, `UPDATE messages SET text='Rewritten entirely.' WHERE id='m1'`)
+	write(lines)
+	changed, err := catalog.ImportAgentEvents(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM agent_events WHERE message_id='m1')+(SELECT COUNT(*) FROM agent_event_messages WHERE message_id='m1')`).Scan(&left); err != nil ||
+		left != 0 || changed.SkippedChanged != 1 {
+		t.Fatalf("after the text changed: %d rows left, import %+v (%v)", left, changed, err)
+	}
+}
+
+// agentEventFamilies is the one definition of the reported kinds. The
+// schemas' kind and group options, and testdata/agent-event-kinds.json, which
+// the dashboard's catalog and the reader's colours are checked against
+// (web/tests/unit/dashboards/agent-events.test.mjs), must follow it.
+// PHAROS_UPDATE_AGENT_EVENT_KINDS=1 rewrites the fixture.
+func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
+	type kind struct {
+		Key   string `json:"key"`
+		Label string `json:"label"`
+		Group string `json:"group"`
+	}
+	want := struct {
+		Groups []string `json:"groups"`
+		Kinds  []kind   `json:"kinds"`
+	}{}
+	for _, family := range agentEventFamilies {
+		if !slices.Contains(want.Groups, family.Group) {
+			want.Groups = append(want.Groups, family.Group)
+		}
+		want.Kinds = append(want.Kinds, kind{family.Key, family.Label, family.Group})
+	}
+	data, _ := json.MarshalIndent(want, "", "  ")
+	data = append(data, '\n')
+	path := filepath.Join("..", "..", "testdata", "agent-event-kinds.json")
+	if os.Getenv("PHAROS_UPDATE_AGENT_EVENT_KINDS") == "1" {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(data) {
+		t.Fatalf("%s is not agentEventFamilies; run with PHAROS_UPDATE_AGENT_EVENT_KINDS=1 (%v)", path, err)
+	}
+	var schema struct {
+		Fields []struct {
+			Name   string `json:"name"`
+			Filter struct {
+				Values struct {
+					Options []struct{ Value, Label string } `json:"options"`
+				} `json:"values"`
+			} `json:"filter"`
+		} `json:"fields"`
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "agent_events.schema.json"))
+	if err != nil || json.Unmarshal(raw, &schema) != nil {
+		t.Fatalf("read the schema: %v", err)
+	}
+	for _, field := range schema.Fields {
+		var got, expected []string
+		for _, option := range field.Filter.Values.Options {
+			got = append(got, option.Value+"="+option.Label)
+		}
+		switch field.Name {
+		case "family":
+			for _, k := range want.Kinds {
+				expected = append(expected, k.Key+"="+k.Label)
+			}
+		case "family_group":
+			for _, group := range want.Groups {
+				expected = append(expected, group+"="+group)
+			}
+		default:
+			continue
+		}
+		if !slices.Equal(got, expected) {
+			t.Errorf("schema %s options %v, want %v", field.Name, got, expected)
+		}
 	}
 }

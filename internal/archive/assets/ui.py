@@ -232,12 +232,13 @@ APP_HTML = r'''<!doctype html>
     :root[data-theme="dark"]{--event-friction:#e66767;--event-learning:#3987e5;--event-second-look:#d95926;--event-choices:#9085e9}
     @media(prefers-color-scheme:dark){:root:not([data-theme]){--event-friction:#e66767;--event-learning:#3987e5;--event-second-look:#d95926;--event-choices:#9085e9}}
     .event-friction{--event-hue:var(--event-friction)}.event-learning{--event-hue:var(--event-learning)}.event-second-look{--event-hue:var(--event-second-look)}.event-choices{--event-hue:var(--event-choices)}
-    .agent-event,.event-context{background:none;color:inherit}
+    mark.agent-event,mark.event-context{background:none;color:inherit;border:0;padding:0}
     .conversation-panel.show-events [data-agent-events] .agent-event{background:color-mix(in srgb,var(--event-hue) 24%,transparent);border-radius:2px;padding:1px 0;-webkit-box-decoration-break:clone;box-decoration-break:clone;cursor:help}
     .conversation-panel.show-events [data-agent-events] .agent-event:hover{background:color-mix(in srgb,var(--event-hue) 40%,transparent)}
     .conversation-panel.show-events [data-agent-events] .event-context{text-decoration:underline dotted color-mix(in srgb,var(--muted) 80%,transparent);text-underline-offset:3px;cursor:help}
     .event-badge{display:none}.conversation-panel.show-events .event-badge{display:inline-flex;align-items:center;gap:5px;margin-left:8px;color:var(--muted);font-size:var(--fs-xs)}.event-badge i{display:inline-block;width:9px;height:9px;border-radius:2px;background:color-mix(in srgb,var(--event-hue) 40%,transparent)}
-    .event-prose{margin:0 0 10px}
+    /* A Reasoning row with events shows its text once: marked with Events on, as its plain value otherwise. */
+    .event-prose{display:none;margin:0 0 10px}.conversation-panel.show-events .event-prose{display:block}.conversation-panel.show-events .event-prose+.event-body>dl.tool-inputs{display:none}
     .event-legend-item i,.event-tip-row i{display:inline-block;flex:none;width:11px;height:11px;border-radius:2px;background:color-mix(in srgb,var(--event-hue) 24%,transparent);border:1px solid color-mix(in srgb,var(--event-hue) 60%,transparent)}
     .event-tip-row{display:grid;grid-template-columns:11px 1fr auto;column-gap:7px;align-items:center;margin-top:6px}.event-tip-row strong{font-weight:600}.event-tip-row>span{color:var(--muted);font-variant-numeric:tabular-nums}.event-tip-row dl{grid-column:2/4;margin:3px 0 0;display:grid;grid-template-columns:auto 1fr;gap:2px 6px;font-size:var(--fs-xs)}.event-tip-row dt{color:var(--muted)}.event-tip-row dd{margin:0}
     .markdown-content p{margin:3px 0}.markdown-content h1,.markdown-content h2,.markdown-content h3,.markdown-content h4,.markdown-content h5,.markdown-content h6{font-family:var(--sans);font-weight:650;line-height:1.35;margin:6px 0 3px}
@@ -993,7 +994,7 @@ function actionRow(messages,context){
   // Thinking's agent events: a count on the row under Events, and the text
   // with its marks at the top of the details.
   const thinkingEvents=message=>message.kind==='reasoning'?messageEventView(message):null;
-  {const found=messages.flatMap(message=>thinkingEvents(message)||[]);if(found.length){const badge=node('span','event-badge '+(EVENT_GROUP_CLASSES[found[0].group]||''));badge.append(node('i'),`${found.length} event${found.length===1?'':'s'}`);badge.title=[...new Set(found.map(item=>item.label))].join(', ');summary.append(badge)}}
+  {const found=messages.flatMap(message=>thinkingEvents(message)||[]);if(found.length){const badge=node('span','event-badge '+eventGroupClass(found[0].group));badge.append(node('i'),`${found.length} event${found.length===1?'':'s'}`);badge.title=[...new Set(found.map(item=>item.label))].join(', ');summary.append(badge)}}
   let failures=0,missing=0;const search=[];
   messages.forEach(message=>{
     const chipStart=chips.children.length,results=context.toolResultsByCall.get(message.call_id)||[],failed=toolFailed(message,results),payload=toolPayload(message),files=fileChanges(message,results[0]);
@@ -1243,14 +1244,13 @@ function transcriptLabelsControl(panel,conversation,messages){
 // groups this conversation has, and a card naming a highlighted message's
 // events on hover. Like Labels, the toggle only shows or hides the marks.
 const EVENTS_KEY='pharos-reader-events';
-const EVENT_GROUP_CLASSES={'Friction':'event-friction','Reactions and learning':'event-learning','Worth a second look':'event-second-look','Choices you may not see':'event-choices'};
 function transcriptEventsControl(panel,conversation,messages){
   const summary=conversation.agent_events;if(!summary)return null;
   const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0);
   const box=node('div','transcript-labels'),button=node('button','transcript-labels-toggle','Events'),legend=node('div','label-legend'),groups=new Set(views.flat().map(event=>event.group));
   button.type='button';box.dataset.viewField='reader_events';button.disabled=!count;
   button.title=count?'Highlight what agents ran into: hover a highlighted sentence for its events':'No agent events found in this conversation';
-  for(const [group,className] of Object.entries(EVENT_GROUP_CLASSES))if(groups.has(group)){const item=node('span','label-legend-item event-legend-item '+className);item.append(node('i'),group);legend.append(item)}
+  for(const [group] of EVENT_GROUPS)if(groups.has(group)){const item=node('span','label-legend-item event-legend-item '+eventGroupClass(group));item.append(node('i'),group);legend.append(item)}
   const load=()=>{const linked=window.pharosView?window.pharosView.read('reader_events',null):null;return count>0&&(typeof linked==='boolean'?linked:pharosPrefs.get(EVENTS_KEY,false)===true)};
   const apply=on=>{panel.classList.toggle('show-events',on);button.setAttribute('aria-pressed',String(on));legend.hidden=!on;if(!on)hideLabelTip();if(count)window.pharosView?.write('reader_events',on)};
   button.onclick=()=>{const on=!panel.classList.contains('show-events');pharosPrefs.set(EVENTS_KEY,on);apply(on)};
@@ -1264,7 +1264,7 @@ function transcriptEventsControl(panel,conversation,messages){
 function showEventTip(events,event){if(!events.length){hideLabelTip();return}
   if(!labelTip){labelTip=node('div','label-tip');labelTip.setAttribute('role','tooltip');document.body.append(labelTip)}
   labelTip.replaceChildren();
-  for(const item of events){const row=node('div','event-tip-row '+(EVENT_GROUP_CLASSES[item.group]||'')),details=node('dl');row.append(node('i'),node('strong','',item.label),node('span','',item.probability==null?'':`${Math.round(item.probability*100)}%`));
+  for(const item of events){const row=node('div','event-tip-row '+eventGroupClass(item.group)),details=node('dl');row.append(node('i'),node('strong','',item.label),node('span','',item.probability==null?'':`${Math.round(item.probability*100)}%`));
     for(const [name,value] of [['Said',item.sentenceText],['About',item.subjectText],['Did',item.responseText]])if(value&&(name==='Said'||value!==item.sentenceText)){details.append(node('dt','',name),node('dd','',shortText(value,180)))}
     row.append(details);labelTip.append(row)}
   labelTip.hidden=false;placeLabelTip(event);

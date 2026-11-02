@@ -33,6 +33,10 @@ Two derived tables, created at catalog open (`agent_events.go`), with no schema 
   (`agentEventStoreFloor`), with its probability, sentence, subject and response text and their UTF-8 byte ranges in
   `messages.text`.
 
+The reported kinds, their labels and groups are `agentEventFamilies` (`agent_events.go`); the schemas' options, the
+dashboard's catalog and the reader's group colours are checked against it through `testdata/agent-event-kinds.json`
+(`TestAgentEventKindsAgreeEverywhere`).
+
 They back two query datasets, `agent_events` (events at or above the threshold) and `agent_event_messages`, and the
 dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard also draws **events per 1,000 agent
 messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
@@ -115,9 +119,11 @@ pharos --config LIBRARY.toml agent-events status
 
 `FILE.jsonl` (`pharos-agent-events-v1`) starts with a header line naming the model and lexicon, then one line per
 message read and one per scored event. Byte ranges are zero-based UTF-8 offsets into `messages.text`, end exclusive.
-The import is one transaction. It keeps an event only when its message exists with the text it was scored on
-(SHA-256), its ranges fall on UTF-8 boundaries of that text, and its kind is one the product reports; it reports
-what it skipped. Importing a message again replaces its events.
+The import is one transaction; blank lines are ignored. It keeps an event only when its message exists with the text
+it was scored on (SHA-256), its ranges fall on UTF-8 boundaries of that text, and its kind is one the product reports;
+it reports what it skipped. Importing a message again replaces its events, and a message the file names that is gone
+or whose text changed loses those an earlier import stored. While reading the file it keeps only each message's
+metadata, and reads a message's text again to check its events' ranges.
 
 ## Candidates and framing in Go
 
