@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // claudeAIAdapter reads a Claude.ai data export (claude.ai → Settings →
@@ -211,9 +212,14 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				messages = append(messages, item)
 			}
 		}
-		// A message without text blocks keeps its flattened text.
+		// A message without text blocks keeps its flattened text. Exports
+		// from before content blocks hold only that text, which is the one
+		// text block a later export holds, under the same ID.
 		if text := firstString(message["text"]); texts == 0 && strings.TrimSpace(text) != "" {
 			item := base("")
+			if len(blocks) == 0 {
+				item = base(":block:0")
+			}
 			item.Kind, item.Text, item.RawText = "message", text, jsonText(map[string]any{"text": text})
 			messages = append(messages, item)
 		}
@@ -264,10 +270,11 @@ func claudeAISelected(conversation claudeAIConversation) map[string]bool {
 	leaf := conversation.CurrentLeaf
 	if _, ok := parents[leaf]; !ok {
 		leaf = ""
-		newest := ""
+		var newest time.Time
 		for _, message := range conversation.Messages {
-			id, at := firstString(message["uuid"]), firstString(message["created_at"])
-			if children[id] == 0 && at >= newest {
+			id := firstString(message["uuid"])
+			at, _ := parseTime(firstString(message["created_at"]))
+			if children[id] == 0 && !at.Before(newest) {
 				leaf, newest = id, at
 			}
 		}

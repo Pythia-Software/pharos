@@ -216,6 +216,12 @@ func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 		c["chat_messages"], c["updated_at"] = c["chat_messages"].([]any)[:3], "2026-10-01T10:03:00Z"
 	})
 	empty := older(func(c map[string]any) { c["chat_messages"] = []any{}; delete(c, "updated_at") })
+	// Exports from before content blocks hold each message's text alone.
+	flat := older(func(c map[string]any) {
+		for _, message := range c["chat_messages"].([]any) {
+			delete(message.(map[string]any), "content")
+		}
+	})
 	count := func(c *Catalog) (int, int) {
 		var all, selected int
 		if err := c.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(m.selected),0) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='conv-1'`).Scan(&all, &selected); err != nil {
@@ -223,7 +229,7 @@ func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 		}
 		return all, selected
 	}
-	for name, export := range map[string]string{"prefix": prefix, "dated prefix": dated, "empty": empty} {
+	for name, export := range map[string]string{"prefix": prefix, "dated prefix": dated, "empty": empty, "before content blocks": flat} {
 		for when, offset := range map[string]time.Duration{"older file": -48 * time.Hour, "copied since": 48 * time.Hour} {
 			t.Run(name+", "+when, func(t *testing.T) {
 				c, _ := testCatalog(t)
@@ -244,16 +250,33 @@ func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 			})
 		}
 	}
-	// A newer export read after an older one replaces it, branch included.
-	c, _ := testCatalog(t)
-	ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: writeSourceFileAt(t, prefix), Account: "me", Enabled: true})
-	ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: writeSourceFileAt(t, claudeAIExport), Account: "me", Enabled: true})
-	var unselected int
-	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE native_id='m3:block:0' AND selected=0`).Scan(&unselected); err != nil || unselected != 1 {
-		t.Fatalf("the newer branch is not selected: %d %v", unselected, err)
+	// A newer export read after an older one replaces it, branch included,
+	// and adds no second copy of a message the older one held as text alone.
+	for name, export := range map[string]string{"prefix": prefix, "before content blocks": flat} {
+		t.Run("newer after "+name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: writeSourceFileAt(t, export), Account: "me", Enabled: true})
+			ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: writeSourceFileAt(t, claudeAIExport), Account: "me", Enabled: true})
+			var unselected int
+			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE native_id='m3:block:0' AND selected=0`).Scan(&unselected); err != nil || unselected != 1 {
+				t.Fatalf("the newer branch is not selected: %d %v", unselected, err)
+			}
+			if all, selected := count(c); all != 12 || selected != 11 {
+				t.Fatalf("after the newer export: %d messages, %d selected", all, selected)
+			}
+		})
 	}
-	if all, selected := count(c); all != 12 || selected != 11 {
-		t.Fatalf("after the newer export: %d messages, %d selected", all, selected)
+}
+
+func TestClaudeAINewestLeafComparesTimesNotText(t *testing.T) {
+	// "10:00:00Z" sorts after "10:00:00.500Z" as text, though it is earlier.
+	selected := claudeAISelected(claudeAIConversation{Messages: []map[string]any{
+		{"uuid": "root", "parent_message_uuid": claudeAIRoot, "created_at": "2026-10-01T09:59:00Z"},
+		{"uuid": "first", "parent_message_uuid": "root", "created_at": "2026-10-01T10:00:00Z"},
+		{"uuid": "second", "parent_message_uuid": "root", "created_at": "2026-10-01T10:00:00.500Z"},
+	}})
+	if !selected["second"] || selected["first"] || !selected["root"] {
+		t.Fatalf("selected = %v", selected)
 	}
 }
 
