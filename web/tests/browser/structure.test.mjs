@@ -34,10 +34,11 @@ const markdownLinkAPI = {
   ]},
   "GET /api/markdown-link": ({query}) => {
     const href=query.get("href");
-    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12"};
+    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12",path:"/workspace/internal/archive/api.go",launchable:false};
     if(href==="http://localhost:5173/")return {status:"server",detail:"Local server returned HTTP 200"};
     return {status:"unavailable",detail:href.startsWith('http')?"Local server unavailable on this Mac":"File unavailable on this Mac"};
   },
+  "POST /api/markdown-link": ({query}) => ({opened:"/workspace/"+query.get("href").split(":")[0],revealed:false}),
 };
 const work = `/work/${workID}`;
 // The root session's last reply, which the card previews as its latest response.
@@ -1119,6 +1120,13 @@ test("Markdown local destinations become navigable only after availability is co
   const source=page.getByRole("link",{name:"Source file",exact:true});
   assert.ok(await source.getAttribute("href"));
   assert.equal(await source.getAttribute("aria-disabled"),null);
+  // The Mac app's context menu reads the resolved path for Open With.
+  assert.equal(await source.getAttribute("data-file-path"),"/workspace/internal/archive/api.go");
+  // A confirmed file opens in its Mac app instead of loading in the browser.
+  await source.click();
+  await page.waitForFunction(()=>document.querySelector('#feedbackToast.visible'));
+  assert.ok(app.calls.some(call=>call.method==='POST'&&call.path==='/api/markdown-link'&&call.query.get('href')==='internal/archive/api.go:12'));
+  assert.equal(page.context().pages().length,1);
   assert.equal(await page.getByRole("link",{name:"Running dev server",exact:true}).getAttribute("href"),"http://localhost:5173/");
   for(const name of ["Missing file","Stopped dev server"]){
     const link=page.getByRole("link",{name,exact:true});

@@ -866,12 +866,22 @@ const checkMarkdownLink=markdownLinkChecker((href,workspace)=>{
 });
 function decorateMarkdownLink(link,item,workspace){
   const kind=item.link,mark=node('span','markdown-link-icon');mark.setAttribute('aria-hidden','true');link.prepend(mark);
-  const update=(status,detail,href)=>{
+  const update=(status,detail,href,file)=>{
     link.dataset.linkStatus=status;link.title=detail+'\n'+item.href;
     // A description is announced without changing the visible link label.
     link.setAttribute('aria-description',detail);
     mark.replaceChildren(icon(status==='unavailable'?'close':status==='unknown'?'info':kind.icon));
-    link.href=href||item.href;
+    link.href=href||item.href;link.onclick=null;
+    // The Mac app's context menu offers Open With and Show in Finder for this path.
+    if(status==='file'&&file?.path){link.dataset.filePath=file.path;link.dataset.fileLaunchable=String(Boolean(file.launchable))}else{delete link.dataset.filePath;delete link.dataset.fileLaunchable}
+    // The Mac opens a local file in its default app; the served copy is the fallback elsewhere.
+    if(status==='file'&&href)link.onclick=event=>{
+      if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+      event.preventDefault();
+      fetch('/api/markdown-link?'+new URLSearchParams({href:item.href,workspace}),{method:'POST'})
+        .then(response=>response.ok?response.json():Promise.reject())
+        .then(result=>feedbackToast(result.revealed?'Shown in Finder':'Opened '+result.opened.split('/').pop()),()=>window.open(href,'_blank','noopener'));
+    };
     if(status==='unavailable'||status==='checking'||status==='unknown'&&kind.kind==='file'){
       link.removeAttribute('href');link.setAttribute('role','link');link.setAttribute('aria-disabled','true');link.tabIndex=0;
     }else{link.removeAttribute('aria-disabled');link.removeAttribute('role')}
@@ -881,7 +891,7 @@ function decorateMarkdownLink(link,item,workspace){
     const image=document.createElement('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.src='/api/markdown-favicon?'+new URLSearchParams({host:kind.host});image.onerror=()=>image.replaceWith(icon('web'));mark.replaceChildren(image);
   }else if(markdownLinkProbed(kind)){
     update('checking',kind.detail);
-    checkMarkdownLink(item.href,workspace).then(result=>update(result.status,result.detail,result.href));
+    checkMarkdownLink(item.href,workspace).then(result=>update(result.status,result.detail,result.href,result));
   }else update(kind.kind,kind.detail);
 }
 
