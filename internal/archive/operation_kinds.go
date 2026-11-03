@@ -23,7 +23,8 @@ type operationKind struct {
 	Holds string
 	// Affects lists the freshness domains (§5) the operation brings current.
 	Affects string
-	// Stop names the existing stopper: index, view, backup, cloud, or "".
+	// Stop names the existing stopper: index, view, backup, cloud, work (the
+	// work's own, Op.setStopper), or "".
 	Stop string
 	// OnEject says what a stop or a release does to it.
 	OnEject string
@@ -115,9 +116,9 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; it runs again on the next index or Tools request.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.authorship", Label: "Classify your writing", Verb: "Classifying your writing", Holds: "D:w W:w", Affects: "an.authorship",
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
-	{Kind: "analysis.labels", Label: "Label messages", Verb: "Labeling messages", VariantLabels: map[string]string{"backlog": "Label earlier messages"}, Holds: "D:w W:w", Affects: "an.labels",
+	{Kind: "analysis.labels", Label: "Label messages", Verb: "Labeling messages", VariantLabels: map[string]string{"backlog": "Label earlier messages"}, Holds: "D:w W:w", Affects: "an.labels", Stop: "work",
 		OnEject: "Stops between batches; the next run resumes it.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
-	{Kind: "analysis.agent_events", Label: "Find agent events", Verb: "Finding agent events", VariantLabels: map[string]string{"backlog": "Find earlier agent events"}, Holds: "D:w W:w", Affects: "an.agent_events",
+	{Kind: "analysis.agent_events", Label: "Find agent events", Verb: "Finding agent events", VariantLabels: map[string]string{"backlog": "Find earlier agent events"}, Holds: "D:w W:w", Affects: "an.agent_events", Stop: "work",
 		OnEject: "Stops between chunks of conversations; the next run resumes it.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.findings", Label: "Update findings", Verb: "Updating findings", Holds: "D:w W:w", Affects: "findings",
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},

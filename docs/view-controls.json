@@ -1055,6 +1055,15 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "b463ec7e5caa3d73:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "labelSwitch",
+      "tag": "button",
+      "control": "'button', 'toggle'",
+      "contract": "settings",
+      "reason": "Persists the library's message labels setting (labels_enabled, /api/labels/settings) or the agent events preference; it controls background processing, not the current URL view."
+    },
+    {
       "key": "f96939e6262189c2:0",
       "file": "internal/archive/assets/background.js",
       "owner": "render",
@@ -1092,15 +1101,6 @@
       "sharedDisclosure": true,
       "contract": "settings",
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
-    },
-    {
-      "key": "3327c32c534abd22:0",
-      "file": "internal/archive/assets/background.js",
-      "owner": "renderLabels",
-      "tag": "input",
-      "control": "'input'",
-      "contract": "settings",
-      "reason": "Persists the library labels_enabled setting through /api/labels/settings; it controls background processing, not the current URL view."
     },
     {
       "key": "c7b7dd6cbc73773b:0",
@@ -2256,15 +2256,6 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "html:6d1477e845d198d5:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"agentEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"agentEventsTitle\" aria-describedby=\"agentEventsDescription\" aria-checked=\"false\">",
-      "contract": "settings",
-      "reason": "Library preference that lists the Agent Experience preview pages in Analyze; not view state."
     },
     {
       "key": "html:6f2936f3f335b6b5:0",

@@ -456,9 +456,10 @@ const ROUTES = [
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
   { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#labelsEnabled", api: {
+  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#agentEventsEnabled", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
-      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." } },
+      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." },
+      agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled)." } },
   } },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },

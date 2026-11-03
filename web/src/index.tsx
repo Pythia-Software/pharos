@@ -1326,7 +1326,7 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const loading = events.loading || read.loading, error = events.error || read.error;
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once Agent Experience is turned on in Settings → App preferences; the first run downloads a small model.</p>;
+  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
     {card("Messages with an event", scanned ? `${(100 * messages / scanned).toFixed(1)}%` : "—", `${messages.toLocaleString()} of ${scanned.toLocaleString()} agent messages read`)}
