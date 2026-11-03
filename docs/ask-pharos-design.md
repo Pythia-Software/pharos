@@ -55,6 +55,16 @@ Reloading restores this tab's open overlay or floating progress panel, including
 the draft and page context. Closed or dismissed surfaces stay closed; restoring
 an overlay preserves the underlying page URI.
 
+Full screen is its own page, `/ask?ask_chat=ID`: the same composer, without its
+glow, filling the page's full width and height, its transcript above the editor.
+While working, the signal trace runs around the page's edge instead.
+Before the first question, the suggestions sit there instead, inside the
+composer, until the user types. The composer's full
+screen button opens it from Home or the overlay and keeps the page context chip;
+pressed again, it returns to the page it came from, where Home shows the chat
+inline and any other page reopens the overlay. Back, the navigation, or opening
+an answer also leave full screen; a pending question then floats as usual.
+
 ## Composer and responses
 
 The prompt editor expands automatically. Focus enlivens the whole composer and its SVG
@@ -68,6 +78,10 @@ it to another surface, call `setWorking` with the active request state, and
 `destroy` it when that surface is removed. Hue cycles slowly while idle and six
 times faster while working, preserving its current phase when speed changes.
 Only the decoration changes hue; content and panel fills retain their colors.
+Hue motion pauses while the decoration is not shown, such as a closed panel or
+full screen's composer, so hidden glows do not restyle every frame. Full screen's
+page-edge signal (`createPharosEdgeTrace`) animates only the transforms of four
+small streaks, one per side, so the compositor moves it without repainting.
 Reduced motion keeps both hue and loading trace still, with loading still visible.
 For an icon, supply its 24×24 SVG outline path to the same effect. The header's
 chat glyph uses this mode so its glow and loading trace follow the bubble inside
@@ -240,7 +254,7 @@ accessible in History; Clear does not delete saved chats. Ordinary search remain
 available. Clear keeps the selected CLI/model/effort for the next chat.
 
 Place the icon buttons inside the composer in this order: switch to ordinary
-search, History, Clear, picture in picture, Send/Stop. Show History only for an empty new composer, with no
+search, History, Clear, picture in picture, full screen, Send/Stop. Show History only for an empty new composer, with no
 submitted messages or draft. Show Clear whenever the composer has a draft or a
 conversation, as a text button floating in the composer's upper-right corner.
 In the modal, place a matching Close text button beside Clear. Their transparent

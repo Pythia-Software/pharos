@@ -17,6 +17,7 @@ import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCard
 import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
 import type { DashboardCardTarget } from "./dashboard-card-model";
+import type { HabitsCover } from "./habits-card";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
@@ -37,6 +38,7 @@ export type QueryPreview = {
   dashboardTrend?: CompactTimelineOptions;
   preserveScale?: boolean;
   study?: HumanStudyPreview;
+  habits?: HabitsCover;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
@@ -343,6 +345,8 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 // canonical revisions; an aborted caller never lends its signal to another run.
 export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return;
+  // A Habits template draws as the dashboard card at its address.
+  jobs = jobs.map(job => job.options?.recipe?.habits && !job.options.dashboard ? { ...job, options: { ...job.options, dashboard: job.options.url, dashboardTarget: job.options.recipe.habits.target } } : job);
   const dashboards = jobs.filter(job => job.options?.dashboard);
   if (dashboards.length) {
     const pending = [...dashboards];

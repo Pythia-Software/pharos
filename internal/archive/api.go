@@ -312,7 +312,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -568,6 +568,20 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/habits":
+		mode, days := r.URL.Query().Get("mode"), 0
+		if n, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil {
+			days = n
+		} else {
+			days = 365
+		}
+		ctx, err := withHabitsPreferences(r.Context(), r.URL.Query().Get("habits_settings"))
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		value, err := s.Catalog.Habits(ctx, mode, days)
+		writeResult(w, value, err)
 	case path == "/api/usage/parallelism":
 		value, err := s.Catalog.parallelismData(r.Context())
 		writeResult(w, value, err)
@@ -684,6 +698,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
 	case path == "/api/search/text" || path == "/api/search/text/validate":
 		if r.Method != "POST" {
 			writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)

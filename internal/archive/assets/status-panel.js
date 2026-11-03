@@ -27,7 +27,8 @@
 .pharos-status-headline details>summary{cursor:pointer}
 .pharos-status-headline .pharos-button{margin-top:8px}
 .pharos-status-now{margin:0 0 10px}
-.pharos-status-heading{margin:14px 0 6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
+.pharos-status-heading{display:flex;align-items:baseline;margin:14px 0 6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
+.pharos-status-heading a{margin-left:auto;font-size:12px;font-weight:400;letter-spacing:normal;text-transform:none}
 .pharos-status-panel .pharos-attention-item>.pharos-sub{margin-top:4px;overflow-wrap:anywhere}
 .pharos-status-line{display:block;overflow-wrap:anywhere}
 .pharos-status-line+.pharos-status-line{margin-top:8px}
@@ -66,9 +67,6 @@
 .pharos-status-items li>span:last-child{flex:0 0 auto;max-width:65%}
 .pharos-status-panel .pharos-dot.small{width:7px;height:7px;flex:none;margin-right:6px}
 .pharos-status-panel .pharos-dot.paused{background:transparent;box-shadow:inset 0 0 0 2px var(--muted,#888)}
-.pharos-status-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px}
-.pharos-status-foot a{margin-left:auto}
-.pharos-status-foot small{flex-basis:100%;color:var(--muted,#666);font-size:12px}
 .pharos-status-others{margin-top:10px;font-size:12px;color:var(--muted,#666);overflow-wrap:anywhere}
 .pharos-status-others>div+div{margin-top:2px}
 .pharos-panel-head .pharos-sub a{color:inherit}
@@ -169,8 +167,8 @@
   const ROUTINE_TONES = new Set(['good', 'busy']);
 
   // The schedule's part of the panel: its headline, one row per cadence
-  // (open when something in it is happening or wrong), and what Update
-  // everything now costs. Null when the snapshot has no schedule.
+  // (open when something in it is happening or wrong). Null when the
+  // snapshot has no schedule.
   function scheduleModel(background, now = Date.now()) {
     if (!background || !Array.isArray(background.cadences)) return null;
     const items = Object.fromEntries((background.items || []).map(item => [item.id, item]));
@@ -200,7 +198,7 @@
     const routine = !headline.title || ROUTINE_TONES.has(headline.tone || 'good');
     return {headline: routine ? null : {tone: headline.tone, title: headline.title, text: headline.text || '', tech: headline.tech || '',
       action: headline.action?.path ? {label: headline.action.label || '', path: headline.action.path, body: headline.action.body || {}} : null},
-      rows, everything: background.everything?.text || ''};
+      rows};
   }
   const scheduleItem = (item, text) => ({id: item.id, label: item.label, dot: SCHEDULE_DOTS[item.state] ?? '', text,
     tooltip: item.state === 'running' && item.feeds ? `${item.feeds} update when this finishes.` : ''});
@@ -645,18 +643,15 @@
     }
     appendNow(content, model);
     if (model.load) content.append(loadRow(model.load));
-    if (schedule?.rows.length) content.append(sectionHeading('Schedule', 'schedule-heading'), cadenceList(schedule.rows));
-    appendAttention(content, model.attention);
-    const foot = node('div', 'pharos-status-foot');
-    foot.dataset.key = 'foot';
-    const everything = button('Update everything now', '', () => post('/api/sync/check', {}));
-    everything.disabled = indexBusy(state?.view, window.pharosLibrary?.localBusy?.());
-    const settings = node('a', '', 'Schedule settings');
+    // Settings sits on the Schedule heading's line, at the right.
+    const settings = node('a', '', 'Settings');
     settings.href = '/settings/sync';
     settings.onclick = event => { event.preventDefault(); navigate('/settings/sync'); };
-    foot.append(everything, settings);
-    if (schedule?.everything) foot.append(node('small', '', schedule.everything));
-    content.append(foot);
+    const scheduleHeading = sectionHeading('Schedule', 'schedule-heading');
+    scheduleHeading.append(settings);
+    content.append(scheduleHeading);
+    if (schedule?.rows.length) content.append(cadenceList(schedule.rows));
+    appendAttention(content, model.attention);
     if (model.others.length) {
       const others = node('div', 'pharos-status-others');
       others.dataset.key = 'others';
@@ -673,8 +668,7 @@
     commit(content, scrollTop);
   }
 
-  // A schedule action or Update everything now; the snapshot shows what
-  // it changed.
+  // A schedule action; the snapshot shows what it changed.
   async function post(path, body) {
     try {
       const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});

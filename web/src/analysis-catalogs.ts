@@ -7,6 +7,7 @@ import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysi
 import { humanAnalysisCatalog } from "./human-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
+import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
 
 // The engine dashboards, by Analyze topic. Carbon and Parallelism build
@@ -14,7 +15,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 // reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
-  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, agent_experience: agentEventsAnalysisCatalog,
+  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, habits: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog,
 };
 
 // The complete catalog a topic draws with, given the user's settings: Carbon

@@ -17,7 +17,7 @@ export const viewFields: Record<string, ViewField> = {
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings","safety"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
@@ -70,6 +70,13 @@ export const viewFields: Record<string, ViewField> = {
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),
   carbon: field("analyze_carbon", ["analyze/carbon","analyze/query/*"], "json", "View-scoped Carbon assumptions; same shape as the Carbon controls."),
   parallelism: field("analyze_parallelism", ["analyze/parallelism","analyze/query/parallelism"], "json", "Ribbon mode, counting, gap, repository, range/custom bounds, selected workspace/agent, zoom and smoothingMinutes."),
+  habits_streak: field("habits_streak", ["analyze/habits"], "enum", "Which days a Habits streak runs over: every day (all), or weekdays only (weekdays), where Saturdays and Sundays neither break nor extend it. Vacation days never do.", ["all", "weekdays"], "all"),
+  habits_calendar: field("habits_calendar", ["analyze/habits"], "enum", "Whose days the Habits activity calendar shows: you (typed messages), agents you started (answering a message you sent), or automatic agent runs (started by a schedule, script, orchestrator or another agent).", ["you", "agents", "automated"], "you"),
+  habits_weekends: field("habits_weekends", ["analyze/habits"], "enum", "Whether the Habits activity calendar shows Saturdays and Sundays (show) or weekdays only (hide).", ["show", "hide"], "show"),
+  habits_weeks: field("habits_weeks", ["analyze/habits"], "enum", "Weeks the Habits activity calendar shows, ending with today's week.", ["13", "26", "53"], "53"),
+  habits_punchcard: field("habits_punchcard", ["analyze/habits"], "enum", "Whose time the Habits weekday × hour punchcard shows: you, agents you started (with you or unattended), agents you started while you're away (unattended), automatic agent runs, or agents you started minus you.", ["you", "agents", "unattended", "automated", "difference"], "you"),
+  habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
+  habits_day: field("habits_day", ["analyze/habits"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };
 // These maps have viewer-dependent initial choices. Capture effective entries

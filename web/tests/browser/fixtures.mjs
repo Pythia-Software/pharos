@@ -33,6 +33,29 @@ export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).m
 const datasets = queryFixtureDatasets;
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
+// Habits: four months of days, with streaks, a vacation, a punchcard and
+// one automation with a long name.
+function habitsSummary() {
+  const count = 120, first = new Date(summaryDay - (count - 1) * day), zero = () => Array.from({ length: 7 }, () => Array(24).fill(0));
+  const days = Array.from({ length: count }, (_, index) => {
+    const date = new Date(+first + index * day), name = date.toISOString().slice(0, 10), weekday = (date.getUTCDay() + 6) % 7, active = index % 9 !== 4 && weekday < 6;
+    const actor = minutes => ({ elapsed_ms: minutes * 60000, active_ms: minutes * 90000, turns: minutes ? 3 : 0 });
+    return { day: name, weekday, vacation: index === count - 20, excused: index === count - 20,
+      you: { engaged_ms: active ? (60 + index % 5 * 40) * 60000 : 0, messages: active ? 12 : 0, typed_words: active ? 800 : 0, ...(active ? { first: +date + 9 * 3600000, last: +date + (17 + index % 4) * 3600000 } : {}), focus_blocks: active ? 2 : 0, focus_ms: active ? 3600000 : 0, ...(active ? { blocks: [[+date + 9 * 3600000, +date + 12 * 3600000], [+date + 14 * 3600000, +date + (17 + index % 4) * 3600000]] } : {}) },
+      with_you: actor(active ? 90 : 0), unattended: actor(index % 3 ? 120 : 0), automated: actor(index % 2 ? 20 : 0), agents_ms: (active ? 90 : 0) * 60000 + (index % 3 ? 120 : 0) * 60000, parallel_ms: 1800000, peak_agents: 3,
+      qualifies: { you: active, agents: active || index % 3 > 0, automated: index % 2 > 0 } };
+  });
+  const cells = { you: zero(), with_you: zero(), unattended: zero(), automated: zero() };
+  for (let weekday = 0; weekday < 5; weekday++) for (let hour = 9; hour < 18; hour++) { cells.you[weekday][hour] = 30 * 60000 * 13; cells.unattended[weekday][(hour + 8) % 24] = 50 * 60000 * 13; }
+  const streak = { current: 4, current_from: days.at(-5).day, longest: 21, longest_from: days[10].day, longest_to: days[30].day, today: "pending" };
+  return { generated_at: iso(0), timezone: "UTC", today: days.at(-1).day, period_start: days[0].day, mode: "all", settings: { vacations: [days[count - 20].day], youMessages: 1, agentMinutes: 10, engagedGap: 15, dayStart: 0 },
+    days, streaks: { you: streak, agents: { ...streak, today: "done" }, automated: { ...streak, current: 0 } },
+    windows: [7, 30, 90, 365].map(length => ({ days: length, considered: Math.min(length, count), active: { you: Math.round(Math.min(length, count) * .7), agents: Math.min(length, count), automated: Math.round(Math.min(length, count) / 2) } })),
+    punchcard: { from: days.at(-90).day, to: days.at(-1).day, weeks: [13, 13, 13, 13, 13, 13, 12].map(count => Array(24).fill(count)), cells },
+    automations: [{ initiator: "scheduled", label: "corpus-overnight-quota-and-progress-with-an-unusually-long-automation-name", runs: 140, active_days: 60, agent_hours: 32.5, first_run: +first, last_run: now - 3600000, median_gap_ms: 3600000, missed: 3, daily: Object.fromEntries(days.filter((_, index) => index % 2).map(item => [item.day, 2])) },
+      { initiator: "scripted", label: "claude -p", runs: 12, active_days: 6, agent_hours: 1.2, first_run: +first, last_run: now - day, median_gap_ms: 2 * day, missed: 0, daily: {} }],
+    coverage: { turns: 3000, unmatched_turns: 40, typed_messages: 900, messages: 5000 } };
+}
 // The service assigns every usage record a carbon factor tier.
 datasets.usage.forEach((row, index) => { row.carbon_tier = ["small", "medium", "large"][index % 3]; });
 // Usage trends consume the calendar keys of their source records.
@@ -434,7 +457,7 @@ const statusOperation = (id, changes) => ({
 });
 export const busyStatus = {
   ...idleStatus, revision: 2,
-  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject in a moment", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
     blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
   operations: [
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
@@ -572,6 +595,7 @@ export const defaultApi = {
     })),
     coverage: { conversations: 2, mirrors_removed: 0, unexplained_waits_excluded: 0, timing: "Captured timing", catalog: "Test catalog" },
   },
+  "GET /api/habits": () => habitsSummary(),
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day), active_conversations: { 1: 4, 7: 18, 30: 60, 90: 140, 180: 200, 365: 200, all: 200 } },
   "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },

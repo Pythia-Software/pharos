@@ -453,6 +453,7 @@ APP_HTML = r'''<!doctype html>
   </section>
   <section id="analyze" class="view" data-feedback-label="Analyze view"><div id="queryTableUsage"></div></section>
   <section id="findings" class="view" data-feedback-label="Findings view"><div id="findingsPage"></div></section>
+  <section id="ask" class="view" data-feedback-label="Ask Pharos view"><div id="askPage"></div></section>
   <section id="detail" class="view"><button class="back" id="back"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-arrow-left"/></svg> Back to Search</button><div id="detailBody"></div></section>
 </main>
 <aside class="drawer" id="bookmarksDrawer" aria-label="Bookmarks" data-feedback-label="Bookmarks drawer"><header class="drawer-head"><h2>Bookmarks</h2><button id="bookmarksClose" class="drawer-close" type="button" aria-label="Close bookmarks" title="Close (Escape)"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></header><div class="drawer-tools"><button id="bookmarkAdd" type="button"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-star"/></svg> Bookmark this page</button></div><div class="drawer-body" id="bookmarksList"></div></aside><div id="bookmarkPopover" class="bookmark-popover" popover="auto" role="dialog" aria-labelledby="bookmarkPopoverTitle" data-feedback-label="Bookmark popover"><form id="bookmarkPopoverForm"><h2 id="bookmarkPopoverTitle">Bookmark added</h2><label>Name<input id="bookmarkName" type="text" autocomplete="off" spellcheck="false"></label><div class="bookmark-popover-actions"><button id="bookmarkRemove" type="button">Remove</button><button type="submit" class="primary">Done</button></div></form></div>
@@ -677,7 +678,7 @@ function placeFeedbackOverModal(){const modal=[...document.querySelectorAll('dia
 new MutationObserver(mutations=>{if(mutations.some(mutation=>mutation.type==='attributes'?mutation.target instanceof HTMLDialogElement:[...mutation.addedNodes,...mutation.removedNodes].some(node=>node instanceof HTMLDialogElement)))placeFeedbackOverModal()}).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['open']});
 document.addEventListener('pointerover',onFeedbackHover,true);document.addEventListener('click',onFeedbackClick,true);document.addEventListener('keydown',event=>{if(feedbackMode&&(event.key==='ArrowUp'||event.key==='ArrowDown')){event.preventDefault();stepFeedbackTarget(event.key==='ArrowUp'?1:-1);return}if(event.key==='Escape'){if($('#feedbackComposer').classList.contains('open'))closeFeedbackComposer();else if(feedbackMode)setFeedbackMode(false);else setFeedbackExpanded(false)}if(event.altKey&&event.key.toLowerCase()==='a'){event.preventDefault();setFeedbackMode(!feedbackMode)}});addEventListener('resize',()=>{renderFeedbackPins();restoreFeedbackLayout()});pageScroller.addEventListener('scroll',renderFeedbackPins,{passive:true});
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}});if(!r.ok)throw new Error((await r.json().catch(()=>({error:r.statusText}))).error);return r.json()}
-const ROUTES=new Set(['home','cards','library','analyze','findings','mcp','settings']);
+const ROUTES=new Set(['home','cards','library','analyze','findings','mcp','settings','ask']);
 const themeOrder=['system','light','dark'];
 function applyTheme(theme,save=true){if(theme==='system')document.documentElement.removeAttribute('data-theme');else document.documentElement.dataset.theme=theme;const button=$('#themeToggle'),next=themeOrder[(themeOrder.indexOf(theme)+1)%themeOrder.length],label=theme[0].toUpperCase()+theme.slice(1),nextLabel=next[0].toUpperCase()+next.slice(1);button.replaceChildren(icon(theme==='dark'?'moon':theme==='light'?'sun':'theme-system'));button.setAttribute('aria-label',`Color theme: ${label}. Activate to switch to ${nextLabel}.`);button.title=`Theme: ${label}. Click to use ${nextLabel}.`;if(save)pharosPrefs.set('pharos-theme',theme)}
 // React owns the shared composer and preserves its draft between openings.
@@ -706,7 +707,7 @@ $('#navigatorURI').addEventListener('input',syncNavigatorGo);
 $('#navigatorCopy').onclick=async()=>{try{await copyFeedbackText(location.href);feedbackToast('URI copied')}catch{feedbackToast('Could not copy URI')}};
 addEventListener('popstate',routeFromLocation);
 addEventListener('pharos:uri-changed',syncNavigator);
-const HISTORY_KEY='pharos-history-v1',HISTORY_LIMIT=1000,VIEW_TITLES={'':'Home',home:'Home',cards:'Card Library',library:'Search',analyze:'Analyze',findings:'Findings',mcp:'MCP',...Object.fromEntries(Object.entries(SETTINGS_PAGES).map(([path,id])=>[path.slice(1),`Settings · ${$('#'+id).dataset.pageTitle}`]))},VIEW_DATASETS={library:['library'],analyze:['usage','mcp_calls','conversation_activity','writing','writing_messages','tools','tool_calls','skill_usages','parallelism','tl1_attempts'],tools:['tools','tool_calls'],mcp:['mcp_calls']};
+const HISTORY_KEY='pharos-history-v1',HISTORY_LIMIT=1000,VIEW_TITLES={'':'Home',home:'Home',cards:'Card Library',library:'Search',analyze:'Analyze',findings:'Findings',mcp:'MCP',ask:'Ask Pharos',...Object.fromEntries(Object.entries(SETTINGS_PAGES).map(([path,id])=>[path.slice(1),`Settings · ${$('#'+id).dataset.pageTitle}`]))},VIEW_DATASETS={library:['library'],analyze:['usage','mcp_calls','conversation_activity','writing','writing_messages','tools','tool_calls','skill_usages','parallelism','tl1_attempts'],tools:['tools','tool_calls'],mcp:['mcp_calls']};
 function loadHistory(){try{const value=JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');return Array.isArray(value)?value.filter(entry=>entry&&typeof entry.url==='string'&&typeof entry.title==='string'&&Number.isFinite(entry.at)):[]}catch{return[]}}
 function saveHistory(entries){try{localStorage.setItem(HISTORY_KEY,JSON.stringify(entries.slice(0,HISTORY_LIMIT)))}catch{}}
 function updatePrivateVisits(path,body){const write=()=>api('/api/ask/'+path,{method:'POST',body:JSON.stringify(body)});return typeof askWriteVisit==='function'?askWriteVisit(write):write()}
@@ -864,12 +865,22 @@ const checkMarkdownLink=markdownLinkChecker((href,workspace)=>{
 });
 function decorateMarkdownLink(link,item,workspace){
   const kind=item.link,mark=node('span','markdown-link-icon');mark.setAttribute('aria-hidden','true');link.prepend(mark);
-  const update=(status,detail,href)=>{
+  const update=(status,detail,href,file)=>{
     link.dataset.linkStatus=status;link.title=detail+'\n'+item.href;
     // A description is announced without changing the visible link label.
     link.setAttribute('aria-description',detail);
     mark.replaceChildren(icon(status==='unavailable'?'close':status==='unknown'?'info':kind.icon));
-    link.href=href||item.href;
+    link.href=href||item.href;link.onclick=null;
+    // The Mac app's context menu offers Open With and Show in Finder for this path.
+    if(status==='file'&&file?.path){link.dataset.filePath=file.path;link.dataset.fileLaunchable=String(Boolean(file.launchable))}else{delete link.dataset.filePath;delete link.dataset.fileLaunchable}
+    // The Mac opens a local file in its default app; the served copy is the fallback elsewhere.
+    if(status==='file'&&href)link.onclick=event=>{
+      if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+      event.preventDefault();
+      fetch('/api/markdown-link?'+new URLSearchParams({href:item.href,workspace}),{method:'POST'})
+        .then(response=>response.ok?response.json():Promise.reject())
+        .then(result=>feedbackToast(result.revealed?'Shown in Finder':'Opened '+result.opened.split('/').pop()),()=>window.open(href,'_blank','noopener'));
+    };
     if(status==='unavailable'||status==='checking'||status==='unknown'&&kind.kind==='file'){
       link.removeAttribute('href');link.setAttribute('role','link');link.setAttribute('aria-disabled','true');link.tabIndex=0;
     }else{link.removeAttribute('aria-disabled');link.removeAttribute('role')}
@@ -879,7 +890,7 @@ function decorateMarkdownLink(link,item,workspace){
     const image=document.createElement('img');image.alt='';image.loading='lazy';image.referrerPolicy='no-referrer';image.src='/api/markdown-favicon?'+new URLSearchParams({host:kind.host});image.onerror=()=>image.replaceWith(icon('web'));mark.replaceChildren(image);
   }else if(markdownLinkProbed(kind)){
     update('checking',kind.detail);
-    checkMarkdownLink(item.href,workspace).then(result=>update(result.status,result.detail,result.href));
+    checkMarkdownLink(item.href,workspace).then(result=>update(result.status,result.detail,result.href,result));
   }else update(kind.kind,kind.detail);
 }
 

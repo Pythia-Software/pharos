@@ -10,6 +10,7 @@ export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?:
 // Read the same cover definition as the preview, before any requests finish.
 // Placeholder marks describe the display, never estimated data values.
 export function cardLoadingPresentation(query: QueryState, options: { recipe?: QueryRecipe; cover?: CardCover; metricId?: string; days?: number } = {}): CardLoadingSpec {
+  if (options.recipe?.habits) return options.recipe.habits.loading;
   const study = options.recipe?.humanStudy;
   if (study && (!query.grouping || study === "conversation-lengths") && humanStudyCoverMatches(options.recipe!, options.cover, options.metricId)) {
     const spec: CardLoadingSpec = study === "conversation-lengths" ? { kind: "list", count: 6, height: 240 } : study === "hours" ? { kind: "columns", count: 24, height: 205 } : ["contribution-patterns", "examples"].includes(study) ? { kind: "list", count: study === "examples" ? 3 : 4, height: 210 } : { kind: "line", count: 31, headline: true, height: 260 };

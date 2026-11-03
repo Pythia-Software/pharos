@@ -1,7 +1,7 @@
 import { EMPTY_QUERY, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
-import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { cardDashboardWhere } from "./card-exploration";
 import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
@@ -157,7 +157,7 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
-  if (recipe.thinking) return recipe;
+  if (recipe.thinking || recipe.habits) return recipe;
   if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const mapped = dashboardFor(recipe);
   const dashboard = mapped.chart.view === "distribution" && recipe.cover?.minSamples !== undefined ? { ...mapped, chart: { ...mapped.chart, minSamples: recipe.cover.minSamples } } : mapped;
@@ -172,6 +172,13 @@ export function parallelismRibbon(days?: number | null) {
 }
 
 export function cardDestination(recipe: QueryRecipe, query: QueryState, window?: RollingWindow): string {
+  // A Habits card is the page's address, as its "Add to Home" saves it,
+  // landing on its section.
+  if (recipe.habits) {
+    const address = new URL(usageWorkspaceURL({ mode: "dashboards", topic: "habits", dataset: "rhythm" }, new URLSearchParams(recipe.habits.view)), "http://localhost");
+    address.searchParams.set("reveal", `section:${recipe.habits.target}`);
+    return address.pathname + address.search;
+  }
   const url = queryURL(recipe.dataset, query, window), target = recipe.destination;
   if(recipe.thinking) {
     const parsed=new URL(url,"http://localhost");

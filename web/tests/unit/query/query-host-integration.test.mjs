@@ -146,7 +146,8 @@ test('page parameters choose the dataset, and every card URL opens its own datas
  }
  assert.equal(m.queryFromURL('/analyze?analyze_workspace=1&q_usage='),undefined,'A dashboard is not a token-table bookmark');
  const clock=new Date(2026,9,8,15);
- for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
+ // Habits templates open, and are collected as, the Habits page (dashboard-card.test.mjs).
+ for(const recipe of queryRecipes.filter(recipe=>!recipe.habits))assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
  const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
  assert.equal(writing.pathname,'/analyze');
  assert.equal(writing.searchParams.get('analyze_data'),'writing_messages');
