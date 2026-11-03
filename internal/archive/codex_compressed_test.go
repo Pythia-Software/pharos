@@ -446,3 +446,22 @@ func TestCodexCaptureWithNamingRecordsReadsNewerCompressedRollout(t *testing.T) 
 		t.Fatalf("captured: %d messages from %q", got, origin)
 	}
 }
+
+// The retained inputs of a single rollout taken before and after compression
+// describe one source, so history can be prepared from both.
+func TestCodexSingleRolloutRetainedAcrossCompressionPreparesHistory(t *testing.T) {
+	c, config, dest := historyFixture(t)
+	plain := filepath.Join(t.TempDir(), "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
+	writeSourceFile(t, plain, codexLines(probeID1, 1))
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: plain, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+	config.Sources = []SourceConfig{source}
+	ingestSource(t, c, source)
+	appendSourceFile(t, plain, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"user_message","message":"later"}}`+"\n")
+	compressRollout(t, plain)
+	ingestSource(t, c, source)
+	inputs, err := filepath.Glob(filepath.Join(config.CaptureRoot, "host-a", "codex", "inputs", "*", captureManifestName))
+	if err != nil || len(inputs) < 2 {
+		t.Fatalf("retained inputs = %v, %v", inputs, err)
+	}
+	prepareHistoryFixture(t, config, dest)
+}

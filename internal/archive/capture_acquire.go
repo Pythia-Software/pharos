@@ -305,7 +305,7 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 	}
 	// A frozen inventory's identity proves its closure; per-record identities
 	// below include only the transcript group and metadata that produced it.
-	root, ok := view.captured(frozen.Source.Path)
+	root, ok := view.capturedSource(frozen.Source)
 	if !ok {
 		return fail(errors.New("unmapped retained source root"))
 	}

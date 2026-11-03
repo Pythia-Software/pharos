@@ -396,7 +396,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 			manifest := view.manifest
 			// Historical Conductor readers map one superseded database, not
 			// the current source root. Lease exactly that generation.
-			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).captured(manifest.Source.Path)
+			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).capturedSource(manifest.Source)
 			if isConductorSource(unit.Source.Kind) && canonicalRoot != unit.Reader.Config().Path {
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)

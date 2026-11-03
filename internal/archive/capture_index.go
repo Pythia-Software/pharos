@@ -71,6 +71,15 @@ func (v *captureView) captured(original string) (string, bool) {
 	return v.translate(original, true)
 }
 
+// capturedSource maps a manifest's source root to its capture. A single Codex
+// rollout is recorded under its plain path in either form (capturedRollout).
+func (v *captureView) capturedSource(source captureSourceInfo) (string, bool) {
+	if isCodexSource(source.Kind) {
+		return v.capturedRollout(source.Path)
+	}
+	return v.captured(source.Path)
+}
+
 // translate maps path through the mapping with the longest matching prefix.
 func (v *captureView) translate(path string, forward bool) (string, bool) {
 	best, length := "", -1
@@ -239,7 +248,7 @@ func openCaptureAdapter(target captureTarget) (Adapter, *captureManifest, *captu
 	// retained it. Both records describe this same validated capturing host.
 	target.Host.MachineID = defaultString(target.Host.MachineID, manifest.Host.MachineID)
 	view := newCaptureView(target.Host, target.Dir, manifest)
-	root, ok := view.captured(manifest.Source.Path)
+	root, ok := view.capturedSource(manifest.Source)
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("capture manifest %s does not map its source path", target.Dir)
 	}
