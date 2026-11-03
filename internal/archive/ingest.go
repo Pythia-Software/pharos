@@ -781,8 +781,8 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	if err != nil {
 		return 0, 0, err
 	}
-	if fromCapture || record.EvidenceIdentity != "" || userExport(record) {
-		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
+	if live := !fromCapture && record.EvidenceIdentity == ""; !live || exportVersioned(record) {
+		if err := guardCapture(tx, record, workspaceID, host, &authority, live); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -1104,8 +1104,9 @@ var errOlderCopy = errors.New("the capture is older than what its host already i
 // stored is left alone, and then so are the workspace's own fields: only a copy
 // no older in any part may replace them, and prune, as a live sync does. A
 // record with nothing newer is rejected with errOlderCopy. Equal versions are
-// the same content, so they pass.
-func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, authority *copyAuthority) error {
+// the same content, so they pass; a live read, which has no captured evidence
+// to compare, passes at an equal version whatever evidence is stored.
+func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, authority *copyAuthority, live bool) error {
 	if workspaceID == "" {
 		return nil
 	}
@@ -1123,6 +1124,7 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 		if err != nil {
 			return err
 		}
+		rejected = rejected && !(live && conversation.Observed == stored)
 		if rejected {
 			claim.older = true
 			older++
@@ -1136,6 +1138,7 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 	if err != nil {
 		return err
 	}
+	workspaceOlder = workspaceOlder && !(live && record.Observed == stored)
 	if older == len(record.Conversations) && (older > 0 || workspaceOlder) {
 		return errOlderCopy
 	}
@@ -1145,16 +1148,13 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 	return nil
 }
 
-// userExport reports whether a record was read from an export a person
-// downloaded. Two exports of one account hold the same conversations, so an
-// older one read after a newer one is guarded as a capture is.
-func userExport(record WorkspaceRecord) bool {
-	for _, conversation := range record.Conversations {
-		if conversation.Origin == "user-export" {
-			return true
-		}
-	}
-	return false
+// exportVersioned reports whether a record was read from an export a person
+// downloaded whose versions are when its conversations last changed. Two
+// exports of one account hold the same conversations, so a live read of an
+// older one after a newer one is guarded as a capture is. ChatGPT exports
+// still carry the file's time, which a copied old export renews.
+func exportVersioned(record WorkspaceRecord) bool {
+	return record.SourceKind == "claude-ai"
 }
 
 // storedCopyVersion is the version host last wrote a workspace's own fields

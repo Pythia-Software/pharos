@@ -2,6 +2,7 @@ package archive
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -173,6 +174,7 @@ func TestClaudeAIExportReadsOnlyWhatItHolds(t *testing.T) {
 	for name, export := range map[string]string{
 		"truncated":        "[" + complete + ",",
 		"cut after one":    "[" + complete,
+		"two arrays":       "[" + complete + "] [" + complete + "]",
 		"no messages list": `[{"uuid":"conv-4","name":""}]`,
 		"null messages":    `[{"uuid":"conv-4","name":"","chat_messages":null}]`,
 	} {
@@ -199,34 +201,58 @@ func writeSourceFileAt(t *testing.T, content string) string {
 }
 
 func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
-	c, _ := testCatalog(t)
-	newer := writeSourceFileAt(t, claudeAIExport)
 	// The older export predates the edited prompt and the reply to it.
 	var export []map[string]any
 	if err := json.Unmarshal([]byte(claudeAIExport), &export); err != nil {
 		t.Fatal(err)
 	}
 	export[0]["chat_messages"] = export[0]["chat_messages"].([]any)[:3]
-	older := writeSourceFileAt(t, jsonText(export))
-	info, err := os.Stat(newer)
+	export[0]["updated_at"] = "2026-10-01T10:03:00Z"
+	for name, olderFile := range map[string]time.Duration{"older file": -48 * time.Hour, "copied again since": 48 * time.Hour} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			newer, older := writeSourceFileAt(t, claudeAIExport), writeSourceFileAt(t, jsonText(export))
+			info, err := os.Stat(newer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at := info.ModTime().Add(olderFile)
+			if err := os.Chtimes(older, at, at); err != nil {
+				t.Fatal(err)
+			}
+			count := func() (int, int) {
+				var all, selected int
+				if err := c.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(m.selected),0) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='conv-1'`).Scan(&all, &selected); err != nil {
+					t.Fatal(err)
+				}
+				return all, selected
+			}
+			ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: newer, Account: "me", Enabled: true})
+			all, selected := count()
+			ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: older, Account: "me", Enabled: true})
+			if gotAll, gotSelected := count(); gotAll != all || gotSelected != selected || all != 12 {
+				t.Fatalf("after the older export: %d messages, %d selected; before %d, %d", gotAll, gotSelected, all, selected)
+			}
+		})
+	}
+}
+
+func TestClaudeAIExportReadLiveAfterItsCapture(t *testing.T) {
+	c, config := testCatalog(t)
+	export := writeSourceFileAt(t, claudeAIExport)
+	source := SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: export, Account: "me", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	indexCaptures(t, c, config.CaptureRoot, currentHost().ID)
+	// The same export read live, as a rebuild does, is not taken for an older copy.
+	adapter, err := MakeAdapter(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale := info.ModTime().Add(-48 * time.Hour)
-	if err := os.Chtimes(older, stale, stale); err != nil {
-		t.Fatal(err)
-	}
-	count := func() (int, int) {
-		var all, selected int
-		if err := c.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(m.selected),0) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='conv-1'`).Scan(&all, &selected); err != nil {
-			t.Fatal(err)
-		}
-		return all, selected
-	}
-	ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: newer, Account: "me", Enabled: true})
-	all, selected := count()
-	ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: older, Account: "me", Enabled: true})
-	if gotAll, gotSelected := count(); gotAll != all || gotSelected != selected || all != 12 {
-		t.Fatalf("after the older export: %d messages, %d selected; before %d, %d", gotAll, gotSelected, all, selected)
+	result := c.IngestContext(withIngestMode(context.Background(), ingestMode{force: true}), adapter, nil)
+	if result.Error != nil || result.Older != 0 || result.SkippedCurrent != 0 {
+		t.Fatalf("live read after capture = %+v", result)
 	}
 }
