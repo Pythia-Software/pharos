@@ -875,10 +875,15 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		return found
 	}
 	document := broker.statusDocument(context.Background())
-	if got, want := pids(document["resources"]), []int{os.Getpid(), servicePID, commandPID, stuckPID}; !slices.Equal(got, want) {
-		t.Fatalf("the machine's total: %v, want %v", got, want)
+	// The broker is this test process, so other tests' children still
+	// running in it are its workers, after the processes it was asked about.
+	total := document["resources"].(*resourceSummary)
+	want := []int{os.Getpid(), servicePID, commandPID, stuckPID}
+	if got := pids(total); len(got) < len(want) || !slices.Equal(got[:len(want)], want) ||
+		slices.ContainsFunc(total.Processes[len(want):], func(r resourceReading) bool { return !strings.HasPrefix(r.Role, "worker:") }) {
+		t.Fatalf("the machine's total: %v, want %v and any workers", got, want)
 	}
-	if total := document["resources"].(*resourceSummary); !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
 		t.Fatalf("the total's line: %+v", total)
 	}
 	entries := document["libraries"].([]map[string]any)
