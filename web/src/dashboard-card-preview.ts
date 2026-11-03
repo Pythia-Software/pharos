@@ -4,7 +4,7 @@ import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
-import { DASHBOARD_CARD_ACTION, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
+import { DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
 import { loadConcurrencyData } from "./concurrency-store";
@@ -21,15 +21,16 @@ import type { QueryPreview } from "./query-previews";
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
 // A dashboard address carries no authored cover, so its card fits the chart.
+// A card's own group count replaces the dashboard's for its chart only.
 // A ribbon card reads the captured timing snapshot the ribbon draws, and a
 // Habits card the habits summary its section draws (timing and habits stand
 // in for them in tests).
-export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary): Promise<QueryPreview> {
+export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary, groups?: number): Promise<QueryPreview> {
   if (isHabitsCardTarget(target)) {
     const view = readHabitsCardView(readDashboardCard(address, new Date(now)).params);
     return habitsCardPreview(target, view, habits ?? await loadHabitsSummary(view, signal));
   }
-  return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now));
+  return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now, groups));
 }
 
 function ribbonPreview(address: string, data: ConcurrencyData, now: number): QueryPreview {
@@ -42,8 +43,10 @@ function ribbonPreview(address: string, data: ConcurrencyData, now: number): Que
     dashboardTrend: { prepared: true, xLabel: cover.hourly ? "hours" : "day", yLabel: cover.label, unit: "" } };
 }
 
-async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now()): Promise<QueryPreview> {
-  const { topic, dataset, state, where, params } = readDashboardCard(address, new Date(now));
+async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), groups?: number): Promise<QueryPreview> {
+  const opened = readDashboardCard(address, new Date(now)), { topic, dataset, where, params } = opened;
+  const counted = groups !== undefined && dashboardCardGroups(address);
+  const state = counted && opened.state.view === "trend" ? { ...opened.state, seriesLimit: groups } : opened.state;
   if (schema.name !== `pharos_${dataset}`) throw new Error("This dashboard card's dataset is unavailable.");
   const calculator = window.pharosCarbon;
   if (topic === "carbon" && !calculator) throw new Error("Carbon assumptions are still loading. Refresh this card to try again.");
@@ -81,7 +84,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   if (analysis.problem) throw new Error(analysis.problem);
   const result = (await run(analysis.query))[0];
   if (!result) throw new Error("The dashboard returned no chart result.");
-  let clause = analysis.clause, entry = selectGroups(result, analysis.selection);
+  let clause = counted ? { ...analysis.clause, display: { ...analysis.clause.display!, maxGroups: groups } } : analysis.clause, entry = selectGroups(result, analysis.selection);
   if (entry.error) throw new Error(entry.error);
   if (state.view === "cycle") {
     if (analysis.native) nativeCycleResult(analysis, entry);

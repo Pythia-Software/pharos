@@ -5,7 +5,8 @@ import type { FieldSchema, MetricDisplay } from "@pythia-software/query-table-co
 import { clearPreviewCache, instantiateRecipe, suggestionWindowLabel, supportsToday, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
 import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardLibraryParams, cardSorts, cardTemplates, cardTopicAll, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
 export { cardLibraryParams } from "./card-library-model";
-import { cardKind, defaultCardCover } from "./card-cover";
+import { cardGroupsFor, cardKind, defaultCardCover } from "./card-cover";
+import { CardGroupsField } from "./card-groups-field";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { queryCategories, type QueryCategory } from "./query-categories";
 import { queryURL, type QueryDataset } from "./query-links";
@@ -204,6 +205,9 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
   };
   const destinationKeys = chosenCover?.mode === "source" ? editing?.measures.find(metric => metric.id === chosenCover.metricId)?.groupBy ?? editing?.exploration?.keys : editing?.exploration?.keys;
   const editedItem = editing && instantiateRecipe({ ...editing, cover: editedCover() }, editDays);
+  // The count field's placeholder is what the chart draws without one.
+  const countable = editing && editedItem && cardGroupsFor(editedItem.query, { recipe: editing, cover: editedItem.cover && { ...editedItem.cover, maxGroups: undefined } }, schemas[editing.dataset]?.fields);
+  const editedGroups = countable && { ...countable, max: cardCoverGroupLimit(editing) };
   const opensDashboard = editedItem && new URL(editedItem.url, location.origin).searchParams.get("analyze_mode") === "dashboards";
   const tabKeys = [ALL, ...topics], index = tabKeys.indexOf(topic);
   const activeFilters = [search, dataset, kind].filter(Boolean).length;
@@ -260,7 +264,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
       {editing && coverChoices(editing).length ? <><label>Cover metric<select aria-label="Cover metric" value={metric} onChange={event => { const next = decodeCover(event.target.value); setMetric(event.target.value); setChart(availableChartKinds(editing, next)[0]); }}>{coverChoices(editing).map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
         <label>Chart<select aria-label="Chart" value={chart} onChange={event => setChart(event.target.value as MetricDisplay["kind"])}>{availableChartKinds(editing, decodeCover(metric)).map(kind => <option key={kind} value={kind}>{chartNames[kind] ?? kind}</option>)}</select></label>
         <label>Chart height (px)<input type="number" aria-label="Chart height (px)" min={170} max={600} step={10} placeholder="Automatic" value={height} onChange={event => setHeight(event.target.value)} /></label>
-        <label>Visible rows / series<input type="number" aria-label="Visible rows / series" min={1} max={cardCoverGroupLimit(editing)} step={1} placeholder="Automatic" value={maxGroups} onChange={event => setMaxGroups(event.target.value)} /></label>
+        {editedGroups ? <CardGroupsField groups={editedGroups} value={maxGroups} onChange={setMaxGroups} /> : null}
         <label>Chart key<select aria-label="Chart key" value={showLegend} onChange={event => setShowLegend(event.target.value)}><option value="auto">Automatic (multiple series only)</option><option value="true">Show</option><option value="false">Hide</option></select></label>
         <label>Other remainder<select aria-label="Other remainder" value={showOther} onChange={event => setShowOther(event.target.value)}><option value="auto">Automatic</option><option value="true">Show when exact and additive</option><option value="false">Hide</option></select></label></> : null}
       {editing && editedItem ? <div className="card-template-destination"><strong>Opens {opensDashboard ? "the full dashboard" : editing.exploration ? "a grouped table" : "source records"}</strong><p>{opensDashboard ? "Explore this card’s topic with the dashboard’s measures, breakdowns, views and filters." : editing.exploration ? destinationKeys?.length ? `Group by ${destinationKeys.map(key => schemas[editing.dataset].fields.find(field => field.name === key)?.label ?? key).join(", ")}.` : "One summary row for the whole window." : "Matched observations and their metrics."} Window: {editing.dataset === "tl1_attempts" ? `Last ${editDays} days` : windowLabel(editDays)}.</p><small>{editing.note}</small><button type="button" className="card-template-query" onClick={() => { dialog.current?.close(); onOpen(queryURL(editing.dataset, editedItem.query, editedItem.window)); }}>Open query to edit grouping and filters <Icon name="arrow-right" /></button></div> : null}

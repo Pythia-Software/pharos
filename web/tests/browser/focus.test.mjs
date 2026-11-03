@@ -752,9 +752,10 @@ test("All Cards moves focus to its content and browser history returns Home", { 
 });
 
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
-  const { page } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
+  const { page, shot } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
   const edit = page.locator(".card-library-entry button[aria-label^='Edit card']").first();
   await press(edit);
+  await shot("card-template-editor");
   await holdsFocus(page, page.locator("dialog.card-template-editor"), edit);
 });
 
