@@ -138,7 +138,7 @@ const background = {
   everything: { seconds: 540, text: "Everything words" },
 };
 
-test("the schedule is the server's headline, one row per cadence with its items, and the cost of updating everything", () => {
+test("the schedule is the server's headline, one row per cadence with its items", () => {
   const schedule = plain(panel.scheduleModel(background, at));
   assert.deepEqual(schedule.headline, { tone: "bad", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } });
   assert.deepEqual(schedule.rows.map(row => [row.id, row.dot, row.open]), [["frequent", "bad", true], ["hourly", "busy pulse", true], ["daily", "", false], ["manual", "paused", false]],
@@ -149,7 +149,7 @@ test("the schedule is the server's headline, one row per cadence with its items,
   assert.equal(schedule.rows[0].what, "Item A, Item C");
   assert.deepEqual(schedule.rows[0].items.map(item => item.text), ["Updated 2 min ago · next in 3 min", "Failed · retrying in 15 min"]);
   assert.equal(schedule.rows[2].items[0].text, "Paused · 30 h ago");
-  assert.equal(schedule.everything, "Everything words");
+  assert.equal(schedule.everything, undefined, "the panel leaves updating everything to Settings");
   // Only when you ask is one more row, Ad hoc, run as the manual cadence.
   const adhoc = schedule.rows.at(-1);
   assert.deepEqual([adhoc.id, adhoc.label, adhoc.dot, adhoc.run.cadence, adhoc.open], ["manual", "Ad hoc", "paused", "manual", false]);
