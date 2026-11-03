@@ -82,9 +82,19 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		if conversation.UUID == "" {
 			return fmt.Errorf("Claude.ai export %s conversation %d has no ID", file, index)
 		}
+		// An empty conversation is an empty list; a missing one is damage,
+		// and would replace the conversation with nothing.
+		if conversation.Messages == nil {
+			return fmt.Errorf("Claude.ai export %s conversation %s has no messages list", file, conversation.UUID)
+		}
 		if err := emit(a.record(conversation, a.original(file), version)); err != nil {
 			return err
 		}
+	}
+	// More also stops at the end of the input or a read error, so only the
+	// closing bracket shows the whole export was read.
+	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+		return fmt.Errorf("Claude.ai export %s ends early", file)
 	}
 	return nil
 }
@@ -140,7 +150,10 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 			if block == nil {
 				continue
 			}
+			// The block is the message's raw text, so nothing in a person's
+			// words is read as protocol, such as pasted usage.
 			item := base(fmt.Sprintf(":block:%d", index))
+			item.RawText = jsonText(block)
 			if start := iso(block["start_timestamp"]); start != "" {
 				item.CreatedAt = start
 			}
@@ -198,7 +211,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 		// A message without text blocks keeps its flattened text.
 		if text := firstString(message["text"]); texts == 0 && strings.TrimSpace(text) != "" {
 			item := base("")
-			item.Kind, item.Text = "message", text
+			item.Kind, item.Text, item.RawText = "message", text, jsonText(map[string]any{"text": text})
 			messages = append(messages, item)
 		}
 		attachments, _ := message["attachments"].([]any)
@@ -208,7 +221,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				continue
 			}
 			item := base(fmt.Sprintf(":attachment:%d", index))
-			item.Kind = "attachment"
+			item.Kind, item.RawText = "attachment", jsonText(attachment)
 			item.Text = jsonText(map[string]any{"type": "file_attachment", "file_name": attachment["file_name"], "file_type": attachment["file_type"], "file_size": attachment["file_size"], "extracted_content": attachment["extracted_content"]})
 			messages = append(messages, item)
 		}
@@ -218,7 +231,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				names = append(names, firstString(mapValue(raw)["file_name"]))
 			}
 			item := base(":files")
-			item.Kind, item.Text = "attachment", jsonText(map[string]any{"type": "files", "file_names": names})
+			item.Kind, item.Text, item.RawText = "attachment", jsonText(map[string]any{"type": "files", "file_names": names}), jsonText(files)
 			messages = append(messages, item)
 		}
 	}

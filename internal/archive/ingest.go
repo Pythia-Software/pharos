@@ -781,7 +781,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	if err != nil {
 		return 0, 0, err
 	}
-	if fromCapture || record.EvidenceIdentity != "" {
+	if fromCapture || record.EvidenceIdentity != "" || userExport(record) {
 		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
 			return 0, 0, err
 		}
@@ -1143,6 +1143,18 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 		authority.older, authority.workspace = true, false
 	}
 	return nil
+}
+
+// userExport reports whether a record was read from an export a person
+// downloaded. Two exports of one account hold the same conversations, so an
+// older one read after a newer one is guarded as a capture is.
+func userExport(record WorkspaceRecord) bool {
+	for _, conversation := range record.Conversations {
+		if conversation.Origin == "user-export" {
+			return true
+		}
+	}
+	return false
 }
 
 // storedCopyVersion is the version host last wrote a workspace's own fields

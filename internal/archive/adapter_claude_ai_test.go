@@ -2,10 +2,12 @@ package archive
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // claudeAIExport is a Claude.ai export in the shape claude.ai writes: the
@@ -147,5 +149,84 @@ func TestClaudeAIExportZipIsCapturedAndIndexedElsewhere(t *testing.T) {
 	}
 	if conversations != 2 || messages != 15 {
 		t.Fatalf("captured export: %d conversations, %d messages", conversations, messages)
+	}
+}
+
+func TestClaudeAIExportReadsOnlyWhatItHolds(t *testing.T) {
+	// Usage a person pasted is their words, not a request's tokens.
+	c, _ := testCatalog(t)
+	dir := t.TempDir()
+	writeSourceFile(t, filepath.Join(dir, "conversations.json"), `[{"uuid":"conv-3","name":"Paste","chat_messages":[
+ {"uuid":"p1","text":"","sender":"human","created_at":"2026-10-03T10:00:00Z","parent_message_uuid":"00000000-0000-4000-8000-000000000000","content":[{"type":"text","text":"{\"usage\":{\"input_tokens\":1000,\"output_tokens\":200}}"}]},
+ {"uuid":"p2","text":"{\"usage\":{\"input_tokens\":5,\"output_tokens\":5}}","sender":"assistant","created_at":"2026-10-03T10:01:00Z","parent_message_uuid":"p1","content":[]}]}]`)
+	ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: dir, Account: "me", Enabled: true})
+	var messages, tokens int
+	if err := c.DB.QueryRow(`SELECT COUNT(*), (SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage) FROM messages`).Scan(&messages, &tokens); err != nil {
+		t.Fatal(err)
+	}
+	if messages != 2 || tokens != 0 {
+		t.Fatalf("%d messages counted %d tokens", messages, tokens)
+	}
+
+	// A damaged export fails rather than replacing conversations with less.
+	complete := `{"uuid":"conv-4","name":"","chat_messages":[]}`
+	for name, export := range map[string]string{
+		"truncated":        "[" + complete + ",",
+		"cut after one":    "[" + complete,
+		"no messages list": `[{"uuid":"conv-4","name":""}]`,
+		"null messages":    `[{"uuid":"conv-4","name":"","chat_messages":null}]`,
+	} {
+		path := filepath.Join(t.TempDir(), "conversations.json")
+		writeSourceFile(t, path, export)
+		adapter, err := MakeAdapter(SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := adapter.Discover(func(WorkspaceRecord) error { return nil }); err == nil {
+			t.Errorf("%s export read without error", name)
+		}
+	}
+	if records := discoverClaudeAI(t, writeSourceFileAt(t, `[`+complete+`]`)); len(records) != 1 || len(records[0].Conversations[0].Messages) != 0 {
+		t.Fatalf("empty conversation = %+v", records)
+	}
+}
+
+func writeSourceFileAt(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	writeSourceFile(t, path, content)
+	return path
+}
+
+func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
+	c, _ := testCatalog(t)
+	newer := writeSourceFileAt(t, claudeAIExport)
+	// The older export predates the edited prompt and the reply to it.
+	var export []map[string]any
+	if err := json.Unmarshal([]byte(claudeAIExport), &export); err != nil {
+		t.Fatal(err)
+	}
+	export[0]["chat_messages"] = export[0]["chat_messages"].([]any)[:3]
+	older := writeSourceFileAt(t, jsonText(export))
+	info, err := os.Stat(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := info.ModTime().Add(-48 * time.Hour)
+	if err := os.Chtimes(older, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	count := func() (int, int) {
+		var all, selected int
+		if err := c.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(m.selected),0) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='conv-1'`).Scan(&all, &selected); err != nil {
+			t.Fatal(err)
+		}
+		return all, selected
+	}
+	ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: newer, Account: "me", Enabled: true})
+	all, selected := count()
+	ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: older, Account: "me", Enabled: true})
+	if gotAll, gotSelected := count(); gotAll != all || gotSelected != selected || all != 12 {
+		t.Fatalf("after the older export: %d messages, %d selected; before %d, %d", gotAll, gotSelected, all, selected)
 	}
 }
