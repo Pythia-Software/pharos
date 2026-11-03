@@ -282,7 +282,7 @@ func freezeCodexAuditRecord(ctx context.Context, unit syncUnit, dir string, budg
 		path := part.item
 		if adapter.view != nil {
 			var ok bool
-			path, ok = adapter.view.captured(part.item)
+			path, ok = adapter.view.capturedRollout(part.item)
 			if !ok {
 				return nil, nil, used, errAuditUnstable
 			}

@@ -172,6 +172,16 @@ func rolloutFile(plain string) string {
 	return preferRollout(plain, plain+".zst", plainInfo, compressedInfo)
 }
 
+// capturedRollout finds the copy of the rollout named by its plain path, in
+// whichever form was taken: a source configured as one compressed file maps
+// only that file.
+func (v *captureView) capturedRollout(item string) (string, bool) {
+	if path, ok := v.captured(item); ok {
+		return rolloutFile(path), true
+	}
+	return v.captured(item + ".zst")
+}
+
 // resolveRolloutSource follows a source configured as one rollout file to
 // whichever form of it is there now, since Codex renames it on compression
 // and on resume.

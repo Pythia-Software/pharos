@@ -329,22 +329,57 @@ func TestCodexRecordReplayReadsCompressedRolloutOverStalePlainCopy(t *testing.T)
 // A source configured as one compressed rollout keeps its original identity
 // when indexed from its capture.
 func TestCodexSingleCompressedRolloutSourceKeepsIdentityFromCapture(t *testing.T) {
-	useHost(t, "host-a")
-	c, config := testCatalog(t)
-	plain := filepath.Join(t.TempDir(), "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
-	writeSourceFile(t, plain, codexLines(probeID1, 2))
-	compressed := compressRollout(t, plain)
-	source := SourceConfig{Name: "codex", Kind: "codex", Path: compressed, Account: "local", Enabled: true}
-	config.Sources = []SourceConfig{source}
-	ingestSource(t, c, source)
-	if result := runCapture(t, config); !result.OK {
-		t.Fatalf("capture = %+v", result)
+	// Configured either form; Codex compressed it before the first capture.
+	for _, form := range []string{".jsonl", ".jsonl.zst"} {
+		t.Run(form, func(t *testing.T) {
+			useHost(t, "host-a")
+			c, config := testCatalog(t)
+			plain := filepath.Join(t.TempDir(), "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
+			writeSourceFile(t, plain, codexLines(probeID1, 2))
+			compressRollout(t, plain)
+			source := SourceConfig{Name: "codex", Kind: "codex", Path: strings.TrimSuffix(plain, ".jsonl") + form, Account: "local", Enabled: true}
+			config.Sources = []SourceConfig{source}
+			ingestSource(t, c, source)
+			if result := runCapture(t, config); !result.OK {
+				t.Fatalf("capture = %+v", result)
+			}
+			useHost(t, "host-b")
+			other, _ := testCatalog(t)
+			indexCaptures(t, other, config.CaptureRoot, "host-a")
+			if got, origin := codexMessageCount(t, other, probeID1); got != 2 || origin != plain {
+				t.Fatalf("captured single rollout: %d messages from %q", got, origin)
+			}
+			useHost(t, "host-a")
+			source.Options = map[string]any{"retained_input_capture": true}
+			auditRetainedCodexSource(t, automaticTestServer(t, source).Catalog, source)
+		})
 	}
-	useHost(t, "host-b")
-	other, _ := testCatalog(t)
-	indexCaptures(t, other, config.CaptureRoot, "host-a")
-	if got, origin := codexMessageCount(t, other, probeID1); got != 2 || origin != plain {
-		t.Fatalf("captured single rollout: %d messages from %q", got, origin)
+}
+
+// auditRetainedCodexSource verifies the source's only unit against a
+// retained acquisition of it.
+func auditRetainedCodexSource(t *testing.T, c *Catalog, source SourceConfig) {
+	t.Helper()
+	ingestSource(t, c, source)
+	adapter, err := MakeAdapter(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := c.acquireRetainedInput(t.Context(), adapter, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	var unit syncUnit
+	if err := input.Adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
+		unit = unitOf(input.Adapter.Config(), parts, false)
+		unit.Reader = input.Adapter
+		return true
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if result := c.auditUnit(t.Context(), unit, "manual", 0); result.Outcome != "passed" {
+		t.Fatalf("retained single rollout verification = %+v", result)
 	}
 }
 
@@ -363,26 +398,7 @@ func TestCodexSingleRolloutSourceFollowsCompressionAndResume(t *testing.T) {
 	if got, origin := codexMessageCount(t, server.Catalog, probeID1); got != 2 || origin != plain {
 		t.Fatalf("after compression: %d messages from %q", got, origin)
 	}
-	adapter, err := MakeAdapter(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input, err := server.Catalog.acquireRetainedInput(t.Context(), adapter, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var unit syncUnit
-	if err := input.Adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
-		unit = unitOf(input.Adapter.Config(), parts, false)
-		unit.Reader = input.Adapter
-		return true
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if result := server.Catalog.auditUnit(t.Context(), unit, "manual", 0); result.Outcome != "passed" {
-		t.Fatalf("retained compressed single rollout verification = %+v", result)
-	}
-	input.Close()
+	auditRetainedCodexSource(t, server.Catalog, source)
 	// Resumed: the plain file comes back, newer, and the compressed one goes.
 	writeSourceFile(t, plain, readCompressedRollout(t, compressed))
 	os.Remove(compressed)

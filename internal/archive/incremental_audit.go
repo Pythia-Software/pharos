@@ -548,12 +548,13 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 			if separator := strings.LastIndex(original, ":sessions:"); separator >= 0 {
 				original = original[:separator]
 			}
-			path, ok := view.captured(original)
+			lookup := view.captured
+			if isCodexSource(unit.Source.Kind) {
+				lookup = view.capturedRollout
+			}
+			path, ok := lookup(original)
 			if !ok {
 				return "", errAuditUnstable
-			}
-			if isCodexSource(unit.Source.Kind) {
-				path = rolloutFile(path)
 			}
 			paths = append(paths, path)
 		}
