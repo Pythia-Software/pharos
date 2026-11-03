@@ -1,6 +1,6 @@
 // Source choice and consent stay separate from discovery and DOM rendering.
 function createPharosSourceWizard() {
-  const supported=['claude','codex','conductor','tl1','antigravity'];
+  const supported=['claude','codex','conductor','tl1','antigravity','copilot'];
   const key=c=>c.kind+'\0'+c.path;
   return {
     tools:[], detected:[], detectionReady:false, locations:[], report:null, decisions:new Map(), names:{},

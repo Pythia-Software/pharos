@@ -1,10 +1,13 @@
 package archive
 
 import (
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // copilotSessionEvents is a Copilot CLI session in the shape release 1.0.105
@@ -17,21 +20,21 @@ const copilotSessionEvents = `{"type":"session.start","data":{"sessionId":"sess-
 {"type":"system.message","data":{"role":"system","content":"You are Copilot."},"id":"e4","timestamp":"2026-11-03T15:00:02.100Z"}
 {"type":"assistant.turn_start","data":{"turnId":"0"},"id":"e5","timestamp":"2026-11-03T15:00:02.200Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":1000,"outputTokens":50,"cacheReadTokens":0,"cacheWriteTokens":900,"reasoningTokens":20,"reasoningEffort":"medium","apiCallId":"api-1"}},"id":"e6","timestamp":"2026-11-03T15:00:05.000Z"}
-{"type":"assistant.message","data":{"messageId":"a1","model":"gpt-6-luna","content":"","reasoningText":"Checking the files","reasoningBlocks":{"provider":"openai-responses"},"toolRequests":[{"toolCallId":"c1","name":"bash","arguments":{"command":"ls"}},{"toolCallId":"c2","name":"view","arguments":{"path":"missing.py"}}]},"id":"e7","timestamp":"2026-11-03T15:00:05.100Z"}
+{"type":"assistant.message","data":{"messageId":"a1","apiCallId":"api-1","model":"gpt-6-luna","content":"","reasoningText":"Checking the files","reasoningBlocks":{"provider":"openai-responses"},"toolRequests":[{"toolCallId":"c1","name":"bash","arguments":{"command":"ls"}},{"toolCallId":"c2","name":"view","arguments":{"path":"missing.py"}}]},"id":"e7","timestamp":"2026-11-03T15:00:05.100Z"}
 {"type":"tool.execution_start","data":{"toolCallId":"c1","toolName":"bash"},"id":"e8","timestamp":"2026-11-03T15:00:05.200Z"}
 {"type":"tool.execution_complete","data":{"toolCallId":"c1","success":true,"result":{"content":"app.py"},"shellExecution":{"exitCode":0}},"id":"e9","timestamp":"2026-11-03T15:00:05.700Z"}
 {"type":"tool.execution_start","data":{"toolCallId":"c2","toolName":"view"},"id":"e10","timestamp":"2026-11-03T15:00:05.800Z"}
 {"type":"tool.execution_complete","data":{"toolCallId":"c2","success":false,"error":{"message":"no such file"}},"id":"e11","timestamp":"2026-11-03T15:00:05.900Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":1200,"outputTokens":80,"cacheReadTokens":900,"cacheWriteTokens":250,"reasoningTokens":0,"apiCallId":"api-2"}},"id":"e12","timestamp":"2026-11-03T15:00:08.000Z"}
-{"type":"assistant.message","data":{"messageId":"a2","model":"gpt-6-luna","content":"Asking for a review.","toolRequests":[{"toolCallId":"c3","name":"task","arguments":{"prompt":"Review app.py"}}]},"id":"e13","timestamp":"2026-11-03T15:00:08.100Z"}
+{"type":"assistant.message","data":{"messageId":"a2","apiCallId":"api-2","model":"gpt-6-luna","content":"Asking for a review.","toolRequests":[{"toolCallId":"c3","name":"task","arguments":{"prompt":"Review app.py"}}]},"id":"e13","timestamp":"2026-11-03T15:00:08.100Z"}
 {"type":"subagent.started","data":{"toolCallId":"c3","agentName":"code-review","agentDisplayName":"app-review","model":"gpt-6-luna"},"agentId":"agent-1","id":"e14","timestamp":"2026-11-03T15:00:08.200Z"}
 {"type":"user.message","data":{"content":"Review app.py","source":"agent-sess-1","messageId":"u2"},"agentId":"agent-1","id":"e15","timestamp":"2026-11-03T15:00:08.300Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":500,"outputTokens":40,"cacheReadTokens":0,"cacheWriteTokens":450,"reasoningTokens":10,"apiCallId":"api-3"}},"agentId":"agent-1","id":"e16","timestamp":"2026-11-03T15:00:10.000Z"}
-{"type":"assistant.message","data":{"messageId":"a3","model":"gpt-6-luna","content":"Looks fine.","toolRequests":[]},"agentId":"agent-1","id":"e17","timestamp":"2026-11-03T15:00:10.100Z"}
+{"type":"assistant.message","data":{"messageId":"a3","apiCallId":"api-3","model":"gpt-6-luna","content":"Looks fine.","toolRequests":[]},"agentId":"agent-1","id":"e17","timestamp":"2026-11-03T15:00:10.100Z"}
 {"type":"subagent.completed","data":{"toolCallId":"c3"},"agentId":"agent-1","id":"e18","timestamp":"2026-11-03T15:00:10.200Z"}
 {"type":"tool.execution_complete","data":{"toolCallId":"c3","success":true,"result":{"content":"Looks fine."}},"id":"e19","timestamp":"2026-11-03T15:00:10.300Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":1300,"outputTokens":30,"cacheReadTokens":1150,"cacheWriteTokens":140,"reasoningTokens":0,"apiCallId":"api-4"}},"id":"e20","timestamp":"2026-11-03T15:00:12.000Z"}
-{"type":"assistant.message","data":{"messageId":"a4","model":"gpt-6-luna","content":"Added the counter.","toolRequests":[]},"id":"e21","timestamp":"2026-11-03T15:00:12.100Z"}
+{"type":"assistant.message","data":{"messageId":"a4","apiCallId":"api-4","model":"gpt-6-luna","content":"Added the counter.","toolRequests":[]},"id":"e21","timestamp":"2026-11-03T15:00:12.100Z"}
 {"type":"session.shutdown","data":{"modelMetrics":{"gpt-6-luna":{"usage":{"inputTokens":4000,"outputTokens":200,"cacheReadTokens":2050,"cacheWriteTokens":1740}}}},"id":"e22","timestamp":"2026-11-03T15:00:13.000Z"}
 {"type":"session.resume","data":{"context":{"cwd":"/work/app"}},"id":"e23","timestamp":"2026-11-03T15:05:00.000Z"}
 {"type":"user.message","data":{"content":"Thanks","messageId":"u3"},"id":"e24","timestamp":"2026-11-03T15:05:01.000Z"}
@@ -132,7 +135,7 @@ func TestCopilotSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 	if reasoning := byID["a1:reasoning"]; reasoning.Text != "Checking the files" || reasoning.ReasoningFormat != "summary" {
 		t.Fatalf("reasoning = %+v", reasoning)
 	}
-	if call, result := byID["call:c1"], byID["result:c1"]; call.CallID != "c1" || call.CreatedAt != "2026-11-03T15:00:05.200Z" || result.Text != `{"content":"app.py","details":{"duration_ms":500,"exit_code":0},"is_error":false,"tool":"bash"}` {
+	if call, result := byID["a1:block:0"], byID["result:c1"]; call.CallID != "c1" || call.CreatedAt != "2026-11-03T15:00:05.200Z" || result.Text != `{"content":"app.py","details":{"duration_ms":500,"exit_code":0},"is_error":false,"tool":"bash"}` {
 		t.Fatalf("call %+v result %+v", call, result)
 	}
 	if failed := byID["result:c2"]; !strings.Contains(failed.Text, `"is_error":true`) || !strings.Contains(failed.Text, "no such file") {
@@ -148,7 +151,7 @@ func TestCopilotSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 		t.Fatalf("legacy = %+v", legacy)
 	}
 	usage := legacy.Conversations[0].Messages[len(legacy.Conversations[0].Messages)-1]
-	if usage.Kind != "metadata" || usage.Model != "claude-sonnet-4.5" || !strings.Contains(usage.Text, `"source":"shutdown_rollup"`) {
+	if usage.Kind != "metadata" || usage.Model != "claude-sonnet-4.5" || !strings.Contains(usage.Text, `"source":"shutdown_residual"`) {
 		t.Fatalf("legacy usage = %+v", usage)
 	}
 }
@@ -168,6 +171,132 @@ func TestCopilotUsageCountsEachRequestOnce(t *testing.T) {
 	var subagent int
 	if err := c.DB.QueryRow(`SELECT COALESCE(SUM(u.total_tokens),0) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN conversations v ON v.id=a.conversation_id WHERE v.native_id='agent-1'`).Scan(&subagent); err != nil || subagent != 540 {
 		t.Fatalf("subagent usage %d %v", subagent, err)
+	}
+	// Each call shares the output of the request that made it: c1 and c2
+	// split api-1's 50, and c3 has api-2's 80, not the next request's.
+	rows, err := c.DB.Query(`SELECT call_id, output_tokens FROM tool_calls WHERE provider='copilot' ORDER BY call_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := []string{}
+	for rows.Next() {
+		var id string
+		var tokens float64
+		if err := rows.Scan(&id, &tokens); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s=%g", id, tokens))
+	}
+	if strings.Join(got, " ") != "c1=25 c2=25 c3=80" {
+		t.Fatalf("output tokens per call: %v", got)
+	}
+}
+
+// copilotUpgraded is a session begun by a release that wrote no receipts and
+// resumed by one that does: each shutdown totals the whole session.
+const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","copilotVersion":"0.0.330"},"id":"m1","timestamp":"2026-01-02T10:00:00.000Z"}
+{"type":"user.message","data":{"content":"Hello"},"id":"m2","timestamp":"2026-01-02T10:00:01.000Z"}
+{"type":"assistant.message","data":{"messageId":"b1","content":"Hi","model":"claude-sonnet-4.5"},"id":"m3","timestamp":"2026-01-02T10:00:02.000Z"}
+{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":300,"outputTokens":20,"cacheReadTokens":100,"cacheWriteTokens":0}}}},"id":"m4","timestamp":"2026-01-02T10:00:03.000Z"}
+{"type":"session.resume","data":{},"id":"m5","timestamp":"2026-01-03T10:00:00.000Z"}
+{"type":"user.message","data":{"content":"Again"},"id":"m6","timestamp":"2026-01-03T10:00:01.000Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"outputTokens":10,"cacheReadTokens":80,"cacheWriteTokens":0,"apiCallId":"api-9"}},"id":"m7","timestamp":"2026-01-03T10:00:02.000Z"}
+{"type":"assistant.message","data":{"messageId":"b2","content":"Hi again","model":"claude-sonnet-4.5","apiCallId":"api-9"},"id":"m8","timestamp":"2026-01-03T10:00:02.100Z"}
+{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390,"outputTokens":30,"cacheReadTokens":180,"cacheWriteTokens":0}}}},"id":"m9","timestamp":"2026-01-03T10:00:03.000Z"}
+`
+
+func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := t.TempDir()
+	source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true}
+	total := func() int {
+		return countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`)
+	}
+	// The receiptless leg's 320 plus the receipt's 100.
+	writeSourceFile(t, filepath.Join(root, "session-state", "sess-3", "events.jsonl"), copilotUpgraded)
+	ingestSource(t, c, source)
+	if got := total(); got != 420 {
+		t.Fatalf("upgraded session: %d tokens, want 420", got)
+	}
+
+	// A flat log moved into a folder and resumed there: its larger total
+	// replaces or leaves the earlier one, never adds to it.
+	flat := filepath.Join(root, "session-state", "sess-0.jsonl")
+	writeSourceFile(t, flat, copilotLegacy)
+	ingestSource(t, c, source)
+	if got := total(); got != 420+320 {
+		t.Fatalf("flat session: %d tokens, want %d", got, 420+320)
+	}
+	resumed := copilotLegacy + strings.ReplaceAll(strings.ReplaceAll(copilotLegacy, `"id":"l`, `"id":"r`), `"inputTokens":300,"outputTokens":20`, `"inputTokens":600,"outputTokens":40`)
+	writeSourceFile(t, filepath.Join(root, "session-state", "sess-0", "events.jsonl"), resumed)
+	if err := os.Remove(flat); err != nil {
+		t.Fatal(err)
+	}
+	ingestSource(t, c, source)
+	if got := countRows(t, c, `SELECT COALESCE(SUM(u.total_tokens),0) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN conversations v ON v.id=a.conversation_id WHERE v.native_id='sess-0'`); got > 640 {
+		t.Fatalf("moved session: %d tokens, more than its last total", got)
+	}
+}
+
+// A capture can copy a session's log before an append and its
+// workspace.yaml after; reading that capture must not undo the append.
+func TestCopilotCaptureOfAnOlderLogLeavesTheNewerOne(t *testing.T) {
+	useHost(t, "host-a")
+	c, config := testCatalog(t)
+	root := copilotFixture(t)
+	source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	session := filepath.Join(root, "session-state", "sess-1")
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(session, "workspace.yaml"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	appendSourceFile(t, filepath.Join(session, "events.jsonl"), `{"type":"assistant.message","data":{"messageId":"a5","model":"gpt-6-luna","content":"You're welcome.","toolRequests":[]},"id":"e25","timestamp":"2026-11-03T15:05:02.000Z"}`+"\n")
+	ingestSource(t, c, source)
+	// Another Mac sharing the library reads this Mac's capture.
+	useHost(t, "host-b")
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='a5'`); n != 1 {
+		t.Fatalf("the appended reply was removed: %d", n)
+	}
+}
+
+// Copilot is offered to a Mac set up before Pharos read it, chosen in
+// guided setup, and followed by automatic updates.
+func TestCopilotIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
+	home := probeHome(t)
+	useHost(t, "host-a")
+	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
+	writeSourceFile(t, filepath.Join(home, ".copilot", "session-state", "sess-1", "events.jsonl"), copilotSessionEvents)
+	path := probeLibrary(t, "")
+	server := probeServer(t, path)
+	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"accept":["claude"]}`); code != 200 {
+		t.Fatalf("accept = %d %v", code, result)
+	}
+	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["new_sources"] != float64(1) {
+		t.Fatalf("status of a Mac set up before Copilot = %v", status)
+	}
+	code, result := probeCall(t, server, http.MethodPost, "/api/probe", `{"kinds":["copilot"]}`)
+	if code != 200 || !strings.Contains(jsonText(result["candidates"]), `"kind":"copilot"`) {
+		t.Fatalf("guided probe = %d %v", code, result)
+	}
+	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["copilot"],"accept":["copilot"]}`); code != 200 || jsonText(result["added"]) != `["copilot"]` {
+		t.Fatalf("accept copilot = %d %v", code, result)
+	}
+	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["new_sources"] != float64(0) {
+		t.Fatalf("a chosen source is still offered: %v", status)
+	}
+
+	root := copilotFixture(t)
+	automatic := automaticTestServer(t, SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true})
+	appendSourceFile(t, filepath.Join(root, "session-state", "sess-1", "events.jsonl"), `{"type":"assistant.message","data":{"messageId":"a5","model":"gpt-6-luna","content":"You're welcome.","toolRequests":[]},"id":"e25","timestamp":"2026-11-03T15:05:02.000Z"}`+"\n")
+	automatic.runAutomatic(automatic.life.ctx, syncSettings{Interval: 300})
+	if n := countRows(t, automatic.Catalog, `SELECT COUNT(*) FROM messages WHERE native_id='a5'`); n != 1 {
+		t.Fatalf("automatic updates skipped Copilot: %d", n)
 	}
 }
 

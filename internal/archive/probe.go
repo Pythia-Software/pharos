@@ -277,6 +277,14 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			}
 		}
 	}
+	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
+		dir := filepath.Join(home, ".copilot")
+		if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
+			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "copilot", resolved) == nil {
+				status.NewSources++
+			}
+		}
+	}
 	if catalog != nil {
 		_ = catalog.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM source_states WHERE host_id=?1)
 			OR EXISTS(SELECT 1 FROM workspace_sightings WHERE host_id=?1)`, host.ID).Scan(&status.KnownHost)

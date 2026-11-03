@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -195,11 +196,10 @@ func (a *copilotAdapter) parseSession(session copilotSession) (*WorkspaceRecord,
 	if record == nil {
 		return nil, read, nil
 	}
-	version := part.version
-	if len(read) > 1 {
-		version = max(version, read[1].version)
-	}
-	observe(record, version)
+	// The log alone versions the session. A capture can copy the log before
+	// an append and workspace.yaml after it; taking the newer yaml's time
+	// would let that older log replace the newer one.
+	observe(record, part.version)
 	return record, read, nil
 }
 
@@ -287,7 +287,21 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		started   time.Time
 	}
 	calls := map[string]*call{}
-	receipts := false
+	// A receipt comes before the assistant message it paid for, and shares
+	// its apiCallId; naming the receipt after the message links the
+	// message's tool calls to it.
+	paidFor := map[string]string{}
+	for _, event := range events {
+		if firstString(event["type"]) == "assistant.message" {
+			data := mapValueDefault(event["data"])
+			if api, id := firstString(data["apiCallId"]), firstString(data["messageId"]); api != "" && id != "" {
+				paidFor[firstString(event["agentId"])+"\x00"+api] = id
+			}
+		}
+	}
+	// Usage per model in receipts so far, and in receipts before the last
+	// shutdown.
+	receipted, beforeShutdown := map[string]map[string]float64{}, map[string]map[string]float64{}
 	var lastShutdown map[string]any
 	shutdownAt, shutdownLine := "", int64(0)
 	started, ended := "", ""
@@ -386,7 +400,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				name := defaultString(request["name"], "tool")
 				callID := defaultString(request["toolCallId"], fmt.Sprintf("%s:call:%d", id, index))
 				item := base
-				item.NativeID, item.CallID, item.Role, item.Kind = "call:"+callID, callID, "assistant", "tool_call"
+				item.NativeID, item.CallID, item.Role, item.Kind = fmt.Sprintf("%s:block:%d", id, index), callID, "assistant", "tool_call"
 				delegated := matchesFold(name, "task", "agent", "spawn_agent", "delegate", "workflow")
 				if delegated {
 					item.Kind = "delegation"
@@ -436,10 +450,21 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			add(item)
 		case "session.usage_record":
 			usage := mapValueDefault(data["usage"])
-			receipts = true
 			agent.model = firstString(usage["model"], agent.model)
 			agent.effort = updatedEffort(agent.effort, usage)
+			counts := receipted[agent.model]
+			if counts == nil {
+				counts = map[string]float64{}
+				receipted[agent.model] = counts
+			}
+			for key, value := range copilotTokenUsage(usage) {
+				n, _ := number(value)
+				counts[key] += n
+			}
 			item := base
+			if message := paidFor[agentID+"\x00"+firstString(usage["apiCallId"])]; message != "" {
+				item.NativeID = message + ":usage"
+			}
 			item.Model, item.Effort = agent.model, agent.effort
 			item.Role, item.Kind = "system", "metadata"
 			item.Text = jsonText(map[string]any{"type": "token_usage", "usage": copilotTokenUsage(usage), "usage_message_id": firstString(usage["apiCallId"], usage["providerCallId"], eventID)})
@@ -447,14 +472,22 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		case "session.shutdown":
 			// Each shutdown totals the whole session so far, receipts included.
 			lastShutdown, shutdownAt, shutdownLine = data, timestamp, line
+			beforeShutdown = map[string]map[string]float64{}
+			for model, counts := range receipted {
+				beforeShutdown[model] = maps.Clone(counts)
+			}
 		case "session.error", "assistant.error", "error":
 			item := base
 			item.Role, item.Kind, item.Text = "system", "error", firstString(data["message"], data["error"], jsonText(data))
 			add(item)
 		}
 	}
-	// Releases that wrote no receipts still totalled each model at shutdown.
-	if !receipts && lastShutdown != nil {
+	// Releases that wrote no receipts still totalled each model at shutdown,
+	// and a session resumed after an upgrade holds both. What the last
+	// shutdown totals beyond the receipts before it is usage no receipt
+	// records. Its ID names no line, so a later total replaces it rather
+	// than adding to it.
+	if lastShutdown != nil {
 		metrics := mapValueDefault(lastShutdown["modelMetrics"])
 		models := make([]string, 0, len(metrics))
 		for model := range metrics {
@@ -462,9 +495,18 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		}
 		sort.Strings(models)
 		for _, model := range models {
-			usage := mapValueDefault(mapValueDefault(metrics[model])["usage"])
-			item := MessageRecord{NativeID: fmt.Sprintf("line-%d:usage:%s", shutdownLine, model), Role: "system", Kind: "metadata", Model: model, CreatedAt: shutdownAt, EvidenceLocator: fmt.Sprintf("%s:%d", origin, shutdownLine), Selected: true,
-				Text: jsonText(map[string]any{"type": "token_usage", "usage": copilotTokenUsage(usage), "source": "shutdown_rollup"})}
+			residual, positive := map[string]any{}, false
+			for key, value := range copilotTokenUsage(mapValueDefault(mapValueDefault(metrics[model])["usage"])) {
+				total, _ := number(value)
+				left := max(total-beforeShutdown[model][key], 0)
+				residual[key] = left
+				positive = positive || left > 0
+			}
+			if !positive {
+				continue
+			}
+			item := MessageRecord{NativeID: "usage:shutdown:" + model, Role: "system", Kind: "metadata", Model: model, CreatedAt: shutdownAt, EvidenceLocator: fmt.Sprintf("%s:%d", origin, shutdownLine), Selected: true,
+				Text: jsonText(map[string]any{"type": "token_usage", "usage": residual, "source": "shutdown_residual"})}
 			main.conversation.Messages = append(main.conversation.Messages, item)
 		}
 	}
