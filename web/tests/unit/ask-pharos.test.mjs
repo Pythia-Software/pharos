@@ -106,6 +106,41 @@ test('glow traces cross their origin within one open path instead of splitting a
   }
 });
 
+test('shared Ask glow pauses its hue while the decoration is not shown, and resumes in phase', () => {
+  const events=[];
+  const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
+  let report,observed,disconnected=false;
+  class IntersectionObserver{constructor(callback){report=callback;}observe(target){observed=target;}disconnect(){disconnected=true;}}
+  const glow=loadClassicScript('ask-glow.js',{IntersectionObserver,matchMedia:()=>({matches:false,addEventListener(){},removeEventListener(){}})});
+  const layers=[{animate:()=>hue}];
+  const motion=glow.askGlowMotion({dataset:{}},layers);
+  assert.equal(observed,layers[0]);
+  events.length=0;
+  report([{isIntersecting:false}]);
+  assert.deepEqual(events,['pause'],'a hidden panel or full screen composer stops ticking');
+  report([{isIntersecting:true}]);
+  assert.deepEqual(events,['pause','play']);
+  motion.destroy();
+  assert.ok(disconnected);
+});
+
+test('the edge trace turns each corner as the previous side leaves, around one lap', () => {
+  const glow=loadClassicScript('ask-glow.js');
+  const width=1000,height=500,length=200,perimeter=3000;
+  const lanes=plain(glow.askEdgeTraceLanes({width,height,length}));
+  assert.deepEqual(lanes.map(lane=>lane.side),['top','right','bottom','left']);
+  assert.deepEqual(lanes.map(lane=>lane.start*perimeter),[0,1000,1500,2500],'each side starts as the signal reaches its corner');
+  for(const [index,lane] of lanes.entries()){
+    const next=lanes[(index+1)%lanes.length],ends=(lane.start+lane.travel)*perimeter,turns=next.start*perimeter+(next.start?0:perimeter);
+    assert.equal(ends-turns,length,`${lane.side} leaves while the next side enters, so the corner never goes dark`);
+    assert.ok(lane.travel<1,'a lane fits within its lap');
+    // Streaks start and finish entirely off their side.
+    const size=lane.axis==='X'?width:height;
+    assert.deepEqual([Math.min(lane.from,lane.to),Math.max(lane.from,lane.to)],[-length,size]);
+  }
+  assert.ok(lanes[0].from<lanes[0].to&&lanes[2].from>lanes[2].to,'the signal runs clockwise');
+});
+
 test('shared Ask glow respects reduced motion from startup, including while working', () => {
   const events=[];
   const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
@@ -238,6 +273,16 @@ test('chat URLs preserve unrelated parameters and support replacing and clearing
   for(const path of ['/library?text=cache','/analyze?analyze_topic=tools','/settings#models']){
     assert.equal(model.askHistoryURL('http://pharos.test'+path,'chat one'),'http://pharos.test/?ask_chat=chat+one');
   }
+  assert.equal(model.askHistoryURL('http://pharos.test/ask?ask_chat=old','saved'),'http://pharos.test/ask?ask_chat=saved','full screen keeps history on its page');
+});
+test('full screen opens the chat on the Ask page and returns to the page it came from', () => {
+  assert.equal(model.askFullscreenURL('http://pharos.test/analyze?analyze_topic=tools','chat one'),'http://pharos.test/ask?ask_chat=chat+one');
+  assert.equal(model.askFullscreenURL('http://pharos.test/?ask_chat=old',null),'http://pharos.test/ask');
+  const exit=(from,id='saved')=>plain(model.askFullscreenExit('http://pharos.test/ask?ask_chat=saved',from,id));
+  assert.deepEqual(exit('/analyze?analyze_topic=tools'),{href:'http://pharos.test/analyze?analyze_topic=tools',presentation:'modal'});
+  assert.deepEqual(exit('/?range=week'),{href:'http://pharos.test/?range=week&ask_chat=saved',presentation:'home'});
+  assert.deepEqual(exit('/home',null),{href:'http://pharos.test/home',presentation:'home'});
+  for(const from of [null,undefined,'','/ask?ask_chat=other','https://elsewhere.test/analyze','http://[bad'])assert.deepEqual(exit(from),{href:'http://pharos.test/?ask_chat=saved',presentation:'home'},String(from));
 });
 test('reload restores the tab surface only for the same page and chat', () => {
   const href='http://pharos.test/?ask_chat=saved-chat&range=week';
@@ -256,6 +301,8 @@ test('reload restores the tab surface only for the same page and chat', () => {
     assert.equal(model.askRestorePresentation('http://pharos.test/analyze?analyze_topic=tokens',{page:'/analyze?analyze_topic=tokens',presentation}),presentation);
   }
   assert.equal(model.askRestorePresentation('http://pharos.test/analyze',{page:'/analyze',presentation:'home'}),null);
+  assert.equal(model.askRestorePresentation('http://pharos.test/ask?ask_chat=saved-chat',{page:'/ask',id:'saved-chat',presentation:'page'}),'page');
+  assert.equal(model.askRestorePresentation('http://pharos.test/analyze',{page:'/analyze',presentation:'page'}),null);
 });
 test('history keeps server matches from later messages and only adds the current chat to unfiltered lists', () => {
   const first={id:'initial',updatedAt:1,conversation:[{prompt:'Initial topic'}]},second={id:'newer',updatedAt:2,conversation:[{prompt:'Another topic'}]};

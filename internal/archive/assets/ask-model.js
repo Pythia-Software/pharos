@@ -147,9 +147,11 @@ function askOmittedNote(omitted = 0) {
   if (!omitted) return '';
   return omitted === 1 ? 'One suggested view could not be opened, so it is left out.' : `${omitted} suggested views could not be opened, so they are left out.`;
 }
+// Home and the full-screen page show the chat inline and name it in ask_chat.
+function askChatPage(pathname) { return ['/', '/home', '/ask'].includes(pathname); }
 function askChatURL(href, id) {
   const url = new URL(href);
-  if (!['/', '/home'].includes(url.pathname)) return url.href;
+  if (!askChatPage(url.pathname)) return url.href;
   if (id) url.searchParams.set('ask_chat', id);
   else url.searchParams.delete('ask_chat');
   return url.href;
@@ -157,7 +159,16 @@ function askChatURL(href, id) {
 // History links must work independently of the page hosting the overlay.
 function askHistoryURL(href, id) {
   const url = new URL(href);
-  return askChatURL(['/', '/home'].includes(url.pathname) ? url.href : new URL('/', url).href, id);
+  return askChatURL(askChatPage(url.pathname) ? url.href : new URL('/', url).href, id);
+}
+function askFullscreenURL(href, id) { return askChatURL(new URL('/ask', href).href, id); }
+// Leaving full screen returns to the page it was opened from: Home shows the
+// chat inline, and any other page reopens it in the dialog.
+function askFullscreenExit(href, from, id) {
+  let target = new URL('/', href);
+  try { const url = new URL(from, href); if (typeof from === 'string' && url.origin === target.origin && url.pathname !== '/ask') target = url; } catch {}
+  const home = ['/', '/home'].includes(target.pathname);
+  return {href: home ? askChatURL(target.href, id) : target.href, presentation: home ? 'home' : 'modal'};
 }
 // Search results are matched against complete chats on the server. Their
 // summaries cannot be searched again without dropping later-message matches.
@@ -204,10 +215,11 @@ function askRestorePresentation(href, saved) {
   const url = new URL(href), id = url.searchParams.get('ask_chat');
   if (id && id !== saved.id) return null;
   if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
-  return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
+  if (saved.presentation === 'page' && url.pathname !== '/ask') return null;
+  return ['home', 'modal', 'floating', 'dismissed', 'page'].includes(saved.presentation) ? saved.presentation : null;
 }
 function askShowBrowseHint({pending=false,browsing=false,presentation='home',hint=true}) {
-  return pending&&hint&&!browsing&&['home','modal'].includes(presentation);
+  return pending&&hint&&!browsing&&['home','modal','page'].includes(presentation);
 }
 // Dismissing the browse hint or choosing picture in picture skips the hint for
 // the next questions, so only people who never browse keep seeing it.

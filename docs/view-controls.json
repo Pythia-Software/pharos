@@ -691,6 +691,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:66858281b3fb2bba:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-fullscreen pharos-icon-control cursor-interaction\" aria-label=\"Full screen\" aria-pressed=\"false\" data-tooltip=\"Full screen\">",
+      "contract": "transient",
+      "reason": "Navigates between the /ask page and the page full screen was opened from; the route is the state, and ask_chat names the chat."
+    },
+    {
       "key": "fragment:6a4405d934090495:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
