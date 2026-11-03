@@ -134,7 +134,7 @@ func readCodexAuditNames(ctx context.Context, adapter *jsonlAdapter, identities,
 			if err = rows.Scan(&id, &rollout); err != nil {
 				break
 			}
-			if path := firstString(rollout); path != "" && paths[filepath.Clean(path)] && firstString(id) != "" {
+			if path := firstString(rollout); path != "" && paths[plainRollout(filepath.Clean(path))] && firstString(id) != "" {
 				ids[firstString(id)] = true
 				if limitErr := auditEvidenceBudget(int64(len(ids))*128, budget); limitErr != nil {
 					rows.Close()

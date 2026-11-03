@@ -194,6 +194,11 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 				}
 			}
 			id, err := a.files().codexRolloutIdentity(path)
+			if err != nil && compressedRollout(path) {
+				// A rollout that does not decode fails its own group when it
+				// is parsed; it must not stop the others from being planned.
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}

@@ -629,7 +629,7 @@ func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 		parts := make([]sourcePart, 0, len(paths))
 		for _, path := range paths {
 			info := a.files().contentInfo(path, infos[path])
-			part := sourcePart{item: a.original(plainRollout(path)), size: info.Size(), version: info.ModTime().UnixNano()}
+			part := sourcePart{item: plainRollout(a.original(path)), size: info.Size(), version: info.ModTime().UnixNano()}
 			if name, ok := a.names[path]; ok {
 				part.signal = name.signal()
 			}
@@ -734,7 +734,7 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}
-	part := sourcePart{item: a.original(plainRollout(path)), size: info.Size(), version: info.ModTime().UnixNano()}
+	part := sourcePart{item: plainRollout(a.original(path)), size: info.Size(), version: info.ModTime().UnixNano()}
 	if parseHook != nil {
 		parseHook(path)
 	}
@@ -770,7 +770,7 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 }
 
 func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRecord, bool, error) {
-	origin := a.original(plainRollout(path))
+	origin := plainRollout(a.original(path))
 	meta := map[string]any{}
 	model, effort := "", a.initialEffort
 	harness, versionFirst, versionLast := "codex", "", ""

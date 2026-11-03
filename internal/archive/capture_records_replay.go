@@ -420,6 +420,12 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 		if !ok || d.Object == nil || d.State != "retained" {
 			return errors.New("unresolved replay dependency")
 		}
+		if d.MissingSince != "" {
+			if view.gone == nil {
+				view.gone = map[string]bool{}
+			}
+			view.gone[d.Path] = true
+		}
 		relative, e := filepath.Rel(dir, dest)
 		if e != nil || !strings.HasPrefix(filepath.ToSlash(relative), "files/") {
 			return errors.New("unsafe replay dependency mapping")

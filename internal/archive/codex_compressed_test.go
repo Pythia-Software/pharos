@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -196,6 +197,8 @@ func TestCodexCorruptCompressedRolloutFailsOnlyItsOwnGroup(t *testing.T) {
 	day := filepath.Join(root, "sessions", "2026", "09", "01")
 	writeSourceFile(t, filepath.Join(day, "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl.zst"), "not zstd at all")
 	writeSourceFile(t, filepath.Join(day, "rollout-2026-09-01T01-00-00-"+probeID2+".jsonl"), codexLines("healthy", 1))
+	// Named, so planning reads its header to match the name.
+	writeSourceFile(t, filepath.Join(root, "session_index.jsonl"), `{"id":"`+probeID1+`","thread_name":"Broken","updated_at":"2026-09-01T12:00:00Z"}`+"\n")
 	adapter, err := MakeAdapter(source)
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +221,9 @@ func TestCodexCorruptCompressedRolloutFailsOnlyItsOwnGroup(t *testing.T) {
 	if got, _ := codexMessageCount(t, c, "repaired"); got != 1 {
 		t.Fatalf("repaired rollout messages = %d", got)
 	}
+	if got := cachedWorkTitle(t, c, stableID("workspace", "codex", "local", "repaired")); got != "Codex repaired" {
+		t.Fatalf("repaired rollout title = %q", got)
+	}
 }
 
 func TestCodexCompressedForkPageKeepsLineage(t *testing.T) {
@@ -238,10 +244,21 @@ func TestCodexCompressedRolloutPassesVerification(t *testing.T) {
 	root := t.TempDir()
 	rollout := filepath.Join(root, "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
 	writeSourceFile(t, rollout, codexLines(probeID1, 2))
-	compressRollout(t, rollout)
+	compressed := compressRollout(t, rollout)
+	// Its name is recorded against the compressed path; verification must
+	// read the same naming row the index did.
+	db, err := sql.Open("sqlite", filepath.Join(root, "state_5.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, "CREATE TABLE threads(id TEXT,name TEXT,rollout_path TEXT);INSERT INTO threads VALUES('"+probeID1+"','Verified name','"+compressed+"'),('"+probeID2+"','Other thread','"+compressed+"')")
+	db.Close()
 	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true}
 	server := automaticTestServer(t, source)
 	ingestSource(t, server.Catalog, source)
+	if got := cachedWorkTitle(t, server.Catalog, stableID("workspace", "codex", "local", probeID1)); got != "Verified name" {
+		t.Fatalf("title = %q", got)
+	}
 	unit := firstSyncUnit(t, server.Catalog, source)
 	if result := server.Catalog.auditUnit(t.Context(), unit, "manual", 0); result.Outcome != "passed" {
 		t.Fatalf("compressed rollout verification = %+v", result)
@@ -272,5 +289,60 @@ func TestCodexCompressedRolloutRetainedBeforeIndex(t *testing.T) {
 	}
 	if result := ingestSource(t, catalog, source); result.Parsed != 0 {
 		t.Fatalf("unchanged retained rollout was parsed again: %+v", result)
+	}
+}
+
+// A plain rollout captured before Codex appended to and compressed it is a
+// superseded copy in every kind of retained input, including SQLite row
+// replays, which restore both copies without file entries.
+func TestCodexRecordReplayReadsCompressedRolloutOverStalePlainCopy(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	plain := filepath.Join(root, "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
+	writeSourceFile(t, plain, codexLines(probeID1, 1))
+	db, err := sql.Open("sqlite", filepath.Join(root, "state_5.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, "CREATE TABLE threads(id TEXT,name TEXT,rollout_path TEXT);INSERT INTO threads VALUES('"+probeID1+"','Replayed name','"+plain+".zst')")
+	db.Close()
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+	ingestSource(t, catalog, source)
+	appendSourceFile(t, plain, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"user_message","message":"later"}}`+"\n")
+	compressRollout(t, plain)
+	// Codex updates its state database while a thread is active.
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(root, "state_5.sqlite"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	ingestSource(t, catalog, source)
+	if got, origin := codexMessageCount(t, catalog, probeID1); got != 2 || origin != plain {
+		t.Fatalf("replayed rollout: %d messages from %q", got, origin)
+	}
+	if got := cachedWorkTitle(t, catalog, stableID("workspace", "codex", "local", probeID1)); got != "Replayed name" {
+		t.Fatalf("name recorded against the compressed path = %q", got)
+	}
+}
+
+// A source configured as one compressed rollout keeps its original identity
+// when indexed from its capture.
+func TestCodexSingleCompressedRolloutSourceKeepsIdentityFromCapture(t *testing.T) {
+	useHost(t, "host-a")
+	c, config := testCatalog(t)
+	plain := filepath.Join(t.TempDir(), "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
+	writeSourceFile(t, plain, codexLines(probeID1, 2))
+	compressed := compressRollout(t, plain)
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: compressed, Account: "local", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	ingestSource(t, c, source)
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	useHost(t, "host-b")
+	other, _ := testCatalog(t)
+	indexCaptures(t, other, config.CaptureRoot, "host-a")
+	if got, origin := codexMessageCount(t, other, probeID1); got != 2 || origin != plain {
+		t.Fatalf("captured single rollout: %d messages from %q", got, origin)
 	}
 }

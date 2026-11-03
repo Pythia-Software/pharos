@@ -212,6 +212,9 @@ func (v *captureView) missing(path string) bool {
 	if v == nil || v.manifest == nil {
 		return false
 	}
+	if v.gone[v.original(path)] {
+		return true
+	}
 	rel, ok := v.rel(path)
 	if !ok {
 		return false
