@@ -280,6 +280,10 @@
       "field": "search_cards"
     },
     {
+      "file": "web/src/session-shape-panels.tsx",
+      "field": "session_signal"
+    },
+    {
       "file": "web/src/workspace-inbox.ts",
       "field": "sidebar_visible"
     },
@@ -6220,6 +6224,15 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "180a4f2e4634b151:0",
+      "file": "web/src/index.tsx",
+      "owner": "SessionShapeDashboard",
+      "tag": "button",
+      "control": "onClick={revealDefinitions}",
+      "contract": "navigation",
+      "reason": "Reveals the Definitions section with reveal=section:session-shape-definitions: scroll and highlight, never focus."
+    },
+    {
       "key": "6d045847d0c95152:0",
       "file": "web/src/index.tsx",
       "owner": "TokenUsageDashboard",
@@ -7055,6 +7068,61 @@
       "control": "",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "90d98ebae7a09e76:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "ActiveTimeDistribution",
+      "tag": "button",
+      "control": "onClick={() => onOpen({ view: \"distribution\", unit: \"records\", metric: \"active_time\", split: \"none\" })}",
+      "contract": "dashboard",
+      "reason": "Opens the panel's fixed view in the dashboard chart: writes analyze_chart, the applied chart state."
+    },
+    {
+      "key": "38873f155d5b4c0f:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "ArchetypeMix",
+      "tag": "button",
+      "control": "onClick={() => onOpen({ view: \"compare\", unit: \"records\", metric: \"sessions\", split: \"archetype\", compareAs: \"share\" })}",
+      "contract": "dashboard",
+      "reason": "Opens the panel's fixed view in the dashboard chart: writes analyze_chart, the applied chart state."
+    },
+    {
+      "key": "7a0cc0da59af2a51:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionShapeBandSummary",
+      "tag": "button",
+      "control": "onClick={() => onSplit(id)}",
+      "contract": "dashboard",
+      "reason": "Chooses the band the chart's shares follow: writes the breakdown into analyze_chart."
+    },
+    {
+      "key": "3c0938979a8182b4:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionsToRead",
+      "tag": "button",
+      "control": "onClick={() => setShown(value => value + 20)}",
+      "contract": "transient",
+      "reason": "Shows more sessions in the panel; how many are shown is not part of the view and resets on reload."
+    },
+    {
+      "key": "7e9cf81137729b5b:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionsToRead",
+      "tag": "select",
+      "control": "value={signal} data-view-field=\"session_signal\" onChange={event => setSignal(event.target.value as \"all\" | SessionSignal)}",
+      "binding": "session_signal",
+      "contract": "view.session_signal",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a63f9d7326c5eecd:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "TurnCycleByProvider",
+      "tag": "button",
+      "control": "onClick={() => onOpen(turnCycles)}",
+      "contract": "dashboard",
+      "reason": "Opens the panel's fixed view in the dashboard chart: writes analyze_chart, the applied chart state."
     },
     {
       "key": "85efc2b35d82ffac:0",

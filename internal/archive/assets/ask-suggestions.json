@@ -19,7 +19,7 @@
   {
    "id": "tool-failures",
    "label": "Failing tool calls",
-   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools"],
+   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools","analyze/session_shape","analyze/query/session_shape"],
    "signals": ["tools.failures"]
   },
   {
@@ -85,7 +85,7 @@
   {
    "id": "writing",
    "label": "My writing and steering",
-   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages"],
+   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages","analyze/session_shape"],
    "signals": ["writing.volume","writing.back_and_forth"]
   },
   {

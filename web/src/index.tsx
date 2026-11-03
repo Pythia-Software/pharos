@@ -86,6 +86,7 @@ import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
+import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { Icon } from "./icons";
@@ -93,6 +94,9 @@ import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
 import { HabitsPanel } from "./habits";
+import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { ActiveTimeDistribution, ArchetypeMix, SessionShapeBandSummary, SessionShapeDefinitions, SessionsToRead, SignalTable, TurnCycleByProvider, revealDefinitions } from "./session-shape-panels";
+import { formatSeconds } from "./session-shape-model";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
@@ -124,7 +128,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages" | "session_shape";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -200,6 +204,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   safety: loadSchema<Row>(safetyDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
+  session_shape: loadSchema<Row>(sessionShapeDocument),
 };
 
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
@@ -409,6 +414,7 @@ const emptyMessages: Record<Dataset, string> = {
   safety: "No risky action reviews match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No agent messages read for events match this query.",
+  session_shape: "No sessions match this query.",
 };
 
 // query-table-ui 0.3.0 formats metric values with a field's renderer only for
@@ -1107,6 +1113,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
+  if (topic === "session_shape") return <SessionShapeDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1269,10 +1276,13 @@ type CatalogViews = (catalog: AnalysisCatalog, format?: AmountFormat) => React.R
 // those it cannot keep, with a notice saying so.
 type ReadWhere = (where: WhereTerm[], state: AnalysisState) => { where: WhereTerm[]; notice?: React.ReactNode };
 // chartHeadline={false} leaves the page's heading to a chart in before.
+// summary and panels may read the chart's state and open another state in it
+// (DashboardChart), as Session Shape's band toggle and panels do.
+type DashboardChart = { state: AnalysisState; update: (change: Partial<AnalysisState>) => void };
 function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defaults, before, after, summary, panels, readWhere, format = catalogAmount, frame, chartHeadline = true }: {
   catalog: AnalysisCatalog; linkCatalog?: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; chartHeadline?: boolean;
-  before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean) => React.ReactNode;
-  panels?: (where: WhereTerm[], onFilter: FilterChange) => React.ReactNode; readWhere?: ReadWhere; format?: AmountFormat;
+  before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[], selected: boolean, chart: DashboardChart) => React.ReactNode;
+  panels?: (where: WhereTerm[], onFilter: FilterChange, chart: DashboardChart) => React.ReactNode; readWhere?: ReadWhere; format?: AmountFormat;
   frame?: (views: CatalogViews, where: WhereTerm[], onFilter: FilterChange) => React.ReactNode;
 }) {
   // An older link is read in the catalog's terms once (canonicalState) and
@@ -1285,13 +1295,14 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
   });
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const schema = schemas[dataset];
+  const chart: DashboardChart = { state: state.view, update: state.update };
   const views: CatalogViews = (drawn, amount = format) => {
     const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
     return <>
       {(state.view.view ?? "trend") !== "trend"
-        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
-        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
-      {panels?.(state.where, state.onFilter)}
+        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length), chart)}</DashboardAnalysis>
+        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length), chart)}</AnalysisTrend>}
+      {panels?.(state.where, state.onFilter, chart)}
     </>;
   };
   return <DashboardCardSourceContext.Provider value={{ catalog, state: state.view, where: state.where, schema }}><section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
@@ -1353,6 +1364,33 @@ function AgentExperienceDashboard() {
       <AgentExperienceRates where={where} />
       <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
       <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
+    </>} />;
+}
+
+// Session Shape: the engine chart opens on sessions by band as weekly
+// shares, with the band toggle and its median and p90 above it; the panels
+// below draw fixed views beside it, and each can open its view in the chart.
+// Durations in seconds read as durations.
+const sessionShapeAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" && measure.format.sourceUnit === "seconds" ? formatSeconds(value) : catalogAmount(value, measure);
+function SessionShapeDashboard() {
+  const open = (chart: DashboardChart) => (next: AnalysisState) => {
+    chart.update({ ...next, selection: undefined, reduce: undefined, compareAs: next.compareAs, share: next.view === "trend" ? next.share : undefined });
+    document.querySelector(".usage-session-shape-dashboard")?.scrollIntoView({ block: "start" });
+  };
+  return <CatalogDashboard catalog={sessionShapeAnalysisCatalog} dataset="session_shape" name="session-shape" defaults={dashboardDefaults.session_shape} format={sessionShapeAmount}
+    summary={(where, _selected, chart) => <SessionShapeBandSummary where={where} split={chart.state.split} onSplit={split => chart.update({ split })} />}
+    panels={(where, _onFilter, chart) => <>
+      <p className="usage-dashboard-note">Separate signals, each against your own history; there is no score. Every rate counts only sessions with the evidence it needs and says how many. <button type="button" className="usage-preset-clear" onClick={revealDefinitions}>Definitions</button></p>
+      <h2 className="session-shape-heading">Shape</h2>
+      <div className="session-shape-grid">
+        <ActiveTimeDistribution where={where} schema={schemas.session_shape} onOpen={open(chart)} />
+        <TurnCycleByProvider where={where} schema={schemas.session_shape} onOpen={open(chart)} />
+      </div>
+      <ArchetypeMix where={where} schema={schemas.session_shape} onOpen={open(chart)} />
+      <h2 className="session-shape-heading">Forensics</h2>
+      <SignalTable where={where} schema={schemas.session_shape} />
+      <SessionsToRead where={where} />
+      <SessionShapeDefinitions />
     </>} />;
 }
 

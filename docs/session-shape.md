@@ -224,6 +224,53 @@ See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 AgentsView's penalty-from-100 health grade is deliberately not adopted.
 
+## The dashboard
+
+Analyze → Session Shape (`?mode=dashboards&topic=session_shape`) opens on
+sessions by length band as weekly shares. It has no headline number and no
+grade, colours no value as good or bad, and shows each rate's sample size
+beside it. The note's Definitions button scrolls to the definitions at the
+foot of the page.
+
+**Shape.**
+
+- A band toggle sets the chart's breakdown to the length, active-time, tool
+  or autonomy band. Beside it are that band's median and p90 per session and
+  the number of sessions with a value.
+- *Active time per session* is a histogram over log-widening bins (30 s to
+  8 h) with the median and p90 marked.
+- *Turn cycle by provider* is a distribution of each session's median turn
+  cycle. Its note says how it differs from Waiting and Compaction's
+  post-tool gap.
+- *Archetype mix by repository* shows each repository's sessions as shares
+  of that repository's own sessions: the nine largest repositories, then the rest
+  as Other.
+
+Each panel has "Open in the chart above", which moves the main chart to the
+same view.
+
+**Forensics.**
+
+- *Signals against your own range* compares the seven days ending at the
+  dashboard's end with the lowest and highest weekly value of the eight
+  weeks before. It applies the dashboard's filters but not its dates.
+  - A value inside the range reads "No detectable change".
+  - A value outside reads "Above your range" or "Below your range", in bold.
+    There is no colour.
+  - Fewer than four weeks with evidence reads "Not enough history".
+  - A week without the evidence a signal needs is "Not enough evidence",
+    never zero.
+  - Each row gives its numerator and denominator and the sessions with
+    evidence.
+- *Sessions to read* lists the sessions where a signal fired, most first, for
+  all signals or one (`session_signal` in the URL). Each links to the
+  reader.
+
+The main chart's catalog is described in
+[dashboard analysis](dashboard-analysis.md#the-catalogs). Home cards are not
+added yet. Each would need a recipe whose destination is exactly one of
+these states.
+
 ## Related dashboards
 
 Session shape answers these questions; the dashboards below already answer

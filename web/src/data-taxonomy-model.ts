@@ -27,6 +27,7 @@ export const dataSources = {
   tl1_attempts: { label: "Individual Agent Attempts (TL1)", entity: "agents", grain: "One TL1 attempt" },
   agent_events: { label: "Events in Agent Replies & Thinking", entity: "messages", grain: "One sentence judged to express one kind of event (experimental)" },
   agent_event_messages: { label: "Agent Messages Read for Events", entity: "messages", grain: "One agent reply or thinking block the event pass read" },
+  session_shape: { label: "Session Shape & Forensic Signals", entity: "conversations", grain: "One agent session (a conversation; a delegated run is its own), with its shape, bands and forensic signals" },
 } as const satisfies Record<string, { label: string; entity: DataEntity; grain: string }>;
 export type DataSource = keyof typeof dataSources;
 
