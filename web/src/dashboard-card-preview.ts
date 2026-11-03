@@ -1,4 +1,4 @@
-import type { AggregationResultEntry, FieldSchema } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pythia-software/query-table-core";
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
@@ -12,24 +12,61 @@ import type { ConcurrencyData } from "./concurrency-data";
 import { ribbonCardTitle, ribbonCover } from "./parallelism-ribbon-card";
 import { habitsCardPreview, isHabitsCardTarget, loadHabitsSummary, readHabitsCardView } from "./habits-card";
 import type { HabitsSummary } from "./habits-model";
+import { orderThinkingGroups, thinkingRequest, type ThinkingResponse } from "./thinking-model";
+import { gridCoverHeight } from "./grid-cover";
 import { isOriginDimension, loadOriginMetadata, originLabel } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
 import { toolMetricPresentation } from "./tools-dashboard-model";
 import { fittedPreview } from "./card-presentation";
+import { defaultCardCover } from "./card-cover";
 import type { CarbonFactors } from "./carbon-analysis-catalog";
-import type { QueryPreview } from "./query-previews";
+import { loadQueryPreviews, type QueryPreview } from "./query-previews";
+import { compactionColumns, isThinkingCardTarget, orderedBoxes, readThinkingCard, thinkingCardRecipe, thinkingCardTitle, thinkingGrid, thinkingGridView, thinkingPageOrder, type ThinkingCardTarget } from "./thinking-card";
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
 // A dashboard address carries no authored cover, so its card fits the chart.
 // A ribbon card reads the captured timing snapshot the ribbon draws, and a
 // Habits card the habits summary its section draws (timing and habits stand
-// in for them in tests).
-export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary): Promise<QueryPreview> {
+// in for them in tests). A Thinking card draws as the Thinking card with its
+// measures does, over the page's population.
+export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary, thinking?: ThinkingResponse): Promise<QueryPreview> {
   if (isHabitsCardTarget(target)) {
     const view = readHabitsCardView(readDashboardCard(address, new Date(now)).params);
     return habitsCardPreview(target, view, habits ?? await loadHabitsSummary(view, signal));
   }
+  if (isThinkingCardTarget(target)) return thinkingPreview(address, schema, target, signal, now, thinking);
   return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now));
+}
+
+async function thinkingPreview(address: string, schema: FieldSchema, target: ThinkingCardTarget, signal: AbortSignal | undefined, now: number, thinking?: ThinkingResponse): Promise<QueryPreview> {
+  const { state, where, filters } = readThinkingCard(address, new Date(now));
+  if (thinkingGridView(target, state)) {
+    const data = thinking ?? await loadThinkingResponse(thinkingRequest(state, false, false, filters), signal);
+    const grid = thinkingGrid(data, state), ready = Boolean(grid?.cells.some(row => row.some(cell => cell !== null)));
+    return { state: ready ? "ready" : "empty", total: data.Timed, summary: thinkingCardTitle(target, state), action: DASHBOARD_CARD_ACTION, emptyLabel: "No observations in this range",
+      note: `${data.Timed.toLocaleString()} usable timing gaps from ${data.Retained.toLocaleString()} retained requests.`, ...grid && ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
+  }
+  if (schema.name !== "pharos_model_requests") throw new Error("This dashboard card's dataset is unavailable.");
+  const recipe = thinkingCardRecipe(target, state);
+  const query = { ...EMPTY_QUERY, where: [...recipe.where ?? [], ...where], aggregations: recipe.measures };
+  let drawn: QueryPreview | undefined, failure: unknown;
+  await loadQueryPreviews([{ id: target, dataset: "model_requests", query, schema, options: { recipe, cover: defaultCardCover(recipe) } }], (_, preview, error) => { drawn = preview; failure = error; }, signal);
+  if (!drawn) throw failure instanceof Error ? failure : new Error(String(failure ?? "The dashboard returned no chart result."));
+  const result = drawn.metrics?.[0]?.result;
+  if (result && thinkingPageOrder(target, state)) {
+    const groups = orderThinkingGroups((thinking ?? await loadThinkingResponse(thinkingRequest(state, false, false, filters), signal)).groups, state);
+    drawn = { ...drawn, metrics: drawn.metrics!.map((metric, i) => i ? metric : { ...metric, result: orderedBoxes(result, groups) }) };
+  }
+  if (target !== "thinking-compactions" || !result) return fittedPreview({ ...drawn, action: DASHBOARD_CARD_ACTION, preserveScale: true });
+  const { buckets, series } = compactionColumns(result);
+  return fittedPreview({ state: buckets.length ? "ready" : "empty", total: buckets.length, summary: "Compactions by day", note: drawn.note, action: DASHBOARD_CARD_ACTION,
+    emptyLabel: "No compactions in this range", buckets, series, dashboardTrend: { prepared: true, xLabel: "day", yLabel: "Compactions", unit: "" } });
+}
+
+async function loadThinkingResponse(url: string, signal?: AbortSignal): Promise<ThinkingResponse> {
+  const response = await fetch(url, { signal }), body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? "Unable to load request timing.");
+  return body;
 }
 
 function ribbonPreview(address: string, data: ConcurrencyData, now: number): QueryPreview {

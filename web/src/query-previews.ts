@@ -18,6 +18,7 @@ import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
 import type { DashboardCardTarget } from "./dashboard-card-model";
 import type { HabitsCover } from "./habits-card";
+import type { GridCover } from "./grid-cover";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
@@ -39,6 +40,7 @@ export type QueryPreview = {
   preserveScale?: boolean;
   study?: HumanStudyPreview;
   habits?: HabitsCover;
+  grid?: GridCover;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
