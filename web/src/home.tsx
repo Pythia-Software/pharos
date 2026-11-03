@@ -65,8 +65,6 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       if (cancelled) return;
       activity.current = counts; setPool(suggestionPool(new Date(), cardTemplates(), counts));
     });
-    const templates = () => { setPool(suggestionPool(new Date(), cardTemplates(), activity.current)); setGeneration(value => value + 1); };
-    window.addEventListener("pharos:card-templates", templates);
     // A hidden tab notes new data and reruns its cards once it is shown.
     let stale = false;
     const refresh = () => { if (document.hidden) { stale = true; return; } stale = false; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); };
@@ -74,7 +72,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
     window.addEventListener("pharos:usage-refresh", refresh); window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
-    return () => { cancelled = true; window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
+    return () => { cancelled = true; window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
   useEffect(() => { if (active) setGeneration(value => value + 1); }, [active]);
   useEffect(() => {
@@ -99,7 +97,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     const controller = new AbortController();
     // Prepare default library covers before its page is opened, without
     // mounting hundreds of offscreen charts. Foreground work finishes first.
-    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.defaultWindow ?? (recipe.days?.length === 1 ? recipe.days[0] : 7)));
+    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.days?.length === 1 ? recipe.days[0] : 7));
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
         await loadCardPreviews(items.slice(at, at + 8).map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), () => {}, controller.signal);
