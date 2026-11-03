@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,5 +205,31 @@ func TestUsageBucketsWithMissingAndExplicitModelCoalesce(t *testing.T) {
 	var rows, total int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*),COALESCE(SUM(total_tokens),0) FROM agent_session_usage").Scan(&rows, &total); err != nil || rows != 1 || total != 35 {
 		t.Fatalf("usage rows = %d, total = %d, err=%v", rows, total, err)
+	}
+}
+
+// A forked subagent's counters start at its parent's usage, which the
+// parent's rollout already counts; only the subagent's own requests are its.
+func TestCodexForkCountsOnlyItsOwnUsage(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := t.TempDir()
+	count := func(total, last int) string {
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":"2026-09-01T00:01:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"output_tokens":0,"total_tokens":%d},"last_token_usage":{"input_tokens":%d,"output_tokens":0,"total_tokens":%d}}}}`+"\n", total, total, last, last)
+	}
+	writeSourceFile(t, filepath.Join(root, "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl"),
+		codexLines(probeID1, 1)+count(1000, 1000))
+	writeSourceFile(t, filepath.Join(root, "2026", "09", "01", "rollout-2026-09-01T00-05-00-"+probeID2+".jsonl"),
+		fmt.Sprintf(`{"type":"session_meta","timestamp":"2026-09-01T00:05:00Z","payload":{"id":%q,"forked_from_id":%q,"subagent_history_start_ordinal":3,"source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`+"\n", probeID2, probeID1, probeID1)+
+			count(1100, 100)+count(1300, 200))
+	ingestSource(t, c, SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true})
+	var metric, sessions float64
+	if err := c.DB.QueryRow(`SELECT SUM(value) FROM metrics WHERE name='total_tokens' AND conversation_id IS NULL`).Scan(&metric); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DB.QueryRow(`SELECT SUM(total_tokens) FROM agent_session_usage`).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if metric != 1300 || sessions != 1300 {
+		t.Fatalf("total tokens: metrics %v, sessions %v; want 1300", metric, sessions)
 	}
 }

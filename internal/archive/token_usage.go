@@ -141,6 +141,22 @@ func addTokenCounts(to, from tokenCounts) {
 		to[k] += v
 	}
 }
+func maxTokenCounts(a, b tokenCounts) tokenCounts {
+	out := tokenCounts{}
+	addTokenCounts(out, a)
+	for k, v := range b {
+		out[k] = math.Max(out[k], v)
+	}
+	return out
+}
+
+// continuesHistory reports whether a Codex session_meta payload says the
+// rollout continues another thread's history rather than starting its own.
+func continuesHistory(meta map[string]any) bool {
+	ordinal, _ := number(meta["subagent_history_start_ordinal"])
+	return firstString(meta["forked_from_id"]) != "" || mapValue(meta["history_base"]) != nil || ordinal > 0
+}
+
 func tokenRemainder(total, attributed tokenCounts) tokenCounts {
 	out := tokenCounts{}
 	for k, v := range total {
@@ -226,11 +242,20 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 	modelCounters := map[string]tokenCounts{}
 	resultIDs := map[string]bool{}
 	recordStreams := map[string]bool{}
+	// A transcript that continues another thread's history (a Codex fork,
+	// forked subagent or revert page) starts its counters at that thread's
+	// usage, which the other thread's transcript counts. inherited holds that
+	// starting point per stream; counters holds each stream's latest total.
+	inherits := false
+	inherited, counters, recorded := map[string]tokenCounts{}, map[string]tokenCounts{}, map[string]bool{}
 	// Each message is decoded once for both passes.
 	raws, values := make([]map[string]any, len(messages)), make([]map[string]any, len(messages))
 	for i, m := range messages {
 		raws[i], values[i] = tokenObject(m)
 		raw, v := raws[i], values[i]
+		if firstString(raw["type"]) == "session_meta" && continuesHistory(v) {
+			inherits = true
+		}
 		if firstString(raw["type"], v["type"]) == "token_usage_record" {
 			stream := defaultString(firstNonNil(v["agent_id"], raw["parent_tool_use_id"], nilIfEmpty(m.ParentNativeID)), "main")
 			stream = defaultString(streamAliases[stream], stream)
@@ -286,11 +311,23 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 			r.scope = "thread"
 			r.counts = nil
 			r.reported = running
+			last := normalizeTokenCounts(mapValue(info["last_token_usage"]))
+			if _, ok := inherited[stream]; !ok {
+				inherited[stream] = tokenCounts{}
+				if inherits && last != nil {
+					inherited[stream] = tokenRemainder(running, last)
+				}
+			}
+			counters[stream] = running
 			if !hasRecords {
-				if previous := cumulative[stream]; previous != nil && running["total_tokens"] < previous["total_tokens"] {
-					r.counts = normalizeTokenCounts(mapValue(info["last_token_usage"]))
+				previous := cumulative[stream]
+				if previous == nil {
+					previous = inherited[stream]
+				}
+				if running["total_tokens"] < previous["total_tokens"] {
+					r.counts = last
 				} else {
-					r.counts = tokenRemainder(running, cumulative[stream])
+					r.counts = tokenRemainder(running, previous)
 				}
 				cumulative[stream] = running
 			}
@@ -328,6 +365,14 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 			}
 		} else {
 			r.checkpoint = normalizeTokenCounts(mapValue(v["thread_token_usage"]))
+		}
+		if inherits && typ == "token_usage_record" && r.checkpoint != nil && !recorded[stream] {
+			// The first record's thread usage beyond its own also starts at the
+			// other thread's, less what earlier counters in this transcript
+			// reported for its other requests.
+			recorded[stream] = true
+			earlier := tokenRemainder(tokenRemainder(counters[stream], inherited[stream]), r.counts)
+			inherited[stream] = maxTokenCounts(inherited[stream], tokenRemainder(tokenRemainder(r.checkpoint, r.counts), earlier))
 		}
 		if id != "" && (r.scope == "request" || r.scope == "task") {
 			key := stream + ":" + id
@@ -407,6 +452,7 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 		}
 		if requests[r.stream] == nil {
 			requests[r.stream] = tokenCounts{}
+			addTokenCounts(requests[r.stream], inherited[r.stream])
 		}
 		addTokenCounts(requests[r.stream], r.counts)
 		gap := tokenRemainder(r.checkpoint, requests[r.stream])

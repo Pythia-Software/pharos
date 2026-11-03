@@ -513,8 +513,10 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // changes so every file is parsed again. v8 retains tool result metadata (exit
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
-// invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v17-origin-entrypoints"
+// invoked_skills attachments for skill_usages; v18 keeps the session_meta of a
+// Codex rollout that continues another thread, so its inherited usage is not
+// counted again.
+const jsonlExtractor = "message-model-v18-codex-continuations"
 
 // transcriptName reports whether a file name is a transcript's: a .jsonl,
 // or for Codex also a compressed rollout.
@@ -827,6 +829,18 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			}
 			if len(meta) == 0 {
 				meta = payload
+				if continuesHistory(payload) {
+					// Token accounting reads that this rollout's counters start
+					// at the thread it continues (conversationTokenReports).
+					continuation := map[string]any{"id": payload["id"]}
+					for _, key := range []string{"forked_from_id", "forked_from_ordinal_exclusive", "history_base", "subagent_history_start_ordinal"} {
+						if value, ok := payload[key]; ok {
+							continuation[key] = value
+						}
+					}
+					text := jsonText(map[string]any{"type": "session_meta", "timestamp": event["timestamp"], "payload": continuation})
+					messages = append(messages, MessageRecord{RawText: text, NativeID: fmt.Sprintf("line-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: text, CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+				}
 			}
 			model = defaultString(payload["model"], model)
 			effort = updatedEffort(effort, payload)
