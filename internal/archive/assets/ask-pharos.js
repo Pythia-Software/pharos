@@ -729,7 +729,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
       const result=await response.json();if(disposed)return;
       showIdeas(askSuggestionItems(result.suggestions),announce);
       // The first suggestions are still being chosen in the background.
-      if(result.pending&&ideaRetries++<3)ideaRetry=setTimeout(()=>void loadIdeas(),20000);
+      if(result.pending)ideaRetry=setTimeout(()=>void loadIdeas(),askSuggestionRetryDelay(ideaRetries++));
+      else ideaRetries=0;
     }catch{/* Without suggestions the composer works as before. */}
   }
   function syncIdeaVisibility(){

@@ -11,6 +11,13 @@ function askSuggestionItems(list) {
   }).slice(0,12);
 }
 
+// While the first suggestions are still being chosen, ask again after 20 s,
+// doubling up to every five minutes: a busy library can take longer than any
+// fixed number of tries.
+function askSuggestionRetryDelay(attempt) {
+  return Math.min(300000,20000*2**Math.max(0,attempt));
+}
+
 async function askReadResponse(response, onProgress) {
   if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
     const result=await response.json();

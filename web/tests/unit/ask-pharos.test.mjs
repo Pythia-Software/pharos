@@ -130,6 +130,13 @@ test('suggestions keep only well-formed, distinct questions from the library', (
   assert.equal(model.askSuggestionItems(Array.from({length:20},(_,i)=>({id:'f'+i,text:'Question '+i+'?'}))).length,12);
 });
 
+test('Ask keeps asking for suggestions while they are being chosen, backing off', () => {
+  const delays=Array.from({length:8},(_,attempt)=>model.askSuggestionRetryDelay(attempt));
+  assert.equal(delays[0],20000);
+  assert.ok(delays.every((delay,i)=>i===0||delay>=delays[i-1]),'never sooner than the last try');
+  assert.equal(delays.at(-1),300000,'a slow first run still gets picked up, every five minutes at most');
+});
+
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
   const actions = state => plain(model.askComposerActions({enabled:true, model:'available-model', ...state}));
   assert.deepEqual(actions({}), {send:false, stop:false, history:true, clear:false, modelLocked:false});

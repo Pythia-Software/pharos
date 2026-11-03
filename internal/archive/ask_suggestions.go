@@ -700,10 +700,12 @@ func (run *askSignalRun) agentEvents(ctx context.Context, kinds []string) (askSi
 	if !askTableExists(ctx, run.c.reader(), "agent_events") {
 		return askSignal{}, nil
 	}
-	query := `SELECT COALESCE(r.display_name,''),e.family,COUNT(*),COUNT(DISTINCT e.conversation_id) FROM agent_events e
+	// Only events the verifier is confident of, as everywhere else they are
+	// shown; one conversation with several kinds counts once.
+	query := `SELECT e.conversation_id,COALESCE(r.display_name,''),e.family,COUNT(*) FROM agent_events e
  JOIN conversations c ON c.id=e.conversation_id JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
- WHERE e.day>=? AND e.family IN (` + strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",") + `) GROUP BY 1,2`
-	args := []any{askDay(run.now, 27)}
+ WHERE e.day>=? AND e.probability>=? AND e.family IN (` + strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",") + `) GROUP BY 1,2,3`
+	args := []any{askDay(run.now, 27), agentEventThreshold}
 	for _, kind := range kinds {
 		args = append(args, kind)
 	}
@@ -713,25 +715,25 @@ func (run *askSignalRun) agentEvents(ctx context.Context, kinds []string) (askSi
 	}
 	defer rows.Close()
 	byRepository, byKind := map[string]float64{}, map[string]float64{}
-	conversations := 0
+	seen := map[string]bool{}
 	for rows.Next() {
-		var repository, kind string
+		var conversation, repository, kind string
 		var count float64
-		var distinct int
-		if err := rows.Scan(&repository, &kind, &count, &distinct); err != nil {
+		if err := rows.Scan(&conversation, &repository, &kind, &count); err != nil {
 			return askSignal{}, err
 		}
 		byRepository[repository] += count
 		byKind[kind] += count
-		conversations += distinct
+		seen[conversation] = true
 	}
+	conversations := len(seen)
 	if err := rows.Err(); err != nil || conversations < 3 {
 		return askSignal{}, err
 	}
 	top, _ := askTop(byKind)
 	repository := askConcentrated(byRepository)
 	return askSignal{Score: saturate(float64(conversations), 20), Support: conversations, Repository: repository,
-		Lead: fmt.Sprintf("Agent events of these kinds appeared in about %d conversations in the last 28 days; the most common was %s%s.", conversations, top, askInRepository(repository))}, nil
+		Lead: fmt.Sprintf("Agent events of these kinds appeared in %d conversations in the last 28 days; the most common was %s%s.", conversations, top, askInRepository(repository))}, nil
 }
 
 func askAgentFriction(ctx context.Context, run *askSignalRun) (askSignal, error) {
@@ -897,8 +899,11 @@ func askFreshnessSignal(ctx context.Context, run *askSignalRun) (askSignal, erro
 	if run.server == nil {
 		return askSignal{}, nil
 	}
+	// The running and queued operations, so a domain being caught up is not
+	// reported as left behind.
+	_, views := run.server.operationsDocumentViews(ctx, false)
 	behind := []string{}
-	for _, row := range run.server.freshness(ctx, nil, true) {
+	for _, row := range run.server.freshness(ctx, views, true) {
 		if row.Behind.State == "behind" && row.CatchingUp == nil {
 			behind = append(behind, row.Label)
 		}

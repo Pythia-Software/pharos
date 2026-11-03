@@ -238,6 +238,63 @@ func TestAskSuggestionRanking(t *testing.T) {
 	}
 }
 
+// Agent events count as Pharos shows them: confident ones only, and each
+// conversation once however many kinds it has.
+func TestAskAgentEventSignalsCountConfidentConversations(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	if err := catalog.ensureAgentEventsSchema(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	seedAskActivity(t, catalog, now)
+	event := func(id, conversation, family string, probability float64) string {
+		return fmt.Sprintf(`INSERT INTO agent_events(message_id,conversation_id,source,day,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model)
+ VALUES('%s','%s','reply','%s','%s',%g,0,1,'s','','','[]','[]','m')`, id, conversation, askDay(now, 1), family, probability)
+	}
+	friction := func() askSignal {
+		t.Helper()
+		signal, err := askAgentFriction(context.Background(), &askSignalRun{c: catalog, now: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signal
+	}
+	// One conversation with three kinds, and unconfident candidates in two
+	// more: not three conversations.
+	execTx(t, catalog.DB, event("m1", "conv-a1", "obstacle", 0.9), event("m2", "conv-a1", "stuck", 0.9), event("m3", "conv-a1", "confusion", 0.9),
+		event("m4", "conv-a2", "obstacle", agentEventThreshold/2), event("m5", "conv-b1", "stuck", agentEventThreshold/2))
+	if signal := friction(); signal.Score != 0 {
+		t.Fatalf("one conversation and unconfident candidates are not three conversations: %+v", signal)
+	}
+	execTx(t, catalog.DB, event("m6", "conv-a2", "obstacle", 0.9), event("m7", "conv-b1", "stuck", agentEventThreshold))
+	if signal := friction(); signal.Score <= 0 || signal.Support != 3 {
+		t.Fatalf("three conversations with confident events: %+v", signal)
+	}
+}
+
+// A domain that is behind but being caught up is not a library-health lead.
+func TestAskFreshnessSignalIgnoresWorkUnderWay(t *testing.T) {
+	f := newFreshnessFixture(t)
+	f.scheduled(true)
+	server := testServer(t, f.config, f.catalog)
+	health := func() askSignal {
+		t.Helper()
+		signal, err := askFreshnessSignal(context.Background(), &askSignalRun{c: f.catalog, server: server, now: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signal
+	}
+	if signal := health(); signal.Score <= 0 || !strings.Contains(signal.Lead, "nothing catching up") {
+		t.Fatalf("a never-indexed source is behind: %+v", signal)
+	}
+	_, index := server.begin(context.Background(), OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser})
+	defer index.Finish(nil)
+	if signal := health(); signal.Score != 0 {
+		t.Fatalf("an index is catching it up: %+v", signal)
+	}
+}
+
 func TestAskSuggestionsEndpointAndLeads(t *testing.T) {
 	s := askTestServer(t)
 	get := func() map[string]any {

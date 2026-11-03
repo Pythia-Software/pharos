@@ -74,7 +74,7 @@ Signals read summaries, not conversation bodies:
 | `agent_session_usage` (by `usage_hour`) | tokens, change in tokens against earlier weeks, cache reuse, reasoning, model mix, delegation, parallel conversations |
 | `model_requests` (via `model_requests_compacted_idx`) | compactions |
 | `message_authorship` (by `day`) | your writing, back-and-forth, pasted and attached context |
-| `agent_events` | friction and reactions |
+| `agent_events` (confident events, as shown elsewhere) | friction and reactions, by conversation |
 | `tool_urls` with `tool_calls` | hosts agents reached for the first time this week, excluding search-result links, this Mac, local networks and bare addresses |
 | safety reviews, `FindingsOverview`, `workspaces`, `ask_sessions` | open risky-action reviews, open and watched findings, older work to recall, earlier chats |
 | the freshness ledger and backup history | library health, backups |
