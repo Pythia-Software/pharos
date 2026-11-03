@@ -356,6 +356,7 @@ operation.
 | `maintenance.library-view` | Index the Search view · Indexing the Search view | chained (dirty workspaces), version | svc | D:w W:w | view | view | Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume. | record | >15 s (today's `libraryCatchUpShown`) | bg |
 | `maintenance.previews` | Fill in previews · Filling in previews | daemon pass | svc | D:w W:w | view | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.session-shape` | Measure session shape · Measuring session shape | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |
 | `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D:w W:w | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
 | `maintenance.search.tool-output` | Remove tool output from word search · Removing tool output from word search | version | svc | D:w W:w | search.words | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |

@@ -132,6 +132,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.parallelism", Label: "Measure parallel work", Verb: "Measuring parallel work", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
+	{Kind: "maintenance.session-shape", Label: "Measure session shape", Verb: "Measuring session shape", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.cache-warm", Label: "Warm page caches", Verb: "Warming page caches", Holds: "D:r", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "maintenance.search.substring", Label: "Build substring search", Verb: "Building substring search", Holds: "D:w W:w", Affects: "search.substring",

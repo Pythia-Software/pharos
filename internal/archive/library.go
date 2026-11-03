@@ -469,7 +469,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // none; filling previews and measuring parallelism likewise. A publication
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
-	var view, previews, parallelism *daemonPass
+	var view, previews, parallelism, shape *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
 			(*pass).end(err)
@@ -481,7 +481,12 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			*pass = c.beginPass(ctx, kind, triggerChained)
 		}
 	}
-	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
+	defer func() {
+		settle(&view, false, nil)
+		settle(&previews, false, nil)
+		settle(&parallelism, false, nil)
+		settle(&shape, false, nil)
+	}()
 	var originsAt time.Time
 	for {
 		if c.queries.wait(ctx) != nil {
@@ -541,11 +546,22 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 					if err != nil && pass.Err() == nil {
 						fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
 					}
-					wait = 2 * time.Second
-					// Warming only reads; its operation is never published.
-					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-					warm.runIO(func() { c.warmCaches(ctx) })
-					warm.end(nil)
+					// Then changed conversations' session shape, likewise.
+					begin(&shape, "maintenance.session-shape")
+					var shaped int
+					shape.runIO(func() { shaped, err = c.refreshSessionShape(pass, sessionShapeBatch, false) })
+					shape.worked(shaped)
+					settle(&shape, shaped > 0, err)
+					if err != nil || shaped == 0 {
+						if err != nil && pass.Err() == nil {
+							fmt.Fprintf(os.Stderr, "Session shape: %v\n", err)
+						}
+						wait = 2 * time.Second
+						// Warming only reads; its operation is never published.
+						warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
+						warm.runIO(func() { c.warmCaches(ctx) })
+						warm.end(nil)
+					}
 				}
 			}
 		}
