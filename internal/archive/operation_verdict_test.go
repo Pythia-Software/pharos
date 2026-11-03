@@ -90,6 +90,30 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 	}
 }
 
+// An update stops this process's work, as an eject does, but leaves the
+// drive mounted: another process's work does not hold it, and work that
+// stops at its next safe point lets it go ahead.
+func TestUpdateRefusesOnlyWorkItWouldInterrupt(t *testing.T) {
+	terminal := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w"))}}
+	foreign := runningView("index.captures", func(view *opView) { view.Foreign, view.SafePoint, view.SafePointSet = true, time.Minute, true })
+	for _, test := range []struct {
+		name, refusal string
+		in            verdictInput
+	}{
+		{"nothing", "", verdictInput{}},
+		{"a batch writer", "", verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
+		{"another process", "", verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
+		{"a step-latency writer", "waits for prepare the catalog", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
+		{"a broker operation", "waits for copy library", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
+		{"unregistered work", "waits for indexing sources", verdictInput{unregistered: []string{"Indexing sources"}}},
+	} {
+		got := updateRefusal(computeEjectVerdict(updateInputs(test.in)))
+		if test.refusal == "" && got != "" || test.refusal != "" && !strings.Contains(got, test.refusal) {
+			t.Errorf("%s: %q; want %q", test.name, got, test.refusal)
+		}
+	}
+}
+
 // An operation holds a capture or index lock from when it takes it until
 // it closes the file.
 func TestOperationHoldsTheLocksItTook(t *testing.T) {

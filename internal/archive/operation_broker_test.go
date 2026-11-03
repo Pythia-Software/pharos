@@ -185,3 +185,44 @@ func TestBrokerCleansDeadAppLeases(t *testing.T) {
 		t.Fatalf("after cleaning: %+v", probes)
 	}
 }
+
+// A release for an update refuses before stopping anything while a broker
+// operation runs or a library's service says its work cannot stop in time.
+func TestBrokerUpdateReleaseAsksEveryLibraryFirst(t *testing.T) {
+	refusal := "The update waits for prepare the catalog, which cannot stop in time."
+	busy := true
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/release" || r.URL.Query().Get("for") != "update" || r.Header.Get("Authorization") != "Bearer child-token" {
+			http.Error(w, "no", http.StatusNotFound)
+			return
+		}
+		answer := map[string]any{"releasable": !busy}
+		if busy {
+			answer["error"] = refusal
+		}
+		writeJSON(w, answer, http.StatusOK)
+	}))
+	defer service.Close()
+	m := &applicationManager{token: "broker-token", id: "installation", operations: newBrokerOperations(filepath.Join(t.TempDir(), "operations.json")),
+		children: map[string]*applicationChild{}, client: &http.Client{Transport: &http.Transport{Proxy: nil}}}
+	m.operations.publish([]brokerLibrary{{ID: "a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: service.URL, Token: "child-token", PID: 42}}})
+	release := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/release?for=update", nil)
+		request.Header.Set("Authorization", "Bearer broker-token")
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		return response
+	}
+	transfer := m.operations.begin(OperationSpec{Kind: "library.transfer", Variant: "move"}, "a")
+	if response := release(); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "move library") || m.released {
+		t.Fatalf("update release during a move: %d %s (released %v)", response.Code, response.Body.String(), m.released)
+	}
+	transfer.Finish(nil)
+	if response := release(); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), refusal) || m.released {
+		t.Fatalf("update release while the library is busy: %d %s (released %v)", response.Code, response.Body.String(), m.released)
+	}
+	busy = false
+	if response := release(); response.Code != http.StatusOK || !m.released {
+		t.Fatalf("update release once nothing is busy: %d %s", response.Code, response.Body.String())
+	}
+}

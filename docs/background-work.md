@@ -188,6 +188,13 @@ cancellation, so locks and ordering do not change.
   the same stoppers, and the registry marks the matching ops `stopping` too.
 - Release (`POST /api/release`) cancels `s.life.ctx` as today. Every op whose
   ctx derives from it ends `interrupted` unless it finishes first.
+- An explicit app update releases with `?for=update`, which first refuses,
+  stopping nothing, while the verdict over this process's own work is `busy`
+  or `unsafe` (`updateInputs`: another process's leases, operations and
+  capture locks do not count, since the drive stays mounted).
+  `GET /api/release?for=update` runs only that check; the broker's
+  `POST /api/release?for=update` refuses while one of its own operations
+  runs, and asks every running library's service before it stops any.
 - **Request-scoped work.** An operation started inside an HTTP handler
   (`begin` with `r.Context()`) is not cancelled by a release, and the
   release waits for the request (`s.life.requests`). Such an operation must

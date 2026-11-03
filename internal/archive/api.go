@@ -209,9 +209,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"error": "cross-origin request refused"}, http.StatusForbidden)
 		return
 	}
-	if r.Method == http.MethodPost && r.URL.Path == "/api/release" {
-		s.release(w)
-		return
+	if r.URL.Path == "/api/release" {
+		switch r.Method {
+		case http.MethodPost:
+			s.release(w, r)
+			return
+		case http.MethodGet:
+			s.releaseCheck(w, r)
+			return
+		}
 	}
 	if !s.admit() {
 		writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)

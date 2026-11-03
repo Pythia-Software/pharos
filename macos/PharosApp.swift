@@ -178,13 +178,16 @@ final class ArchiveService: ObservableObject {
     private var managedLibraryMonitors: [String: LibraryVolumeMonitor] = [:]
     private var managedLibraryStateTask: URLSessionDataTask?
     private var brokerOperationsTask: URLSessionDataTask?
-    private let releaseService: (URL, String) -> ServiceClient.Release
+    /// Releases a service or the broker: (URL, token, before an update).
+    private let releaseService: (URL, String, Bool) -> ServiceClient.Release
     var deferUpdate: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
     var resumeUpdates: () -> Void = {}
     private(set) var menuBar: MenuBarController!
 
     init(plan: LaunchPlan? = nil,
-         releaseService: @escaping (URL, String) -> ServiceClient.Release = { ServiceClient.release($0, token: $1) }) {
+         releaseService: @escaping (URL, String, Bool) -> ServiceClient.Release = {
+             $2 ? ServiceClient.releaseForUpdate($0, token: $1) : ServiceClient.release($0, token: $1)
+         }) {
         self.releaseService = releaseService
         defer { menuBar = MenuBarController(service: self) }
         // Here rather than on a view: with its window closed, Pharos keeps
@@ -588,7 +591,7 @@ final class ArchiveService: ObservableObject {
             return (self.endpoint, self.service)
         }
         guard let endpoint else { return .approve }
-        let answer = releaseService(endpoint.url, endpoint.token)
+        let answer = releaseService(endpoint.url, endpoint.token, false)
         let (state, verdict) = ReleaseState.after(answer)
         lock.withLock { release = state }
         switch answer {
@@ -915,10 +918,14 @@ final class ArchiveService: ObservableObject {
 
     /// Stop only this app's service, wait for catalog closure, and (for an
     /// update) exclude every bundled CLI until the new app has launched.
-    func prepareToTerminate(installing: Bool, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
+    /// `unlessBusy` (an explicit Install and Relaunch) first asks the service
+    /// to stop the way an eject does, and refuses, stopping nothing, while
+    /// its work cannot reach a safe point in time. Install on quit does not:
+    /// quitting stops that work anyway.
+    func prepareToTerminate(installing: Bool, unlessBusy: Bool = false, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
         flushWebSession { [weak self] error in
             if let error { completion(error); return }
-            self?.prepareAfterSessionSave(installing: installing, timeout: timeout, completion: completion)
+            self?.prepareAfterSessionSave(installing: installing, unlessBusy: installing && unlessBusy, timeout: timeout, completion: completion)
         }
     }
 
@@ -942,7 +949,7 @@ final class ArchiveService: ObservableObject {
         }
     }
 
-    private func prepareAfterSessionSave(installing: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
+    private func prepareAfterSessionSave(installing: Bool, unlessBusy: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
         shuttingDown = true
         let child = process
         let endpoint = lock.withLock { self.endpoint }
@@ -956,15 +963,20 @@ final class ArchiveService: ObservableObject {
                 try lease?.begin(version: version)
                 let stopService = {
                     if let child, child.isRunning {
-                        if self?.managedApplication == true { child.terminate(); return }
+                        // The broker stops its libraries itself on SIGTERM.
+                        // Before an explicit update it first releases them,
+                        // refusing while their work cannot stop in time.
+                        let managed = self?.managedApplication == true
+                        if managed && !unlessBusy { child.terminate(); return }
                         if let endpoint {
-                            switch releaseService(endpoint.url, endpoint.token) {
-                            case .released: break
+                            switch releaseService(endpoint.url, endpoint.token, unlessBusy) {
+                            case .released: if managed { child.terminate() }
                             case .notRunning:
                                 // The owned child may still be initializing,
                                 // before its HTTP listener has opened.
                                 if child.isRunning { child.terminate() }
-                            case .stopping: throw UpdateFailure(message: "Pharos is finishing a write. Wait a moment, then quit or install again.")
+                            case .stopping(let body):
+                                throw UpdateFailure(message: ServiceClient.reason(body) ?? "Pharos is finishing a write. Wait a moment, then quit or install again.")
                             case .failed(let reason): throw UpdateFailure(message: "Could not close Pharos's catalog: \(reason)")
                             }
                         } else { child.terminate() }
