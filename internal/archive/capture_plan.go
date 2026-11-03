@@ -137,6 +137,15 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		}
 	case "tl1":
 		return plan, plan.tl1(source)
+	case "copilot":
+		files, err := (&copilotAdapter{baseAdapter{config: source}}).captureFiles()
+		if err != nil {
+			return plan, fmt.Errorf("Copilot sessions are unavailable: %w", err)
+		}
+		for _, file := range files {
+			rel, _ := filepath.Rel(source.Path, file)
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
+		}
 	case "antigravity":
 		adapter := antigravityAdapter{baseAdapter: baseAdapter{config: source}}
 		files, err := adapter.captureFiles()

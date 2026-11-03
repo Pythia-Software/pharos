@@ -40,7 +40,7 @@ function createPharosSourceWizard() {
 (() => {
   'use strict';
   const DISMISSED = 'pharos-onboarding-dismissed:';
-  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', 'claude-ai': 'Claude.ai', antigravity: 'Antigravity'};
+  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', 'claude-ai': 'Claude.ai', copilot: 'Copilot CLI', antigravity: 'Antigravity'};
   const CSS = `
 .source-setup-open .application-body{overflow:hidden}
 .source-setup-open .application-body>:not(#pharosOnboarding){display:none!important}
