@@ -5698,15 +5698,6 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
-      "key": "9e052f92f613288c:0",
-      "file": "web/src/home.tsx",
-      "owner": "HomePage",
-      "tag": "textarea",
-      "control": "value={editDescription} onChange={event => setEditDescription(event.target.value)}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
-    },
-    {
       "key": "ab52b07e0c85d81a:0",
       "file": "web/src/home.tsx",
       "owner": "HomePage",
@@ -5730,15 +5721,6 @@
       "owner": "HomePage",
       "tag": "select",
       "control": "aria-label=\"Cover metric\" value={editCover} onChange={event => setEditCover(event.target.value)}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
-    },
-    {
-      "key": "ef1d670d8233da35:0",
-      "file": "web/src/home.tsx",
-      "owner": "HomePage",
-      "tag": "input",
-      "control": "value={editTitle} onChange={event => setEditTitle(event.target.value)}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
@@ -6259,6 +6241,24 @@
       "control": "aria-label={`Edit ${title}`} onClick={onEdit}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
+      "key": "a7dc844b99e1b790:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "select",
+      "control": "aria-label=\"Category\" value={category} onChange={event => editing.onCategory!(event.target.value as QueryCategory)}",
+      "contract": "editing",
+      "reason": "The card editor's category, chosen in place on the card. An unapplied authoring draft saved only with the card."
+    },
+    {
+      "key": "c4e50ff52faed8b9:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "input",
+      "control": "aria-label=\"Call to action\" value={actionLabel ?? \"\"} onChange={event => editing.onAction!(event.target.value)}",
+      "contract": "editing",
+      "reason": "The card editor's call to action, edited in place on the card. An unapplied authoring draft saved only with the card."
     },
     {
       "key": "d09bdc3a13ea798d:0",

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMPTY_QUERY } from '@pythia-software/query-table-core';
-import { dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets } from '../../../src/dashboard-card-model';
+import { DASHBOARD_CARD_ACTION, dashboardCardLabels, dashboardCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets } from '../../../src/dashboard-card-model';
 import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
@@ -43,6 +43,25 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.deepEqual(readBookmarks().map(item=>item.id),[second.id]);
   assert.equal(dashboardCardCollected(url),false,'removing the card offers it again');
   assert.throws(()=>collectDashboardCard(url,'   ',''),/title/);
+});
+
+test('dashboard cards keep a chosen call to action and category, and store neither when it matches the default', t => {
+  fixture(t);
+  const url = makeURL({...dashboardDefaults.tokens, metric:'tokens'});
+  assert.equal(dashboardCardPresentation(url).category,'usage');
+  const plain = collectDashboardCard(url,'Tokens','','chart',{action:` ${DASHBOARD_CARD_ACTION} `,category:'usage'});
+  assert.equal(Object.hasOwn(plain,'action'),false);
+  assert.equal(Object.hasOwn(plain,'category'),false);
+  const labelled = collectDashboardCard(url,'Tokens','','chart',{action:' See where tokens go ',category:'cost'});
+  assert.equal(labelled.action,'See where tokens go');
+  assert.equal(labelled.category,'cost');
+  const kept = updateBookmark(labelled.id,'Renamed','');
+  assert.deepEqual([kept.action,kept.category],['See where tokens go','cost'],'editing without labels keeps them');
+  const reset = updateBookmark(labelled.id,'Renamed','',undefined,undefined,dashboardCardLabels(url,'chart',{action:'',category:'usage'}));
+  assert.equal(Object.hasOwn(reset,'action'),false);
+  assert.equal(Object.hasOwn(reset,'category'),false);
+  assert.throws(()=>collectDashboardCard(url,'Tokens','','chart',{action:'x'.repeat(61)}),/call to action/);
+  assert.throws(()=>collectDashboardCard(url,'Tokens','','chart',{category:'nonsense'}),/category/);
 });
 
 test('dashboard cards re-resolve Today in the pinned zone and preserve fixed and unbounded ranges', t => {
