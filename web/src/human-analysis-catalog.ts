@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, branchesOf, encodeQuery, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import {  branchesOf, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { mapTermPredicates } from "./where-terms";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
@@ -34,8 +34,6 @@ const measures: Record<string, AnalysisMeasure> = {
   conversations: { label: "Conversations", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with a matching message. A conversation in several groups counts once in each, so groups do not add up to the total." },
   typed_share: { label: "Typed share of words", unit: "percent", format: percent, op: "sum", ratio: ["typed_words", "words"], additive: false, note: "Typed words divided by all user words, pooled over each group's messages rather than averaging per-message shares." },
   words_per_message: { label: "Typed words per message", unit: "words", format: mean, op: "sum", ratio: ["typed_words", { op: "sum", expression: "IF([typed_words]>0,1,0)", label: "messages with typed text" }], additive: false, note: "Typed words divided by messages holding any, pooled; messages without typed text do not dilute it." },
-  correction_share: { label: "Correction-cue share", unit: "percent", format: percent, op: "sum", ratio: [cue("correction_cue", "messages with an authored correction cue"), messages], additive: false, note: "Messages whose typed text holds a correction cue (the dataset's own rule), divided by all messages, pooled." },
-  positive_share: { label: "Positive-cue share", unit: "percent", format: percent, op: "sum", ratio: [cue("positive_cue", "messages with an authored positive cue"), messages], additive: false, note: "Messages whose typed text holds a positive cue (the dataset's own rule), divided by all messages, pooled." },
   copied_share: { label: "Copied-from-conversation share", unit: "percent", format: percent, op: "sum", ratio: [cue("has_source", "messages holding text copied from a conversation"), messages], additive: false, note: "Messages holding text matched to an earlier conversation, divided by all messages, pooled." },
 };
 
@@ -116,7 +114,5 @@ export function readHumanLink(where: WhereTerm[], versioned: boolean): HumanLink
   }
   return { where: changed ? read : where, unsupported };
 }
-// The legacy Writing view of an older link's filters, where they still apply.
-export const humanLegacyURL = (where: WhereTerm[]) => `/analyze?${new URLSearchParams({ analyze_view: "writing", q_writing: encodeQuery({ ...EMPTY_QUERY, where }) })}`;
 const describeClause = (clause: WhereClause) => `${clause.negated ? "not " : ""}${clause.field} ${clause.op} ${clause.value}`.trim();
 export const describeTerm = (term: WhereTerm) => branchesOf(term).map(branch => branch.length > 1 ? `(${branch.map(describeClause).join(" and ")})` : describeClause(branch[0])).join(" or ");

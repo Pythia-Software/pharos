@@ -2,15 +2,23 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { toJpeg } from "html-to-image";
 import { boundedLog, pendingSubmission, safeURL, type Annotation, type Diagnostics, type Screenshot, type Submission } from "./model";
+import { Icon } from "../icons";
+import { preferences } from "../preferences";
+import { SearchHelp } from "../search-help";
 import "./pharos-client.css";
 import { annotationForUpload, restoreReview, type FeedbackReview, type PharosAnnotation } from "./pharos-model";
 declare global {
   interface Window {
     pharosFeedback?: { annotations: () => PharosAnnotation[]; clear: (ids: string[]) => void; toast: (message: string) => void; annotate: () => void };
+    pharosSendFeedback?: () => void;
     uiFeedback?: { safeURL: typeof safeURL; capture: (element: HTMLElement, id: string) => Promise<Screenshot>; removeScreenshot: (id: string) => void };
   }
 }
-const draftKey = "uifeedback.v1.draft", contactKey = "uifeedback.v1.contact";
+// The contact email is an app preference (Settings → App preferences), so it
+// follows the library; this device's earlier remembered address moves there once.
+const draftKey = "uifeedback.v1.draft", contactKey = "pharos-feedback-contact-email", legacyContactKey = "uifeedback.v1.contact";
+try { const legacy = localStorage.getItem(legacyContactKey); if (legacy !== null) { if (!preferences().get(contactKey, "")) preferences().set(contactKey, legacy); localStorage.removeItem(legacyContactKey); } } catch { /* Storage is unavailable; nothing to move. */ }
+function saveContact(email: string) { if (email) preferences().set(contactKey, email); else preferences().remove(contactKey); }
 let database: Promise<IDBDatabase> | null = null;
 function db(): Promise<IDBDatabase> {
   if (!database) database = new Promise((resolve, reject) => {
@@ -49,10 +57,10 @@ window.fetch = async (input, init) => {
   const record = (status: string) => { if (path) failedRequests = boundedLog(failedRequests + `\n${new Date().toISOString()} ${init?.method ?? (input instanceof Request ? input.method : "GET")} ${path} ${status}`); };
   try { const response = await originalFetch(input, init); if (!response.ok) record(String(response.status)); return response; } catch (e) { record("network error"); throw e; }
 };
-interface Draft { comment: string; kind: Submission["kind"]; email: string; remember: boolean }
+interface Draft { comment: string; kind: Submission["kind"] }
 function readDraft(): Draft {
-  const empty: Draft = { comment: "", kind: "feedback", email: "", remember: false };
-  try { const draft = JSON.parse(localStorage.getItem(draftKey) || "null"), email = localStorage.getItem(contactKey) || ""; return { ...empty, ...draft, email: draft?.email ?? email, remember: Boolean(email) }; } catch { return empty; }
+  const empty: Draft = { comment: "", kind: "bug" };
+  try { const draft = JSON.parse(localStorage.getItem(draftKey) || "null"); return { comment: draft?.comment ?? empty.comment, kind: draft?.kind ?? empty.kind }; } catch { return empty; }
 }
 async function annotationsForSubmission(): Promise<Annotation[]> {
   return await Promise.all((window.pharosFeedback?.annotations() ?? []).map(async a => {
@@ -62,19 +70,21 @@ async function annotationsForSubmission(): Promise<Annotation[]> {
   }));
 }
 function Composer({ close }: { close: () => void }) {
-  const [draft, setDraft] = useState(readDraft), [annotations, setAnnotations] = useState<Annotation[]>([]), [ready, setReady] = useState(false), [error, setError] = useState("");
+  const [draft, setDraft] = useState(readDraft), [email, setEmail] = useState(() => String(preferences().get(contactKey, ""))), [annotations, setAnnotations] = useState<Annotation[]>([]), [ready, setReady] = useState(false), [error, setError] = useState("");
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null), [logs, setLogs] = useState(false), [collecting, setCollecting] = useState(false), [busy, setBusy] = useState(false), [receipt, setReceipt] = useState("");
   const [sourceIDs, setSourceIDs] = useState<string[]>([]);
   const dialog = useRef<HTMLDialogElement>(null);
-  const busyRef = useRef(busy); busyRef.current = busy || collecting;
+  const busyRef = useRef(busy); busyRef.current = busy;
   const closeRef = useRef<() => void>(close); closeRef.current = () => { void keepDraft(); };
   useEffect(() => { const el = dialog.current!, previous = document.activeElement; el.showModal(); const cancel = (e: Event) => { e.preventDefault(); if (!busyRef.current) closeRef.current(); }; el.addEventListener("cancel", cancel);
     return () => { el.removeEventListener("cancel", cancel); el.close(); if (previous instanceof HTMLElement) restoreFocus(previous); };
   }, []);
   useEffect(() => { void Promise.all([annotationsForSubmission(), stored<FeedbackReview>("outbox", "review", "get")]).then(([items, saved]) => {
     const review = restoreReview(saved, items); setAnnotations(review.annotations); setSourceIDs(review.sourceIDs); setDiagnostics(review.diagnostics); setLogs(review.includeDiagnostics); setReady(true);
+    // Bug reports include logs. Once collected, the reviewer's choice stands.
+    if (draft.kind === "bug" && !review.diagnostics) void includeLogs(true);
   }, e => setError(String(e))); }, []);
-  useEffect(() => { if (receipt) return; try { localStorage.setItem(draftKey, JSON.stringify(draft)); if (draft.remember && draft.email) localStorage.setItem(contactKey, draft.email); else localStorage.removeItem(contactKey); } catch { setError("Could not save this draft. Check local storage before sending."); } }, [draft, receipt]);
+  useEffect(() => { if (receipt) return; try { localStorage.setItem(draftKey, JSON.stringify(draft)); } catch { setError("Could not save this draft. Check local storage before sending."); } }, [draft, receipt]);
   useEffect(() => { if (ready && !receipt) void saveReview().catch(e => setError(String(e))); }, [annotations, sourceIDs, diagnostics, logs, ready, receipt]);
   function saveReview() { return stored<FeedbackReview>("outbox", "review", "put", { annotations, sourceIDs, diagnostics, includeDiagnostics: logs }); }
   async function keepDraft(afterClose?: () => void) {
@@ -85,8 +95,8 @@ function Composer({ close }: { close: () => void }) {
     catch (e) { busyRef.current = false; setError(String(e)); setBusy(false); }
   }
   function update(patch: Partial<Draft>) { setDraft(value => ({ ...value, ...patch })); }
-  async function collect() {
-    if (logs) { setLogs(false); return; }
+  async function includeLogs(on: boolean) {
+    if (!on) { setLogs(false); return; }
     setCollecting(true); setError("");
     try {
       const res = await fetch("/api/feedback/diagnostics"); if (!res.ok) throw new Error("Could not collect service diagnostics. Try again, or send without logs.");
@@ -97,7 +107,7 @@ function Composer({ close }: { close: () => void }) {
     event.preventDefault(); if (!ready || busy) return; setBusy(true); setError("");
     try {
       const previous = await stored<Submission>("outbox", "pending", "get") ?? null;
-      const submission = pendingSubmission({ version: 1, application: { name: "Pharos" }, kind: draft.kind, comment: draft.comment.trim(), email: draft.email.trim() || undefined, annotations, diagnostics: logs && diagnostics ? diagnostics : undefined }, previous, () => crypto.randomUUID());
+      const submission = pendingSubmission({ version: 1, application: { name: "Pharos" }, kind: draft.kind, comment: draft.comment.trim(), email: email.trim() || undefined, annotations, diagnostics: logs && diagnostics ? diagnostics : undefined }, previous, () => crypto.randomUUID());
       const body = JSON.stringify(submission); if (new TextEncoder().encode(body).length > 8 * 1024 * 1024) throw new Error("This report exceeds 8 MiB. Remove screenshots or split it into smaller reports.");
       await stored("outbox", "pending", "put", submission);
       const res = await fetch("/api/feedback/submit", { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(55000) });
@@ -108,31 +118,28 @@ function Composer({ close }: { close: () => void }) {
       catch { setError("Feedback was received, but this device could not clear its saved draft."); }
     } catch (e) { setError(String(e)); } finally { setBusy(false); }
   }
-  return <dialog className="uifeedback-dialog" ref={dialog} aria-labelledby="uifeedback-title" data-feedback-ui><form onSubmit={event => void send(event)}><header><h2 id="uifeedback-title">{receipt ? "Feedback sent" : "Send feedback"}</h2><button type="button" disabled={busy || collecting} onClick={() => void keepDraft()} aria-label="Close feedback">Close</button></header>
-    {receipt ? <><p role="status">Your feedback was received. Thank you.</p><p>Report: <code>{receipt}</code></p><p>{draft.email ? "We can contact you at the address you provided." : "No contact email was included."}</p></> : <>
-      <label>Type<select value={draft.kind} disabled={busy} onChange={e => update({ kind: e.target.value as Draft["kind"] })}><option value="feedback">Feedback</option><option value="bug">Bug report</option><option value="feature">Feature request</option><option value="prompt">Prompt to build</option></select></label>
+  return <dialog className="uifeedback-dialog" ref={dialog} aria-labelledby="uifeedback-title" data-feedback-ui><form onSubmit={event => void send(event)}><div className="uifeedback-heading"><h2 id="uifeedback-title">{receipt ? "Feedback sent" : "Send feedback"}</h2><button type="button" disabled={busy} onClick={() => void keepDraft()} aria-label="Close feedback"><Icon name="close" /></button></div>
+    {receipt ? <><p role="status">Your feedback was received. Thank you.</p><p>Report: <code>{receipt}</code></p><p>{email ? "We can contact you at the address you provided." : "No contact email was included."}</p></> : <>
+      <label>Type<select value={draft.kind} disabled={busy} onChange={e => { const kind = e.target.value as Draft["kind"]; update({ kind }); if (kind === "bug" && !logs) void includeLogs(true); }}><option value="bug">Bug report</option><option value="feedback">Feedback</option><option value="feature">Feature request</option><option value="prompt">Prompt to build</option></select></label>
       <label>What would you like changed?<textarea value={draft.comment} maxLength={16000} disabled={busy} onChange={e => update({ comment: e.target.value })} placeholder={annotations.length ? "Optional context for these annotations" : "Describe the issue, request, or prompt"} required={!annotations.length} /></label>
-      <button type="button" disabled={busy || collecting || !ready} onClick={() => void keepDraft(() => window.pharosFeedback?.annotate())}>Annotate an element</button>
-      <section aria-label="Included annotations">{annotations.map((a, i) => <article key={a.id}><h3>{i + 1}. {a.label}</h3><p>{a.comment}</p><small><code>{a.selector}</code> · {new Date(a.captured_at).toLocaleString()}</small>{a.url && <p className="uifeedback-url">{a.url}</p>}{a.text && <blockquote>{a.text}</blockquote>}{a.screenshot && <img alt={`Screenshot of ${a.label}`} src={`data:${a.screenshot.mime};base64,${a.screenshot.data}`} />}<button type="button" disabled={busy} onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))}>Exclude from this report</button></article>)}{!annotations.length && <p>No annotated elements included. You can send general feedback here.</p>}</section>
-      <label>Contact email (optional)<input type="email" maxLength={254} value={draft.email} disabled={busy} onChange={e => update({ email: e.target.value })} autoComplete="email" /></label>
-      <label className="uifeedback-check"><input type="checkbox" disabled={busy} checked={draft.remember} onChange={e => update({ remember: e.target.checked })} />Remember my email on this device for future reports</label>
-      <button type="button" disabled={busy} onClick={() => { update({ email: "", remember: false }); localStorage.removeItem(contactKey); }}>Forget my email</button>
-      <label className="uifeedback-check"><input type="checkbox" disabled={busy || collecting || !ready} checked={logs} onChange={() => void collect()} />Include recent browser errors, failed requests, and service logs</label>
+      {annotations.length > 0 && <ul className="uifeedback-annotations" aria-label="Included annotations">{annotations.map(a => <li key={a.id}>{a.screenshot && <img alt={`Screenshot of ${a.label}`} src={`data:${a.screenshot.mime};base64,${a.screenshot.data}`} />}<div><strong>{a.label}</strong>{a.comment && <span> · {a.comment}</span>}{(a.url || a.text) && <small title={[a.url, a.text].filter(Boolean).join("\n")}>{a.url || a.text}</small>}</div><button type="button" disabled={busy} onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))} aria-label={`Exclude ${a.label} from this report`} title="Exclude from this report"><Icon name="close" /></button></li>)}</ul>}
+      <button type="button" className="uifeedback-annotate" disabled={busy || collecting || !ready} onClick={() => void keepDraft(() => window.pharosFeedback?.annotate())}>Annotate an element</button>
+      <label>Contact email (optional)<span className="uifeedback-email"><input type="email" maxLength={254} value={email} disabled={busy} onChange={e => { setEmail(e.target.value); saveContact(e.target.value.trim()); }} autoComplete="email" /><button type="button" disabled={busy} onClick={() => void keepDraft(() => window.pharosNavigate?.("/settings/preferences"))} aria-label="Contact email settings" title="Contact email settings"><Icon name="settings" /></button></span></label>
+      <label className="uifeedback-check"><input type="checkbox" disabled={busy || collecting || !ready} checked={logs} onChange={e => void includeLogs(e.target.checked)} />Include recent browser errors, failed requests, and service logs</label>
       {collecting && <p role="status">Collecting recent logs…</p>}
-      {logs && diagnostics && <details open><summary>Review or edit attached logs</summary>{(["browser", "requests", "service"] as const).map(kind => <label key={kind}>{kind}<textarea disabled={busy} value={diagnostics[kind] || ""} onChange={e => setDiagnostics(d => ({ ...d, [kind]: boundedLog(e.target.value) }))} /></label>)}</details>}
-      <p className="uifeedback-privacy">Sending shares your comments, annotations, layout details, and selected attachments with Pythia Software. Reports are private and retained for 90 days. An email address is used only to follow up on your feedback. Prompts enter a review queue.</p>
-      <footer><button type="button" disabled={busy || collecting} onClick={() => void keepDraft()}>Keep draft</button><button className="primary" disabled={!ready || busy || collecting} type="submit">{busy ? "Sending…" : "Send feedback"}</button></footer>
+      {logs && diagnostics && <details><summary>Review or edit attached logs</summary>{(["browser", "requests", "service"] as const).map(kind => <label key={kind}>{kind}<textarea disabled={busy} value={diagnostics[kind] || ""} onChange={e => setDiagnostics(d => ({ ...d, [kind]: boundedLog(e.target.value) }))} /></label>)}</details>}
+      <footer><SearchHelp label="Privacy" text="Privacy">Sending shares your comments, annotations, layout details, and selected attachments with Pythia Software. Reports are private and retained for 90 days. An email address is used only to follow up on your feedback. Prompts enter a review queue.</SearchHelp><span className="uifeedback-actions"><button type="button" disabled={busy} onClick={() => void keepDraft()}>Keep draft</button><button className="primary" disabled={!ready || busy || collecting} type="submit">{busy ? "Sending…" : "Send feedback"}</button></span></footer>
     </>}{error && <p role="alert" className="uifeedback-error">{error}</p>}
   </form></dialog>;
 }
 function restoreFocus(opener: HTMLElement) {
   const target = opener.getClientRects().length ? opener : document.getElementById("headerMore"); target?.focus();
 }
-if (!(window as unknown as { pharosShare?: unknown }).pharosShare) {
-  const toolbar = document.querySelector(".feedback-toolbar-controls");
-  if (toolbar) { const button = document.createElement("button"); button.type = "button"; button.id = "feedbackSend"; button.textContent = "Send feedback"; toolbar.append(button);
-    const open = (opener: HTMLButtonElement) => { const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); root.render(<Composer close={() => { root.unmount(); host.remove(); restoreFocus(opener); }} />); };
-    button.onclick = () => open(button);
-    const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) header.onclick = () => open(header);
-  }
+const toolbar = document.querySelector(".feedback-toolbar-controls");
+if (toolbar) { const button = document.createElement("button"); button.type = "button"; button.id = "feedbackSend"; button.textContent = "Send feedback"; toolbar.append(button);
+  const open = (opener: HTMLButtonElement) => { const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); root.render(<Composer close={() => { root.unmount(); host.remove(); restoreFocus(opener); }} />); };
+  button.onclick = () => open(button);
+  const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) header.onclick = () => open(header);
+  // The Mac app's context menu; focus returns to the header button, or More.
+  window.pharosSendFeedback = () => open(header instanceof HTMLButtonElement ? header : button);
 }

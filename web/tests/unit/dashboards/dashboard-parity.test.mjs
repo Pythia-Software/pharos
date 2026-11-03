@@ -128,8 +128,10 @@ test("token-volume-trend: tokens by provider, 7-day rolling mean", async t => {
 });
 
 test("token-volume-log: tokens by repository on a log scale", async t => {
-  const { state } = await trendPair(t, "token-volume-log", 30);
-  assert.deepEqual([state.split, state.scale], ["repository_name", "logarithmic"]);
+  const { state, dashboard } = await trendPair(t, "token-volume-log", 30);
+  assert.deepEqual([state.split, state.scale, state.nonzero], ["repository_name", "logarithmic", true]);
+  // Both leave out idle days and every zero.
+  assert.ok(dashboard.buckets.length < 30 && dashboard.buckets.every(bucket => Object.values(bucket.values).length && Object.values(bucket.values).every(value => value > 0)));
 });
 
 test("cumulative-api-cost: priced cost by provider, cumulative", async t => {

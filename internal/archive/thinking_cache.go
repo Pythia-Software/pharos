@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,9 +24,8 @@ func (c *Catalog) thinkingSnapshot(ctx context.Context) ([]thinkingRecord, error
 	})
 }
 
-// Native WHERE remains compiled/executed by the existing SQL dataset. Predicates
-// on the request ledger do not need to reconstruct timing to select eligible IDs.
-// In particular Card Library date/model filters take this inexpensive path.
+// Native WHERE remains compiled/executed by the existing SQL dataset, over the
+// stored timing projection, which is narrower than the request ledger.
 func (c *Catalog) thinkingNativeIDs(ctx context.Context, o thinkingOptions) (map[string]bool, error) {
 	if o.FilterSQL == "" {
 		return nil, nil
@@ -46,33 +46,12 @@ func (c *Catalog) thinkingNativeIDs(ctx context.Context, o thinkingOptions) (map
 }
 
 func (c *Catalog) loadThinkingNativeIDs(ctx context.Context, o thinkingOptions) (map[string]bool, error) {
-	from := "(" + thinkingSource + ") d"
-	simple := true
-	for _, term := range o.NativeWhere {
-		for _, branch := range term.Branches() {
-			for _, clause := range branch {
-				switch clause.Field {
-				case "id", "conversation_id", "agent_session_id", "native_id", "sequence", "requested_at", "model", "effort", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "model_effort", "day", "week", "month":
-				default:
-					simple = false
-				}
-			}
-		}
-	}
-	if simple {
-		from = "(SELECT mr.*,COALESCE(NULLIF(model,''),'Unreported') thinking_model,COALESCE(NULLIF(effort,''),'Unreported') thinking_effort FROM model_requests mr) d"
-	}
-	where := o.FilterSQL
-	if simple {
-		where = strings.ReplaceAll(where, "d.model", "d.thinking_model")
-		where = strings.ReplaceAll(where, "d.effort", "d.thinking_effort")
-	}
 	tx, release, err := beginQueryWithTempStore(ctx, c.reader(), 1)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	rows, err := tx.QueryContext(ctx, "SELECT d.id FROM "+from+" WHERE "+strings.TrimPrefix(where, " WHERE "), o.FilterArgs...)
+	rows, err := tx.QueryContext(ctx, "SELECT d.id FROM ("+thinkingSource+") d WHERE "+strings.TrimPrefix(o.FilterSQL, " WHERE "), o.FilterArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,15 +99,17 @@ func selectThinkingRecords(ctx context.Context, all []thinkingRecord, o thinking
 type thinkingOptionsList struct{ Models, Efforts []string }
 
 func (c *Catalog) thinkingOptionsList(ctx context.Context) (thinkingOptionsList, error) {
+	// The choices come from the shared population, which every view loads
+	// first, rather than from another scan of the ledger.
 	return cachedValue(ctx, c, "thinking:options", func(ctx context.Context) (thinkingOptionsList, error) {
-		rows, err := queryMapsContext(ctx, c.reader(), "SELECT DISTINCT COALESCE(NULLIF(model,''),'Unreported') model,COALESCE(NULLIF(effort,''),'Unreported') effort FROM model_requests")
+		all, err := c.thinkingSnapshot(ctx)
 		if err != nil {
 			return thinkingOptionsList{}, err
 		}
 		models, efforts := map[string]bool{}, map[string]bool{}
-		for _, r := range rows {
-			models[asString(r["model"])] = true
-			efforts[asString(r["effort"])] = true
+		for _, r := range all {
+			models[r.Model] = true
+			efforts[r.Effort] = true
 		}
 		out := thinkingOptionsList{}
 		for m := range models {
@@ -189,10 +170,26 @@ func (c *Catalog) thinkingFit(ctx context.Context, rs []thinkingRecord, normaliz
 }
 
 func thinkingCohortKey(rs []thinkingRecord) string {
-	h := sha256.New()
 	// Include fitted inputs as well as identity: a source commit can land between
 	// acquiring the immutable population and acquiring this cache's generation.
 	// An older in-flight cohort must never seed a fit for updated observations.
+	// Chunks hash in parallel, since an all-time cohort has a million records.
+	const chunk = 1 << 16
+	sums := make([][]byte, (len(rs)+chunk-1)/chunk)
+	var wg sync.WaitGroup
+	for n := range sums {
+		wg.Go(func() { sums[n] = thinkingRecordsHash(rs[n*chunk : min(len(rs), (n+1)*chunk)]) })
+	}
+	wg.Wait()
+	h := sha256.New()
+	for _, sum := range sums {
+		_, _ = h.Write(sum)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func thinkingRecordsHash(rs []thinkingRecord) []byte {
+	h := sha256.New()
 	var number [8]byte
 	for _, r := range rs {
 		for _, value := range []string{r.ID, r.Model, r.Effort, r.Conversation, r.Stream, r.Native} {
@@ -209,5 +206,5 @@ func thinkingCohortKey(rs []thinkingRecord) string {
 			_, _ = h.Write(number[:])
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return h.Sum(nil)
 }

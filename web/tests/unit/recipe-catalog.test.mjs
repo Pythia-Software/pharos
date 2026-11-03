@@ -16,7 +16,7 @@ import { analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-
 import { tokenAnalysisCatalog } from "../../src/token-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../src/record-analysis-catalogs";
 import { cardDashboardWhere, cardDetailsURL } from "../../src/card-exploration";
 import { windowedChart } from "../../src/card-windows";
 
@@ -49,9 +49,16 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
     for (const rows of [false, true]) assert.deepEqual(core.toQueryRequestV3(query, schema, capabilities, execution, { now, rows }).diagnostics, [], `destination @${days}d`);
     const cover = cardCoverQuery(query, recipe);
     assert.deepEqual(core.toQueryRequestV3(cover.query, schema, capabilities, execution, { now, rows: false }).diagnostics, [], `cover @${days}d`);
-    const restored = core.decodeQueryStrict(new URL(suggestion.url, "http://home.test").searchParams.get(`q_${recipe.dataset}`));
-    assert.deepEqual(restored, core.normalizeQueryState(query), `URL @${days}d`);
     const url = new URL(suggestion.url, "http://home.test");
+    // A Habits section card opens the Habits page at its selectors, and
+    // draws from the habits summary rather than its query.
+    if (recipe.habits) {
+      assert.deepEqual([url.pathname, readUsageWorkspace(url.searchParams).mode, readUsageWorkspace(url.searchParams).topic], ["/analyze", "dashboards", "habits"]);
+      for (const [key, value] of Object.entries(recipe.habits.view)) assert.equal(url.searchParams.get(key), value, key);
+      continue;
+    }
+    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${recipe.dataset}`));
+    assert.deepEqual(restored, core.normalizeQueryState(query), `URL @${days}d`);
     if (Object.hasOwn(usageDatasetTopics, recipe.dataset)) {
       assert.equal(url.pathname, "/analyze", `Analyze route @${days}d`);
       assert.equal(readUsageWorkspace(url.searchParams).dataset, recipe.destination?.dataset ?? recipe.dataset);

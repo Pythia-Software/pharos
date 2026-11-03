@@ -1,18 +1,19 @@
 import searchCases from '../../../../testdata/search-draft-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
 import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
+import {findingsRank} from '../../../src/findings-route';
+import {createDetailLanding,nativeDetailsReady,attentionMutationMatters,attentionReferenceAt,attentionTargetNoun,toggleAttentionTarget} from '../../../src/view-attention-model';
 import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/query-table-core';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,viewPageForURL} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
 import {restoreRollingDefinition} from '../../../src/query-links';
 import {readRollingWindow, resolveRollingQuery, updateQueryWindowURL, queryURL, queryFromURL} from '../../../src/query-links';
 import {todayBounds} from '../../../src/day-window';
-import {loadSearchPage} from '../../../src/search-pagination';
 import {readDashboardLink} from '../../../src/usage-dashboard-model';
 
 const query={...EMPTY_QUERY,where:Array.from({length:70},(_,i)=>({field:'model',op:'!=',value:`${i}-${Array.from({length:60},(_,n)=>String.fromCharCode(33+(i*31+n*17+i*n)%90)).join('')}`}))};
@@ -45,6 +46,31 @@ test('host view codecs preserve explicit false, empty values, ordered IDs and re
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
  for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+});
+
+test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
+ const url=new URL('https://pharos.test/findings?optimize_area=safety');
+ const values={optimize_area:'safety',safety_list:'handed_off',safety_place:'machine:host-1',safety_rank:'calls',safety_case:'safety_stable',disclosures:{'safety:safety_stable:evidence:source-1':true}};
+ for(const [name,value]of Object.entries(values)){
+  const field=viewFields[name];url.searchParams.set(field.param,encodeViewValue(field,value));
+  assert.deepEqual(parseViewValue(field,url.searchParams.get(field.param)),value);
+ }
+ assert.equal(viewPageForURL(url),'findings/safety');
+ const fields=fieldsForPage('findings/safety');
+ for(const name of Object.keys(values))assert.ok(fields[name],name);
+ assert.equal(fields.findings_rank,undefined);
+ assert.equal(fieldsForPage('findings').safety_case,undefined);
+ assert.throws(()=>parseViewValue(viewFields.safety_list,'won'));
+ assert.equal(viewPageForURL(new URL('https://pharos.test/findings?optimize_area=safety&view=table')),'findings/safety/table');
+ assert.equal(viewPageForURL(new URL('https://pharos.test/findings?optimize_area=safety&view=settings')),'findings/safety/settings');
+ assert.ok(fieldsForPage('findings/safety/table').safety_case);
+ assert.equal(fieldsForPage('findings/safety/settings').safety_case,undefined);
+ assert.equal(fieldsForPage('findings/safety/table').findings_rank,undefined);
+ assert.equal(fieldsForPage('findings/safety/table').safety_rank,undefined);
+ assert.equal(fieldsForPage('findings/safety/settings').safety_rank,undefined);
+ assert.equal(fieldsForPage('findings').safety_rank,undefined);
+ for(const rank of ['recent','calls','evidence'])assert.equal(parseViewValue(viewFields.safety_rank,encodeViewValue(viewFields.safety_rank,rank)),rank);
+ assert.throws(()=>parseViewValue(viewFields.safety_rank,'usd'));
 });
 
 test('large links remain self-contained until immutable library persistence succeeds',async()=>{
@@ -164,17 +190,6 @@ test('Today follows the viewer unless pinned, and native datetime edits release 
 });
 
 
-test('reader batch restoration replays fresh cursors and clamps a shortened result',async()=>{
- const calls=[];
- const load=async cursor=>{calls.push(cursor);return cursor===''?{items:['first'],next_cursor:'fresh-next'}:{items:['second']};};
- assert.deepEqual(await loadSearchPage(load,1),{batch:{items:['second']},cursor:'fresh-next',page:1});
- assert.deepEqual(calls,['','fresh-next']);
- const short=await loadSearchPage(async()=>({items:[]}),3);assert.equal(short.page,0);
- const retry=[];await loadSearchPage(async cursor=>{retry.push(cursor);return {items:[]};},1,'live-cursor');assert.deepEqual(retry,['live-cursor']);
- await assert.rejects(loadSearchPage(load,251),/0 to 250/);
-});
-
-
 test("partial linked parallelism views never inherit another viewer's saved counting assumptions",async()=>{
  const {readConcurrencySettings}=await import('../../../src/concurrency-settings');
  const savedWindow=globalThis.window,savedLocation=globalThis.location;
@@ -203,9 +218,18 @@ test('retained page bindings cannot write foreign URL fields after navigation',a
  writeViewState('delegation_page','2');assert.equal(location.searchParams.get('delegation_page'),'2');
  globalThis.location=new URL('https://pharos.test/analyze?analyze_topic=tokens');
  const before=location.href;
- for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],reader_search:{},reader_page:'0',card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
+ for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
  assert.equal(location.href,before);
  writeViewState('nav_collapsed',false);assert.equal(location.searchParams.get('nav_collapsed'),'0');
+ // Fields written together replace the history entry once, and not at all when unchanged.
+ const {writeViewStates}=await import('../../../src/view-state');
+ globalThis.location=new URL('https://pharos.test/work/w');
+ let replaced=0;globalThis.history={state:null,replaceState(_state,_title,url){replaced++;globalThis.location=new URL(url);}};
+ writeViewStates({reader_expanded:['message:a'],reader_collapsed:['message:b'],card_window:'default'});
+ assert.equal(replaced,1);
+ assert.deepEqual([location.searchParams.get('reader_expanded'),location.searchParams.get('reader_collapsed'),location.searchParams.has('card_window')],['["message:a"]','["message:b"]',false]);
+ writeViewStates({reader_expanded:['message:a'],reader_collapsed:['message:b']});
+ assert.equal(replaced,1);
 });
 
 test('viewer-dependent entry captures batch writes and respect explicit changes, cancellation and navigation',async t=>{
@@ -251,7 +275,7 @@ test('applied search codecs agree with shared cross-language validation cases',(
  for(const sample of searchCases){
   const restored=readTextSearch(new URLSearchParams({text_builder:JSON.stringify(sample.draft)}));
   assert.equal(!restored.error,sample.valid,sample.name);
-  for(const owner of ['search_state','reader_search','record_keyword']){
+  for(const owner of ['search_state','record_keyword']){
    const value=owner==='record_keyword'?{field:'model',draft:sample.draft}:sample.draft;
    if(owner==='record_keyword'?(sample.recordValid??sample.valid):sample.valid)assert.doesNotThrow(()=>encodeViewValue(viewFields[owner],value),`${owner}: ${sample.name}`);
    else assert.throws(()=>encodeViewValue(viewFields[owner],value),undefined,`${owner}: ${sample.name}`);
@@ -259,7 +283,7 @@ test('applied search codecs agree with shared cross-language validation cases',(
  }
  const large={...searchCases.find(item=>item.valid).draft,editor:'syntax',text:'x'.repeat(24001)};
  assert.throws(()=>encodeViewValue(viewFields.search_state,large));
- for(const [name,value]of [['reader_page','+5'],['reader_page','-0'],['sidebar_width','+400'],['reader_expanded',['m',null]],['window_timezone','Local'],['window_timezone','']])assert.throws(()=>encodeViewValue(viewFields[name],value));
+ for(const [name,value]of [['delegation_page','+5'],['delegation_page','-0'],['find_case','true'],['sidebar_width','+400'],['reader_expanded',['m',null]],['window_timezone','Local'],['window_timezone','']])assert.throws(()=>encodeViewValue(viewFields[name],value));
 });
 
 test('classic controls recover from invalid state while strict query readers still reject it',async()=>{
@@ -268,12 +292,12 @@ test('classic controls recover from invalid state while strict query readers sti
  globalThis.CustomEvent=class{constructor(type,props){this.type=type;Object.assign(this,props);}};
  globalThis.window={dispatchEvent:event=>warnings.push(event)};
  try{
-  for(const [name,raw,fallback]of [['reader_content','{"a":1}',{}],['history_collapsed','[null]',[]],['overlay','bad','none']]){
+  for(const [name,raw,fallback]of [['reader_content','{"a":1}',{}],['reader_content','{',{}],['history_collapsed','[null]',[]],['overlay','bad','none']]){
    const params=new URLSearchParams({[viewFields[name].param]:raw});
    assert.throws(()=>readViewState(name,fallback,params));
    assert.deepEqual(readClassicViewState(name,fallback,params),fallback);
   }
-  assert.equal(warnings.length,3);
+  assert.equal(warnings.length,4);
  }finally{globalThis.window=oldWindow;globalThis.CustomEvent=oldEvent;}
 });
 
@@ -302,4 +326,103 @@ test('page navigation drops source attention while preserving global view contro
  assert.equal(samePage.get('highlight'),'control:query_days');assert.equal(samePage.get('reveal'),'page');
  retainPageView(samePage,'analyze/query/tools',[],'analyze/query/usage');
  assert.equal(samePage.has('highlight'),false);assert.equal(samePage.has('reveal'),false);
+});
+
+
+// A provider whose answers the test releases one at a time.
+function detailProvider(){
+ const calls=[];
+ const resolve=(reference,signal)=>new Promise(done=>calls.push({reference,signal,done}));
+ return {calls,resolve};
+}
+const settled=()=>new Promise(resolve=>setTimeout(resolve,0));
+
+test('native detail landings wait for a provider, retry when one registers, and cancel on navigation',async()=>{
+ let passes=0;const landing=createDetailLanding(()=>passes++),target='detail:{"rowId":"a"}';
+ assert.equal(landing.resolve(target),false,'without a provider the target waits');assert.equal(landing.pending,false);
+ const custom=detailProvider(),removeCustom=landing.register(custom.resolve);
+ assert.equal(landing.resolve(target),false);assert.equal(landing.pending,true);
+ assert.equal(landing.resolve(target),false);assert.equal(custom.calls.length,1,'repeated passes share one request');
+ custom.calls[0].done('unavailable');await settled();
+ assert.equal(landing.pending,false);assert.equal(landing.resolve(target),false);assert.equal(custom.calls.length,1,'an unavailable target is not retried every pass');
+ removeCustom();
+ const table=detailProvider(),before=passes;landing.register(table.resolve);
+ assert.ok(passes>before,'registration asks for another pass');
+ assert.equal(landing.resolve(target),false);assert.equal(table.calls.length,1,'a new provider retries the unavailable target');
+ table.calls[0].done('revealed');await settled();
+ assert.equal(landing.resolve(target),true);
+ const refreshed=detailProvider();landing.register(refreshed.resolve)();
+ assert.equal(landing.resolve(target),true,'a revealed landing survives a provider refresh without replaying');
+ assert.equal(refreshed.calls.length,0);
+
+ const other='detail:{"rowId":"b"}';
+ assert.equal(landing.resolve(other),false);const request=table.calls.at(-1);
+ assert.equal(request.reference,other,'a new target replaces the landed one');
+ landing.cancel();assert.equal(request.signal.aborted,true,'navigation aborts the pending request');
+ request.done('revealed');await settled();
+ assert.equal(landing.pending,false);
+ assert.equal(landing.resolve(other),false,'a late answer to a cancelled request cannot land');
+ assert.equal(table.calls.length,3);
+ table.calls[2].done(Promise.reject(new Error('lost')));await settled();
+ assert.equal(landing.pending,false,'a failed provider reports unavailable');
+ assert.equal(landing.resolve(other),false);
+});
+
+test('native details wait for the first result page of a visible, restored table',()=>{
+ const ready={visible:true,restored:true,loading:false,rows:'succeeded',schema:'pharos_mcp_calls'};
+ assert.equal(nativeDetailsReady(ready),true);
+ assert.equal(nativeDetailsReady({...ready,rows:'failed'}),true);
+ for(const waiting of [{rows:'running'},{rows:undefined},{loading:true},{restored:false},{visible:false},{schema:undefined}])
+  assert.equal(nativeDetailsReady({...ready,...waiting}),false,JSON.stringify(waiting));
+});
+
+test("attention ignores its own status UI and class changes but follows the page's",()=>{
+ const element=(classes='',{owned=false,parent=null}={})=>({classes,parentElement:parent,closest:()=>owned?{}:null,getAttribute:()=>classes,matches(){return /pharos-(highlight|reveal)/.test(this.classes)}});
+ const text=parentElement=>({parentElement});
+ const status=element('',{owned:true}),page=element('card');
+ assert.equal(attentionMutationMatters({type:'characterData',target:text(status)},new Set()),false,'status text');
+ assert.equal(attentionMutationMatters({type:'childList',target:status,addedNodes:[text(status)],removedNodes:[]},new Set()),false,'status children');
+ assert.equal(attentionMutationMatters({type:'childList',target:element(''),addedNodes:[status],removedNodes:[]},new Set()),false,'adding the status UI');
+ assert.equal(attentionMutationMatters({type:'childList',target:element(''),addedNodes:[status,page],removedNodes:[]},new Set()),true,'page content arriving with it');
+ assert.equal(attentionMutationMatters({type:'childList',target:page,addedNodes:[text(page)],removedNodes:[]},new Set()),true,'page text');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'hidden',target:page},new Set()),true);
+ const marked=element('card pharos-reveal');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card',target:marked},new Set([marked])),false,'marking an element');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card',target:element('card active pharos-reveal')},new Set()),true,'an ordinary class change');
+ const cleared=element('card');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set()),false,'unmarking an element');
+ assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set([cleared])),true,'a re-render dropped the mark from a target');
+});
+
+test('a right-click names the innermost target that resolves back to it, and highlighting toggles the link',()=>{
+ const node=(tagName,attributes={},parentElement=null,inner=null)=>({tagName,parentElement,getAttribute:name=>attributes[name]??null,querySelector:()=>inner});
+ const card=node('ARTICLE',{'data-pharos-target':'card:tool-failures'});
+ const disclosure=node('DETAILS',{'data-pharos-target':'section:help','data-view-field':'disclosures'},card);
+ const text=node('P',{},disclosure);
+ const owners=new Map([['card:tool-failures',card],['section:help',disclosure]]);
+ const resolvesTo=(reference,element)=>owners.get(reference)===element;
+ assert.equal(attentionReferenceAt(text,resolvesTo),'section:help');
+ owners.delete('section:help');
+ assert.equal(attentionReferenceAt(text,resolvesTo),'card:tool-failures','a reference naming another element is skipped');
+ const row=node('TR',{},null,node('SPAN',{'data-pharos-target':'row:42'}));
+ owners.set('row:42',row);
+ assert.equal(attentionReferenceAt(node('TD',{},row),resolvesTo),'row:42','a cell names its row');
+ assert.equal(attentionReferenceAt(node('DIV'),resolvesTo),null);
+ assert.equal(attentionTargetNoun('call:toolu_1'),'Tool Call');
+ assert.equal(attentionTargetNoun('unknown:x'),'Element');
+ const step=(search,reference)=>'?'+toggleAttentionTarget(search,reference).toString();
+ let search=step('?tab=1','card:a');
+ assert.deepEqual([...new URLSearchParams(search)],[['tab','1'],['reveal','card:a']],'the first target is the landing');
+ search=step(search,'card:b');
+ assert.deepEqual(new URLSearchParams(search).getAll('highlight'),['card:b']);
+ search=step(search,'card:a');
+ assert.deepEqual([...new URLSearchParams(search)],[['tab','1'],['reveal','card:b']],'removing the landing promotes a highlight');
+ assert.equal(step(search,'card:b'),'?tab=1');
+});
+
+test('a linked Findings rank applies without saving; a manual choice saves the default a new unlinked view uses',()=>{
+ assert.deepEqual(findingsRank('minutes','usd'),{rank:'minutes'},'restoring a link is read-only');
+ assert.deepEqual(findingsRank('','tokens'),{rank:'tokens'},'an unlinked view shows the saved default');
+ assert.deepEqual(findingsRank('',undefined),{rank:'usd'});
+ assert.deepEqual(findingsRank('minutes','usd','tokens'),{rank:'tokens',save:{rank:'tokens'}});
 });

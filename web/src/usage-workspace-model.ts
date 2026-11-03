@@ -7,7 +7,7 @@ import { analysisVersion } from "./dashboard-analysis-model";
 export const usageDatasets = {
   model_requests: { label: "Model requests", description: "Retained request usage and post-tool timing evidence.", field: "model", searchLabel: "Model request names" },
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
-  conversation_activity: { label: "Conversation activity", description: "Human input and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
+  conversation_activity: { label: "Conversation activity", description: "Human messages and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
   writing: { label: "Human words by workspace", description: "Authorship totals across each workspace’s conversations and folded delegated work.", field: "title", searchLabel: "Workspace Titles" },
   writing_messages: { label: "Human messages", description: "Individual messages and their authorship evidence.", field: "text", searchLabel: "Conversation Message Text" },
   tool_calls: { label: "Tool calls", description: "Commands, results, timing, status, and context added or carried.", field: "command", searchLabel: "Workspace Tool Command Text" },
@@ -16,20 +16,25 @@ export const usageDatasets = {
   skill_usages: { label: "Skill evidence", description: "Invocations, file loads, retained bodies, and source evidence.", field: "skill_name", searchLabel: "Skill Names" },
   tl1_attempts: { label: "TL1 attempts", description: "Recorded task attempts, configurations, outcomes, and costs.", field: "title", searchLabel: "TL1 Task Titles" },
   parallelism: { label: "Parallel activity", description: "Hour-by-agent records with the existing counting assumptions.", field: "model", searchLabel: "Parallel Activity Model Names" },
+  rhythm: { label: "Rhythm", description: "Hour-by-actor records: your engaged time and your agents' time, by who started it.", field: "unit_label", searchLabel: "Rhythm Conversation Titles" },
+  agent_events: { label: "Agent events", description: "Sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more.", field: "sentence", searchLabel: "Agent Event Sentences" },
+  agent_event_messages: { label: "Agent messages read for events", description: "Every agent reply and thinking block the event pass read, with its keyword hits and events.", field: "title", searchLabel: "Agent Event Conversation Titles" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
-  activity: { label: "Conversation Input and Output", description: "Explore human-supplied text and model output across whole conversations, models, and repositories." },
+  activity: { label: "Conversations", description: "How many conversations are you having, and how much do they produce? Explore conversations, your messages and model output across models and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
   tokens: { label: "Tokens and Cost", description: "How much are agents consuming? Choose a measure, a breakdown, and a time range." },
   skills: { label: "Skills", description: "Where does skill evidence appear? Compare observed invocations and loads." },
   calls: { label: "Tool Calls", description: "Explore individual calls, failures, research, file paths, and context. Compare groups, distributions, and changes over time." },
   tools: { label: "Tool Summary", description: "Understand tool mix, reliability, and context overhead. Compare groups or follow changes over time." },
-  time: { label: "Agent Time", description: "Where is recorded tool time going? Compare activities over time." },
+  time: { label: "Tool Time", description: "Where is recorded tool time going? Compare activities over time." },
   parallelism: { label: "Parallelism", description: "Explore overlapping conversations and estimated model activity. Select a ribbon or drag to zoom." },
+  habits: { label: "Habits", description: "When do you and your agents work, and how consistently? Streaks, an activity calendar, a weekday × hour punchcard, workday shape and automation reliability." },
   mcp: { label: "Pharos MCP", description: "How are agents using Pharos? Explore calls, reliability, response sizes, and time spent serving requests." },
   carbon: { label: "Carbon Impact", description: "Estimated electricity and emissions, with explicit assumptions." },
+  agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
 } as const;
 export const usageTopics = { ...engineUsageTopics,
   "thinking-overview": {label:"Waiting and Compaction",description:"Understand observed model waits, context associations, compaction and timing evidence."},
@@ -38,11 +43,11 @@ export const usageTopics = { ...engineUsageTopics,
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
-  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", tl1_attempts: "tokens",
+  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
-  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
+  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
@@ -52,7 +57,8 @@ const timeFields: Record<UsageDataset, string[]> = {
   tl1_attempts: ["started_at"],
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
-  mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"],
+  mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"], rhythm: ["started_at", "day", "hour_of_day", "week", "month"],
+  agent_events: ["occurred_at", "day", "week", "month"], agent_event_messages: ["occurred_at", "day", "week", "month"],
 };
 const builtWith: Partial<Record<UsageDataset, string[]>> = { parallelism: ["counting", "gap_minutes"] };
 const termFields = (term: WhereTerm): string[] => predicatesOf(term).map(clause => clause.field);
@@ -112,20 +118,46 @@ export function usageDashboardReturn(current: URLSearchParams) {
   };
 }
 
-export function usageAnalysisLink(dataset: UsageDataset, query: QueryState, target: string, current: URLSearchParams) {
-  const url = new URL(target, "http://localhost");
-  // The older activity/ribbon analyses use different populations and controls.
-  // Their entry point is useful, but cannot claim to preserve an arbitrary query.
-  const resetsFilters = ["time", "parallelism"].includes(url.searchParams.get("machine_view") ?? "");
-  if (!resetsFilters) {
-    url.searchParams.set(dataset === "usage" && url.searchParams.get("analyze_view") === "carbon" ? "q_carbon" : `q_${dataset}`, encodeQuery(query));
-    for (const key of ["analyze_chart", "analyze_carbon", "window_mode", "window_days", "window_field", "window_dataset", "window_until_field", "window_timezone"]) if (current.has(key)) url.searchParams.set(key, current.get(key)!);
-  }
-  return { href: url.pathname + url.search, resetsFilters };
-}
+// Parameters only the removed Analyze and Tools pages read.
+const legacyKeys = ["analyze_workspace", "analyze_view", "writing", "messages", "message_query", "message_cursor", "machine_view", "machine_demo", "tools_view", "usage", "parallelism", "carbon_window"];
 export function isUsageWorkspace(params = new URLSearchParams(location.search)) {
   if (params.get("analyze_workspace") === "1" || ["analyze_mode", "analyze_data", "analyze_topic"].some(key => params.has(key))) return true;
-  return !["analyze_view", "writing", "machine_view", "q_usage", "q_writing", "q_writing_messages", "q_conversation_activity", "q_parallelism"].some(key => params.has(key));
+  return !["analyze_view", "writing", "machine_view", "tools_view", "q_usage", "q_writing", "q_writing_messages", "q_conversation_activity", "q_parallelism"].some(key => params.has(key));
+}
+
+// An older Analyze or Tools link (analyze_view, machine_view, writing,
+// tools_view) opens what replaced its page: a link holding its table's query
+// opens that query table, and otherwise the page's dashboard, with the chart
+// a dashboard reads through its catalog's legacy mapping, and Carbon's
+// population. A workspace link is returned as it is.
+export function canonicalAnalyzeURL(path: string, params: URLSearchParams): string {
+  if (path === "/analyze" && isUsageWorkspace(params)) return `/analyze?${params}`;
+  const table = (dataset: UsageDataset) => ({ mode: "query" as const, dataset, topic: usageDatasetTopics[dataset] });
+  const dashboard = (topic: UsageTopic) => ({ mode: "dashboards" as const, dataset: usageTopicDatasets[topic], topic });
+  const view = params.get("analyze_view"), machine = params.get("machine_view");
+  const target = path === "/tools" || params.has("tools_view") ? table(params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls")
+    : view === "conversations" ? table("conversation_activity")
+    : view === "writing" ? params.get("writing") === "messages" ? table("writing_messages") : params.has("q_writing") ? table("writing") : dashboard("human")
+    : view === "carbon" ? dashboard("carbon")
+    : machine === "time" ? dashboard("time")
+    : machine === "parallelism" || view === "concurrency" ? params.has("q_parallelism") ? table("parallelism") : dashboard("parallelism")
+    : params.has("q_usage") ? table("usage") : dashboard("tokens");
+  const next = new URLSearchParams();
+  for (const [key, value] of params) {
+    if (legacyKeys.includes(key) || key.startsWith("activity_") || key.startsWith("q_") && key !== `q_${target.dataset}`) continue;
+    if (key.startsWith("window_") && params.get("window_dataset") !== target.dataset) continue;
+    if (key === "analyze_chart" && target.mode === "query") continue;
+    next.append(key, value);
+  }
+  // The legacy Carbon page kept its population in q_carbon and its Today
+  // window in carbon_window; the dashboard keeps them in analyze_filters and
+  // analyze_window.
+  if (target.topic === "carbon" && !next.has("analyze_filters")) {
+    try { const where = decodeQueryStrict(params.get("q_carbon") ?? "")?.where; if (where?.length) next.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where })); } catch { /* An unreadable query leaves the dashboard's own population. */ }
+    if (params.get("carbon_window") === "today") next.set("analyze_window", "today");
+  }
+  next.set("analyze_mode", target.mode); next.set("analyze_data", target.dataset); next.set("analyze_topic", target.topic);
+  return `/analyze?${next}`;
 }
 export function readUsageWorkspace(params: URLSearchParams) {
   const mode = params.get("analyze_mode"), dataset = params.get("analyze_data"), topic = params.get("analyze_topic");
@@ -195,7 +227,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
 // (readAnalysisLink). A card's filters are always its population, so where a
 // link stops being a card link its chart is marked current, and its filters
 // stay the population.
-const analysisTopics = new Set<string>(["tokens", "calls", "activity", "tools", "mcp", "time", "skills"]);
+const analysisTopics = new Set<string>(["tokens", "calls", "activity", "tools", "mcp", "time", "skills", "agent_experience"]);
 export function stampCardChart(params: URLSearchParams) {
   if (!analysisTopics.has(params.get("analyze_topic") ?? "") || !params.has("analyze_chart")) return;
   try {
@@ -211,15 +243,3 @@ export function usageSearchQuery(query: QueryState): QueryState {
   return { ...source, aggregations: [], offset: 0 };
 }
 
-export const currentUsageAnalyses = [
-  { label: "Tokens & cost", topic: "tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens" },
-  { label: "Human words", topic: "human", url: "/analyze?analyze_view=writing" },
-  { label: "Human messages", topic: "human", url: "/analyze?analyze_view=writing&writing=messages" },
-  { label: "Conversation activity", topic: "human", url: "/analyze?analyze_view=conversations" },
-  { label: "Agent time", topic: "time", url: "/analyze?analyze_view=tokens&machine_view=time" },
-  { label: "Parallelism", topic: "parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism" },
-  { label: "Carbon impact & assumptions", topic: "carbon", url: "/analyze?analyze_view=carbon" },
-  { label: "Tool calls", topic: "tools", url: "/tools?tools_view=calls" },
-  { label: "Tool summary", topic: "tools", url: "/tools?tools_view=summary" },
-  { label: "Skill evidence", topic: "skills", url: "/tools?tools_view=skills" },
-] as const;

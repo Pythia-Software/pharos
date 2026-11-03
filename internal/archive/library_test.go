@@ -189,7 +189,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 	if sorted["total"] != float64(2) || rows[0].(map[string]any)["title"] != "Bravo" || rows[1].(map[string]any)["title"] != "Charlie" {
 		t.Fatalf("unexpected sorted page: %#v", sorted)
 	}
-	if firstString(rows[1].(map[string]any)["first_input"]) != "Please fix the parser" || firstString(rows[1].(map[string]any)["last_response"]) != "Fixed it" {
+	if row := rows[1].(map[string]any); firstString(row["first_input"]) != "Please fix the parser" || firstString(row["last_response"]) != "Fixed it" || row["first_input_id"] != "m1" || row["last_response_id"] != "m4" {
 		t.Fatalf("page rows lack previews: %#v", rows[1])
 	}
 	filtered := post("/api/query/library", `{"select":["title"],"where":[{"field":"tool_error_count","op":">=","value":"1"}],"orderBy":[{"field":"changed_file_count","dir":"desc"}],"limit":10,"offset":0}`)

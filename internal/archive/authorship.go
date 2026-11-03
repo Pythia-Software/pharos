@@ -1393,6 +1393,13 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	}
 	if run.reason == "unchanged" || run.reason == "no user suffix" {
 		if err := c.writeTransaction(ctx, "complete unchanged authorship", func(tx *sql.Tx) error {
+			// A run can start before its first user turn arrives.
+			for _, launch := range run.added {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,?,?,?)
+					ON CONFLICT(child_id) DO UPDATE SET parent_id=excluded.parent_id,tool_call_id=excluded.tool_call_id,program=excluded.program`, launch.child, launch.parent, launch.toolCall, launch.program); err != nil {
+					return err
+				}
+			}
 			for key, value := range map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now()} {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 					return err

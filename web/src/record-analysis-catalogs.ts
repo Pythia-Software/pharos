@@ -2,7 +2,7 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
 import { activityPresentation } from "./machine-activity-data";
 
-// Agent Time and Skills read individual records (tool calls, skill evidence),
+// Tool Time and Skills read individual records (tool calls, skill evidence),
 // so each record is one observation, and records of one agent conversation
 // group into conversation units.
 
@@ -19,7 +19,7 @@ const numbered = (ids: string[]) => (state: AnalysisState): AnalysisState => {
   return typeof position === "number" && ids[position] ? { ...state, metric: ids[position] } : state;
 };
 
-// ----- Agent Time: tool_calls, one record per call ----------------------------
+// ----- Tool Time: tool_calls, one record per call -----------------------------
 
 const timeMeasures: Record<string, AnalysisMeasure> = {
   // Durations are milliseconds; the dashboard shows this total in hours.
@@ -35,7 +35,7 @@ const timeMeasures: Record<string, AnalysisMeasure> = {
   result_tokens: { label: "Result tokens", unit: "tokens", format: count, op: "sum", field: "result_tokens", value: "result_tokens", additive: true, note: "Tokens a call's result added to the context, measured or estimated from retained result text." },
 };
 const conversationSplits = { repository_name: ["repository_name"], provider: ["provider"], ...origin };
-export const agentTimeAnalysisCatalog: AnalysisCatalog = {
+export const toolTimeAnalysisCatalog: AnalysisCatalog = {
   dataset: "tool_calls", time: { first: "started_at", last: "started_at" }, measures: timeMeasures,
   breakdowns: {
     activity: { label: "Activity", fields: ["activity"] },
@@ -69,8 +69,8 @@ export const agentTimeAnalysisCatalog: AnalysisCatalog = {
   legacySlices: true,
   scatter: ["calls", "time"],
 };
-agentTimeAnalysisCatalog.breakdowns.provider.order = providerOrder;
-agentTimeAnalysisCatalog.breakdowns.repository_name.empty = "No repository";
+toolTimeAnalysisCatalog.breakdowns.provider.order = providerOrder;
+toolTimeAnalysisCatalog.breakdowns.repository_name.empty = "No repository";
 
 // ----- Skills: skill_usages, one record per piece of evidence ----------------
 

@@ -47,6 +47,8 @@ type labelsAsset struct {
 type labelsAssetSet struct {
 	Model   labelsAsset `json:"model"`
 	Runtime labelsAsset `json:"onnxruntime"`
+	// AgentEventsModel is the agent event verifier (docs/agent-events.md).
+	AgentEventsModel labelsAsset `json:"agent_events_model"`
 }
 
 //go:embed labels/assets.json
@@ -62,6 +64,9 @@ var labelsAssets = func() labelsAssetSet {
 	}
 	if url := os.Getenv("PHAROS_LABELS_MODEL_URL"); url != "" {
 		set.Model.URL = url
+	}
+	if url := os.Getenv("PHAROS_AGENT_EVENTS_MODEL_URL"); url != "" {
+		set.AgentEventsModel.URL = url
 	}
 	return set
 }()
@@ -112,6 +117,24 @@ func (a labelsAsset) present() bool {
 
 // partial is the download in progress, kept between attempts.
 func (a labelsAsset) partial() string { return a.dir() + ".download" }
+
+// failure records why the last download failed, until one succeeds, so
+// status can say so rather than read as not yet started.
+func (a labelsAsset) failure() string { return a.dir() + ".failed" }
+
+// lastFailure is when the last download failed and why ("" when the last
+// attempt did not fail).
+func (a labelsAsset) lastFailure() (time.Time, string) {
+	info, err := os.Stat(a.failure())
+	if err != nil {
+		return time.Time{}, ""
+	}
+	data, err := os.ReadFile(a.failure())
+	if err != nil {
+		return time.Time{}, ""
+	}
+	return info.ModTime(), strings.TrimSpace(string(data))
+}
 
 // downloaded is how many bytes of the download are on disk.
 func (a labelsAsset) downloaded() int64 {
@@ -366,15 +389,20 @@ func fetchLabelsAssets(ctx context.Context, assets []labelsAsset, op *Op, progre
 			}
 		})
 		if err != nil {
+			if ctx.Err() == nil {
+				_ = os.WriteFile(asset.failure(), []byte(err.Error()+"\n"), 0o600)
+			}
 			return err
 		}
+		os.Remove(asset.failure())
 	}
 	return nil
 }
 
 // labelsAssetStatus describes an asset for status: downloaded, downloading
-// (with progress), partly downloaded, or not yet downloaded.
+// (with progress), failed, partly downloaded, or not yet downloaded.
 func labelsAssetStatus(asset labelsAsset) string {
+	at, failed := asset.lastFailure()
 	switch {
 	case asset.present():
 		return "downloaded to " + asset.dir()
@@ -383,6 +411,12 @@ func labelsAssetStatus(asset labelsAsset) string {
 	case labelsFetchActive():
 		done := asset.downloaded()
 		return fmt.Sprintf("downloading: %d of %d MB (%.0f%%)", done>>20, asset.Size>>20, 100*float64(done)/float64(asset.Size))
+	case failed != "":
+		status := "the last download failed at " + at.Format("Jan 2 15:04") + " (" + failed + ")"
+		if done := asset.downloaded(); done > 0 {
+			status += fmt.Sprintf("; %d of %d MB kept", done>>20, asset.Size>>20)
+		}
+		return status + "; Pharos tries again later"
 	case asset.downloaded() > 0:
 		return fmt.Sprintf("partly downloaded (%d of %d MB, resumed on the next attempt)", asset.downloaded()>>20, asset.Size>>20)
 	}
@@ -447,6 +481,27 @@ func (settings LabelerSettings) labelsWaiting() string {
 	return "waiting for the download (" + strings.Join(parts, "; ") + ")"
 }
 
+// labelerDownloads is what a library's labeler work still needs downloaded,
+// each asset once: the labels' where labels are on, and the runtime and the
+// verifier where agent events are.
+func labelerDownloads(labels LabelerSettings, events AgentEventSettings) []labelsAsset {
+	missing := []labelsAsset{}
+	add := func(assets ...labelsAsset) {
+		for _, asset := range assets {
+			if !slices.ContainsFunc(missing, func(have labelsAsset) bool { return have.Name == asset.Name }) {
+				missing = append(missing, asset)
+			}
+		}
+	}
+	if labels.Enabled {
+		add(labels.missingAssets()...)
+	}
+	if events.Enabled {
+		add(events.missingAssets(labels)...)
+	}
+	return missing
+}
+
 // labelsFetchRetry is how long the broker waits to retry a failed download.
 var labelsFetchRetry = 15 * time.Minute
 
@@ -455,12 +510,14 @@ var labelsFetchRetry = 15 * time.Minute
 // downloads them once for every library, then asks the open libraries'
 // services to label now. A failed download is retried later; an interrupted
 // one resumes.
-func (m *applicationManager) startLabelsFetch(settings LabelerSettings) {
+func (m *applicationManager) startLabelsFetch(settings LabelerSettings, events AgentEventSettings) {
 	if m.ctx.Err() != nil {
 		return
 	}
-	missing := settings.missingAssets()
-	if !settings.Enabled || len(missing) == 0 || slices.ContainsFunc(missing, func(asset labelsAsset) bool { return !asset.pinned() }) {
+	// An asset this build pins no download for (a model whose release is not
+	// out yet) is left out; the rest still download.
+	missing := slices.DeleteFunc(labelerDownloads(settings, events), func(asset labelsAsset) bool { return !asset.pinned() })
+	if len(missing) == 0 {
 		return
 	}
 	if !m.labelsFetching.CompareAndSwap(false, true) {
@@ -475,7 +532,7 @@ func (m *applicationManager) startLabelsFetch(settings LabelerSettings) {
 			// Another process (pharos labels fetch) is downloading.
 			return nil
 		case err != nil && m.ctx.Err() == nil:
-			time.AfterFunc(labelsFetchRetry, func() { m.startLabelsFetch(settings) })
+			time.AfterFunc(labelsFetchRetry, func() { m.startLabelsFetch(settings, events) })
 			return err
 		case err != nil:
 			return err
@@ -485,8 +542,9 @@ func (m *applicationManager) startLabelsFetch(settings LabelerSettings) {
 	})
 }
 
-// requestLabels asks every open library's service to label now (Run now of
-// its labels item); a library without labels ignores it.
+// requestLabels asks every open library's service to label now and find
+// agent events now (Run now of those items); a library without them
+// ignores it.
 func (m *applicationManager) requestLabels() {
 	m.mu.Lock()
 	endpoints := []applicationEndpoint{}
@@ -495,14 +553,16 @@ func (m *applicationManager) requestLabels() {
 	}
 	m.mu.Unlock()
 	for _, endpoint := range endpoints {
-		request, err := http.NewRequestWithContext(m.ctx, "POST", endpoint.URL+"/api/background/run", strings.NewReader(`{"item":"labels"}`))
-		if err != nil {
-			continue
-		}
-		request.Header.Set("Authorization", "Bearer "+endpoint.Token)
-		request.Header.Set("Content-Type", "application/json")
-		if response, err := m.client.Do(request); err == nil {
-			response.Body.Close()
+		for _, item := range []string{"labels", "agent_events"} {
+			request, err := http.NewRequestWithContext(m.ctx, "POST", endpoint.URL+"/api/background/run", strings.NewReader(`{"item":"`+item+`"}`))
+			if err != nil {
+				continue
+			}
+			request.Header.Set("Authorization", "Bearer "+endpoint.Token)
+			request.Header.Set("Content-Type", "application/json")
+			if response, err := m.client.Do(request); err == nil {
+				response.Body.Close()
+			}
 		}
 	}
 }

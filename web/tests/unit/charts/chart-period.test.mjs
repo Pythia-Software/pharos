@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, periodIndex, shiftPeriod, validPeriodCount } from '../../../src/chart-period';
 import { calendarPresetPeriod, chartPeriodCount, presetPeriod, selectChartRange, customDateBounds, timeBounds, usageTime, withTimeRange } from '../../../src/usage-chart';
 import { rangeInputValue, parseRangeInput, rangeHasTime } from '../../../src/chart-range';
-import { loadUsageHistory, sharedUsageHistory } from '../../../src/usage-history';
+import { loadUsageHistory } from '../../../src/usage-history';
 
 test('range presets reset the time bucket while custom dates preserve it', () => {
   let view = { period: 'month', hours: 12, days: 10 }, bounds, changes = 0;
@@ -124,18 +124,7 @@ test('All Time clamps its 20-month cutoff to the end of February', () => {
   }
 });
 
-test('shared conversation history ignores missing/invalid dates and compares actual instants', () => {
-  assert.deepEqual(sharedUsageHistory([]), { oldest_conversation_at: null });
-  assert.deepEqual(sharedUsageHistory([
-    {}, { conversations: [{}, { started_at: '' }, { started_at: 'unknown' }] },
-    { conversations: [{ started_at: '2025-02-21T23:45:00Z' }, { started_at: '2025-02-22T01:30:00+02:00' }] },
-  ]), { oldest_conversation_at: '2025-02-22T01:30:00+02:00' });
-});
-
-test('charts share history reads, refresh imports, retry failures and support offline exports', async t => {
-  const previousWindow = globalThis.window;
-  globalThis.window = {};
-  t.after(() => { if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow; });
+test('charts share history reads, refresh imports and retry failures', async t => {
   let reads = 0, oldest = '2026-01-01T00:00:00Z', fail = false;
   t.mock.method(globalThis, 'fetch', async url => {
     assert.equal(url, '/api/usage/history');
@@ -154,9 +143,6 @@ test('charts share history reads, refresh imports, retry failures and support of
   fail = false;
   await loadUsageHistory(true);
   assert.equal(reads, 4);
-  window.pharosShare = { works: [{ conversations: [{ started_at: '2024-01-01T00:00:00Z' }] }] };
-  assert.deepEqual(await loadUsageHistory(true), { oldest_conversation_at: '2024-01-01T00:00:00Z' });
-  assert.equal(reads, 4, 'shared exports use their own history without contacting the server');
 });
 
 test('smoothing history shifts and counts calendar/custom intervals across DST', () => {

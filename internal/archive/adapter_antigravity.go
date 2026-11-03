@@ -124,8 +124,40 @@ func (a *antigravityAdapter) runLogs() []string {
 // no transcript keeps.
 var antigravityPrintMode = []byte("Print mode:")
 
-// antigravityLogID matches the conversation IDs a run log names.
-var antigravityLogID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+// antigravityLogIDs calls found with the bounds of each conversation ID a run
+// log names, a lowercase UUID, leftmost first and not overlapping, as the
+// regular expression [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+// would. Logs run to hundreds of megabytes, which that expression reads ten
+// times slower.
+func antigravityLogIDs(data []byte, found func(start, end int)) {
+	const length = 36
+	hex := func(b byte) bool { return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' }
+	for start := 0; start+length <= len(data); {
+		// Every match has its first hyphen eight bytes in.
+		dash := bytes.IndexByte(data[start+8:], '-')
+		if dash < 0 {
+			return
+		}
+		start += dash
+		if start+length > len(data) {
+			return
+		}
+		match := true
+		for i := 0; i < length && match; i++ {
+			if i == 8 || i == 13 || i == 18 || i == 23 {
+				match = data[start+i] == '-'
+			} else {
+				match = hex(data[start+i])
+			}
+		}
+		if !match {
+			start++
+			continue
+		}
+		found(start, start+length)
+		start += length
+	}
+}
 
 // antigravityRunLogName is the run's start, to the second, in a log's name.
 var antigravityRunLogName = regexp.MustCompile(`^cli-(\d{8}_\d{6})\.log$`)
@@ -146,7 +178,9 @@ type antigravityRunLog struct {
 }
 
 // antigravityLogCache holds each run log read, by path, size and modification
-// time; a run's log never changes once it ends.
+// time; a run's log never changes once it ends. It keeps every log its
+// directory still has (the CLI keeps thousands, each entry a few IDs), so a
+// plan reads only the runs since the last one.
 var antigravityLogCache sync.Map
 
 type antigravityLogEntry struct {
@@ -154,11 +188,12 @@ type antigravityLogEntry struct {
 	log            antigravityRunLog
 }
 
-// readRunLogs reads the run logs the CLI (or a capture of it) still has.
-func (a *antigravityAdapter) readRunLogs() ([]antigravityRunLog, error) {
-	logs := []antigravityRunLog{}
+// readRunLogs reads paths, the run logs the CLI (or a capture of it) still
+// has, in order.
+func (a *antigravityAdapter) readRunLogs(paths []string) ([]antigravityRunLog, error) {
+	logs := make([]antigravityRunLog, 0, len(paths))
 	buffer := make([]byte, 64*1024)
-	for _, path := range a.runLogs() {
+	for _, path := range paths {
 		if err := a.context().Err(); err != nil {
 			return nil, err
 		}
@@ -172,21 +207,25 @@ func (a *antigravityAdapter) readRunLogs() ([]antigravityRunLog, error) {
 			if err != nil {
 				return nil, err
 			}
-			found := antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano(), log: log}
+			entry = antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano(), log: log}
 			if a.view == nil {
-				antigravityLogCache.Store(path, found)
-				entries := 0
-				antigravityLogCache.Range(func(key, value any) bool {
-					entries++
-					if entries > 4096 {
-						antigravityLogCache.Delete(key)
-					}
-					return true
-				})
+				antigravityLogCache.Store(path, entry)
 			}
-			entry = found
 		}
 		logs = append(logs, entry.(antigravityLogEntry).log)
+	}
+	if a.view == nil {
+		// Forget the logs the CLI has since removed from this directory.
+		dir, current := filepath.Join(a.config.Path, antigravityRunLogs), map[string]bool{}
+		for _, path := range paths {
+			current[path] = true
+		}
+		antigravityLogCache.Range(func(key, _ any) bool {
+			if path := key.(string); filepath.Dir(path) == dir && !current[path] {
+				antigravityLogCache.Delete(key)
+			}
+			return true
+		})
 	}
 	return logs, nil
 }
@@ -210,7 +249,7 @@ func (a *antigravityAdapter) printModeConversations(transcripts map[string]strin
 // discovery rather than attributing them wrongly.
 func (a *antigravityAdapter) printModeDetail(transcripts map[string]string) (map[string]bool, map[string]error, error) {
 	unreadable := map[string]error{}
-	logs, err := a.readRunLogs()
+	logs, err := a.readRunLogs(a.runLogs())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -343,15 +382,14 @@ func readAntigravityRunLog(ctx context.Context, path string, buffer []byte) (ant
 		}
 		data := scanner.Bytes()
 		log.print = log.print || bytes.Contains(data, antigravityPrintMode)
-		for _, match := range antigravityLogID.FindAllIndex(data, -1) {
-			if match[1] == len(data) && !final {
-				continue
+		antigravityLogIDs(data, func(start, end int) {
+			if end == len(data) && !final {
+				return
 			}
-			id := string(data[match[0]:match[1]])
-			if !seen[id] {
+			if id := string(data[start:end]); !seen[id] {
 				log.ids, seen[id] = append(log.ids, id), true
 			}
-		}
+		})
 	}
 	return log, scanner.Err()
 }
@@ -365,13 +403,12 @@ func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
 		return nil, err
 	}
 	paths := a.runLogs()
-	logs := make([]antigravityRunLog, len(paths))
-	buffer := make([]byte, 64*1024)
+	logs, err := a.readRunLogs(paths)
+	if err != nil {
+		return nil, err
+	}
 	named := map[string]bool{}
-	for index, path := range paths {
-		if logs[index], err = readAntigravityRunLog(a.context(), path, buffer); err != nil {
-			return nil, err
-		}
+	for index := range logs {
 		for _, id := range logs[index].ids {
 			named[id] = true
 		}

@@ -1,0 +1,36 @@
+/* Attention colours (--attention-*) are reserved for Find and linked
+   attention; nothing else uses them. Fallbacks cover standalone pages. */
+::highlight(pharos-matches) { background: var(--attention-mark, #fff176); color: var(--attention-ink, #1d1a0a); }
+::highlight(pharos-landing) { background: var(--attention-current, #ff9f43); color: var(--attention-ink, #1d1a0a); }
+.pharos-find { --pharos-find-top: 88px; position: fixed; z-index: 10000; top: var(--pharos-find-top); right: 24px; width: min(480px, calc(100vw - 48px)); box-sizing: border-box; display: grid; gap: 6px; padding: 8px 8px 8px 4px; border: 1px solid var(--line, #ccc); border-radius: 8px; background: var(--panel, #fff); color: var(--ink, #222); box-shadow: 0 12px 32px #0004; font-size: var(--fs-sm, 12px); }
+.pharos-find [hidden] { display: none !important; }
+.pharos-find.dragging { box-shadow: 0 16px 40px #0006; user-select: none; }
+.pharos-find-row, .pharos-find-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.pharos-find-meta { padding-left: 28px; }
+.pharos-find-meta:not(:has(> :not(:empty, [hidden]))) { display: none; }
+.pharos-find button { display: inline-grid; place-items: center; min-width: 27px; height: 27px; padding: 0 5px; color: var(--muted, #666); }
+.pharos-find button:hover:not(:disabled) { color: var(--ink, #222); background: color-mix(in srgb, var(--line, #ccc) 45%, transparent); }
+.pharos-find button .app-icon { width: 16px; height: 16px; }
+.pharos-find .pharos-find-grip { min-width: 22px; padding: 0; cursor: grab; touch-action: none; }
+.pharos-find.dragging .pharos-find-grip { cursor: grabbing; }
+/* The field matches Pharos text inputs; the match options sit inside it. */
+.pharos-find-field { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 0 3px 0 9px; border: 1px solid var(--line, #ccc); border-radius: 5px; background: var(--bg, #fff); }
+.pharos-find-field:focus-within { border-color: var(--focus-ring, var(--accent)); box-shadow: 0 0 0 1px var(--focus-ring, var(--accent)); }
+.pharos-find-field > .app-icon { flex: none; width: 15px; height: 15px; color: var(--muted, #666); }
+.pharos-find-field input { flex: 1; min-width: 0; height: 100%; padding: 0 4px; border: 0; outline: none; -webkit-appearance: none; appearance: none; background: none; color: var(--ink, #222); font-size: var(--fs-base, 14px); }
+.pharos-find-field input::-webkit-search-cancel-button { display: none; }
+.pharos-find-field input::placeholder { color: var(--muted, #666); }
+.pharos-find .pharos-find-field button { min-width: 24px; height: 24px; padding: 0 4px; border-radius: 4px; font: 600 var(--fs-xs, 11px) ui-monospace, monospace; }
+.pharos-find .pharos-find-field button[aria-pressed="true"] { background: var(--accent, #315845); color: var(--panel, #fff); }
+.pharos-find.invalid .pharos-find-field { border-color: var(--bad, #b3261e); }
+.pharos-find-status { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted, #666); }
+.pharos-find .pharos-find-expand { height: 24px; padding: 0 8px; border: 1px solid var(--line, #ccc); border-radius: 4px; font-size: var(--fs-xs, 11px); white-space: nowrap; }
+.pharos-find-notes:empty { display: none; }
+.pharos-find-notes { padding-left: 28px; }
+.pharos-find-notes p { margin: 0; color: var(--muted, #666); }
+/* A closed disclosure holding matches, and the path opened to the current match. */
+[data-pharos-find="container"] { outline: 2px dashed var(--attention-ring, #e0a800); outline-offset: 2px; }
+[data-pharos-find="container"]::after { content: attr(data-pharos-find-count); display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 9px; background: var(--attention-mark, #fff176); color: var(--attention-ink, #1d1a0a); font-size: var(--fs-2xs, 10px); font-weight: 600; line-height: 16px; vertical-align: middle; }
+[data-pharos-find-trail] { outline: 2px solid var(--attention-current, #ff9f43); outline-offset: 2px; background: color-mix(in srgb, var(--attention-mark, #fff176) 16%, transparent); }
+[data-pharos-find-trail][data-pharos-find="container"] { outline-style: solid; }
+@media (max-width: 600px) { .pharos-find:not(.placed) { top: auto; bottom: 12px; right: 12px; width: calc(100vw - 24px); } }

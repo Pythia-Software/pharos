@@ -1,0 +1,307 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_safety",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "last_seen_at",
+      "dir": "desc"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "state",
+      "width": 110
+    },
+    {
+      "field": "title",
+      "width": 300
+    },
+    {
+      "field": "subject",
+      "width": 250
+    },
+    {
+      "field": "target_label",
+      "width": 140
+    },
+    {
+      "field": "calls",
+      "width": 100
+    },
+    {
+      "field": "last_seen_at",
+      "width": 130
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Review ID",
+      "type": "text",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
+      "name": "title",
+      "label": "Review",
+      "type": "text",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "state",
+      "label": "State",
+      "type": "enum",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "state",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"state\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "open",
+              "label": "Open"
+            },
+            {
+              "value": "handed_off",
+              "label": "Handed off"
+            },
+            {
+              "value": "dismissed",
+              "label": "Dismissed"
+            }
+          ]
+        }
+      },
+      "render": "safety_state"
+    },
+    {
+      "name": "rule_label",
+      "label": "Check",
+      "type": "text",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "rule_label",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"rule_label\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "subject",
+      "label": "Selected resource",
+      "type": "text",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "subject",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"subject\""
+        }
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "target_label",
+      "label": "Location",
+      "type": "text",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "target_label",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"target_label\""
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "calls",
+      "label": "Calls in discovery window",
+      "type": "number",
+      "group": "Activity",
+      "bindings": {
+        "postgres": {
+          "expr": "calls",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"calls\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "material_change",
+      "label": "New execution evidence",
+      "type": "bool",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "material_change",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"material_change\""
+        }
+      }
+    },
+    {
+      "name": "in_prompt",
+      "label": "In a prompt",
+      "type": "bool",
+      "group": "Review",
+      "bindings": {
+        "postgres": {
+          "expr": "in_prompt",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"in_prompt\""
+        }
+      }
+    },
+    {
+      "name": "first_seen_at",
+      "label": "First seen",
+      "type": "datetime",
+      "group": "Activity",
+      "bindings": {
+        "postgres": {
+          "expr": "first_seen_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"first_seen_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "render": "datetime_rel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "last_seen_at",
+      "label": "Last seen",
+      "type": "datetime",
+      "group": "Activity",
+      "bindings": {
+        "postgres": {
+          "expr": "last_seen_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"last_seen_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "render": "datetime_rel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "handed_at",
+      "label": "Handed off",
+      "type": "datetime",
+      "group": "Activity",
+      "bindings": {
+        "postgres": {
+          "expr": "handed_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"handed_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "render": "datetime_rel",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "review_count",
+      "label": "Reviews",
+      "type": "number",
+      "group": "Activity",
+      "bindings": {
+        "postgres": {
+          "expr": "review_count",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"review_count\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "aggregate": {
+        "groupable": true
+      },
+      "select": {
+        "default": false
+      },
+      "description": "One per review. Sum to count reviews when grouping."
+    }
+  ]
+}

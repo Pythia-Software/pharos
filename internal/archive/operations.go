@@ -155,6 +155,8 @@ type Op struct {
 	version                        uint64 // bumped on every change, for the journal
 	written                        uint64 // version last written to the journal
 	writtenEver                    bool
+	// stopper is how a kind whose Stop is "work" stops (setStopper).
+	stopper func()
 	// tentative is set while a daemon pass's operation is unpublished.
 	tentative bool
 	// locks are the capture and index locks the operation has taken: a hold
@@ -323,10 +325,10 @@ type opRegistry struct {
 	// one, ended operations need not wait to be written before they are
 	// forgotten.
 	journaled bool
-	// lowerIO reports whether background-priority operations run their IO
-	// at the utility tier (§10): the unified activity flag. Nil leaves IO
-	// policy as it was before the flag existed.
-	lowerIO func() bool
+	// lowerIO runs background-priority operations' IO at the utility tier
+	// (§10). The service and the broker set it; a registry without it leaves
+	// IO policy alone.
+	lowerIO bool
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -625,7 +627,7 @@ func (op *Op) RunIO(fn func()) {
 // lowersIO reports whether RunIO lowers op's IO. The priority is fixed at
 // registration, so it needs no lock.
 func (op *Op) lowersIO() bool {
-	return op != nil && op.reg != nil && op.spec.Priority == priorityBackground && op.reg.lowerIO != nil && op.reg.lowerIO()
+	return op != nil && op.reg != nil && op.spec.Priority == priorityBackground && op.reg.lowerIO
 }
 
 // Run moves a queued operation to running; the first Step implies it.
@@ -814,6 +816,31 @@ func (op *Op) childFrom(ctx context.Context, spec OperationSpec) (context.Contex
 	}
 	spec.Parent = op.id
 	return op.reg.begin(ctx, spec)
+}
+
+// setStopper is how work of a kind whose Stop is "work" is stopped: stop
+// cancels the work's context, and the work ends at its next safe point with
+// what it finished stored.
+func (op *Op) setStopper(stop func()) {
+	if !op.lock() {
+		return
+	}
+	op.stopper = stop
+	op.reg.mu.Unlock()
+}
+
+// stopWork calls the work's stopper, reporting false before it has one.
+func (op *Op) stopWork() bool {
+	if !op.lock() {
+		return false
+	}
+	stop := op.stopper
+	op.reg.mu.Unlock()
+	if stop == nil {
+		return false
+	}
+	stop()
+	return true
 }
 
 // markStopping records a stop asked for by a user (a stop endpoint).

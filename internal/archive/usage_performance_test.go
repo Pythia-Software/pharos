@@ -66,8 +66,8 @@ func usagePerformanceCatalog(t *testing.T) *Catalog {
 }
 
 // usagePerformanceDay pins c's clock to the day its tool cube was built, and
-// returns that day's local midnight. A read-only snapshot cannot rebuild the
-// cube, which is fresh, and answers Machine Time, only on that day.
+// returns that day's local midnight, so day windows end where the snapshot's
+// data does.
 func usagePerformanceDay(t *testing.T, c *Catalog) time.Time {
 	t.Helper()
 	var built string

@@ -2,13 +2,14 @@ import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
 import { jsonInspectionTemplate } from "./query-inspection-contract";
-import { usageQuerySchema,usageActionQuery } from "./usage-query-columns";
+import { usageQuerySchema,usageActionQuery,fittedDefaultQuery } from "./usage-query-columns";
 import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
 import { analysisCycles, analysisDefaults, analysisReductions, analysisVersion, analysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
+import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
 import { chartDisplays } from "./chart-series";
 import { chartScales } from "./chart-scale";
@@ -27,7 +28,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages } from "./app-navigation-model";
+import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -111,7 +112,7 @@ export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Re
 // settings that view draws. A non-empty legend selection follows them.
 // Other keys are left out; the page fills them from its defaults.
 export const chartKeys: Record<AnalysisView, string[]> = {
-  trend: ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "completePeriods", "norm", "normPeriods", "seriesLimit"],
+  trend: ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "norm", "normPeriods", "seriesLimit"],
   compare: ["v", "view", "unit", "metric", "split", "reduce", "compareAs", "minSamples", "scale"],
   distribution: ["v", "view", "unit", "metric", "split", "minSamples", "scale"],
   scatter: ["v", "view", "unit", "metric", "metricY", "split", "scale", "scaleY"],
@@ -177,7 +178,7 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "display": return [...chartDisplays];
     case "rollingOp": return [...rollingOps];
     case "scale": case "scaleY": return [...chartScales];
-    case "share": case "norm": case "completePeriods": return [false, true];
+    case "share": case "nonzero": case "norm": case "completePeriods": return [false, true];
     default: return fail(`no candidates for ${option}`);
   }
 }
@@ -466,7 +467,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -564,6 +565,48 @@ const values = (entries: ReadonlyArray<readonly [string, string]> | ReadonlyArra
   entries.map(entry => typeof entry === "string" ? { value: entry, ...describe?.(entry) ? { description: describe(entry) } : {} } : { value: entry[0], label: entry[1] });
 const windowOption = (param: string, days: readonly number[], description: string): Option => ({ name: "days", param, kind: "window", values: days.map(day => ({ value: day, ...optionLabels.window[String(day)] ? { label: optionLabels.window[String(day)] } : {} })), description });
 
+// The Thinking dashboards keep every control in one JSON parameter, thinking.
+// Each option is one of its keys, so site_link takes the same options and
+// days there as on the other dashboards; view.thinking holds the rest.
+const thinkingOption = (name: keyof typeof defaultThinking, description: string, entries?: ReadonlyArray<readonly [string, string]> | ReadonlyArray<string>, requires?: Requirement[]): Option =>
+  ({ name, param: "thinking", key: name, kind: entries ? "enum" : "text", ...entries ? { values: values(entries) } : {}, default: defaultThinking[name], ...requires ? { requires } : {}, description });
+const thinkingOptions = (detail: boolean): Option[] => [
+  ...detail ? [thinkingOption("view", "The chart. Box-plot views split by model + effort when breakdown is none.", thinkingViews)] : [],
+  thinkingOption("model", "A recorded model name (model_requests.model), or all."),
+  thinkingOption("effort", "A recorded effort (model_requests.effort), or all."),
+  ...detail ? [
+    thinkingOption("groupBy", "The breakdown: one panel, box or row per group.", thinkingBreakdowns),
+    thinkingOption("normalization", "Distributions as shares of each group or as counts.", ["share", "count"]),
+    thinkingOption("sortBy", "Group order. Effort keeps low to high, Unreported last.", [["median", "Median wait"], ["p95", "95th percentile"], ["volume", "Requests"]]),
+    thinkingOption("sortDirection", "Group order direction.", [["desc", "Descending"], ["asc", "Ascending"]]),
+    thinkingOption("period", "Time bucket for distributions over time; range presets choose one when left out.", ["hour", "hours", "day", "days", "week", "month"]),
+    thinkingOption("calendarRows", "Time-of-day rows.", ["day", "week", "month"], [needs("view", "calendar")]),
+    thinkingOption("calendarMetric", "Time of day: raw waits, or observed ÷ workload-estimated waits.", [["raw", "Raw wait"], ["ratio", "Adjusted ratio"]], [needs("view", "calendar")]),
+  ] : [],
+];
+const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "range", kind: "days", values: [{ value: "today", label: "Today since local midnight" }, ...Object.keys(thinkingRangeDays).map(Number).map(day => ({ value: day, ...optionLabels.window[String(day)] ? { label: optionLabels.window[String(day)] } : {} })), { value: "all", label: "All time" }],
+  description: "site_link's days: the dashboard's Range, written as thinking.range. All time when left out; view.thinking takes a custom from/to range." };
+
+// How each Analyze dashboard's controls reach site_link: its analysis
+// catalog's chart and window, or options keyed into the parameter that holds
+// its state, with days for its range. Every topic must say, so that a new
+// dashboard cannot become a page that takes only filters.
+type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
+const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
+  activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
+  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  agent_experience: { catalog: true },
+  "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
+  "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
+};
+function checkDashboardLinks(topic: UsageTopic, links: DashboardLinks) {
+  if ("catalog" in links !== Boolean(analysisCatalogs[topic])) fail(`${topic}: dashboardLinks says catalog ${"catalog" in links}, but analysisCatalogs ${analysisCatalogs[topic] ? "has" : "lacks"} it`);
+  if ("catalog" in links) return;
+  if (!links.options.length) fail(`${topic}: a dashboard without a catalog needs options for its controls`);
+  for (const option of [...links.options, links.days]) if (!option.key || option.param !== links.days.param) fail(`${topic}: option ${option.name} is not a key of ${links.days.param}`);
+  if (links.days.name !== "days" || links.days.kind !== "days") fail(`${topic}: its range is the days option`);
+}
+
 // The shell's page titles (VIEW_TITLES in ui.py): key: 'Title' pairs.
 export function viewTitles(uiPy: string): Record<string, string> {
   const literal = /VIEW_TITLES=\{([^}]*)\}/.exec(uiPy)?.[1] ?? fail("no VIEW_TITLES in ui.py");
@@ -633,8 +676,15 @@ export function buildSiteMap(inputs: SiteInputs) {
       });
     }
     if (section.path === "analyze") {
-      for(const topic of topics.filter(topic=>!analysisCatalogs[topic])) child({path:`analyze/${topic}`,title:usageTopics[topic].label,description:usageTopics[topic].description,route:"/analyze",fixed:{analyze_mode:"dashboards",analyze_topic:topic,analyze_data:usageTopicDatasets[topic]},dataset:usageTopicDatasets[topic],options:[whereOption("analyze_filters","model_requests")]});
-      for (const topic of topics.filter(topic=>analysisCatalogs[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
+      for (const topic of topics) checkDashboardLinks(topic, dashboardLinks[topic]);
+      for (const topic of topics) {
+        const links = dashboardLinks[topic];
+        if ("catalog" in links) continue;
+        child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
+          fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic],
+          options: [...links.options, whereOption("analyze_filters", usageTopicDatasets[topic]), links.days] });
+      }
+      for (const topic of topics.filter(topic => "catalog" in dashboardLinks[topic])) child({ path: `analyze/${topic}`, title: usageTopics[topic].label, description: usageTopics[topic].description, route: "/analyze",
         fixed: { analyze_mode: "dashboards", analyze_topic: topic, analyze_data: usageTopicDatasets[topic] }, dataset: usageTopicDatasets[topic], dashboard: topic,
         ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns need agent counting.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [
@@ -662,6 +712,13 @@ export function buildSiteMap(inputs: SiteInputs) {
         const view = new URL(page.href!, origin).searchParams.get("view")!;
         child({ path: `findings/${view}`, title: page.label, description: pageDescriptions[`findings/${view}`], route: "/findings", fixed: { view },
           ...view === "table" ? { dataset: "findings", builder: "queryURL", options: [whereOption("q_findings", "findings"), windowOption("window_days", rollingWindowDays, "A rolling window on findings.window_field, as for query tables.")] } : {} });
+      }
+      const safety = child({ path: "findings/safety", title: "Risky actions", description: "Deterministically selected review questions with separate prompt baskets and handoff history.", route: "/findings", fixed: { optimize_area: "safety" }, children: [] });
+      for (const page of safetyPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        const node = add({ path: `findings/safety/${view}`, title: page.label, description: pageDescriptions[`findings/safety/${view}`], route: "/findings", fixed: { optimize_area: "safety", view },
+          ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
+        safety.children!.push(node.path);
       }
     }
     if (section.path === "work") {
@@ -693,7 +750,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   }
   for(const node of Object.values(nodes))if(node.dataset&&node.options?.some(option=>option.kind==="where"&&option.param.startsWith("q_"))){
     const schema=siteSchemas[node.dataset as QueryDataset];
-    const initial={...EMPTY_QUERY,select:schema.defaultSelect??[],orderBy:schema.defaultSort??[],limit:schema.defaultLimit??EMPTY_QUERY.limit,fitToScreen:true};
+    const initial=fittedDefaultQuery(schema);
     Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
   }
   return {

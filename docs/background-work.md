@@ -181,13 +181,22 @@ func (op *Op) Finish(err error)                // terminal state from err and th
 cancellation, so locks and ordering do not change.
 
 - Each kind row names its stopper: the existing function that stops it
-  (`stopIngest`, `stopLibraryRefresh`, `backups.stop`, `cloud.stop(id)`), or
-  none.
+  (`stopIngest`, `stopLibraryRefresh`, `backups.stop`, `cloud.stop(id)`),
+  `work` for work that registers its own (`Op.setStopper`: the labels and
+  agent events backlog runs cancel their context and stop between batches),
+  or none.
 - `POST /api/operations/stop {"id": …}` looks up the operation, calls that
   stopper, and moves the op to `stopping`. The existing stop endpoints call
   the same stoppers, and the registry marks the matching ops `stopping` too.
 - Release (`POST /api/release`) cancels `s.life.ctx` as today. Every op whose
   ctx derives from it ends `interrupted` unless it finishes first.
+- An explicit app update releases with `?for=update`, which first refuses,
+  stopping nothing, while the verdict over this process's own work is `busy`
+  or `unsafe` (`updateInputs`: another process's leases, operations and
+  capture locks do not count, since the drive stays mounted).
+  `GET /api/release?for=update` runs only that check; the broker's
+  `POST /api/release?for=update` refuses while one of its own operations
+  runs, and asks every running library's service before it stops any.
 - **Request-scoped work.** An operation started inside an HTTP handler
   (`begin` with `r.Context()`) is not cancelled by a release, and the
   release waits for the request (`s.life.requests`). Such an operation must
@@ -315,9 +324,10 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network only) | an.identities | — | Stops on release only. | record | step | parent's |
 | `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Stops on release only. | batch | step | parent's |
 | `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
-| `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
+| `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
 | `analysis.authorship` | Classify your writing · Classifying your writing | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
-| `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | — | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
+| `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
+| `analysis.agent_events` (variant `backlog`) | Find agent events · Finding agent events | chained (after labels, when the Agent Experience switch or `agent_events_enabled` is on; background item Agent events; the first run downloads the verifier if the broker has not), user (turning the switch on runs the item), cli (`pharos agent-events run`); `backlog` as for `analysis.labels` | svc, cli (+ worker process) | D:w W:w | an.agent_events | work | Stops between chunks of conversations; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
 | `analysis.refresh` | Update analyses · Updating analyses | chained (after a legacy source sync: Git, then tools, then findings) | svc | D:w W:w | an.git, an.tools, findings | — | Stops; it runs again after the next index. | batch | >5 s | bg |
 
@@ -357,6 +367,7 @@ operation.
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
+| `ask.suggestions` | Choose Ask Pharos suggestions · Choosing Ask Pharos suggestions | chained (background item Ask Pharos suggestions, only where Ask Pharos is enabled, when the analyses, safety reviews or findings it reads changed or a day passed), user (enabling Ask Pharos), read (`GET /api/ask/suggestions` before the first run requests the item) | svc | D:w W:w (one `meta` row) | — | — | Stops; the suggestions already chosen stay until the next run. | record | >5 s | bg |
 | `ask.models` | Check Ask Pharos models · Checking Ask Pharos models | read (the model picker asks for a CLI whose list is missing or over an hour old; it answers from the old list meanwhile), user (enabling Ask Pharos), startup (Ask Pharos enabled) | svc (+ the AI CLI) | — (subprocess only) | — | — | Stops. | record | never | bg |
 | `maintenance.capture-compress` | Compress cold captures · Compressing cold captures | daemon pass (`compressCaptures`: every 15 min, first 2 min after the service starts), only when an indexed, unpinned snapshot generation, an earlier file version, a cold latest transcript or an idle latest database snapshot of this Mac's captures is stored uncompressed ([capture compression](capture-compression.md)) | svc | D:w C(this):w (the capture lock only for each rename and manifest commit) | — | — | Stops; the file in progress stays uncompressed and a later pass compresses it. | record | >5 s | bg |
 | `drive.measure` | Check the drive · Checking the drive | read (`GET /api/health/drive`, 5 min cache) | svc (+`diskutil`) | D:w W:w (one `library_size_history` row) | — | — | Stops. | record | never | bg |
@@ -430,6 +441,7 @@ nothing.
 | `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools, an.ledger | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
 | `catalog.repair` (variants `refine-usage`, `repair-usage-attribution`) | Repair usage (Terminal) · Repairing usage | cli | cli | D:w W:w | an.tools, an.authorship | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `repositories.merge` | Merge repositories (Terminal) · Merging repositories | cli (`repositories --merge --apply`) | cli | D:w W:w | an.identities, an.git | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
+| `analysis.agent_events.import` | Import agent events (Terminal) · Importing agent events | cli (`agent-events import FILE`) | cli | D:w W:w | an.agent_events | — | Pharos cannot stop it; the import is one transaction, so a kill leaves the previous events. | none (to Pharos) | always | fg |
 | `tools.ledger.build` | Build the Tools ledger · Building the Tools ledger | user (`POST /api/tools/backfill`), version, step of `library.upgrade` | svc, cli (`build-tools`) | D:w W:w | an.ledger, an.tools | — | Stops between conversations; building the ledger again resumes it. | record | always | fg |
 
 Notes:
@@ -472,7 +484,7 @@ Notes:
 |---|---|---|---|---|---|---|---|---|---|---|
 | `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
 | `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
-| `labels.fetch` | Download the labeling model · Downloading the labeling model | startup (a library with `labels_enabled` opens on a Mac without the model or ONNX Runtime; retried 15 min after a failure), cli (`pharos labels fetch`) | brk, cli | — (network and this Mac's support directory only) | — | — | Stops; it touches no library, and the next attempt resumes the download. | record | always (broker registry) | bg |
+| `labels.fetch` | Download the labeling model · Downloading the labeling model | startup (a library with `labels_enabled` opens on a Mac without the model or ONNX Runtime, or one with `agent_events_enabled` without the verifier or the runtime; retried 15 min after a failure), cli (`pharos labels fetch`, `pharos agent-events fetch`) | brk, cli | — (network and this Mac's support directory only) | — | — | Stops; it touches no library, and the next attempt resumes the download. | record | always (broker registry) | bg |
 | `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
 
 Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
@@ -532,8 +544,8 @@ Mac:
 |---|---|---|
 | `safe` | No running operation holds the drive for writing. Read-only holders (a `maintenance.cache-warm` pass) may run; eject stops them | Release stops any readers (each `on_eject` says how) and closes the catalog |
 | `safe-in(eta)` | At least one operation holds the drive for writing, and every drive holder stops at a safe point within the release budget (7 s, `stopTimeout`): latency `instant` or `record`, a `SafePoint` estimate ≤ 7 s, or a `batch` holder with no estimate (assumed to stop in time; a release that times out refuses safely). `eta` is the largest estimate, or `null` when any is unknown | Release stops them at safe points and closes the catalog. With an `eta`: "Ejecting stops <label> within about N s". With `eta: null`, fixed wording: "Ejecting stops <label> after the current <unit>; if that takes more than 7 s, Pharos refuses and you can try again" |
-| `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it |
-| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock that no live lease and no operation in this service's registry names by an exact concrete write hold (§4.1; holding the ingest coordinator names nothing); a lease file or lease directory that cannot be read, listed or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown |
+| `busy` | Some holder blocks release: a held lease of another process (CLI work), a broker operation, `catalog.initialize`, a `release-blocking` request-scoped operation (§2.3), or a holder whose `SafePoint` estimate exceeds the budget or whose latency is `step` or `none`; `eta` is its safe point or forecast when known | Eject is refused until it ends or reaches its safe point; the panel names it, and its button reads Eject when safe: it stops what it can, waits, and ejects on the first fresh verdict that allows it (checked on each snapshot, and every few seconds once snapshots go quiet, as on a hidden page) |
+| `unsafe` | Unknown or unregistered writer evidence: kind `unknown`; unregistered running work found by the registry's self-check; a held capture or index lock that no live lease and no operation in this service's registry names by an exact concrete write hold (§4.1; holding the ingest coordinator names nothing); a lease file or lease directory that cannot be read, listed or probed; the service unreachable while the drive is mounted | Eject is refused; the panel says what is unknown, and Eject when safe waits for it as for `busy` |
 
 So a Search view refresh alone (`maintenance.library-view`, a `record`
 writer) is `safe-in`, never `safe`.
@@ -761,7 +773,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `search.query` | — | the three `*_ready` keys not at their index's version; count unknown | `building`, `version` | `maintenance.search.query` |
 | `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `scheduled-frequent` / `scheduled-hourly` / `scheduled-daily` (`scheduled`: work waits for its background item's cadence, §11), `late` (behind: it has waited longer than its cadence's window, 30 min, 3 h or 30 h, since `sync_deferred.pending_since`), `deferred-by-schedule` (behind: background updates are off or paused, or the item is set to only when you ask), `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
-| `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
+| `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
 | `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
 | `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
@@ -1216,10 +1228,11 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   `/api/operations` keeps `freshness: []`. `attention` (§7.3) is filled
   from phase 2.
 - Phase 2 adds to `/api/status`: `library.drive.location` and `mounted`,
-  `library.portable` and `library.path`, and `features.unified_activity`
-  (the flag, §9). It drops `journal.recent`, keeping `journal.dropped`.
+  `library.portable` and `library.path`. It drops `journal.recent`, keeping
+  `journal.dropped`. (It also carried `features.unified_activity`, the
+  flag, until the flag was removed; §9.)
 - `eject.headline` (both documents, phase 2 round 1): the verdict as one
-  short clause ("Safe to eject in ~2 s: stops back up first"); `summary`
+  short clause ("Safe to eject in ~2 s"); `summary`
   stays the full sentence, including the release's 7 s limit, for
   tooltips.
 - Phase 1 also returns, per operation, `variant`, `subject`, `detail` (the
@@ -1402,29 +1415,28 @@ one server-side sentence.
 
 ## 9. Feature flag and rollout
 
-`pharos-unified-activity-v1` is a boolean in the catalog's `ui_preferences`,
-default `false`, toggled in Settings → Preferences (phase 2 adds it).
+The series shipped behind `pharos-unified-activity-v1`, a boolean
+preference with a "Unified activity panel (preview)" switch in Settings →
+Preferences. The flag is gone: the unified activity panel is the drive
+panel for everyone, and a saved value of the old key is ignored.
 
-**Gated by the flag:** every new surface (the rebuilt drive panel, the
-native menu rendered from the snapshot, Settings pages that read the
-snapshot or ledger) and every behaviour change (phase 4's IO priority, the
-registry refusing to start drive-holding work during a release).
+What that means now:
 
-Phase 2 wiring: the switch is "Unified activity panel (preview)" in
-Settings → Preferences, saved at once. Go reads the flag through
-`Catalog.unifiedActivity` (`feature_flags.go`), cached for 5 s and cleared
-whenever preferences are saved. The page reads it from `pharosPrefs`
-(`status-store.js`); with it on, `status-panel.js` is the one renderer of
-the header chip, its panel and Index changes' state, and `library.js` and
-`sync.js` leave those alone; turning it off gives them back without a
-reload. `/api/menu-bar/status` carries `unified_activity`, and only when it
-is true does the native menu also poll the snapshot. The panel's Eject
-requests `/api/status?fresh=1` and acts only on that result; in the app it
-requests `/api/app/status?fresh=1` instead and acts only on the broker's
-fresh verdict for the selected library (§7.2), refusing when that is
-missing, names another library or is not `checked: fresh`; it never acts
-on the library's own verdict there. `safe` ejects, `safe-in` asks first
-and checks again, `busy` and `unsafe` refuse.
+- `status-store.js` connects on every page, and `status-panel.js` is the
+  one renderer of the header chip, its panel and Index changes' state.
+  `library.js` and `sync.js` still ask `pharosStatusStore.enabled()`,
+  which is always true, until their old drive panel paths are removed.
+- `/api/menu-bar/status` always carries `unified_activity: true`, so the
+  native menu also polls the snapshot. The shipped `MenuBar.swift` still
+  reads the field.
+- Background work always lowers its IO (§10).
+
+The panel's Eject requests `/api/status?fresh=1` and acts only on that
+result; in the app it requests `/api/app/status?fresh=1` instead and acts
+only on the broker's fresh verdict for the selected library (§7.2),
+refusing when that is missing, names another library or is not
+`checked: fresh`; it never acts on the library's own verdict there. `safe`
+ejects, `safe-in` asks first and checks again, `busy` and `unsafe` refuse.
 
 **Runs regardless, in shadow:** the registry, the journal, the broker's
 registry, the snapshot endpoints and streams, the freshness function, and
@@ -1434,9 +1446,9 @@ operation that holds the drive and is in scope of `libraryActivities` has
 an activity; and the verdict is never `safe` while `libraryActivities`
 lists a writer (§4.3).
 
-**Dual-write, no retirement.** Existing endpoints, fields, pollers and the
-old drive panel keep working unchanged. Removing them is a later phase,
-not part of this series.
+**Dual-write, no retirement.** Existing endpoints, fields and pollers keep
+working unchanged; the old drive panel's code stays, though nothing opens
+it now. Removing them is a later phase, not part of this series.
 
 **Unregistered work is a test failure.** A Go test parses the package's
 non-test files and fails on any `spawn(`, `runBackground(` or `go func`
@@ -1477,17 +1489,27 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   planned; the sampler starts no goroutine. Measured cost: about 20 µs of CPU for a
   sample of ten processes and its summary, 0.0013 % of one core
   (`TestResourceSamplingIsCheap`).
-- **What.** CPU is the delta of own plus exited children's user and system
-  time over the wall time between two readings, as % of one core (`null`
+- **What.** On macOS the kernel process tree adds active descendants (including
+  labeling CLIs and their workers) as separate rows with process names and PIDs,
+  attributed to their owning library. CPU uses each process's own user and system
+  time so exiting workers are not counted again through their parent. Work that
+  starts and exits between samples can be missed. If the process tree is
+  unavailable, the fallback includes exited child CPU in the parent. CPU is
+  the delta over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
-  Monitor's figure). A figure, and a total, never exceeds `NumCPU × 100`. A reading is
+  Monitor's figure); disk is the delta of `ri_diskio_bytesread` plus
+  `ri_diskio_byteswritten` over the same interval, in bytes per second
+  (`disk_bytes_per_second`, the process's own: the kernel keeps no disk
+  count for exited children; `null` until a second reading, and off
+  macOS). A figure, and a total, never exceeds `NumCPU × 100`. A reading is
   a new baseline, with `cpu_percent: null`, when its PID was reused
   (another `ri_proc_start_abstime`), when the previous reading is more
   than 10 s old (no page was open: an average over the gap is not the
   current load), and when its children's time grew by more than the
   interval × cores (a long child reaped). A total's `cpu_percent` is
-  `null` (memory only) while any of its processes has none. `cpu_percent`
-  is a whole number and `memory_bytes` two significant figures.
+  `null` (memory only) while any of its processes has none, and so is its
+  `disk_bytes_per_second`. `cpu_percent` is a whole number, and
+  `memory_bytes` and `disk_bytes_per_second` two significant figures.
 - **Change detection.** `resources` objects are left out of the snapshot's
   tag (`statusTag`), so a document whose only change is its load keeps its
   ETag: a poll gets 304 and sees new resources only with another change. A
@@ -1505,26 +1527,31 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   the same call's `ri_resident_size`, the figure `ps -o rss` reports, so
   RSS history stays comparable; `ps` remains the fallback. Recorded CPU
   shifts a little lower: it includes `RUSAGE_CHILDREN`, which counted the
-  once-a-second `ps` forks. This is not behind the flag: it changes no
-  behaviour and drops one fork per second of a run.
+  once-a-second `ps` forks. This changes no behaviour and drops one fork
+  per second of a run.
 
 Shape, in `/api/status` (`resources`, `null` when nothing could be read)
 and in `/api/app/status` (the machine's total as `resources`, and each
 library entry's own as `libraries[].resources`):
 
 ```json
-{"cpu_percent": 45, "memory_bytes": 1200000000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+{"cpu_percent": 45, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
  "label": "Pharos is using ~45% of one core · 1.2 GB",
  "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
                 "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
 ```
 
 `role` is `service`, `broker` or the lease's process (`cli:ingest`).
-`label` and `text` are the server's words; the panel's Load row shows the
-machine's `label` in the app and the library's otherwise, with the
-processes' `text` in its tooltip.
+`label` and `text` are the server's words. The panel's Load row shows CPU
+(% of one core), RAM and Disk (per second) in one row, each with its icon,
+for the machine in the app and the library otherwise, with `label` and the
+processes' `text` in its tooltip. The panel's Load row is four equal
+cells, CPU | RAM | I/O | Storage: I/O is `disk_bytes_per_second`, and
+Storage is the library's `storage_bytes` in the status snapshot (what it
+keeps on its drive, from the last drive check, which Health refreshes;
+the snapshot never measures it, and leaves it out before a check).
 
-**Priority classes to IO policy** (applied only with the flag on):
+**Priority classes to IO policy:**
 
 | Class | Disk IO policy | Applied |
 |---|---|---|
@@ -1533,11 +1560,8 @@ processes' `text` in its tooltip.
 
 The class is applied in one place, the handle: `Op.RunIO(fn)` runs fn
 under utility when the operation's priority is `background` and the
-registry's `lowerIO` says so; otherwise it runs fn unchanged. `lowerIO`
-reads the flag from memory only (`Catalog.unifiedActivityNow`): saving
-preferences sets it, every read of the flag refreshes it, and the
-service's `watchFeatureFlags` daemon reads it every 5 s, so work never
-waits on a reader connection for it. The thread returns to Go's pool only
+registry has `lowerIO` set (the service's and the broker's do); otherwise
+it runs fn unchanged. The thread returns to Go's pool only
 once its policy is restored; if restoring fails, the goroutine keeps the
 thread locked and Go ends it rather than reuse it at utility. The policy
 is per thread and goroutines fn starts do not inherit it, so it wraps the
@@ -1563,12 +1587,7 @@ loops that do their IO on their own goroutine:
   writer lock) follows the class; the truncating pass, which holds
   writers off, always runs at the default tier;
 - the broker's delivery (`library.deliver`): its pending capture and its
-  move. The broker has no catalog, so its `lowerIO` is the flag the
-  selected library's service reports (`features.unified_activity`), read
-  from every status document and asked for again before each delivery.
-  The value belongs to the selected library: another selection clears it,
-  and a selected library whose service cannot confirm it (none running,
-  or no answer) is off.
+  move.
 
 Work run inline inside a background body inherits its utility thread,
 whatever its own class: a Tools rollup that `analysis.refresh` rebuilds
@@ -1578,7 +1597,7 @@ Not covered: work an operation hands to other goroutines (capture's hashing
 pipeline, a backup's WAL poller), and Terminal commands, whose registries
 have no `lowerIO`.
 The three copy paths that ran at utility before (capture copies, local
-backups, adoption) keep doing so with the flag on or off: they are not
+backups, adoption) keep doing so: they are not
 moved to the default tier even where their kind is foreground. A
 read-started rebuild that a request or page waits on is registered
 foreground and keeps the default tier: `analysis.tools` from a read,
@@ -1587,11 +1606,11 @@ before findings exist, and `analysis.authorship` from a page. A background body 
 at utility can make a foreground writer wait a little longer; the utility
 tier, unlike background, is not throttled hard.
 
-## 11. Background updates
+## 11. Background Processing
 
 Every domain a page shows has an automatic owner. `backgroundLoop`
 (`background.go`) runs the work the scheduled index does not, on one of
-three cadences, and Settings → Background updates and the drive panel show
+three cadences, and Settings → Background Processing and the drive panel show
 the same schedule from one declaration (`backgroundItems`):
 
 | Item | Runs | Cadence before measurements | Measured by |
@@ -1605,6 +1624,8 @@ the same schedule from one declaration (`backgroundItems`):
 | Your writing | the chain's authorship stage | Hourly, adaptive | `analysis.authorship` |
 | Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
 | Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |
+| Agent events | the chain's agent events stage, only where the agent events switch (Settings → Background Processing) or `agent_events_enabled` is on (docs/agent-events.md) | Hourly, adaptive | `analysis.agent_events` (not its `backlog` runs) |
+| Ask Pharos suggestions | the suggestion signals ([Ask suggestions](ask-suggestions.md)), only where Ask Pharos is enabled, when their inputs changed | Hourly, adaptive | `ask.suggestions` |
 | Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` |
 | Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
 | Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
@@ -1626,7 +1647,9 @@ the same schedule from one declaration (`backgroundItems`):
 - **Overrides** may permanently move an item to a slower cadence or to only
   when you ask. Adaptive items also have **Promote/Demote … for a week**
   actions: they move one bucket faster or slower, even beyond the measured
-  placement. The choice is stored per Mac in `background_temporary_cadences`
+  placement. In Settings, dragging an adaptive item onto another cadence's
+  column does the same for any cadence, and dragging it back to its usual
+  one ends the week. The choice is stored per Mac in `background_temporary_cadences`
   with a seven-day expiry and takes precedence over automatic placement and
   permanent overrides until then. The usual schedule resumes at expiry or
   when **End temporary schedule** is selected. Choosing a permanent schedule
@@ -1657,8 +1680,8 @@ the same schedule from one declaration (`backgroundItems`):
   mark is completed at once.
 - **Preserve originals** on a Mac with no enabled sources captures nothing
   but still indexes what other Macs captured.
-- **Mode.** On (default), paused until a time (scheduled indexing waits
-  too), or only when I ask (`sync_settings.enabled` off). With no schedule
+- **Mode.** On (default), paused until a time (Pause for 1 hour or 1 day,
+  `pause_minutes` up to 1440; scheduled indexing waits too), or only when I ask (`sync_settings.enabled` off). With no schedule
   row, the first scheduled index stores the default one. Run now runs an
   item whatever the mode or power source; for new conversations it asks
   `automaticLoop` for one scheduled index, leaving the saved schedule as it
@@ -1692,12 +1715,33 @@ the same schedule from one declaration (`backgroundItems`):
 - **Surfaces.** `/api/status` carries `background`: the headline, every
   item's state (`running`, `queued`, `failed`, `missed`, `never`,
   `power`, `current`, `paused`, `manual`, `unavailable`) with `as_of` and
-  `next_at`, one row per cadence, and the cost of Update everything now.
+  `next_at`, one row per cadence, `unscheduled` (the items set to Only
+  when you ask, Back up unless chosen: on no schedule, so in no cadence's
+  row), and the cost of Update everything now. A measured item's cost
+  carries `typical`, the middle of its recent runs ("Typically 2–3 h",
+  between the runs a quarter of the way in from each end), which leads its
+  line in Settings.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled
   indexing and the journaled analysis passes after it). `POST /api/background/settings`
   and `POST /api/background/run` change and run it.
+- **In the panel.** The headline shows only when it is out of the
+  ordinary (tone `bad`, `behind` or `paused`): Up to date and the running
+  item are already in the cadence rows, where a running item's tooltip
+  says what it feeds. A running item's dot pulses, as the header chip's
+  does; a queued one (Up next) is steady. Stop sits beside Eject. Each
+  cadence row is its icon, dot and name, with its state at the line's end.
+  Unscheduled items are one more row, Ad hoc, shown like a cadence; each
+  row's small ▶ runs it now (`POST /api/background/run {"cadence": …}`,
+  `manual` for Ad hoc). Settings → Background Processing lists them in an
+  Only when you ask group, and its column heads carry the same ▶. The panel is titled Background Processing,
+  under "Library NAME (1/3) on DRIVE", the name linking to Settings →
+  Libraries; other libraries are only counted there. Running now and
+  Schedule head their sections, and each running line says where it
+  comes from: "Part of Hourly" for a background pass, else who started
+  it (`trigger`). An alert's title and action share a line, its detail
+  below.
 
 ## Known hazards this contract must not hide
 
@@ -1745,8 +1789,9 @@ against current code before starting it.
   incremental runs have class `changes_audit_deferred`. Find out whether the
   5 s / 16 MiB budget, writer contention or the capture lock is the cause.
 - **Retire the old status paths.** This is the phase that follows this
-  contract's rollout. Once the flag defaults on and has been stable, remove
-  the run-record progress fields, the `detail` strings, client grouping by
+  contract's rollout. The flag is gone (§9); once the panel has been
+  stable, remove the old drive panel in `library.js`, the menu bar's
+  legacy path, the run-record progress fields, the `detail` strings, client grouping by
   label, the duplicate pollers and the three older freshness rules (§5).
 - **SQLite maintenance as operation kinds.** A periodic `ANALYZE` refresh
   (statistics are currently built only when missing), as a registered,

@@ -82,6 +82,8 @@ type Server struct {
 	auto      automaticSync
 	// background is the Hourly and Daily schedule's state (background.go).
 	background backgroundState
+	// diagnostics holds Settings → Logs's page and request journals.
+	diagnostics serviceDiagnostics
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
@@ -111,9 +113,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		server.ingestMu.path = catalog.Path
 		catalog.background = server.start
 		catalog.ops = server.ops
-		// Background work's IO follows the flag (§10); off, it is as before.
-		// From memory only: work never waits on a reader for the flag.
-		server.ops.lowerIO = catalog.unifiedActivityNow
+		// Background work's IO runs at the utility tier (§10).
+		server.ops.lowerIO = true
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
@@ -208,9 +209,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"error": "cross-origin request refused"}, http.StatusForbidden)
 		return
 	}
-	if r.Method == http.MethodPost && r.URL.Path == "/api/release" {
-		s.release(w)
-		return
+	if r.URL.Path == "/api/release" {
+		switch r.Method {
+		case http.MethodPost:
+			s.release(w, r)
+			return
+		case http.MethodGet:
+			s.releaseCheck(w, r)
+			return
+		}
 	}
 	if !s.admit() {
 		writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
@@ -220,9 +227,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if interactiveRead(r) {
 		defer s.Catalog.beginInteractiveRead(r.Context())()
 	}
+	trace, traced := s.traceRequest(w, r)
+	defer traced()
+	if trace != nil {
+		w = trace
+	}
 	debug.SetPanicOnFault(true) // see exitOnFault
 	defer func() {
 		if value := recover(); value != nil {
+			if trace != nil {
+				trace.panic = fmt.Sprintf("%v\n\n%s", value, debug.Stack())
+			}
 			s.exitIfFault(value)
 			writeJSON(w, map[string]any{"error": fmt.Sprint(value)}, http.StatusInternalServerError)
 		}
@@ -233,6 +248,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
 		s.feedbackHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/logs/") {
+		s.logsHTTP(w, r)
 		return
 	}
 	if r.URL.Path == "/api/query-object-references" {
@@ -293,7 +312,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -324,6 +343,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-storage.js":   {"managed-storage.js", "text/javascript; charset=utf-8"},
+	"/assets/page-errors.js":       {"page-errors.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.js":   {"managed-library.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.css":  {"managed-library.css", "text/css; charset=utf-8"},
 }
@@ -397,13 +417,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, value, http.StatusOK)
 		}
-	case path == "/api/share":
-		s.getShared(w, r, r.URL.Query()["id"])
-	case strings.HasPrefix(path, "/api/share/work/"):
-		s.getShared(w, r, []string{strings.TrimPrefix(path, "/api/share/work/")})
 	case strings.HasPrefix(path, "/api/work/"):
 		// /api/work/{id}, /api/work/{id}/conversations/{conversation}, and
 		// /api/work/{id}/find: the reader loads a workspace in pieces.
+		// /api/work/{id}/matches places a Search's matches in its summary.
 		parts := strings.Split(strings.TrimPrefix(path, "/api/work/"), "/")
 		var value any
 		var err error
@@ -411,10 +428,20 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		case len(parts) == 2 && (parts[1] == "delegation" || parts[1] == "parallel"):
 			s.getDelegation(w, r, parts[0], parts[1] == "parallel")
 			return
+		case len(parts) == 2 && parts[1] == "preview":
+			s.getWorkPreview(w, r, parts[0])
+			return
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":
 			value, err = nilIfNoMap(s.Catalog.WorkConversation(parts[0], parts[2]))
+		case len(parts) == 2 && parts[1] == "matches":
+			matches, err := s.Catalog.WorkMatches(r.Context(), parts[0], r.URL.Query())
+			if err != nil {
+				writeError(w, err, http.StatusBadRequest)
+				return
+			}
+			value = matches
 		case len(parts) == 2 && parts[1] == "find":
 			q := r.URL.Query()
 			options := transcriptFindOptions{Term: q.Get("q"), Output: q.Get("output") == "1", Regex: q.Get("regex") == "1", CaseSensitive: q.Get("case") == "1"}
@@ -541,6 +568,20 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/habits":
+		mode, days := r.URL.Query().Get("mode"), 0
+		if n, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil {
+			days = n
+		} else {
+			days = 365
+		}
+		ctx, err := withHabitsPreferences(r.Context(), r.URL.Query().Get("habits_settings"))
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		value, err := s.Catalog.Habits(ctx, mode, days)
+		writeResult(w, value, err)
 	case path == "/api/usage/parallelism":
 		value, err := s.Catalog.parallelismData(r.Context())
 		writeResult(w, value, err)
@@ -657,6 +698,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
 	case path == "/api/search/text" || path == "/api/search/text/validate":
 		if r.Method != "POST" {
 			writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
@@ -750,6 +793,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postFindings(w, r, body)
 	case path == "/api/preferences":
 		s.postPreferences(w, r, body)
+	case path == "/api/labels/settings":
+		s.postLabelsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":

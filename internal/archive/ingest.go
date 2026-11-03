@@ -1344,7 +1344,10 @@ func upsertRepositoryChanges(tx *sql.Tx, value map[string]any, options ...reposi
 	}
 	_, err = tx.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,owner,root_commit,forge_id,aliases_json,local_locations_json,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET canonical_remote=COALESCE(excluded.canonical_remote,repositories.canonical_remote),normalized_remote=COALESCE(excluded.normalized_remote,repositories.normalized_remote),display_name=excluded.display_name,
-		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
+		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at
+		WHERE (repositories.canonical_remote,repositories.normalized_remote,repositories.display_name,repositories.owner,repositories.root_commit,repositories.forge_id,repositories.aliases_json,repositories.local_locations_json)
+		IS NOT (COALESCE(excluded.canonical_remote,repositories.canonical_remote),COALESCE(excluded.normalized_remote,repositories.normalized_remote),excluded.display_name,
+		COALESCE(excluded.owner,repositories.owner),COALESCE(excluded.root_commit,repositories.root_commit),COALESCE(excluded.forge_id,repositories.forge_id),excluded.aliases_json,excluded.local_locations_json)`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
 	return item.ID, staleToolPaths(added, item.ID, items), err
 }
 
@@ -2110,6 +2113,12 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (links int, er
 }
 
 func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
+	// Links only accrue (deletes cascade), so those after lastLink are this
+	// pass's: only their workspaces' names can change.
+	var lastLink int64
+	if err := c.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rowid),0) FROM conversation_identity_links").Scan(&lastLink); err != nil {
+		return 0, err
+	}
 	if err := c.reconcileHistoryLinks(ctx); err != nil {
 		return 0, err
 	}
@@ -2117,7 +2126,11 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
 		return 0, err
 	}
-	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json NOT IN ('[]','null')")
+	// Ingest links a conversation's aliases as it writes it, and records them
+	// in declared_native_aliases, so a conversation written later links back
+	// to it. Only conversations from before those declarations need linking.
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT id,aliases_json FROM conversations c WHERE aliases_json NOT IN ('[]','null')
+		AND NOT EXISTS(SELECT 1 FROM declared_native_aliases d WHERE d.conversation_id=c.id)`)
 	if err != nil {
 		return 0, err
 	}
@@ -2152,6 +2165,7 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	reportWork(ctx, "updating linked workspaces", "link", 0, len(links))
+	renamed := []string{}
 	for index, link := range links {
 		pairs := [][5]string{
 			{firstString(link["left_id"]), firstString(link["left_kind"]), firstString(link["left_activity"]), firstString(link["right_kind"]), firstString(link["right_activity"])},
@@ -2168,8 +2182,14 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 			activity, hasActivity := parseTime(pair[2])
 			if !hasActivity || linked.After(activity) {
 				if err := c.writeTransaction(ctx, "linked workspace activity", func(tx *sql.Tx) error {
-					_, err := tx.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=? AND (activity_at IS NULL OR activity_at<?)", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0], formatTime(linked))
-					return err
+					result, err := tx.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=? AND (activity_at IS NULL OR activity_at<?)", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0], formatTime(linked))
+					if err != nil {
+						return err
+					}
+					if changed, _ := result.RowsAffected(); changed > 0 {
+						renamed = append(renamed, pair[0])
+					}
+					return nil
 				}); err != nil {
 					return 0, err
 				}
@@ -2177,10 +2197,22 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 		}
 		reportWork(ctx, "updating linked workspaces", "link", index+1, len(links))
 	}
-	if err := c.writeTransaction(ctx, "resolve linked workspace names", func(tx *sql.Tx) error {
-		return refreshWorkspaceNames(tx, nil)
-	}); err != nil {
+	added, err := queryMapsContext(ctx, c.DB, `SELECT DISTINCT c.workspace_id FROM conversation_identity_links l
+		JOIN conversations c ON c.id=l.left_id OR c.id=l.right_id WHERE l.rowid>?`, lastLink)
+	if err != nil {
 		return 0, err
+	}
+	for _, row := range added {
+		renamed = append(renamed, firstString(row["workspace_id"]))
+	}
+	// Ingest resolves the names of the workspaces it writes and those linked
+	// to them; this pass resolves those whose links or activity it changed.
+	if len(renamed) > 0 {
+		if err := c.writeTransaction(ctx, "resolve linked workspace names", func(tx *sql.Tx) error {
+			return refreshWorkspaceNames(tx, renamed)
+		}); err != nil {
+			return 0, err
+		}
 	}
 	var after int
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&after); err != nil {

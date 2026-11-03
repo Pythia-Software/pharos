@@ -29,12 +29,18 @@
 .pharos-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sea,#315845)}
 .pharos-drive .pharos-dot{background:#8cc6a0}
 .pharos-dot.busy{background:var(--mast-brass,#d4a857);box-shadow:0 0 0 3px color-mix(in srgb,var(--mast-brass,#d4a857) 30%,transparent)}
+/* Pulses animate opacity only, with the outer ring on ::after. WebKit runs
+   opacity on the compositor; animating box-shadow repaints and re-composites
+   the whole page every frame, which made long transcripts sluggish. */
+.pharos-drive .pharos-dot:is(.busy,.bad){position:relative}
+.pharos-drive .pharos-dot:is(.busy,.bad)::after{content:'';position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 6px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent);opacity:0;animation:pharos-drive-ring 1.6s ease-in-out infinite}
 .pharos-drive .pharos-dot.busy{animation:pharos-drive-pulse 1.6s ease-in-out infinite}
-@keyframes pharos-drive-pulse{50%{opacity:.55;box-shadow:0 0 0 6px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent)}}
-@media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot.busy{animation:none}}
+@keyframes pharos-drive-pulse{50%{opacity:.55}}
+@keyframes pharos-drive-ring{50%{opacity:1}}
 .pharos-drive .pharos-dot.bad{background:#e5675c;box-shadow:0 0 0 3px color-mix(in srgb,#e5675c 35%,transparent);animation:pharos-drive-alert 1.6s ease-in-out infinite}
-@keyframes pharos-drive-alert{50%{opacity:.6;box-shadow:0 0 0 6px color-mix(in srgb,#e5675c 12%,transparent)}}
-@media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot.bad{animation:none}}
+.pharos-drive .pharos-dot.bad::after{box-shadow:0 0 0 6px color-mix(in srgb,#e5675c 12%,transparent)}
+@keyframes pharos-drive-alert{50%{opacity:.6}}
+@media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot:is(.busy,.bad),.pharos-drive .pharos-dot:is(.busy,.bad)::after{animation:none}}
 .pharos-attention{margin-top:12px;padding:10px 12px;border:1px solid var(--bad,#9c3d36);border-radius:8px;background:color-mix(in srgb,var(--bad,#9c3d36) 8%,transparent)}
 .pharos-drive-panel .pharos-attention h3{margin-top:0;color:var(--bad,#9c3d36)}
 .pharos-attention-item+.pharos-attention-item{margin-top:10px;padding-top:10px;border-top:1px solid var(--line,#ccc)}
@@ -87,7 +93,8 @@
 .pharos-bar.step{height:3px;margin-bottom:7px}
 .pharos-bar.step>span{opacity:.65}
 .pharos-bar.indeterminate>span{width:35%;animation:pharos-slide 1.6s ease-in-out infinite}
-@keyframes pharos-slide{from{margin-left:-35%}to{margin-left:100%}}
+/* transform runs on the compositor; margin-left would lay out every frame. */
+@keyframes pharos-slide{from{transform:translateX(-100%)}to{transform:translateX(286%)}}
 @media(prefers-reduced-motion:reduce){.pharos-bar>span{transition:none}.pharos-bar.indeterminate>span{animation:none;width:100%;opacity:.5}}
 .pharos-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
 .pharos-row .pharos-note{flex:1 1 100%}
@@ -650,7 +657,7 @@
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
-    // Capture & index is on Settings → Background updates and in the drive panel.
+    // Capture & index is on Settings → Background Processing and in the drive panel.
     for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
       update.disabled = captureIndexDisabled(state);
       if (update.classList.contains('pharos-panel-update')) update.hidden = update.disabled;
@@ -1207,7 +1214,7 @@
     }
   }
 
-  // Index changes is the incremental run (Settings → Background updates'
+  // Index changes is the incremental run (Settings → Background Processing'
   // Update everything now): it indexes only what changed in this Mac's sources,
   // without capturing them.
   async function syncNow() {
@@ -1484,14 +1491,12 @@
   const syncOnly = document.getElementById('headerSyncOnly');
   if (syncOnly) syncOnly.onclick = syncNow;
 
-  window.addEventListener('pharos:unified-activity', () => { if (unified()) closePanel(); });
-
   window.pharosLibrary = {closePanel, setPanelOpen(open) {
     if (open) openPanel({fromURL: true});
     else { closePanel({fromURL: true}); window.pharosStatusPanel?.close({fromURL: true}); }
   }, refresh: refreshStatus,
-    // For status-panel.js: the chip and Index changes it renders while the
-    // unified activity preference is on, the in-place renderer, and whether
+    // For status-panel.js: the chip and Index changes it renders, the
+    // in-place renderer, and whether
     // this page is starting a capture or index.
     ensureChip, updateLiveChildren, localBusy: () => Boolean(headerCaptureIndexRunning || hostsBusy), status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.

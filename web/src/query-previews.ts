@@ -16,6 +16,9 @@ import { activityPresentation } from "./machine-activity-data";
 import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
+import type { DashboardCardTarget } from "./dashboard-card-model";
+import type { HabitsCover } from "./habits-card";
+import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
@@ -35,14 +38,15 @@ export type QueryPreview = {
   dashboardTrend?: CompactTimelineOptions;
   preserveScale?: boolean;
   study?: HumanStudyPreview;
+  habits?: HabitsCover;
 };
-type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string };
+type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
-export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); }
+export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
 
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
@@ -341,13 +345,15 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 // canonical revisions; an aborted caller never lends its signal to another run.
 export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return;
+  // A Habits template draws as the dashboard card at its address.
+  jobs = jobs.map(job => job.options?.recipe?.habits && !job.options.dashboard ? { ...job, options: { ...job.options, dashboard: job.options.url, dashboardTarget: job.options.recipe.habits.target } } : job);
   const dashboards = jobs.filter(job => job.options?.dashboard);
   if (dashboards.length) {
     const pending = [...dashboards];
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal); if (!signal?.aborted) publish(job.id, preview); }
+        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget); if (!signal?.aborted) publish(job.id, preview); }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };
@@ -479,9 +485,10 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   for (const group of groups.values()) {
     let batch: Item[] = [], size = 0;
     for (const item of group) {
-      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || !item.query.aggregations?.length) {
-        if (batch.length) tasks.push(batch);
-        batch = []; size = 0; tasks.push([item]); continue;
+      // The server evaluates each distribution in its own pass over the source,
+      // so batching one with other cards only serializes their work.
+      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping || metric.distribution) || !item.query.aggregations?.length) {
+        tasks.push([item]); continue;
       }
       const count = item.query.aggregations.length;
       if (size + count > 20 || !item.query.aggregations?.length) { if (batch.length) tasks.push(batch); batch = []; size = 0; }

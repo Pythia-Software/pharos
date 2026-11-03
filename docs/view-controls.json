@@ -2,22 +2,22 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "0.9.8",
+      "version": "0.9.9",
       "status": "reviewed",
       "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
@@ -92,6 +92,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/logs-page.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/thinking-dashboard.tsx",
       "field": "disclosures"
     },
@@ -102,6 +106,18 @@
     {
       "file": "web/src/view-state.ts",
       "field": "disclosures"
+    },
+    {
+      "file": "web/src/page-find.ts",
+      "field": "find"
+    },
+    {
+      "file": "web/src/page-find.ts",
+      "field": "find_case"
+    },
+    {
+      "file": "web/src/page-find.ts",
+      "field": "find_regex"
     },
     {
       "file": "web/src/findings.tsx",
@@ -124,6 +140,58 @@
       "field": "guide_open"
     },
     {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_calendar"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_calendar"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_day"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_punchcard"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_punchcard"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_punchcard_days"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_punchcard_days"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_streak"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_streak"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_weekends"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_weekends"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_weeks"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_weeks"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "history_collapsed"
     },
@@ -132,12 +200,20 @@
       "field": "history_search"
     },
     {
+      "file": "web/src/logs-page.tsx",
+      "field": "log_source"
+    },
+    {
       "file": "web/src/app-navigation.tsx",
       "field": "nav_collapsed"
     },
     {
       "file": "web/src/app-navigation.tsx",
       "field": "nav_expanded"
+    },
+    {
+      "file": "web/src/findings.tsx",
+      "field": "optimize_area"
     },
     {
       "file": "internal/archive/assets/library.js",
@@ -161,6 +237,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_events"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_filter"
     },
     {
@@ -172,16 +252,24 @@
       "field": "reader_labels"
     },
     {
-      "file": "web/src/conversation-search.tsx",
-      "field": "reader_order"
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_writing"
     },
     {
-      "file": "web/src/conversation-search.tsx",
-      "field": "reader_page"
+      "file": "web/src/safety.tsx",
+      "field": "safety_case"
     },
     {
-      "file": "web/src/conversation-search.tsx",
-      "field": "reader_search"
+      "file": "web/src/safety.tsx",
+      "field": "safety_list"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_place"
+    },
+    {
+      "file": "web/src/safety.tsx",
+      "field": "safety_rank"
     },
     {
       "file": "web/src/conversation-results.tsx",
@@ -527,6 +615,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:069af350652f6234:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model, effort and speed as your default\">",
+      "contract": "editing",
+      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
       "key": "fragment:06f5bec8efd6e3d2:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -555,11 +652,11 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:2095e9c1516aba27:0",
+      "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-save-default cursor-interaction\" aria-label=\"Make this selection the default\" aria-pressed=\"false\" data-tooltip=\"Save this CLI, model and effort as your default\">",
+      "control": "<button type=\"button\" class=\"pharos-picker-row pharos-fast-toggle cursor-interaction\" role=\"switch\" aria-checked=\"false\" data-tooltip=\"Faster answers; the CLI may bill this mode at a higher rate\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -644,6 +741,15 @@
       "control": "<button type=\"button\" class=\"pharos-plain pharos-never cursor-interaction\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:66858281b3fb2bba:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-fullscreen pharos-icon-control cursor-interaction\" aria-label=\"Full screen\" aria-pressed=\"false\" data-tooltip=\"Full screen\">",
+      "contract": "transient",
+      "reason": "Navigates between the /ask page and the page full screen was opened from; the route is the state, and ask_chat names the chat."
     },
     {
       "key": "fragment:6a4405d934090495:0",
@@ -753,6 +859,15 @@
       "disclosure": true,
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:a9ad79f64dbaf85e:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-browse-hint-dismiss cursor-interaction\" aria-label=\"Dismiss browse hint\" title=\"Don’t show for a while\">",
+      "contract": "settings",
+      "reason": "Snoozes the Ask browse hint in UI preferences; not view state."
     },
     {
       "key": "fragment:ad63fe0a924cd37a:0",
@@ -938,6 +1053,15 @@
       "control": "'button', className, text",
       "contract": "settings",
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "b463ec7e5caa3d73:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "labelSwitch",
+      "tag": "button",
+      "control": "'button', 'toggle'",
+      "contract": "settings",
+      "reason": "Persists the library's message labels setting (labels_enabled, /api/labels/settings) or the agent events preference; it controls background processing, not the current URL view."
     },
     {
       "key": "f96939e6262189c2:0",
@@ -2105,20 +2229,20 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:0bab6dfe661d5b94:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "input",
+      "control": "<input id=\"feedbackContactEmail\" type=\"email\" maxlength=\"254\" autocomplete=\"email\" placeholder=\"you@example.com\" aria-labelledby=\"feedbackContactEmailTitle\" aria-describedby=\"feedbackContactEmailDescription\">",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
       "key": "html:2de3664badf0dd59:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
       "tag": "button",
       "control": "<button id=\"lighthouseSpinOnClick\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"lighthouseSpinOnClickTitle\" aria-describedby=\"lighthouseSpinOnClickDescription\" aria-checked=\"false\">",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
-    },
-    {
-      "key": "html:3af61b3ea3e1ea68:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"unifiedActivity\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"unifiedActivityTitle\" aria-describedby=\"unifiedActivityDescription\" aria-checked=\"false\">",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
@@ -3172,29 +3296,11 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "7647f1f9226e53a7:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderDetail",
-      "tag": "button",
-      "control": "'button', 'button-with-icon share-link'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "a58b094fb4327fd7:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderDetail",
       "tag": "button",
       "control": "'button', 'work-repository-link', w.repository_name",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "c992fea4ef36d7c4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderDetail",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Search this workspace'",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
@@ -3326,24 +3432,6 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
-      "key": "a0036a86953f7789:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "search",
-      "tag": "button",
-      "control": "'button', 'conversation-find-marker'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "e861c4e0a36f2fd2:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "searchOthers",
-      "tag": "button",
-      "control": "'button', item.shown?'':'hidden-only', item.shown?`#${item.index+1} · ${item.shown}`:`#${item.index+1}`",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
       "key": "34ee83a2e65ae313:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "setDrawer",
@@ -3379,78 +3467,6 @@
       "owner": "setupConversationMap",
       "tag": "button",
       "control": "'button', `conversation-map-turn ${turn.dataset.human==='true'?'human':''}`",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "59697c369aecf2cd:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', icon('arrow-down')",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "7a2f0a4a729c23c2:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', icon('arrow-up')",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "a183ad834b64c088:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', icon('close')",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:1",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:2",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "bef2b64bf45f82e0:3",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "input",
-      "control": "'input', ''",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
-    },
-    {
-      "key": "c75ffa96b4fa174a:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "setupConversationSearch",
-      "tag": "button",
-      "control": "'button', '', 'Show'",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
@@ -3548,13 +3564,13 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "a240ddf105d4c2db:0",
+      "key": "a2396c325479ce5c:0",
       "file": "internal/archive/assets/ui.py",
-      "owner": "transcriptLabelsControl",
-      "tag": "button",
-      "control": "'button', 'transcript-labels-toggle', 'Labels'",
+      "owner": "transcriptHighlightControl",
+      "tag": "input",
+      "control": "'input', ''",
       "contract": "reader",
-      "reason": "The Labels toggle writes reader_labels through the view contract; its saved preference is only the fallback when a link carries none."
+      "reason": "Each Highlight checkbox writes its own boolean view field (reader_writing, reader_events, reader_labels) through the view contract; its saved preference is only the fallback when a link carries none."
     },
     {
       "key": "0e18c887173fcc9b:0",
@@ -3591,6 +3607,15 @@
       "control": "'button', '', status.running || !status.needed ? 'Close' : 'Later'",
       "contract": "action",
       "reason": "Library upgrade/migration preview or mutation action, not an applied content query."
+    },
+    {
+      "key": "eca88c5aa1a147f6:0",
+      "file": "web/src/agent-event-examples.tsx",
+      "owner": "AgentEventExamples",
+      "tag": "button",
+      "control": "onClick={() => setShown(value => value + 24)}",
+      "contract": "transient",
+      "reason": "Shows more example events in the panel; how many are shown is not part of the view and resets on reload."
     },
     {
       "key": "103123ac664d233e:0",
@@ -4427,90 +4452,6 @@
       "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
-      "key": "0b24f86fce417896:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "onClick={() => reveal(index)}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "194fcafba3e16562:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "ViewDisclosure",
-      "control": "viewKey=\"reader:search-coverage\"",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
-      "key": "216d58696a6a866d:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "aria-label=\"Close conversation search\" onClick={close}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "2c1bafcc15859565:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "aria-label=\"Previous matching message\" onClick={() => reveal(active - 1)}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "33a364570a3c2f0c:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "aria-label=\"Next matching message\" onClick={() => reveal(active + 1)}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "973649fecf6c737c:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "onClick={() => applied && void run(applied, result.cursor,false,\"\",Number(pageIndex))}",
-      "contract": "reader",
-      "reason": "Applied conversation Find page is an ordinal in reader_page, replaying fresh cursors. Retry reuses the current live batch."
-    },
-    {
-      "key": "d786e12bf9371934:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "TextSearchEditor",
-      "control": "value={scopedDraft} onKind={() => {}} onDraft={next => { pending.current?.abort(); setBusy(false); setDraft(next); }} onApply={next => void run(next)} onClear={() => { pending.current?.abort(); setBusy(false); setDraft(emptyTextSearch()); setResult(undefined); setApplied(undefined); writeViewState(\"reader_search\", {}); options.reveal(null); }}",
-      "contract": "reader",
-      "reason": "Applied reader_search and reader_order are URL state; unapplied edits, running search and result cursor batches are transient."
-    },
-    {
-      "key": "d9932cefd235128e:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "button",
-      "control": "onClick={() => applied && void run(applied, result.next_cursor,false,\"\",Number(pageIndex)+1)}",
-      "contract": "reader",
-      "reason": "Applied conversation Find page is an ordinal in reader_page, replaying fresh cursors. Retry reuses the current live batch."
-    },
-    {
-      "key": "db1260fa93c780a6:0",
-      "file": "web/src/conversation-search.tsx",
-      "owner": "ConversationSearch",
-      "tag": "SearchSelect",
-      "control": "data-view-field=\"reader_order\" aria-label=\"Message order\" value={direction} onChange={e => { setDirection(e.target.value); setActive(-1); options.reveal(null); }}",
-      "binding": "reader_order",
-      "contract": "view.reader_order",
-      "reason": "Bound by the shared view-state primitive."
-    },
-    {
       "key": "2da290a1c01e8a10:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
@@ -4520,11 +4461,20 @@
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
     {
-      "key": "3539ef4de8f33cc5:0",
+      "key": "4385fb8ea3f848bf:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
       "tag": "input",
-      "control": "value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })}",
+      "control": "name=\"dashboardCardTarget\" value={item.id} checked={draft.target === item.id} onChange={() => choose(item.id)}",
+      "contract": "editing",
+      "reason": "Chooses which chart of the dashboard URL the new card shows (Parallelism's ribbon or its catalog chart). An unapplied authoring draft saved only with the card, never a view parameter."
+    },
+    {
+      "key": "4aa192bf83534c86:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "button",
+      "control": "aria-label=\"Create card\" onClick={start}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
@@ -4538,29 +4488,11 @@
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
     {
-      "key": "6a4e9253499dd22d:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "button",
-      "control": "onClick={() => { const url = dashboardCardURL(location.href, catalog, state, where); setDraft({ url, title: dashboardCardTitle(catalog, state), description: dashboardCardDescription(url) }); setError(\"\"); setSaved(false); dialog.current?.showModal(); }}",
-      "contract": "editing",
-      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
-    },
-    {
       "key": "b4d31e6a92c6f43b:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
       "tag": "a",
       "control": "onClick={event => { event.preventDefault(); window.pharosNavigate?.(\"/home\"); }}",
-      "contract": "editing",
-      "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
-    },
-    {
-      "key": "eccae4db9182a984:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "textarea",
-      "control": "value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
     },
@@ -4718,11 +4650,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "a36c713739142100:0",
+      "key": "afca3b99369dd872:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
       "tag": "ChartSelect",
-      "control": "value={view.share ? \"share\" : \"values\"} onChange={share => set({ share: share === \"share\" })}",
+      "control": "value={view.share ? \"share\" : view.nonzero ? \"nonzero\" : \"values\"} onChange={shown => set({ share: shown === \"share\", nonzero: shown === \"nonzero\" })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -5554,15 +5486,6 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
-      "key": "4a005640c466496f:0",
-      "file": "web/src/findings.tsx",
-      "owner": "FindingsList",
-      "tag": "select",
-      "control": "value={route.repo} onChange={event => replaceParams({ repo: event.target.value })} aria-label=\"Show findings for\"",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
       "key": "539c15646ab2ab3f:0",
       "file": "web/src/findings.tsx",
       "owner": "FindingsList",
@@ -5570,6 +5493,15 @@
       "control": "value={counts.open.toLocaleString()} onClick={() => setList(\"open\")}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
+    },
+    {
+      "key": "7825e739c3f59359:0",
+      "file": "web/src/findings.tsx",
+      "owner": "FindingsList",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={route.repo} onChange={repo => replaceParams({ repo })}",
+      "contract": "findings",
+      "reason": "Shared Optimize dashboard control; keeps the existing Efficiency rank binding or native repo route."
     },
     {
       "key": "7d84d07f4e7c6314:0",
@@ -5581,20 +5513,20 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
+      "key": "c2ab6b8270e972bc:0",
+      "file": "web/src/findings.tsx",
+      "owner": "FindingsList",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.findings_rank",
+      "reason": "Shared Optimize dashboard control; keeps the existing Efficiency rank binding or native repo route."
+    },
+    {
       "key": "c2fa2ce28083bc17:0",
       "file": "web/src/findings.tsx",
       "owner": "FindingsList",
       "tag": "Tile",
       "control": "value={counts.watching.toLocaleString()} onClick={() => setList(\"watching\")}",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
-      "key": "f9b46636411523f5:0",
-      "file": "web/src/findings.tsx",
-      "owner": "FindingsList",
-      "tag": "button",
-      "control": "onClick={() => setRank(unit)}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
@@ -5791,6 +5723,153 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
+      "key": "09297a595a9c5edc:0",
+      "file": "web/src/habits.tsx",
+      "owner": "DayDetail",
+      "tag": "button",
+      "control": "onClick={onVacation}",
+      "contract": "settings",
+      "reason": "Marks the selected day as a vacation in the saved habit settings; it does not change the linked view. Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "5668b411f8230e87:0",
+      "file": "web/src/habits.tsx",
+      "owner": "DayDetail",
+      "tag": "input",
+      "control": "aria-label=\"Day\" data-view-field=\"habits_day\" value={day?.day ?? \"\"} onChange={event => onSelect(event.target.value)}",
+      "binding": "habits_day",
+      "contract": "view.habits_day",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "782e951cbf10c182:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "HabitsSettingsPanel",
+      "control": "onChange={update}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "807c26364addf6f8:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "CalendarChart",
+      "control": "onSelect={setSelected}",
+      "contract": "view.habits_day",
+      "reason": "Selects or clears the calendar day through habits_day."
+    },
+    {
+      "key": "a2a903535d89bfce:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={calendar} onChange={setCalendar}",
+      "contract": "view.habits_calendar",
+      "reason": "Writes habits_calendar through useViewState."
+    },
+    {
+      "key": "afce7374875b6312:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={mode} onChange={setMode}",
+      "contract": "view.habits_streak",
+      "reason": "Writes habits_streak through useViewState."
+    },
+    {
+      "key": "bb9fd842bddd5bee:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "DayDetail",
+      "control": "onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))}",
+      "contract": "view.habits_day",
+      "reason": "Selects the calendar day through habits_day; its vacation switch saves to the habit settings (pharos-habits-v1), not the view."
+    },
+    {
+      "key": "d73e684db4c89234:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={weeks} onChange={setWeeks}",
+      "contract": "view.habits_weeks",
+      "reason": "Writes habits_weeks through useViewState."
+    },
+    {
+      "key": "dc058267a3b501a8:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={weekends} onChange={setWeekends}",
+      "contract": "view.habits_weekends",
+      "reason": "Writes habits_weekends through useViewState."
+    },
+    {
+      "key": "7d1a49d4d82e3d7d:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Engaged gap\" value={settings.engagedGap} onChange={event => set(\"engagedGap\", Number(event.target.value))}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "8e1155cb1eb61aee:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "button",
+      "control": "aria-label={`Remove vacation day ${formatDay(day)}`} onClick={() => onChange(toggleVacation(settings, day))}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "d28f5bb046885d3c:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"habits-settings\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "edaf1f43e1dc62ce:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Day starts at\" value={settings.dayStart} onChange={event => set(\"dayStart\", Number(event.target.value))}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "60df250855d67a01:0",
+      "file": "web/src/habits.tsx",
+      "owner": "number",
+      "tag": "input",
+      "control": "value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isInteger(value) && value >= low && value <= high) set(key, value); }}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "81a76fa7daf2c4df:0",
+      "file": "web/src/habits.tsx",
+      "owner": "Punchcard",
+      "tag": "ChartSelect",
+      "control": "value={days} onChange={onDays}",
+      "contract": "view.habits_punchcard_days",
+      "reason": "Writes habits_punchcard_days through useViewState."
+    },
+    {
+      "key": "90e4c03eeaad2a02:0",
+      "file": "web/src/habits.tsx",
+      "owner": "Punchcard",
+      "tag": "ChartSelect",
+      "control": "value={view} onChange={onView}",
+      "contract": "view.habits_punchcard",
+      "reason": "Writes habits_punchcard through useViewState."
+    },
+    {
       "key": "0cc6b34321064cd2:0",
       "file": "web/src/home.tsx",
       "owner": "HomePage",
@@ -5814,15 +5893,6 @@
       "owner": "HomePage",
       "tag": "button",
       "control": "onClick={() => editor.current?.close()}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
-    },
-    {
-      "key": "9e052f92f613288c:0",
-      "file": "web/src/home.tsx",
-      "owner": "HomePage",
-      "tag": "textarea",
-      "control": "value={editDescription} onChange={event => setEditDescription(event.target.value)}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
@@ -5854,13 +5924,13 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
-      "key": "ef1d670d8233da35:0",
-      "file": "web/src/home.tsx",
-      "owner": "HomePage",
-      "tag": "input",
-      "control": "value={editTitle} onChange={event => setEditTitle(event.target.value)}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+      "key": "2973122a62468b5c:0",
+      "file": "web/src/index.tsx",
+      "owner": "<module>",
+      "tag": "a",
+      "control": "onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}",
+      "contract": "view.safety_case",
+      "reason": "Opens the review by its stable record ID while retaining the source Safety table query and route."
     },
     {
       "key": "5e0ed74b4806d0d2:0",
@@ -5908,6 +5978,17 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "00e22af22344e13c:0",
+      "file": "web/src/index.tsx",
+      "owner": "ConversationResultCard",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" aria-label={`Browse turns: ${activitySummary}`} onClick={openBrowser}",
+      "binding": "search_cards",
+      "disclosure": true,
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "0fb8dba2b119b527:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
@@ -5926,6 +6007,17 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "1d97fab11b9f77e9:0",
+      "file": "web/src/index.tsx",
+      "owner": "ConversationResultCard",
+      "tag": "button",
+      "control": "data-view-field=\"search_cards\" aria-label={`${entry.label}. Browse turns: ${activitySummary}`} onClick={openBrowser}",
+      "binding": "search_cards",
+      "disclosure": true,
+      "contract": "view.search_cards",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "4fdbaf71bb0bff42:0",
       "file": "web/src/index.tsx",
       "owner": "ConversationResultCard",
@@ -5937,40 +6029,11 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "65734982c21de1f3:0",
-      "file": "web/src/index.tsx",
-      "owner": "ConversationResultCard",
-      "tag": "button",
-      "control": "data-view-field=\"search_cards\" aria-label={`Browse turns: ${activitySummary}`} onClick={() => { setHasBrowsed(true); setBrowse(true); browserToggle.current?.focus({ preventScroll: true }); }}",
-      "binding": "search_cards",
-      "disclosure": true,
-      "contract": "view.search_cards",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "40b4c7c5f5fca240:0",
       "file": "web/src/index.tsx",
       "owner": "copyText",
       "tag": "textarea",
       "control": "\"textarea\"",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "16ff62de301395a2:0",
-      "file": "web/src/index.tsx",
-      "owner": "DashboardRefresh",
-      "tag": "button",
-      "control": "onClick={() => window.dispatchEvent(new Event(\"pharos:usage-refresh\"))}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "cd30d34dcc371e1b:0",
-      "file": "web/src/index.tsx",
-      "owner": "FindMatch",
-      "tag": "button",
-      "control": "onClick={() => openFindHit(hit)}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
@@ -5991,60 +6054,6 @@
       "control": "onFilter={onFilter}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "11ff01ad75eed9e1:0",
-      "file": "web/src/index.tsx",
-      "owner": "LegacyCarbon",
-      "tag": "CarbonImpact",
-      "control": "onFilter={onFilter}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "85e306ddfb5cfac1:0",
-      "file": "web/src/index.tsx",
-      "owner": "LegacyCarbon",
-      "tag": "AnalysisTrend",
-      "control": "onChange={update} onFilter={onFilter}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "18ca94050c4f2a6e:0",
-      "file": "web/src/index.tsx",
-      "owner": "LegacyUsagePage",
-      "tag": "button",
-      "control": "onClick={() => choose(\"carbon\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "29f01b292c3dea64:0",
-      "file": "web/src/index.tsx",
-      "owner": "LegacyUsagePage",
-      "tag": "button",
-      "control": "onClick={() => choose(\"writing\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "8e668855dc21ba5e:0",
-      "file": "web/src/index.tsx",
-      "owner": "LegacyUsagePage",
-      "tag": "button",
-      "control": "onClick={() => choose(\"tokens\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "9e0760b7f3345f29:0",
-      "file": "web/src/index.tsx",
-      "owner": "LegacyUsagePage",
-      "tag": "button",
-      "control": "onClick={() => setSelectedCall({ id: String(row.id) })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
     },
     {
       "key": "3174087a79eb1d95:0",
@@ -6130,33 +6139,6 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "5bd13eafe1e16d1b:0",
-      "file": "web/src/index.tsx",
-      "owner": "MessageSearchClause",
-      "tag": "MessageTableSearch",
-      "control": "value={value} onApply={(next, table) => commit(next, table)} onClear={() => commit(null)}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "4309cfefe98ee95b:0",
-      "file": "web/src/index.tsx",
-      "owner": "PresetRow",
-      "tag": "button",
-      "control": "onClick={() => onApply(null)}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "73e76249335ef4eb:0",
-      "file": "web/src/index.tsx",
-      "owner": "PresetRow",
-      "tag": "QueryChip",
-      "control": "onClick={() => onApply(preset)}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
       "key": "1336b97a68a7ce43:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
@@ -6202,15 +6184,6 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "36165ae1630cd480:0",
-      "file": "web/src/index.tsx",
-      "owner": "QuerySurface",
-      "tag": "select",
-      "control": "aria-label=\"Query time window\" value={(() => { const choice = readRollingWindow(new URLSearchParams(location.search), dataset); return choice?.mode === \"today\" ? \"today\" : choice?.mode === \"relative\" && choice.days === 1 ? \"24h\" : \"saved\"; })()} onChange={event => { if (event.target.value === \"saved\") return; const selected = readRollingWindow(new URLSearchParams(location.search), dataset); const address = updateQueryWindowURL(queryURL(dataset, api.query, selected), event.target.value === \"today\" ? \"today\" : 1, api.query); const adjusted = queryFromURL(address)!; const params = new URL(address, location.origin).searchParams; const nextURL=new URL(location.href); for (const key of [\"window_mode\", \"window_days\", \"window_field\", \"window_dataset\", \"window_timezone\", \"window_until_field\"]) {const value=params.get(key);if(value)nextURL.searchParams.set(key,value);else nextURL.searchParams.delete(key);} nextURL.searchParams.set(`q_${registryKey}`,params.get(`q_${dataset}`)!); history.replaceState(history.state,\"\",nextURL);window.dispatchEvent(new Event(\"pharos:uri-changed\")); api.setQuery(adjusted.query); }}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
       "key": "4af7943147f725a8:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
@@ -6247,60 +6220,6 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "fd5c56f492ae10ae:0",
-      "file": "web/src/index.tsx",
-      "owner": "RefreshPricesButton",
-      "tag": "button",
-      "control": "onClick={() => void copy()}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "04209a8ead3dd74e:0",
-      "file": "web/src/index.tsx",
-      "owner": "Segmented",
-      "tag": "button",
-      "control": "onClick={() => onChange(option)}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "6c69bd4e084a9019:0",
-      "file": "web/src/index.tsx",
-      "owner": "ShareSelection",
-      "tag": "button",
-      "control": "onClick={() => { setError(\"\"); void window.pharosShareDownload?.(ids.map(String)).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : \"The export failed\")); }}",
-      "contract": "action",
-      "reason": "Export/selection actions are excluded."
-    },
-    {
-      "key": "ed3852f33c1e4b68:0",
-      "file": "web/src/index.tsx",
-      "owner": "ShareSelection",
-      "tag": "button",
-      "control": "onClick={() => void selectAll()}",
-      "contract": "action",
-      "reason": "Export/selection actions are excluded."
-    },
-    {
-      "key": "8f37bed72f7fcdd2:0",
-      "file": "web/src/index.tsx",
-      "owner": "TokenUsage",
-      "tag": "AnalysisTrend",
-      "control": "onChange={update} onFilter={filterChange(api)} onTimeFilter={(change, preset) => { // A chart date selection replaces the page period. Release its scope // before updating the query so normalization cannot restore that limit. onTimeRangeChange?.(); filterChange(api)(change, preset); }}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "95121705c9f0868c:0",
-      "file": "web/src/index.tsx",
-      "owner": "TokenUsage",
-      "tag": "PresetRow",
-      "control": "onApply={preset => { if (preset?.chart) update(preset.chart as Partial<TokenTrendView>); }}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
       "key": "6d045847d0c95152:0",
       "file": "web/src/index.tsx",
       "owner": "TokenUsageDashboard",
@@ -6319,42 +6238,6 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "1387f7e919a70621:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolCallDialog",
-      "tag": "div",
-      "control": "aria-label=\"Tool call details\" onClick={event => event.stopPropagation()}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "655f3c57c40945dc:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolCallDialog",
-      "tag": "button",
-      "control": "onClick={() => { onClose(); window.pharosOpenDetail?.(String(call.workspace_id)); }}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "7eae3eb95aa6c6b7:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolCallDialog",
-      "tag": "button",
-      "control": "onClick={onClose}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "a3861a96c0b77342:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolCallDialog",
-      "tag": "div",
-      "control": "onClick={onClose}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
       "key": "cf311fd806d28d81:0",
       "file": "web/src/index.tsx",
       "owner": "ToolLedgerBanner",
@@ -6362,96 +6245,6 @@
       "control": "onClick={() => void build()}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "381a726f57f64382:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => setSelected(String(row.tool_call_id))}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "5090d6d0993307ca:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => drill(row)}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "bb71edd0b72dea52:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => choose(\"skills\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "bdfebcc719b8ffc3:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => choose(\"summary\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "d35fd326a684db4a:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => setSelected(String(row.id))}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "dee483a895bee1f6:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => choose(\"calls\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "ee45e5823d339124:0",
-      "file": "web/src/index.tsx",
-      "owner": "ToolsPage",
-      "tag": "button",
-      "control": "onClick={() => openFindHit({ workspace_id: String(row.workspace_id), conversation_id: String(row.conversation_id), message_id: String(row.body_message_id ?? row.evidence_message_id), title: String(row.title), count: 1 })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "25a839fa5766e64d:0",
-      "file": "web/src/index.tsx",
-      "owner": "UserMessageSurface",
-      "tag": "button",
-      "control": "onClick={() => api.refresh()}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "87d878a1d0523dab:0",
-      "file": "web/src/index.tsx",
-      "owner": "UserMessageSurface",
-      "tag": "button",
-      "control": "onClick={() => rerun(api, { search, value: found.search!.next_cursor })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "a2e3d79e1c5a9674:0",
-      "file": "web/src/index.tsx",
-      "owner": "UserMessageSurface",
-      "tag": "button",
-      "control": "onClick={() => rerun(api, { search: \"\", value: \"\" })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
     },
     {
       "key": "0559fce65baceae3:0",
@@ -6472,229 +6265,55 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "1eaa55d4d49e8164:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "ChartSelect",
-      "control": "value={view.scope} onChange={scope => update({ scope })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
+      "key": "635b9b9fda13d8e8:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "CrashText",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={key}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "207e0305e1d246f1:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "ScaleControl",
-      "control": "value={view.scale} onChange={scale => update({ scale })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
+      "key": "071bcb45a9aa4180:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "Events",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={key}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "81eb07146c860c20:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "RangeControl",
-      "control": "onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={(from, to, preset) => onFilter(current => withTimeRange(current, writingTime, from, to, preset), preset)}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "8491bbe7e09a3c44:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "StackedColumns",
-      "control": "onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "a184525976156505:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "RollingControl",
-      "control": "value={view.rollingPeriods} onChange={rollingPeriods => update({ rollingPeriods })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "b46a29ea0d46f569:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "ChartSelect",
-      "control": "value={view.split} onChange={next => update({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "d670b5962dd45cf0:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "DisplayControl",
-      "control": "value={view.display} onChange={display => update({ display })}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "faf67f631e109344:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingPanel",
-      "tag": "PeriodControl",
-      "control": "onChange={update}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "04b846608a7b0988:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingUsage",
-      "tag": "Segmented",
-      "control": "value={rows} onChange={chooseRows}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "170442c5f2e9dae3:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingUsage",
-      "tag": "MessageMix",
-      "control": "onFilter={filterChange(api)}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "297c35b363b3228b:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingUsage",
+      "key": "01cbf11db1ede9ec:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "LogsPage",
       "tag": "button",
-      "control": "onClick={() => chooseView(\"table\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
+      "control": "onClick={refresh}",
+      "contract": "editing",
+      "reason": "Refresh re-reads the logs and Copy report for an agent copies text: actions, not view state. The source is log_source; disclosures use ViewDisclosure."
     },
     {
-      "key": "68d26964d7389b60:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingUsage",
+      "key": "24fc1d2d7d7e7ae5:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "Overview",
       "tag": "button",
-      "control": "onClick={() => chooseView(\"text\")}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
+      "control": "onClick={() => void copyReport()}",
+      "contract": "editing",
+      "reason": "Refresh re-reads the logs and Copy report for an agent copies text: actions, not view state. The source is log_source; disclosures use ViewDisclosure."
     },
     {
-      "key": "c8c96a1645f40fe4:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingUsage",
-      "tag": "button",
-      "control": "onClick={() => drill(row)}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "fed0ab40288de5f0:0",
-      "file": "web/src/index.tsx",
-      "owner": "WritingUsage",
-      "tag": "WritingPanel",
-      "control": "onFilter={filterChange(api)}",
-      "contract": "legacy",
-      "reason": "Legacy view-state migration is explicitly deferred."
-    },
-    {
-      "key": "167c3030ecac74aa:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "DashboardSelect",
-      "control": "aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "28b31ea4f0f20ecd:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Activity repository\" value={scope.repository} onChange={event => filter({ repository: event.target.value })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "74a2520735f387c4:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "button",
-      "control": "onClick={() => update({ view: key })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "a04de5aa2e26d649:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Activity model\" value={scope.model} onChange={event => filter({ model: event.target.value })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "a217d747d436fb2b:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Activity period\" value={scope.days} onChange={event => filter({ days: Number(event.target.value) })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "fe8a43fd544caa31:0",
-      "file": "web/src/machine-activity.tsx",
-      "owner": "MachineActivity",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Activity provider\" value={scope.provider} onChange={event => filter({ provider: event.target.value })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "1ea686699fc83b04:0",
-      "file": "web/src/machine-analytics-table.tsx",
-      "owner": "MachineAnalyticsTable",
-      "tag": "button",
-      "control": "onClick={() => filter(groupFilters(row.fact, grouping))}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "4b7b471d126b0493:0",
-      "file": "web/src/machine-analytics-table.tsx",
-      "owner": "MachineAnalyticsTable",
-      "tag": "QueryBuilder",
-      "control": "",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "7ddbe43ac00e619e:0",
-      "file": "web/src/machine-analytics-table.tsx",
-      "owner": "MachineAnalyticsTable",
-      "tag": "MetricsPanel",
-      "control": "onInspect={(bucket, clause) => { const rows = inspectBucketQuery(api.query, bucket, clause, schema); if (rows) api.setQuery(rows); }}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "be28cb059f71d1ab:0",
-      "file": "web/src/machine-analytics-table.tsx",
-      "owner": "MachineAnalyticsTable",
-      "tag": "DataTable",
-      "control": "onQueryChange={api.setQuery}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "efae5cebc8b42193:0",
-      "file": "web/src/machine-analytics-table.tsx",
-      "owner": "MachineAnalyticsTable",
-      "tag": "button",
-      "control": "onClick={() => filter(groupFilters(row.fact, grouping), true)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+      "key": "fd3969f8d6594f2d:0",
+      "file": "web/src/logs-page.tsx",
+      "owner": "Runs",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`logs:${source}:run:${run.started_at ?? \"earlier\"}`} defaultOpen={index === 0 || run.crashed}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "809445575b482999:0",
@@ -6711,143 +6330,6 @@
       "owner": "ZoomNavigation",
       "tag": "button",
       "control": "aria-label=\"Back one step\" onClick={onBack}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "3abd0c5d497bc045:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "aria-label={`${group.key} · ${kind.label}: ${timeLabel(duration)}, ${percent(duration, group.duration)}`} onClick={() => filter([...machineWhere({ days: 0, repository: group.key, provider: \"\", model: \"\" }, window), { field: \"activity\", op: \"=\", value: kind.id }])}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "459e3f9e16329bfc:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => onRepository(repository)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "8c34e6240865923f:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => setMeasure(\"share\")}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "9a138dbacb73089a:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => setMeasure(\"hours\")}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "b4230493e933ecec:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Trend command family\" value={operation} onChange={event => event.target.value ? filter([{ field: \"operation_key\", op: \"=\", value: event.target.value }]) : restore(where.filter(term => \"any\" in term || term.field !== \"operation_key\"))}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "b44709cc2703e580:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={clear}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "b8d5399df513af1e:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Trend measure\" value={metric} onChange={event => setMetric(event.target.value as TimeMetric)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "bc825b7afac17f08:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => filter([{ field: \"activity\", op: \"=\", value: kind.id }], false, true)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "d516ddeae252c053:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Analytics grouping\" value={grouping} onChange={event => setGrouping(event.target.value as MachineGrouping)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "ecba41eda0304e68:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => api.refresh()}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "ecba41eda0304e68:1",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => api.refresh()}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "f133e7b8b3349b9d:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => document.getElementById(\"machineRawCalls\")?.scrollIntoView({ behavior: \"smooth\" })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "f4a107185d2da9e2:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "ViewDisclosure",
-      "control": "viewKey=\"machine:methodology\"",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "f70936d71de07004:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "MachineTimeDashboard",
-      "tag": "button",
-      "control": "onClick={() => filter(machineWhere({ days: 0, repository: group.key, provider: \"\", model: \"\" }, window), false, true)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "95f147d59a135676:0",
-      "file": "web/src/machine-time.tsx",
-      "owner": "TimeTrend",
-      "tag": "circle",
-      "control": "aria-label={`Inspect calls on ${dates[index]}: ${label(value)}${metric === \"average\" ? \" per timed run\" : \"\"}`} onClick={() => onDay(dates[index])} onKeyDown={event => { if (event.key === \"Enter\" || event.key === \" \") { event.preventDefault(); onDay(dates[index]); } }}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6870,44 +6352,6 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "2fcf394a3528e329:0",
-      "file": "web/src/message-table-search.tsx",
-      "owner": "MessageTableSearch",
-      "tag": "SearchOrderControl",
-      "control": "onChange={setOrder}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "401e30621d939f7f:0",
-      "file": "web/src/message-table-search.tsx",
-      "owner": "MessageTableSearch",
-      "tag": "SearchFilters",
-      "control": "onChange={setWhere}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "44a270ca285e6f02:0",
-      "file": "web/src/message-table-search.tsx",
-      "owner": "MessageTableSearch",
-      "tag": "TextSearchEditor",
-      "control": "value={value} onKind={() => {}} onClear={onClear} onApply={next => onApply(next, { where, orderBy: order })}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "74a2b7ae3e65a048:0",
-      "file": "web/src/message-table-search.tsx",
-      "owner": "MessageTableSearch",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={`query:${api.schema?.name ?? \"messages\"}:layout`}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "1cd6c49e2f9528e1:0",
       "file": "web/src/nested-pages.tsx",
       "owner": "PageLink",
@@ -6915,6 +6359,51 @@
       "control": "onClick={event => { onClick?.(event); const target = localPageNavigation(href, location.href, { ...event, target: event.currentTarget.target, download: event.currentTarget.hasAttribute(\"download\") }); if (!target || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate(target); }}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "ffd6c787f400180f:0",
+      "file": "web/src/optimize-controls.tsx",
+      "owner": "OptimizePlaceFilter",
+      "tag": "select",
+      "control": "data-view-field={viewField} value={value} onChange={event => onChange(event.target.value)} aria-label={label}",
+      "contract": "optimize-dashboard",
+      "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
+    },
+    {
+      "key": "fef9cd82131aa37b:0",
+      "file": "web/src/optimize-controls.tsx",
+      "owner": "OptimizeRank",
+      "tag": "button",
+      "control": "onClick={() => onChange(option)}",
+      "contract": "optimize-dashboard",
+      "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
+    },
+    {
+      "key": "2ea640480a8d3ed2:0",
+      "file": "web/src/page-find.ts",
+      "owner": "button",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Page Find buttons: Match case and Regular expression write find_case/find_regex; Previous/Next/Expand all/Close and note actions navigate matches, open the disclosures holding them (through their own URL state) or close Find. The move grip drags the bar; its position is transient."
+    },
+    {
+      "key": "63e5a46ada2b07b3:0",
+      "file": "web/src/page-find.ts",
+      "owner": "showBar",
+      "tag": "input",
+      "control": "\"input\"",
+      "contract": "view.find",
+      "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
+      "key": "502369976da84683:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "input",
+      "control": "aria-label=\"Title\" value={title} onChange={event => editing.onTitle(event.target.value)}",
+      "contract": "editing",
+      "reason": "The card editor's title, edited in place on the card. An unapplied authoring draft saved only with the card."
     },
     {
       "key": "518523774b3bb3cd:0",
@@ -6953,6 +6442,24 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
+      "key": "a7dc844b99e1b790:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "select",
+      "control": "aria-label=\"Category\" value={category} onChange={event => editing.onCategory!(event.target.value as QueryCategory)}",
+      "contract": "editing",
+      "reason": "The card editor's category, chosen in place on the card. An unapplied authoring draft saved only with the card."
+    },
+    {
+      "key": "c4e50ff52faed8b9:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "input",
+      "control": "aria-label=\"Call to action\" value={actionLabel ?? \"\"} onChange={event => editing.onAction!(event.target.value)}",
+      "contract": "editing",
+      "reason": "The card editor's call to action, edited in place on the card. An unapplied authoring draft saved only with the card."
+    },
+    {
       "key": "d09bdc3a13ea798d:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -6969,6 +6476,15 @@
       "control": "aria-label={`Remove ${title}`} onClick={onRemove}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
+      "key": "fb5255a0d019ca7c:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "textarea",
+      "control": "aria-label=\"Description\" value={description} onChange={event => editing.onDescription(event.target.value)}",
+      "contract": "editing",
+      "reason": "The card editor's description, edited in place on the card. An unapplied authoring draft saved only with the card."
     },
     {
       "key": "7280e16d4177626c:0",
@@ -7154,6 +6670,140 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "0a853d8dd47f9c38:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_remove\" }, \"Removed from risky action prompt.\")}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "2621838d3b1e866f:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_add\" }, `Added to risky action prompt for ${card.target_label}.`)}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "9a4c889d09545973:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Dismissed. You can bring it back at any time.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "9f6fc49bad424044:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "0b02d959799fef64:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(\"\")}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "18af2a203d110cda:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`safety:${detail.id}:evidence:${entry.id}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "523d6cb74c489e92:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.safety_rank",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without changing review records."
+    },
+    {
+      "key": "8db372c814d2d994:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={place} onChange={setPlace}",
+      "contract": "view.safety_place",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without changing review records."
+    },
+    {
+      "key": "a9646855ca0dcbb5:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"safety:coverage\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "df39f809cdc2c8c1:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "df39f809cdc2c8c1:1",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
+      "binding": "safety_case",
+      "contract": "view.safety_case",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e0307aedafa343ef:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyPage",
+      "tag": "button",
+      "control": "data-view-field=\"safety_list\" onClick={() => setList(state)}",
+      "binding": "safety_list",
+      "contract": "view.safety_list",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "2cdbc38b92746f90:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySettings",
+      "tag": "input",
+      "control": "checked={rule.enabled} onChange={event => void save(rule.id, event.target.checked)}",
+      "contract": "settings",
+      "reason": "Saves library-wide discovery settings."
+    },
+    {
+      "key": "db9d7e4b52e357a6:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySettings",
+      "tag": "button",
+      "control": "onClick={() => void refresh()}",
+      "contract": "editing",
+      "reason": "Requests an explicit background refresh; does not change view state."
+    },
+    {
       "key": "0f43a5c72d8a7da5:0",
       "file": "web/src/search-composer.tsx",
       "owner": "HomeSearch",
@@ -7308,11 +6958,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "81f40ca237262854:0",
+      "key": "3f3b82cf10958266:0",
       "file": "web/src/search-help.tsx",
       "owner": "SearchHelp",
       "tag": "button",
-      "control": "aria-label={`${label} help`} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}",
+      "control": "aria-label={text ? undefined : `${label} help`} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={() => setOpen(false)} onClick={show}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -8153,20 +7803,11 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "06de8071311bc23f:0",
+      "key": "0b44ca3da1ae991b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
       "tag": "input",
-      "control": "value={draft.email} onChange={e => update({ email: e.target.value })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "0c97059d4406d606:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "button",
-      "control": "onClick={() => { update({ email: \"\", remember: false }); localStorage.removeItem(contactKey); }}",
+      "control": "value={email} onChange={e => { setEmail(e.target.value); saveContact(e.target.value.trim()); }}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8180,11 +7821,20 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "214dd45712932f85:0",
+      "key": "21c546ddb1da3f5d:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "input",
-      "control": "checked={logs} onChange={() => void collect()}",
+      "tag": "details",
+      "control": "",
+      "contract": "editing",
+      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+    },
+    {
+      "key": "22fa336466ad9c3b:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void keepDraft(() => window.pharosNavigate?.(\"/settings/preferences\"))} aria-label=\"Contact email settings\"",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8194,33 +7844,6 @@
       "owner": "Composer",
       "tag": "button",
       "control": "onClick={() => void keepDraft()} aria-label=\"Close feedback\"",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "49f738c3387665ad:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => update({ kind: e.target.value as Draft[\"kind\"] })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "5db26489d5d87a77:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "button",
-      "control": "onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "6b58402d298c6458:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "input",
-      "control": "checked={draft.remember} onChange={e => update({ remember: e.target.checked })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8252,11 +7875,29 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "d50ef63da5300b1e:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "select",
+      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (kind === \"bug\" && !logs) void includeLogs(true); }}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
       "key": "d548e27480346e5b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
       "tag": "button",
       "control": "onClick={() => void keepDraft()}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "e28978a9f272d38d:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))} aria-label={`Exclude ${a.label} from this report`}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -8270,13 +7911,13 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "f152a1ffe5ba736d:0",
+      "key": "eefcab6e11e3e40c:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "details",
-      "control": "open",
-      "contract": "editing",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
+      "tag": "input",
+      "control": "checked={logs} onChange={e => void includeLogs(e.target.checked)}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
       "key": "57c08b857d8535fe:0",
@@ -8472,6 +8113,15 @@
       "reason": "Native item properties and source navigation; retained payload disclosures use stable dataset/row/field keys."
     },
     {
+      "key": "1ec13b514454e60a:0",
+      "file": "web/src/usage-workspace.tsx",
+      "owner": "UsageWorkspace",
+      "tag": "button",
+      "control": "onClick={() => window.dispatchEvent(new Event(\"pharos:usage-refresh\"))}",
+      "contract": "action",
+      "reason": "Refresh reruns the open dashboard's queries; it changes no view state."
+    },
+    {
       "key": "7e93b199393c67fc:0",
       "file": "web/src/usage-workspace.tsx",
       "owner": "UsageWorkspace",
@@ -8479,24 +8129,6 @@
       "control": "onClick={() => setAttempt(value => value + 1)}",
       "contract": "action",
       "reason": "Retry resolves the retained card source again and replaces the URL with its canonical dashboard state; the attempt count is transient."
-    },
-    {
-      "key": "ba8a589e824239d9:0",
-      "file": "web/src/view-attention.ts",
-      "owner": "button",
-      "tag": "button",
-      "control": "\"button\"",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
-      "key": "0cb0a2278b863d45:0",
-      "file": "web/src/view-attention.ts",
-      "owner": "findBox",
-      "tag": "input",
-      "control": "\"input\"",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
       "key": "a77d7bde4338f61f:0",

@@ -320,7 +320,7 @@ func (site *siteMap) completeViewArguments(input map[string]any) map[string]any 
 	out := map[string]any{}
 	for name, value := range input {
 		field := site.ViewContract.Fields[name]
-		if field.Kind == "enum" || slices.Contains([]string{"reader_page", "delegation_page", "sidebar_width"}, name) {
+		if field.Kind == "enum" || slices.Contains([]string{"delegation_page", "sidebar_width"}, name) {
 			if n, ok := value.(float64); ok && n == float64(int64(n)) {
 				value = strconv.FormatInt(int64(n), 10)
 			}
@@ -328,7 +328,7 @@ func (site *siteMap) completeViewArguments(input map[string]any) map[string]any 
 				value = strconv.Itoa(n)
 			}
 		}
-		if name == "search_state" || name == "reader_search" {
+		if name == "search_state" {
 			if draft, ok := value.(map[string]any); ok && len(draft) > 0 {
 				value = site.completeSearchDraft(name, draft)
 			}

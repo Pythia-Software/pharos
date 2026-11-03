@@ -14,7 +14,8 @@ import { Icon } from "./icons";
 import { preferences } from "./preferences";
 import { invalidateCardPreviews, loadCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
-import { collectDurableQuery, migrateSavedQueries, readBookmarks } from "./bookmarks";
+import { migrateSavedQueries, readBookmarks } from "./bookmarks";
+import { collectCardTemplate } from "./dashboard-card-model";
 import { PageLink } from "./nested-pages";
 import { focusPageContent } from "./page-focus";
 import "./card-library.css";
@@ -69,7 +70,7 @@ export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, Fie
   }, [active]);
   async function keep(item: QuerySuggestion) {
     try {
-      await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
+      await collectCardTemplate(item);
       setMessage(`Collected “${item.title}”.`);
     } catch (error) { setMessage(String(error)); }
   }

@@ -1,7 +1,7 @@
 import { MAX_HOST_QUERY_VALUE_LENGTH, parseHostQueryState, type FieldDef, type HostQueryState } from "@pythia-software/query-table-core";
 import type { HostQueryOptions } from "@pythia-software/query-table-react";
 import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest, type RecordKeywordSearch } from "./record-keyword-model";
-import { emptyScope, refreshSearchToday, readTextSearch, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
+import { emptyScope, refreshSearchToday, readTextSearch, scopes, textFindParameters, type TextCondition, type TextSearchDraft } from "./text-search-model";
 import type { SearchResultsView } from "./search-results-view-model";
 
 // Clauses Pharos runs itself, registered with Query Table as host query state
@@ -52,11 +52,14 @@ const stateOf = (params: Record<string, string>): HostQueryState => ({ version: 
 
 export function recordKeywordHostQuery(dataset: string, fields: FieldDef[]): HostQueryOptions {
   const parameter = recordKeywordParameter(dataset);
+  // The removed Human messages table saved its search as message_query.
+  const owned = dataset === "writing_messages" ? [parameter, "message_query"] : [parameter];
   return {
-    ownedParameters: [parameter],
+    ownedParameters: owned,
     defaults: emptyHostState(),
     normalize(state) {
-      const token = readParams(state, [parameter]).get(parameter);
+      const params = readParams(state, owned), older = params.get("message_query");
+      const token = params.get(parameter) ?? (older === undefined ? undefined : canonicalRecordKeyword(messageKeyword(older)));
       if (token === undefined) return emptyHostState();
       const { value, error } = readRecordKeywordSearch(token, fields);
       if (!value) throw new Error(error);
@@ -64,6 +67,20 @@ export function recordKeywordHostQuery(dataset: string, fields: FieldDef[]): Hos
       return stateOf({ [parameter]: bounded(canonicalRecordKeyword(value), "keyword filter") });
     },
   };
+}
+// An older Human messages search becomes a keyword filter on the message's
+// text when it means the same: the whole user message, matched exactly. A
+// span class (typed, pasted, …), a date range or fuzzy matching has no
+// keyword-filter equivalent, so it is refused rather than broadened.
+export function messageKeyword(token: string): RecordKeywordSearch {
+  const text = readTextSearch(new URLSearchParams({ text_builder: token }));
+  if (text.error) throw new Error(text.error);
+  const { surface, ...rest } = text.draft.scope, { surface: _, ...empty } = emptyScope();
+  const unsupported = !["user", "prose"].includes(surface) ? `searches only ${scopes.find(scope => scope.surface === surface)?.label.toLowerCase() ?? surface}`
+    : JSON.stringify(rest) !== JSON.stringify(empty) ? "limits its own dates or sources"
+    : text.draft.fuzzy ? "uses fuzzy matching" : "";
+  if (unsupported) throw new Error(`This saved Human messages search ${unsupported}, which a keyword filter on the message text cannot keep. Remove the search and add a keyword filter instead.`);
+  return { field: "text", draft: { ...text.draft, scope: emptyScope(), dateWindow: undefined } };
 }
 export function canonicalRecordKeyword(search: RecordKeywordSearch): string {
   return `{"field":${JSON.stringify(search.field)},"draft":${canonicalDraft(search.draft)}}`;
@@ -83,6 +100,8 @@ export function recordKeywordFind(state: HostQueryState | undefined, dataset: st
 }
 
 // ---- Search (Library): a message, file or URL search and the result view. ----
+// Results show as conversations unless view=table; older view=conversation
+// links still read, and the address bar drops the now-default value.
 
 export type LibrarySearchKind = "text" | "file" | "url";
 export type LibraryHost = { kind: LibrarySearchKind; text: TextSearchDraft | null; file: string; fileCase: boolean; view: SearchResultsView };
@@ -98,13 +117,13 @@ export function libraryHostState(host: LibraryHost): HostQueryState {
     params.kind = host.kind; params.search = host.file.trim();
     if (host.fileCase) params.case = "1";
   }
-  if (host.view === "conversation") params.view = "conversation";
+  if (host.view === "table") params.view = "table";
   return stateOf(params);
 }
 export function readLibraryHost(state: HostQueryState | undefined): LibraryHost {
   const params = new URLSearchParams(Object.entries(state?.params ?? {}).flatMap(([name, values]) => values.map(value => [name, value])));
   const kind = params.get("kind") === "file" || params.get("kind") === "url" ? params.get("kind") as LibrarySearchKind : "text";
-  const view: SearchResultsView = params.get("view") === "conversation" ? "conversation" : "table";
+  const view: SearchResultsView = params.get("view") === "table" ? "table" : "conversation";
   if (kind !== "text") return { kind, text: null, file: params.get("search") ?? "", fileCase: params.get("case") === "1", view };
   const text = params.has("text_builder") || params.has("search") ? readTextSearch(params) : null;
   return { kind, text: text?.active && !text.error ? text.draft : null, file: "", fileCase: false, view };
@@ -114,7 +133,7 @@ export const libraryHostQuery: HostQueryOptions = {
   defaults: emptyHostState(),
   normalize(state) {
     const params = readParams(state, libraryHostParameters);
-    const kind = params.get("kind") ?? "text", view = params.get("view") ?? "table";
+    const kind = params.get("kind") ?? "text", view = params.get("view") ?? "conversation";
     if (!["text", "file", "url"].includes(kind)) throw new Error("This search has an unknown kind.");
     if (!["table", "conversation"].includes(view)) throw new Error("This search has an unknown result view.");
     if (params.has("case") && !["0", "1"].includes(params.get("case")!)) throw new Error("This search's case setting could not be read.");
@@ -134,33 +153,14 @@ export function libraryFind(state: HostQueryState | undefined): string {
   if (host.fileCase) params.set("find_case", "1");
   return params.toString();
 }
+/** Adding a content search shows its matches as conversations. Editing or
+ * removing one keeps the chosen view, so Table stays a deliberate choice. */
+export function changeLibrarySearch(state: HostQueryState | undefined, change: Partial<LibraryHost>): HostQueryState {
+  const next = libraryHostState({ ...readLibraryHost(state), ...change });
+  return !libraryFind(state) && libraryFind(next) ? libraryHostState({ ...readLibraryHost(next), view: "conversation" }) : next;
+}
 export const withoutLibrarySearch = (state: HostQueryState | undefined): HostQueryState =>
   libraryHostState({ ...readLibraryHost(state), kind: "text", text: null, file: "", fileCase: false });
-
-// ---- Older Human messages table: its message search (message_query). ----
-
-export const messageHostQuery: HostQueryOptions = {
-  ownedParameters: ["message_query"],
-  defaults: emptyHostState(),
-  normalize(state) {
-    const token = readParams(state, ["message_query"]).get("message_query");
-    if (token === undefined) return emptyHostState();
-    const text = readTextSearch(new URLSearchParams({ text_builder: token }));
-    if (text.error) throw new Error(text.error);
-    return withMessageSearch(text.active ? text.draft : null);
-  },
-};
-export function readMessageSearchHost(state: HostQueryState | undefined): TextSearchDraft | null {
-  const token = state?.params.message_query?.[0];
-  const text = token ? readTextSearch(new URLSearchParams({ text_builder: token })) : null;
-  return text?.active && !text.error ? text.draft : null;
-}
-export const withMessageSearch = (draft: TextSearchDraft | null): HostQueryState =>
-  draft ? stateOf({ message_query: bounded(canonicalDraft(draft), "search") }) : emptyHostState();
-export const messageFind = (state: HostQueryState | undefined): string => {
-  const draft = readMessageSearchHost(state);
-  return draft ? textFindParameters(draft) : "";
-};
 
 // Renew a calendar search at execution boundaries, never while paging a batch.
 export function refreshTodayHost(state: HostQueryState | undefined, clock = new Date(), onlyNewDay = false): HostQueryState | undefined {
@@ -168,10 +168,6 @@ export function refreshTodayHost(state: HostQueryState | undefined, clock = new 
     const host = readLibraryHost(state);
     const text = host.text && refreshSearchToday(host.text, clock, onlyNewDay);
     if (text && text !== host.text) return libraryHostState({ ...host, text });
-  } else if (state?.params.message_query) {
-    const draft = readMessageSearchHost(state);
-    const next = draft && refreshSearchToday(draft, clock, onlyNewDay);
-    if (next && next !== draft) return withMessageSearch(next);
   }
   return state;
 }

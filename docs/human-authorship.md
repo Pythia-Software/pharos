@@ -2,6 +2,8 @@
 
 **Your writing** in Usage estimates how much text you typed (or dictated) into agent chats. Transcripts store a lot under the "user" role that you did not write: harness instructions, one-click prompts, attachment references, pasted logs, agent output copied from another chat, and prompts sent by scripts. Each user message is split into spans, and each span gets a category and the reason it was assigned. The totals are the sum of those spans, and the transcript reader shows the spans for each message ("11 words typed · 219 from elsewhere"). A copied or re-sent span links to the conversation and message its text came from. The classification changes nothing else: messages are stored and displayed as the source recorded them.
 
+The reader and a library card's Browse preview highlight typed spans while their Highlight row's **Human writing** box is checked, the default (view field `reader_writing`; [In the reader](local-labeler.md#in-the-reader) describes the row).
+
 The classification is derived from retained messages into `message_authorship` (one row per user message, with characters and words per category). Manual **Index changes** and **Capture & index** refresh it when its inputs changed and wait for it to finish. Scheduled indexing leaves it pending; the background schedule's **Your writing** item then rebuilds it on its cadence (Hourly while a rebuild takes minutes; see [background updates](background-work.md#11-background-updates)), so Usage keeps the last classified totals until then. Separate source/captured-file index actions also request a background rebuild. Opening Usage or Settings builds it only when it is missing or was classified by an older version of the rules. Record writes invalidate authorship independently of tool usage, including messages containing only user text. Rebuild cost depends on both user messages and retained agent/tool text; sources stream through existing time indexes, and the agent comparison corpus is evicted outside the seven-day window.
 
 ## Which messages count
@@ -118,8 +120,10 @@ it, reused-line origins and their first distinct conversations, template
 session/day counts, last user-turn times, and question-form provenance.
 Triggers record the earliest changed input time, including user-only messages.
 A normal append reads and classifies only that suffix, looking up historical
-candidates and lines as needed. It reuses launches when all changed inputs
-postdate every existing headless start. Reply replay includes any idle gap
+candidates and lines as needed. It reuses stored launches when no headless
+run starts after the watermark. When new runs arrive, it derives launches
+again and keeps the suffix path only if every stored launch is unchanged; the
+new links are stored with the suffix. Reply replay includes any idle gap
 since the previous user turn, so question forms remain recognizable beyond
 the seven-day copied-output window. Every conversation's replayed questions
 are saved with its earlier history, even when only another conversation has
@@ -144,6 +148,12 @@ changed-data rebuild populates the extra derived tables;
 its production storage cost has not yet been measured.
 Checkpoint version 2 forces one full rebuild of version 1 state, which may
 have lost question history or restored an incompatible mirror message anchor.
+Checkpoint version 3 fingerprints only the conversations that started by the
+watermark, plus any linked to another conversation or parent to an earlier
+one, so a new conversation, workspace or run no longer forces the full
+fallback. A new conversation dates its dirty evidence by its start rather than
+by the time it was indexed. Upgrading to version 3 runs one full pass (about four minutes on
+a 110 GB catalog).
 
 Checkpoint publication is chunked too. Its version is invalidated before
 output writes and restored with the generation only after all state writes

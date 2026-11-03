@@ -386,6 +386,8 @@ func (s *Server) stopOperation(w http.ResponseWriter, body map[string]any) {
 		stopped = s.Catalog.stopLibraryRefresh()
 	case "backup":
 		stopped = s.backups.stop()
+	case "work":
+		stopped = op.stopWork()
 	case "cloud":
 		id := view.Spec.Legacy
 		if view.Spec.Kind == "cloud.connect" {

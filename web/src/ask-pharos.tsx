@@ -2,10 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { HomeSearch } from "./search-composer";
-import { createAskChartPreviews, type AskChartPreviews } from "./ask-chart-preview";
+import { createAskChartPreviews } from "./ask-chart-preview";
+import { createAskWorkPreviews } from "./ask-work-preview";
+import { combineAskPreviews, type AskLinkPreviews } from "./ask-link-previews";
 import type { QueryDataset } from "./query-links";
 
-declare global { interface Window { initPharosAsk?: (root: HTMLElement, options?: { chartPreviews?: AskChartPreviews }) => () => void; } }
+declare global { interface Window { initPharosAsk?: (root: HTMLElement, options?: { previews?: AskLinkPreviews }) => () => void; } }
 type Selection = { provider: string; model: string; effort: string };
 type Model = { id: string; label: string; efforts: string[]; default: boolean };
 type Provider = { id: string; models: Model[]; defaultSelection?: Selection };
@@ -45,7 +47,7 @@ export function AskPharosSearch({ schemas }: { schemas: Record<QueryDataset, Fie
     if (!markup || !mount.current || !window.initPharosAsk) return;
     const root = mount.current.querySelector<HTMLElement>("#pharos-ask")!;
     setSearchHost(root.querySelector<HTMLElement>(".pharos-search-host"));
-    return window.initPharosAsk(root, { chartPreviews: createAskChartPreviews(schemas) });
+    return window.initPharosAsk(root, { previews: combineAskPreviews(createAskChartPreviews(schemas), createAskWorkPreviews()) });
   }, [markup, schemas]);
   return <>
     {!markup && homeHost && createPortal(<HomeSearch schema={schema} />, homeHost)}

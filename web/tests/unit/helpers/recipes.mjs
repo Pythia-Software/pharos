@@ -12,6 +12,7 @@ import findings from "../../../../schemas/findings.schema.json";
 import library from "../../../../schemas/library.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import parallelism from "../../../../schemas/parallelism.schema.json";
+import rhythm from "../../../../schemas/rhythm.schema.json";
 import skillUsages from "../../../../schemas/skill_usages.schema.json";
 import tl1Attempts from "../../../../schemas/tl1_attempts.schema.json";
 import toolCalls from "../../../../schemas/tool_calls.schema.json";
@@ -19,12 +20,14 @@ import tools from "../../../../schemas/tools.schema.json";
 import usage from "../../../../schemas/usage.schema.json";
 import writing from "../../../../schemas/writing.schema.json";
 import writingMessages from "../../../../schemas/writing_messages.schema.json";
+import agentEvents from "../../../../schemas/agent_events.schema.json";
+import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 
 export { core, instantiateRecipe, queryRecipes, cardCoverQuery };
 
 // Every dataset the repository defines a schema for.
 export const schemas = Object.fromEntries(Object.entries({
-  model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages,
+  model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages,
 }).map(([dataset, document]) => [dataset, core.loadSchema(document)]));
 export { execution, queryCapabilities as capabilities } from "../../support/query-server.mjs";
 export const day = 86400000;

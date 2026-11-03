@@ -83,6 +83,13 @@ test('timeline lines preserve gaps in non-additive measures and remain visible f
   const buckets = [{ values: { a: 10 } }, { values: {} }, { values: { a: 20 } }];
   assert.equal(timelinePath(buckets, 'a', y, false).match(/M /g).length, 2, 'missing ratios break the line');
   assert.equal(timelinePath(buckets, 'a', y).match(/M /g).length, 1, 'idle amounts stay connected');
+  const passed = timelinePath(buckets, 'a', y, true, true);
+  assert.equal(passed.match(/M /g).length, 1, 'without zeroes, a line passes over a missing value');
+  assert.equal(passed.split(' ').filter(part => part === 'L').length, 1, 'and draws nothing at it');
+  // A series left with one value among several periods still draws.
+  const single = timelinePath([{ values: { a: 10 } }, { values: { b: 20 } }], 'a', y, true, true);
+  assert.equal(single, 'M 0 90 L 500 90', 'across its own period');
+  assert.equal(timelinePath([{ values: { a: 10 } }, {values: {} }, { values: { a: 20 } }], 'a', y, false).match(/ L /g).length, 2, 'as does each lone point of a broken line');
   const lone = timelinePath(buckets.slice(0, 1), 'a', y);
   assert.ok(lone.includes(' L '), 'one period draws a segment');
   assert.ok(!/NaN|Infinity/.test(lone));

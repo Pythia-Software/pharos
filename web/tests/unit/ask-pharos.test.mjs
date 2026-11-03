@@ -1,5 +1,7 @@
 import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
 import { askChartPreviewJob, onAskChartRefresh } from '../../src/ask-chart-model';
+import { askWorkPreviewAddress, workPreviewEndpoint, workPreviewView } from '../../src/ask-work-model';
+import { combineAskPreviews } from '../../src/ask-link-previews';
 import { dashboardDefaults } from '../../src/dashboard-defaults';
 import { usageTopicDatasets } from '../../src/usage-workspace-model';
 import { schemas } from './helpers/recipes.mjs';
@@ -104,6 +106,41 @@ test('glow traces cross their origin within one open path instead of splitting a
   }
 });
 
+test('shared Ask glow pauses its hue while the decoration is not shown, and resumes in phase', () => {
+  const events=[];
+  const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
+  let report,observed,disconnected=false;
+  class IntersectionObserver{constructor(callback){report=callback;}observe(target){observed=target;}disconnect(){disconnected=true;}}
+  const glow=loadClassicScript('ask-glow.js',{IntersectionObserver,matchMedia:()=>({matches:false,addEventListener(){},removeEventListener(){}})});
+  const layers=[{animate:()=>hue}];
+  const motion=glow.askGlowMotion({dataset:{}},layers);
+  assert.equal(observed,layers[0]);
+  events.length=0;
+  report([{isIntersecting:false}]);
+  assert.deepEqual(events,['pause'],'a hidden panel or full screen composer stops ticking');
+  report([{isIntersecting:true}]);
+  assert.deepEqual(events,['pause','play']);
+  motion.destroy();
+  assert.ok(disconnected);
+});
+
+test('the edge trace turns each corner as the previous side leaves, around one lap', () => {
+  const glow=loadClassicScript('ask-glow.js');
+  const width=1000,height=500,length=200,perimeter=3000;
+  const lanes=plain(glow.askEdgeTraceLanes({width,height,length}));
+  assert.deepEqual(lanes.map(lane=>lane.side),['top','right','bottom','left']);
+  assert.deepEqual(lanes.map(lane=>lane.start*perimeter),[0,1000,1500,2500],'each side starts as the signal reaches its corner');
+  for(const [index,lane] of lanes.entries()){
+    const next=lanes[(index+1)%lanes.length],ends=(lane.start+lane.travel)*perimeter,turns=next.start*perimeter+(next.start?0:perimeter);
+    assert.equal(ends-turns,length,`${lane.side} leaves while the next side enters, so the corner never goes dark`);
+    assert.ok(lane.travel<1,'a lane fits within its lap');
+    // Streaks start and finish entirely off their side.
+    const size=lane.axis==='X'?width:height;
+    assert.deepEqual([Math.min(lane.from,lane.to),Math.max(lane.from,lane.to)],[-length,size]);
+  }
+  assert.ok(lanes[0].from<lanes[0].to&&lanes[2].from>lanes[2].to,'the signal runs clockwise');
+});
+
 test('shared Ask glow respects reduced motion from startup, including while working', () => {
   const events=[];
   const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
@@ -116,28 +153,23 @@ test('shared Ask glow respects reduced motion from startup, including while work
   motion.destroy();
 });
 
-test('prompt suggestions mix broad questions with real repository scopes only in multi-repository libraries', () => {
-  const suggestions=options=>plain(model.askPromptSuggestions(options));
-  const broad=suggestions();
-  for(const repositories of [[],['pharos'],['pharos','pharos',null,'','  ']]){
-    assert.deepEqual(suggestions({repositories}),broad);
-  }
-  const repositories=['pharos','query-table'];
-  const mixed=suggestions({repositories});
-  assert.equal(mixed.length,broad.length);
-  assert.equal(new Set(mixed).size,mixed.length);
-  assert.ok(mixed.some((text,index)=>text===broad[index]),'keep library-wide questions');
-  for(const name of repositories)assert.ok(mixed.some(text=>text.includes('“'+name+'” repository')));
-  assert.ok(mixed.every(text=>!text.includes('{scope}')),'never offer a template placeholder');
-  const varied=suggestions({repositories,variation:1});
-  assert.notDeepEqual(varied,mixed,'refresh can introduce another repository for the same question');
-  assert.equal(varied.find(text=>text==='Which repositories use the most tokens?'),'Which repositories use the most tokens?');
+test('suggestions keep only well-formed, distinct questions from the library', () => {
+  const items=plain(model.askSuggestionItems([
+    {id:'spend-where',text:' Where do my tokens go? '},
+    {id:'spend-where',text:'Where do my tokens go?'},
+    {id:'risk-review'},{text:'No id'},null,{id:'blank',text:'  '},
+    {id:'recall-similar',text:'Find earlier work I could build on in the 研究/<test> & tools repository.'},
+  ]));
+  assert.deepEqual(items,[{id:'spend-where',text:'Where do my tokens go?'},{id:'recall-similar',text:'Find earlier work I could build on in the 研究/<test> & tools repository.'}]);
+  assert.deepEqual(plain(model.askSuggestionItems(undefined)),[],'a missing list offers nothing rather than canned questions');
+  assert.equal(model.askSuggestionItems(Array.from({length:20},(_,i)=>({id:'f'+i,text:'Question '+i+'?'}))).length,12);
 });
 
-test('suggestion scopes preserve repository names as data, including punctuation and Unicode', () => {
-  const repositories=['研究/<test> & tools','owner/repo.with-dots'];
-  const suggestions=plain(model.askPromptSuggestions({repositories}));
-  for(const repository of repositories)assert.ok(suggestions.some(text=>text.includes('“'+repository+'” repository')));
+test('Ask keeps asking for suggestions while they are being chosen, backing off', () => {
+  const delays=Array.from({length:8},(_,attempt)=>model.askSuggestionRetryDelay(attempt));
+  assert.equal(delays[0],20000);
+  assert.ok(delays.every((delay,i)=>i===0||delay>=delays[i-1]),'never sooner than the last try');
+  assert.equal(delays.at(-1),300000,'a slow first run still gets picked up, every five minutes at most');
 });
 
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
@@ -236,6 +268,16 @@ test('chat URLs preserve unrelated parameters and support replacing and clearing
   for(const path of ['/library?text=cache','/analyze?analyze_topic=tools','/settings#models']){
     assert.equal(model.askHistoryURL('http://pharos.test'+path,'chat one'),'http://pharos.test/?ask_chat=chat+one');
   }
+  assert.equal(model.askHistoryURL('http://pharos.test/ask?ask_chat=old','saved'),'http://pharos.test/ask?ask_chat=saved','full screen keeps history on its page');
+});
+test('full screen opens the chat on the Ask page and returns to the page it came from', () => {
+  assert.equal(model.askFullscreenURL('http://pharos.test/analyze?analyze_topic=tools','chat one'),'http://pharos.test/ask?ask_chat=chat+one');
+  assert.equal(model.askFullscreenURL('http://pharos.test/?ask_chat=old',null),'http://pharos.test/ask');
+  const exit=(from,id='saved')=>plain(model.askFullscreenExit('http://pharos.test/ask?ask_chat=saved',from,id));
+  assert.deepEqual(exit('/analyze?analyze_topic=tools'),{href:'http://pharos.test/analyze?analyze_topic=tools',presentation:'modal'});
+  assert.deepEqual(exit('/?range=week'),{href:'http://pharos.test/?range=week&ask_chat=saved',presentation:'home'});
+  assert.deepEqual(exit('/home',null),{href:'http://pharos.test/home',presentation:'home'});
+  for(const from of [null,undefined,'','/ask?ask_chat=other','https://elsewhere.test/analyze','http://[bad'])assert.deepEqual(exit(from),{href:'http://pharos.test/?ask_chat=saved',presentation:'home'},String(from));
 });
 test('reload restores the tab surface only for the same page and chat', () => {
   const href='http://pharos.test/?ask_chat=saved-chat&range=week';
@@ -254,6 +296,8 @@ test('reload restores the tab surface only for the same page and chat', () => {
     assert.equal(model.askRestorePresentation('http://pharos.test/analyze?analyze_topic=tokens',{page:'/analyze?analyze_topic=tokens',presentation}),presentation);
   }
   assert.equal(model.askRestorePresentation('http://pharos.test/analyze',{page:'/analyze',presentation:'home'}),null);
+  assert.equal(model.askRestorePresentation('http://pharos.test/ask?ask_chat=saved-chat',{page:'/ask',id:'saved-chat',presentation:'page'}),'page');
+  assert.equal(model.askRestorePresentation('http://pharos.test/analyze',{page:'/analyze',presentation:'page'}),null);
 });
 test('history keeps server matches from later messages and only adds the current chat to unfiltered lists', () => {
   const first={id:'initial',updatedAt:1,conversation:[{prompt:'Initial topic'}]},second={id:'newer',updatedAt:2,conversation:[{prompt:'Another topic'}]};
@@ -277,6 +321,96 @@ test('private visit writes preserve deletion order and recover after a failed up
   const clear=model.askWriteVisit(()=>events.push('clear'));
   await assert.rejects(failed,/offline/);await clear;
   assert.equal(events.at(-1),'clear');
+});
+test('a single visit replaces one entry, while a full history write reconciles the private store', () => {
+  const visit={url:'/analyze',at:2,title:'Analyze'};
+  const one=plain(model.askVisitInput({entry:visit,replaced:{url:'/',at:1}}));
+  assert.equal(one.reconcile,false);
+  assert.deepEqual(one.visits.map(entry=>entry.url),['/analyze']);
+  assert.deepEqual(one.replaces,{url:'/',at:1},'the private store receives the identity removed from browser history');
+  assert.equal(plain(model.askVisitInput({entry:visit})).replaces,null);
+  const stored=[{url:'/',at:1,title:'Stored title'},{url:'/library',page:'library',at:2},{url:'/settings',at:3,title:'x'.repeat(900)}];
+  const full=plain(model.askVisitInput({stored,titleFor:url=>url==='/'?'Home':''}));
+  assert.equal(full.reconcile,true);
+  assert.equal(full.replaces,null);
+  assert.deepEqual(full.visits.map(entry=>entry.url),['/','/library','/settings'],'every stored visit is sent');
+  assert.equal(full.visits[0].title,'Home','current page titles replace stored ones');
+  assert.equal(full.visits[1].title,'Visited page','untitled visits get a readable fallback');
+  assert.equal(full.visits[2].title.length,500,'titles are clipped to the server limit');
+  assert.equal(stored[2].title.length,900,'browser history is not modified');
+});
+test('a provider change starts from its default and a model change keeps only an effort it offers', () => {
+  const catalogs={
+    Codex:{models:[{id:'fast',efforts:['Default']},{id:'deep',efforts:['Default','Low','High'],default:true}]},
+    Claude:{models:[{id:'opus',efforts:['Default','High']},{id:'sonnet',efforts:['Default']}]},
+    Gemini:{models:[{id:'pro'}],defaultSelection:{provider:'Gemini',model:'pro',effort:'High'}},
+  };
+  assert.deepEqual(plain(model.askDefaultSelection('Codex',catalogs.Codex)),{provider:'Codex',model:'deep',effort:'Default'},'the marked default model wins');
+  assert.deepEqual(plain(model.askDefaultSelection('Claude',catalogs.Claude)).model,'opus','without a marked default the first model is used');
+  assert.deepEqual(plain(model.askDefaultSelection('Gemini',catalogs.Gemini)),catalogs.Gemini.defaultSelection,"a provider's own default wins");
+  assert.equal(model.askDefaultSelection('Empty',{models:[]}).model,'','a provider without models has no model to send with');
+  const start={provider:'Codex',model:'deep',effort:'High'};
+  const pick=(page,value)=>plain(model.askPickSelection(start,page,value,catalogs));
+  assert.deepEqual(pick('provider','Claude'),{provider:'Claude',model:'opus',effort:'Default'});
+  assert.deepEqual(pick('model','fast'),{provider:'Codex',model:'fast',effort:'Default'},'an effort the new model lacks resets');
+  assert.deepEqual(pick('effort','Low'),{...start,effort:'Low'});
+  assert.deepEqual(plain(model.askPickSelection({provider:'Claude',model:'sonnet',effort:'Default'},'model','opus',catalogs)).effort,'Default');
+  assert.deepEqual(plain(model.askPickSelection({provider:'Claude',model:'sonnet',effort:'High'},'model','opus',catalogs)).effort,'High','an offered effort is kept');
+  assert.deepEqual(start,{provider:'Codex',model:'deep',effort:'High'},'picking returns a new selection');
+  assert.deepEqual(plain(model.askEffortChoices(catalogs.Codex,'missing')),['Default'],'an unknown model offers only the default effort');
+});
+test('Fast is off by default, offered per model and dropped when the model or provider lacks it', () => {
+  const catalogs={
+    Codex:{models:[{id:'luna',efforts:['Default'],fast:true},{id:'old',efforts:['Default']}]},
+    Claude:{models:[{id:'opus',efforts:['Default'],fast:true,default:true}]},
+  };
+  assert.equal(model.askDefaultSelection('Claude',catalogs.Claude).fast,undefined,'a default selection is not fast');
+  assert.equal(model.askFastAvailable(catalogs.Codex,'luna'),true);
+  assert.equal(model.askFastAvailable(catalogs.Codex,'old'),false);
+  const fast=plain(model.askPickSelection({provider:'Codex',model:'luna',effort:'Default'},'fast',true,catalogs));
+  assert.deepEqual(fast,{provider:'Codex',model:'luna',effort:'Default',fast:true});
+  assert.deepEqual(plain(model.askPickSelection(fast,'fast',false,catalogs)),{provider:'Codex',model:'luna',effort:'Default'},'turning Fast off leaves no flag');
+  assert.equal(plain(model.askPickSelection(fast,'model','old',catalogs)).fast,undefined,'a model without Fast drops it');
+  assert.equal(plain(model.askPickSelection(fast,'effort','Default',catalogs)).fast,true,'an effort change keeps Fast');
+  assert.equal(plain(model.askPickSelection(fast,'provider','Claude',catalogs)).fast,undefined,'a new provider starts with Fast off');
+  assert.equal(model.askIsDefaultSelection(fast,{provider:'Codex',model:'luna',effort:'Default'}),false,'Fast differs from a standard-speed default');
+  assert.equal(model.askIsDefaultSelection(fast,fast),true);
+});
+test('a saved selection is used while its provider exists, otherwise the first provider loads', () => {
+  const providers=[{id:'Codex'},{id:'Claude'}];
+  const saved={provider:'Claude',model:'retired-model',effort:'High'};
+  assert.equal(model.askSelectionProvider(saved,providers),'Claude');
+  assert.equal(model.askSelectionProvider({...saved,provider:'Gone'},providers),'Codex');
+  assert.equal(model.askSelectionProvider(null,providers),'Codex');
+  assert.equal(model.askValidSelection(saved,providers),true,'a model missing from the catalog stays selected; the server validates it');
+  assert.equal(model.askValidSelection({...saved,provider:'Gone'},providers),false);
+  assert.equal(model.askValidSelection({provider:'Codex'},providers),false);
+  assert.equal(model.askValidSelection(null,providers),false);
+  assert.equal(model.askIsDefaultSelection(saved,{...saved}),true);
+  assert.equal(model.askIsDefaultSelection(saved,{...saved,effort:'Default'}),false);
+  assert.equal(model.askIsDefaultSelection(saved,null),false);
+});
+test('a later or invalidated chat load makes an earlier slow load stale', async () => {
+  const loads=model.askLoadSequence(),applied=[];
+  const open=async(id,wait)=>{const token=loads.next();await wait;if(loads.current(token))applied.push(id);};
+  let finishSlow;
+  const slow=open('slow',new Promise(resolve=>{finishSlow=resolve;}));
+  await open('fast',Promise.resolve());
+  finishSlow();await slow;
+  assert.deepEqual(applied,['fast'],'a late response must not replace the chat opened after it');
+  const token=loads.next();
+  assert.equal(loads.current(token),true);
+  loads.invalidate();
+  assert.equal(loads.current(token),false,'a new chat or route change cancels a pending load');
+});
+test('an opened chat focuses its composer only if focus stayed put while it loaded', () => {
+  const body={},link={},elsewhere={};
+  const focus=state=>model.askFocusAfterLoad({navigate:true,current:true,before:link,active:link,body,...state});
+  assert.equal(focus({}),true);
+  assert.equal(focus({active:body}),true,'focus dropped to the page while loading');
+  assert.equal(focus({active:elsewhere}),false,'the user moved focus while it loaded');
+  assert.equal(focus({navigate:false}),false,'restoring from the URL leaves focus alone');
+  assert.equal(focus({current:false}),false,'a superseded load does not take focus');
 });
 test('the transcript fits the latest exchange with a little prior context, within its window budget', () => {
   const height=state=>model.askThreadHeight({total:2000,latest:300,previous:250,gap:26,available:600,...state});
@@ -334,7 +468,7 @@ test('Ask preserves progress and elapsed time, exposing activity details only fo
   const quiet=plain(model.askWaitStatus({activity,elapsedMs:24000,cli:'Codex'}));
   assert.equal(quiet.message,activity[0].message);
   assert.match(quiet.elapsed,/20s since last update/);
-  assert.match(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,/12s since last update/);
+  assert.equal(model.askWaitStatus({cli:'Claude',elapsedMs:12000}).elapsed,'');
   for(const status of ['loading','single','multiple','answer','none','clarification','canceled']) {
     assert.equal(model.askShowActivity({status,activity}),false,status);
   }
@@ -359,6 +493,14 @@ test('browsing suppresses automatic navigation even after reopening a single res
     assert.equal(model.askShowBrowseHint({pending:false,presentation}),false);
   }
   for(const presentation of ['floating','dismissed'])assert.equal(model.askShowBrowseHint({pending:true,presentation}),false);
+  assert.equal(model.askShowBrowseHint({pending:true,presentation:'modal',hint:false}),false);
+});
+test('a dismissed or used browse hint stays away for five questions, then returns', () => {
+  assert.deepEqual(plain(model.askStartBrowseHint(undefined)),{hint:true,snoozed:0});
+  let snoozed=model.askBrowseHintSnooze(),shown=[];
+  for(let i=0;i<7;i++){const start=model.askStartBrowseHint(snoozed);shown.push(start.hint);snoozed=start.snoozed;}
+  assert.deepEqual(shown,[false,false,false,false,false,true,true]);
+  assert.deepEqual(plain(model.askStartBrowseHint('junk')),{hint:true,snoozed:0});
 });
 test('floating progress reflects the latest state and distinguishes completion from waiting or cancellation', () => {
   const running=model.askFloatingState({status:'loading',message:'Comparing model usage…'});
@@ -367,6 +509,9 @@ test('floating progress reflects the latest state and distinguishes completion f
   assert.equal(streaming.message,'Searching archived work…');assert.equal(streaming.ready,false);
   for (const status of ['single','multiple','clarification','error']) assert.equal(model.askFloatingState({status}).ready,true);
   assert.equal(model.askFloatingState({status:'canceled'}).ready,false);
+  const opened=model.askFloatingState({status:'single'},{navigated:true});
+  assert.match(opened.message,/follow-up/);assert.equal(opened.ready,false);
+  assert.equal(model.askFloatingState({status:'clarification'},{navigated:true}).ready,true);
 });
 test('dragged progress stays reachable after moving or shrinking the window', () => {
   const bounds={width:300,height:80,viewportWidth:390,viewportHeight:550};
@@ -408,15 +553,58 @@ test('Ask preview jobs keep each chart URL and its moving window intact', t => {
   for (const [index,job] of jobs.entries()) assert.equal(job.options.dashboard,urls[index]);
 });
 
+test('Ask previews work pages and their conversations in either link spelling, and nothing else', () => {
+  assert.deepEqual(askWorkPreviewAddress('/work/w%201'),{workspace:'w 1'});
+  assert.deepEqual(askWorkPreviewAddress('/work/w1?conversation=c1&reveal=m4'),{workspace:'w1',conversation:'c1'});
+  assert.deepEqual(askWorkPreviewAddress('/work/w1/conversation/c1?highlight=m1&highlight=m2'),{workspace:'w1',conversation:'c1'});
+  for (const address of ['/work','/work/','/work/w1/files','/work/w1/conversation/','/work/w1/conversation/c1?conversation=c2','/work/w1?find=retry','https://elsewhere.test/work/w1','/conversation/c1','/?ask_chat=w1','/analyze?analyze_mode=dashboards']) {
+    assert.equal(askWorkPreviewAddress(address),undefined,address);
+  }
+  assert.equal(workPreviewEndpoint({workspace:'w/1',conversation:'c&1'}),'/api/work/w%2F1/preview?conversation=c%261');
+  assert.equal(workPreviewEndpoint({workspace:'w1'}),'/api/work/w1/preview');
+});
+
+test('Ask combines preview kinds so each link renders with the first kind that claims it', () => {
+  const mounted = [], kind = (name, prefix) => ({canRender:address=>address.startsWith(prefix),revalidate:()=>mounted.push(name+' revalidated'),mount:(_host,card)=>{mounted.push(name+' '+card.href);return ()=>{};}});
+  const previews = combineAskPreviews(kind('chart','/analyze'),kind('work','/work/'));
+  assert.equal(previews.canRender('/settings'),false);
+  previews.mount(null,{href:'/work/w1',title:''});previews.mount(null,{href:'/analyze?x',title:''});previews.revalidate();
+  assert.deepEqual(mounted,['work /work/w1','chart /analyze?x','chart revalidated','work revalidated']);
+});
+
+test('work previews identify the run in two lines: where and when, then who and how much', () => {
+  const metric = (value, quality='observed') => ({value,quality,known:1,total:1});
+  const specs = [['cost','API cost','usd'],['clock','Clock span','ms'],['children','Children','count'],['turns','User turns','count'],['files','Files Edited','count']].map(([id,label,unit])=>({id,label,unit,definition:label+' definition'}));
+  const models = [{model:'claude-opus-4-5-20251101',provider:'claude',sessions:3,tokens:9},{model:'gpt-5',provider:'codex',sessions:1,tokens:5},{model:'gemini',provider:'antigravity',sessions:1,tokens:2}];
+  const now = Date.parse('2026-11-01T18:00:00Z'), start = Date.parse('2026-10-30T20:14:00Z');
+  const workspace = {start,end:null,sessions:7,models,totals:{cost:metric(41.2,'partial'),clock:metric(3_600_000*3+12*60_000),children:metric(6),turns:metric(1),files:metric(null)}};
+  const preview = {repository:'pharos',branch:'gbdubs/fix',metrics:specs,workspace};
+  const text = parts => parts.map(part=>part.text);
+  const work = workPreviewView(preview,now);
+  assert.match(work.where[0].text,/Oct 30/);assert.doesNotMatch(work.where[0].text,/2026/,'this year is implied');
+  assert.match(work.where[0].title,/2026/);
+  assert.equal(work.where[1].text,'3h 12m');
+  assert.equal(work.where[2].text,'pharos · gbdubs/fix','the place truncates first');
+  assert.deepEqual(text(work.what),['6 subagents','claude-opus-4-5, gpt-5 +1','1 turn','$41.20+'],'unknown measures are omitted; partial ones are marked');
+  assert.match(work.what[1].title,/claude-opus-4-5-20251101 \(claude\): 3 sessions/);
+  assert.match(workPreviewView(preview,Date.parse('2027-02-01T00:00:00Z')).where[0].text,/2026/,'other years are named');
+  // Independent top-level conversations are sessions, not subagents; partial
+  // counts keep their marker even when only one item was seen.
+  const conversation = {start:null,end:null,sessions:2,models:models.slice(1,2),totals:{children:metric(0),turns:metric(1,'partial'),files:metric(4,'partial')}};
+  const scoped = workPreviewView({metrics:specs,workspace,conversation},now);
+  assert.deepEqual(text(scoped.where),[],'nothing known about where or when is left out');
+  assert.deepEqual(text(scoped.what),['0 subagents','gpt-5','1+ turns','4+ files']);
+});
+
 test('retained Ask charts revalidate on reopening and their own data or calendar refresh until disposed', () => {
   const openings = new EventTarget(), data = new EventTarget(), refreshes = [];
-  const stop = onAskChartRefresh('usage',openings,()=>refreshes.push('usage'),data);
+  const stop = onAskChartRefresh('usage',openings,stale=>refreshes.push(stale),data);
   openings.dispatchEvent(new Event('open'));
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'tools'}));
-  assert.equal(refreshes.length,1,'unrelated datasets leave the chart alone');
+  assert.deepEqual(refreshes,[false],'reopening keeps a fresh preview and unrelated datasets leave the chart alone');
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));
   data.dispatchEvent(new Event('pharos:usage-refresh'));
-  assert.equal(refreshes.length,3,'both data and calendar changes invalidate the retained view');
+  assert.deepEqual(refreshes,[false,true,true],'both data and calendar changes invalidate the retained view');
   stop();
   openings.dispatchEvent(new Event('open'));
   data.dispatchEvent(new CustomEvent('pharos:data-refresh',{detail:'usage'}));

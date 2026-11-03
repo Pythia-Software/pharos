@@ -2,12 +2,15 @@ import { todayBounds } from "./day-window";
 import { clipIntervals, concurrencyMetrics, concurrencySpans, mergeIntervals, minute, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics } from "./concurrency-data";
 import { readConcurrencySettings, resolveConcurrencyRange } from "./concurrency-settings";
 
-let cached: ConcurrencyData | null = null, pending: Promise<ConcurrencyData> | null = null, loadError = "";
+let cached: ConcurrencyData | null = null, pending: Promise<ConcurrencyData> | null = null, loadError = "", stale = false;
 const summaryCache = new Map<string, ConcurrencyMetrics | null>();
 const runtimeCache = new Map<string, {agent: number; active: number} | null>();
+// Refreshing card previews marks the snapshot stale: the next load fetches
+// it again, while synchronous readers (quick stats) keep the last one.
+export function invalidateConcurrencyData(): void { stale = true; }
 export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
   if (pending) return pending;
-  if (cached && !refresh) return Promise.resolve(cached);
+  if (cached && !refresh && !stale) return Promise.resolve(cached);
   // The dev UI can explicitly substitute a captured export for visual previews.
   const prototype = typeof document !== "undefined" && document.documentElement.hasAttribute("data-concurrency-prototype");
   pending = fetch(prototype ? "/api/usage/concurrency-prototype" : "/api/usage/parallelism").then(async response => {
@@ -17,7 +20,7 @@ export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
     // Go names the system timezone "Local" when TZ is unset. The loopback
     // service and browser share that timezone; Intl needs its IANA name.
     if (data.timezone === "Local") data = { ...data, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    cached = data; loadError = ""; summaryCache.clear(); runtimeCache.clear(); return data;
+    cached = data; stale = false; loadError = ""; summaryCache.clear(); runtimeCache.clear(); return data;
   }).catch(error => { loadError = error instanceof Error ? error.message : String(error); throw error; }).finally(() => { pending = null; });
   return pending;
 }

@@ -72,6 +72,22 @@ test("Stop stays disabled once pressed, until the operations it stopped change",
   assert.equal(model(view({ operations: [operation("a"), operation("c")] }), { stopRequested: new Set(["a"]) }).stop.stopping, false, "a new stoppable operation enables it again");
 });
 
+test("a Stop the server refuses leaves Stop enabled for that operation and says why", async () => {
+  const operations = [operation("a"), operation("b")], requested = new Set(["a", "b"]), sent = [], reported = [];
+  const targets = model(view({ operations })).stop.targets;
+  await panel.sendStops(targets, requested, async (path, request) => {
+    const { id } = JSON.parse(request.body);
+    sent.push([path, request.method, id]);
+    return id === "b" ? { ok: false, status: 409, statusText: "Conflict", json: async () => ({ error: "Refused" }) } : { ok: true, json: async () => ({ stopping: true }) };
+  }, message => reported.push(message));
+  assert.deepEqual(sent, [["/api/operations/stop", "POST", "a"], ["/api/operations/stop", "POST", "b"]]);
+  assert.deepEqual([...requested], ["a"]);
+  assert.deepEqual(reported, ["Refused"]);
+  assert.equal(model(view({ operations }), { stopRequested: requested }).stop.stopping, false);
+  await panel.sendStops([{ id: "a", path: "/x", method: "POST", body: {} }], requested, async () => { throw Error("offline"); }, message => reported.push(message));
+  assert.equal(requested.size, 0, "a failed request also lets the user try again");
+});
+
 test("the verdict row is the server's short headline, with the full sentence in its tooltip", () => {
   const verdict = model(view({ eject: { verdict: "safe-in", headline: "Short", summary: "Long sentence", blockers: [{ label: "L", on_eject: "O" }] } })).verdict;
   assert.equal(verdict.text, "Short");
@@ -88,15 +104,16 @@ test("the schedule and load stay out while the snapshot has none", () => {
   assert.ok(filled.load);
 });
 
-test("the load row is the server's line, each process's line in its tooltip; in the app, every Pharos process's", () => {
-  const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
-  const own = model(view({ resources: library }));
-  assert.deepEqual(own.load, { text: "Library line", tooltip: "Service line\nTerminal line" });
+test("the load row is CPU, RAM and disk in one row, the server's line and each process's in its tooltip; in the app, every Pharos process's", () => {
+  const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, disk_bytes_per_second: 12e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
+  const own = plain(model(view({ resources: library, library: { drive: { name: "Euclid", ejectable: true }, path: "/Volumes/Euclid/Pharos", storage_bytes: 48e9 } })).load);
+  assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"]]);
+  assert.equal(own.tooltip, "Library line\nService line\nTerminal line");
   // The broker's total, when the store has one, wins over the library's.
-  const app = model(view({ resources: library }, { resources: { label: "Machine line", processes: [] } }));
-  assert.deepEqual(app.load, { text: "Machine line", tooltip: "" });
-  // A service without a line: numbers only, made here.
-  assert.equal(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.text, "45% of one core · 1.2 GB");
+  const app = plain(model(view({ resources: library }, { resources: { label: "Machine line", cpu_percent: 337, memory_bytes: 8.2e9, disk_bytes_per_second: null, processes: [] } })).load);
+  assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—"], "a figure not measured yet is a dash");
+  // A service that does not measure I/O: no I/O.
+  assert.deepEqual(plain(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.metrics).map(metric => metric.id), ["cpu", "memory", "disk"]);
   assert.equal(model(view({ resources: {} })).load, null);
 });
 
@@ -104,13 +121,15 @@ const at = Date.parse("2026-10-27T12:00:00Z");
 const minutesAgo = minutes => new Date(at - minutes * 60000).toISOString();
 const background = {
   mode: "on",
-  headline: { tone: "busy", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } },
+  headline: { tone: "bad", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } },
   items: [
     { id: "conversations", label: "Item A", state: "current", state_label: "Updated", as_of: minutesAgo(2), next_at: minutesAgo(-3) },
     { id: "writing", label: "Item B", state: "running", state_label: "Updating now", as_of: minutesAgo(50), next_at: null },
     { id: "repositories", label: "Item C", state: "failed", state_label: "Failed", as_of: minutesAgo(120), next_at: minutesAgo(-15) },
     { id: "preserve", label: "Item D", state: "paused", state_label: "Paused", as_of: minutesAgo(60 * 30), next_at: null },
+    { id: "backup", label: "Item E", state: "manual", state_label: "Only when you ask", as_of: minutesAgo(26 * 60), next_at: null },
   ],
+  unscheduled: ["backup"],
   cadences: [
     { id: "frequent", label: "Row A", state: "failed", state_label: "1 failed", as_of: minutesAgo(2), next_at: minutesAgo(-15), items: ["conversations", "repositories"] },
     { id: "hourly", label: "Row B", state: "running", state_label: "Updating now", as_of: null, next_at: null, items: ["writing", "missing"] },
@@ -119,10 +138,10 @@ const background = {
   everything: { seconds: 540, text: "Everything words" },
 };
 
-test("the schedule is the server's headline, one row per cadence with its items, and the cost of updating everything", () => {
+test("the schedule is the server's headline, one row per cadence with its items", () => {
   const schedule = plain(panel.scheduleModel(background, at));
-  assert.deepEqual(schedule.headline, { tone: "busy", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } });
-  assert.deepEqual(schedule.rows.map(row => [row.id, row.dot, row.open]), [["frequent", "bad", true], ["hourly", "busy", true], ["daily", "", false]],
+  assert.deepEqual(schedule.headline, { tone: "bad", title: "Title words", text: "Text words", tech: "Tech words", action: { label: "Action words", path: "/api/background/run", body: { cadence: "daily" } } });
+  assert.deepEqual(schedule.rows.map(row => [row.id, row.dot, row.open]), [["frequent", "bad", true], ["hourly", "busy pulse", true], ["daily", "", false], ["manual", "paused", false]],
     "a row opens when something in it is happening or wrong");
   assert.equal(schedule.rows[0].text, "1 failed · retrying in 15 min");
   assert.equal(schedule.rows[2].text, "Updated 10 h ago");
@@ -130,8 +149,24 @@ test("the schedule is the server's headline, one row per cadence with its items,
   assert.equal(schedule.rows[0].what, "Item A, Item C");
   assert.deepEqual(schedule.rows[0].items.map(item => item.text), ["Updated 2 min ago · next in 3 min", "Failed · retrying in 15 min"]);
   assert.equal(schedule.rows[2].items[0].text, "Paused · 30 h ago");
-  assert.equal(schedule.everything, "Everything words");
-  assert.equal(model(view({ background })).schedule.rows.length, 3);
+  assert.equal(schedule.everything, undefined, "the panel leaves updating everything to Settings");
+  // Only when you ask is one more row, Ad hoc, run as the manual cadence.
+  const adhoc = schedule.rows.at(-1);
+  assert.deepEqual([adhoc.id, adhoc.label, adhoc.dot, adhoc.run.cadence, adhoc.open], ["manual", "Ad hoc", "paused", "manual", false]);
+  assert.deepEqual(adhoc.items.map(item => [item.id, item.text]), [["backup", "Last run 26 h ago"]]);
+  // Each row runs its own cadence now, unless it is already running.
+  assert.deepEqual(schedule.rows.map(row => [row.run.cadence, row.run.disabled]), [["frequent", false], ["hourly", true], ["daily", false], ["manual", false]]);
+  // Updating now pulses; Up next is steady.
+  const queued = plain(panel.scheduleModel({ ...background, items: [{ ...background.items[1], state: "queued", state_label: "Up next" }] }, at));
+  assert.equal(queued.rows[1].items[0].dot, "busy");
+  // A running item's tooltip says what it feeds.
+  const feeding = plain(panel.scheduleModel({ ...background, items: [{ ...background.items[1], feeds: "Writing pages" }] }, at));
+  assert.equal(feeding.rows[1].items[0].tooltip, "Writing pages update when this finishes.");
+  // Routine headlines (up to date, or the item the rows already show
+  // running) stay out; the out of the ordinary ones stay in.
+  for (const tone of ["good", "busy"]) assert.equal(panel.scheduleModel({ ...background, headline: { tone, title: "T", text: "X" } }, at).headline, null, tone);
+  for (const tone of ["bad", "behind", "paused"]) assert.ok(panel.scheduleModel({ ...background, headline: { tone, title: "T", text: "X" } }, at).headline, tone);
+  assert.equal(model(view({ background })).schedule.rows.length, 4);
 });
 
 test("next times are minutes away, then a clock time", () => {
@@ -162,13 +197,28 @@ test("Eject appears only for an ejectable drive in the app, and acts only on a f
   assert.equal(model(view()).eject, null, "outside the app there is no eject");
   assert.equal(model(view(), { nativeEject: true }).eject.phase, "idle");
   assert.equal(model(view({ library: { drive: { name: "Mac", ejectable: false } } }), { nativeEject: true }).eject, null);
-  const refused = model(view(), { nativeEject: true, ejectState: { phase: "refused", eject: { verdict: "busy", summary: "Words", blockers: [{ label: "L", on_eject: "O" }] } } }).eject;
-  assert.equal(refused.verdict, "busy");
-  assert.deepEqual(refused.blockers, ["L: O"]);
+  const confirm = model(view(), { nativeEject: true, ejectState: { phase: "confirm", eject: { verdict: "safe-in", summary: "Words", blockers: [{ label: "L", on_eject: "O", verdict: "safe-in" }] } } }).eject;
+  assert.equal(confirm.verdict, "safe-in");
+  assert.deepEqual(confirm.blockers, ["L: O"]);
+  // Waiting lists only what keeps it waiting; the release stops the rest.
+  const waiting = model(view(), { nativeEject: true, ejectState: { phase: "waiting", eject: { verdict: "unsafe", summary: "Words",
+    blockers: [{ label: "U", on_eject: "O", verdict: "unsafe" }, { label: "S", on_eject: "O", verdict: "safe-in" }] } } }).eject;
+  assert.deepEqual(waiting.blockers, ["U: O"]);
+  assert.equal(waiting.label, "Waiting to eject…");
   assert.equal(panel.ejectDecision({ verdict: "safe" }), "eject");
   assert.equal(panel.ejectDecision({ verdict: "safe-in" }), "confirm");
   for (const verdict of ["busy", "unsafe", undefined]) assert.equal(panel.ejectDecision({ verdict }), "refuse");
   assert.equal(panel.ejectDecision(null), "refuse");
+});
+
+test("Eject says what it does under the shown verdict", () => {
+  const label = verdict => model(view({ eject: { verdict, summary: "S", blockers: [] } }), { nativeEject: true }).eject.label;
+  assert.equal(label("safe"), "⏏ Eject");
+  assert.equal(label("safe-in"), "⏏ Stop and Eject");
+  assert.equal(label("busy"), "⏏ Eject when safe");
+  assert.equal(label("unsafe"), "⏏ Eject when safe");
+  assert.equal(model(view(), { nativeEject: true, ejectState: { phase: "checking" } }).eject.label, "Checking…");
+  assert.equal(model(view(), { nativeEject: true, ejectState: { phase: "ejecting", message: "Releasing…" } }).eject.label, "Releasing…");
 });
 
 test("the verdict shows a less safe answer at once and a safer one only after it holds", () => {
@@ -222,15 +272,31 @@ test("Index changes waits for captures and indexes, not for other work", () => {
   assert.equal(panel.indexBusy(view(), true), true, "a run this page is starting");
 });
 
-test("other libraries say what runs there, or their verdict", () => {
-  const others = model(view({}, { others: [
-    { id: "b", name: "Archive", operations: [operation("t", { kind: "library.transfer", label: "Copy library", step: { index: 1, count: 2, name: "Copying" } })], eject: { summary: "S" } },
-    { id: "c", name: "Spare", operations: [], eject: { headline: "Idle words", summary: "S" } },
-  ] })).others;
-  assert.match(others[0].text, /Copy library · step 1 of 2/);
-  assert.equal(others[1].text, "Idle words");
-  const idle = model(view({}, { others: [{ id: "c", name: "Spare", operations: [], stateLabel: "Open", eject: { headline: "H", summary: "Long" } }] })).others[0];
-  assert.equal(idle.text, "Open", "an idle library gets its short state word");
+test("other libraries are only counted in the library line; an app operation touching none is listed", () => {
+  const shown = model(view({}, { service: { name: "Pending history", position: 1, count: 3 }, others: [
+    { id: "b", name: "Archive", drive: "euclid", operations: [operation("t", { kind: "library.transfer", label: "Copy library" })] },
+    { id: "c", name: "Spare", operations: [] },
+    { id: "app:op", name: "Download model", operations: [operation("d", { kind: "labels.download", label: "Download model", step: { index: 1, count: 2, name: "Fetching" } })] },
+  ] }));
+  assert.equal(shown.library.of, "1/3");
+  assert.deepEqual(shown.others.map(other => other.name), ["Download model"]);
+  assert.match(shown.others[0].text, /Download model · step 1 of 2/);
+  assert.equal(model(view({}, { service: { name: "Only", position: 1, count: 1 } })).library.of, "", "one library: no count");
+});
+
+test("each running line says where it comes from, so it reads against the schedule", () => {
+  const origin = changes => plain(panel.operationLine(operation("a", changes))).secondary[0];
+  assert.equal(origin({ kind: "background.update", variant: "hourly", trigger: "schedule" }), "Part of Hourly");
+  assert.equal(origin({ trigger: "user" }), "Started by you");
+  assert.equal(origin({ trigger: "chained" }), "Follows other work");
+});
+
+test("the panel is titled for what it shows, under the library and its drive", () => {
+  const shown = model(view(), { nativeEject: true });
+  assert.equal(shown.title, "Background Processing");
+  assert.deepEqual([shown.library.name, shown.library.drive], ["Pharos", "Euclid"]);
+  assert.equal(model(view({}, { service: { name: "My Library" } })).library.name, "My Library", "the app's name for the library wins over its folder");
+  assert.equal(model(view({ library: { drive: { name: "Mac", ejectable: false }, path: "/Users/me/Pharos" } })).library.drive, "this Mac");
 });
 
 test("without a snapshot the panel says why", () => {

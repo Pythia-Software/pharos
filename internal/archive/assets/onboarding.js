@@ -54,7 +54,7 @@ function createPharosSourceWizard() {
 .pharos-onboard-body h3{font:600 19px/1.3 var(--serif);margin:16px 0 0}
 .pharos-onboard .pharos-muted{color:var(--muted,#666);font-weight:400}
 .pharos-onboard [hidden]{display:none!important}
-.pharos-onboard :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.pharos-onboard :focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .pharos-onboard>h2:focus{outline:none}
 .pharos-tool-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;border:0;margin:0;padding:0;min-width:0}
 .pharos-onboard .pharos-tool{display:flex;align-items:center;gap:16px;position:relative;padding:20px;margin:0;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-weight:400;cursor:pointer}
@@ -105,7 +105,7 @@ function createPharosSourceWizard() {
 .pharos-working{display:grid;gap:10px;margin:18px 0}.pharos-working>p{margin:0}
 .pharos-working .pharos-meter{height:6px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
 .pharos-working .pharos-meter>span{display:block;width:35%;height:100%;background:var(--accent,#315845);animation:pharos-onboard-slide 1.6s ease-in-out infinite}
-@keyframes pharos-onboard-slide{from{margin-left:-35%}to{margin-left:100%}}
+@keyframes pharos-onboard-slide{from{transform:translateX(-100%)}to{transform:translateX(286%)}}
 @media(max-width:600px){.pharos-onboard{padding:24px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.pharos-onboard>h2,.application-setup .pharos-onboard>h2{font-size:27px}.pharos-onboard-intro,.application-setup .pharos-onboard-intro{font-size:14px}.pharos-tool-options{grid-template-columns:1fr;gap:10px}.pharos-onboard .pharos-tool{padding:14px 12px;gap:12px}.pharos-tool>svg{width:48px}.pharos-tool strong{font-size:17px}.pharos-onboard-actions{gap:8px}.pharos-onboard .pharos-onboard-actions button{min-width:0;padding:7px 10px}.pharos-candidate-name{flex-wrap:wrap}.pharos-candidate-name input{max-width:100%;box-sizing:border-box}}
 @media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}`;
 
@@ -422,7 +422,7 @@ function createPharosSourceWizard() {
     } catch (failure) {
       if (!shown()) return toast(failure.message);
       setTitle(body, `Sources added for ${label}`);
-      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'A capture is already running on this Mac. Capture these sources from Settings → Background updates once it finishes.' : `The capture did not start: ${failure.message}`));
+      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'A capture is already running on this Mac. Capture these sources from Settings → Background Processing once it finishes.' : `The capture did not start: ${failure.message}`));
       actions.replaceChildren(button('Close', true, close));
       return;
     }
@@ -433,14 +433,14 @@ function createPharosSourceWizard() {
       ? (incremental ? `Captured ${size(bytes)} of new and changed files from ${label}; the rest was already in the library.` : `Captured ${size(bytes)} from ${label}.`)
       : `The capture from ${label} finished with errors.`;
     if (!shown()) {
-      toast(run?.state === 'complete' ? `${headline} Index it in Settings → Background updates.` : headline);
+      toast(run?.state === 'complete' ? `${headline} Index it in Settings → Background Processing.` : headline);
       return;
     }
     setTitle(body, run?.state === 'complete' ? `Captured from ${label}` : `Capture from ${label} incomplete`);
     const next = drive?.ejectable
       ? `You can eject ${drive.name} now; indexing can finish now or later on any Mac.`
       : 'Indexing makes these conversations searchable; it can run now or later.';
-    body.replaceChildren(node('p', 'pharos-lead', headline), captureRows(run), node('p', '', run?.state === 'complete' ? next : `What was captured is kept; capture again from Settings → Background updates. ${next}`));
+    body.replaceChildren(node('p', 'pharos-lead', headline), captureRows(run), node('p', '', run?.state === 'complete' ? next : `What was captured is kept; capture again from Settings → Background Processing. ${next}`));
     const index = button('Index now', true, () => indexSources(sources, status, body, actions));
     active.back=close;
     actions.replaceChildren(button('Later', false, close), index);
@@ -480,7 +480,7 @@ function createPharosSourceWizard() {
       run = await runs.index({sources, only_needed: true}, update => { if (update && shown()) rows.replaceChildren(indexRows(update)); });
     } catch (failure) {
       if (!shown()) return toast(failure.message);
-      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'Source indexing is already running. Index these captures from Settings → Background updates once it finishes.' : `Indexing did not start: ${failure.message}`));
+      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'Source indexing is already running. Index these captures from Settings → Background Processing once it finishes.' : `Indexing did not start: ${failure.message}`));
       actions.replaceChildren(button('Close', true, close));
       return;
     }

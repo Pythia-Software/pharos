@@ -6,11 +6,11 @@ struct MenuBarPreferences {
     static let key = "pharos-menu-bar"
     static let defaults: [String: Bool] = [
         "enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
-        "cost": false, "backup": false, "space": false, "index": false, "eject": false,
+        "cost": false, "streak": false, "agent_streak": false, "backup": false, "space": false, "index": false, "eject": false,
         "open": true, "status": true, "settings": true, "quit": true,
-        "search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false,
+        "search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false,
     ]
-    static let defaultOrder = ["open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "settings", "eject", "quit"]
+    static let defaultOrder = ["open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"]
     static let required = ["open", "status", "settings", "quit"]
     static func isSeparator(_ id: String) -> Bool {
         id.range(of: "^separator:[1-9][0-9]*$", options: .regularExpression) != nil
@@ -19,9 +19,10 @@ struct MenuBarPreferences {
         switch id {
         case "status", "indexed", "index": return "status"
         case "words", "tokens", "cost", "carbon": return "usage"
+        case "streak", "agent_streak": return "habits"
         case "backup", "space": return "library"
         case "search", "analyze", "optimize": return "navigation"
-        case "capture", "health", "sources", "finder": return "manage"
+        case "capture", "health", "sources", "finder", "logs": return "manage"
         case "eject", "quit": return "quit"
         default: return id
         }
@@ -140,8 +141,8 @@ struct ManagedLibraryStatus: Equatable {
 }
 
 /// The menu's status line from the status snapshot (docs/background-work.md
-/// §7), used only while the library's pharos-unified-activity-v1 preference
-/// is on. Every word is the server's: the first attention item's title, else
+/// §7), used while /api/menu-bar/status reports unified_activity, which it
+/// now always does. Every word is the server's: the first attention item's title, else
 /// the first top-level operation's line, else the eject verdict's headline.
 /// Pure, for the harness.
 struct UnifiedMenuStatus: Equatable {
@@ -365,6 +366,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("cost", "Estimated API cost", path: "/analyze?analyze_topic=tokens")
         row("carbon", "Estimated CO₂e", path: "/analyze?analyze_topic=carbon")
         row("usage-note", "Loading usage…")
+        row("streak", "Your streak", path: "/analyze?analyze_topic=habits")
+        row("agent_streak", "Agent streak", path: "/analyze?analyze_topic=habits")
         row("backup", "Last backup", path: "/settings/backups")
         row("space", "Library size", path: "/settings")
         row("free", "Calculating free space…")
@@ -376,6 +379,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("sources", "Manage sources…", path: "/settings/sources")
         let finder = NSMenuItem(title: "Show library in Finder", action: #selector(showLibraryInFinder), keyEquivalent: "")
         finder.target = self; rows["finder"] = finder
+        // Logs opens Settings → Logs at a source. update() marks the sources
+        // the status snapshot says hold something recent to read.
+        let logs = NSMenuItem(title: "Logs & crash reports", action: nil, keyEquivalent: "")
+        logs.image = NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: nil)
+        let sources = NSMenu()
+        for (id, title) in Self.logSources {
+            let source = NSMenuItem(title: title, action: #selector(navigate(_:)), keyEquivalent: "")
+            source.target = self
+            source.representedObject = id == "overview" ? "/settings/logs" : "/settings/logs?log_source=\(id)"
+            source.identifier = NSUserInterfaceItemIdentifier(id)
+            sources.addItem(source)
+            if id == "overview" { sources.addItem(.separator()) }
+        }
+        logs.submenu = sources
+        rows["logs"] = logs
         row("settings", "Settings…", path: "/settings/preferences")
         let eject = NSMenuItem(title: "Eject library…", action: #selector(ejectLibrary), keyEquivalent: "")
         eject.target = self; rows["eject"] = eject
@@ -468,7 +486,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func refreshUsage() {
         if preferences.usagePeriod == "today" && !Calendar.current.isDateInToday(usageUpdated) { usage = nil }
-        guard service?.hasConnectedLibrary == true, preferences["enabled"], ["words", "tokens", "carbon", "cost"].contains(where: { preferences[$0] }),
+        guard service?.hasConnectedLibrary == true, preferences["enabled"], ["words", "tokens", "carbon", "cost", "streak", "agent_streak"].contains(where: { preferences[$0] }),
               usageTask == nil, (Date().timeIntervalSince(usageUpdated) >= 60 || !Calendar.current.isDateInToday(usageUpdated)),
               let request = service?.localRequest("/api/menu-bar/usage?period=\(preferences.usagePeriod)") else { return }
         let origin = service?.url
@@ -613,13 +631,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         rows["error"]?.isHidden = problem == nil
         rows["error"]?.representedObject = snapshot["error_path"] as? String ?? "/settings/sync"
         setRowTitle("indexed", Self.date(snapshot["indexed_at"]).map { "Indexed \(Self.ago($0))" } ?? "Not indexed yet")
-        for key in ["indexed", "words", "tokens", "carbon", "cost", "backup", "space", "index", "eject"] {
+        for key in ["indexed", "words", "tokens", "carbon", "cost", "streak", "agent_streak", "backup", "space", "index", "eject"] {
             rows[key]?.isHidden = !preferences[key]
         }
         metric("words", "Words typed", (usage?["human_words"] as? NSNumber).map { NumberFormatter.localizedString(from: $0, number: .decimal) })
         metric("tokens", "Tokens used", (usage?["tokens"] as? NSNumber).map { Self.compact($0.doubleValue) })
         metric("carbon", "Estimated CO₂e", (usage?["co2e_g"] as? NSNumber).map { Self.mass($0.doubleValue) })
         metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { String(format: "$%.2f", $0.doubleValue) })
+        let streaks = usage?["streaks"] as? [String: String]
+        metric("streak", "Your streak", streaks?["you"])
+        metric("agent_streak", "Agent streak", streaks?["agents"])
         metric("backup", "Last backup", Self.date(snapshot["backup_at"]).map(Self.ago) ?? "Never")
         let storage = snapshot["storage"] as? [String: Any] ?? [:]
         let sizes = storage["sizes"] as? [String: Any] ?? [:]
@@ -635,8 +656,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")…")
         rows["eject"]?.isEnabled = ejectable && !service.ejecting && service.url != nil
         rows["finder"]?.isEnabled = libraryDirectory != nil
+        let logAttention = snapshot["logs"] as? [String: String] ?? [:]
+        for source in rows["logs"]?.submenu?.items ?? [] {
+            guard let id = source.identifier?.rawValue else { continue }
+            source.isEnabled = service.url != nil
+            source.image = logAttention[id].flatMap { level in
+                NSImage(systemSymbolName: level == "error" ? "exclamationmark.octagon" : "exclamationmark.triangle", accessibilityDescription: level == "error" ? "Errors" : "Warnings")
+            }
+        }
+        setRowTitle("logs", logAttention.isEmpty ? "Logs & crash reports" : "Logs & crash reports · \(logAttention.count) to check")
         rows["index"]?.isEnabled = service.url != nil && service.hasConnectedLibrary && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
-        for key in ["words", "tokens", "carbon", "cost", "backup", "space"] { rows[key]?.isEnabled = service.url != nil }
+        for key in ["words", "tokens", "carbon", "cost", "streak", "agent_streak", "backup", "space"] { rows[key]?.isEnabled = service.url != nil }
         layoutMenuText()
         menu.update()
     }
@@ -713,6 +743,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { refresh() }
 
     func invalidateUsage() { usageUpdated = .distantPast; refreshUsage() }
+
+    /// Settings → Logs's sources, as web/src/logs-model.ts lists them.
+    static let logSources = [("overview", "Overview"), ("page", "Page errors"), ("requests", "Slow & failed requests"), ("service", "Service output"),
+                             ("app", "App output"), ("background", "Background work"), ("crashes", "Crash reports")]
 
     @objc private func navigate(_ sender: NSMenuItem) { showWindow(path: sender.representedObject as? String ?? "") }
 

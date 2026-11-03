@@ -1,6 +1,6 @@
 (() => {
-  if (document.getElementById('pharosShareData')) return;
-  let status = null;
+  // The live status, and the snapshot the Settings query tables show.
+  let status = null, tableStatus = null;
   let busy = false;
   let timer = null;
   let activeRun = null;
@@ -172,8 +172,7 @@
     const active = runningRun(activity);
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
-    // With the unified activity preference on, status-panel.js owns the
-    // header's Index changes state.
+    // status-panel.js owns the header's Index changes state.
     if (window.pharosStatusStore?.enabled() === true) {
       if (wasActive && !active) window.pharosLibrary?.refresh?.();
       window.pharosLibrary?.refreshSyncControls?.();
@@ -203,7 +202,7 @@
     // resets its scroll containers even when the React root is retained.
     const retained = new Set(['backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
     for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
-    // The schedule (Background updates) is background.js's, at the top.
+    // The schedule (Background Processing) is background.js's, at the top.
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
     repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
@@ -248,9 +247,11 @@
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
         const latest = await call('/api/sync/status');
-        // Keep history still while it is being reviewed. Page visits, Refresh
-        // and actions replace it; activity, source status and alerts stay live.
-        status = automatic && status?.settings ? {...latest, history: status.history} : latest;
+        // Query tables stay still while they are being reviewed: page visits,
+        // their Run Now and auto-refresh, and actions replace them; activity
+        // and alerts stay live.
+        status = latest;
+        if (!automatic || !tableStatus?.settings) tableStatus = latest;
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
@@ -265,7 +266,7 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
   }
   window.addEventListener('pharos:route', () => refresh());
-  window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};
   refresh();

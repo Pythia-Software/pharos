@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
 
-const { markdownLinkAllowed, markdownLinkKind, markdownTree } = reader;
+const { markdownLinkAllowed, markdownLinkChecker, markdownLinkKind, markdownLinkProbed, markdownTree } = reader;
 const escape = text => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 // The HTML the page's markdownView produces for a tree.
 function html(item) {
@@ -111,6 +111,29 @@ test("Markdown links distinguish local files, local servers, websites and page a
   assert.deepEqual(links.map(link => [link.href, link.link.kind]), [["/Users/me/My Report.md:12", "file"], ["docs/readme.md", "file"]]);
 });
 
+test("only local destinations are probed, each once a minute and four at a time", async () => {
+  for (const href of ["docs/readme.md", "/Users/me/report.md:12", "http://localhost:5173/"]) assert.equal(markdownLinkProbed(markdownLinkKind(href)), true, href);
+  for (const href of ["/library?view=conversation", "/analyze?analyze_topic=tokens", "#notes", "mailto:me@example.com", "https://example.com"]) assert.equal(markdownLinkProbed(markdownLinkKind(href)), false, href);
+  assert.equal(markdownLinkProbed(null), false);
+  const calls = [];
+  let clock = 0;
+  const check = markdownLinkChecker((href, workspace) => new Promise((resolve, reject) => calls.push({ href, workspace, resolve, reject })), { now: () => clock });
+  const first = check("internal/archive/api.go:12", "w1");
+  assert.equal(check("internal/archive/api.go:12", "w1"), first, "a repeated link shares its check");
+  check("internal/archive/api.go:12", "w2");
+  for (const href of ["a.md", "b.md", "c.md"]) check(href, "w1");
+  assert.deepEqual(calls.map(call => [call.href, call.workspace]), [["internal/archive/api.go:12", "w1"], ["internal/archive/api.go:12", "w2"], ["a.md", "w1"], ["b.md", "w1"]], "a workspace has its own check, and only four run at once");
+  calls[0].resolve({ status: "available", href: "file:///x" });
+  assert.deepEqual(await first, { status: "available", href: "file:///x" });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(calls.length, 5, "a finished check starts the next");
+  calls[1].reject(new Error("offline"));
+  assert.equal((await check("internal/archive/api.go:12", "w2")).status, "unknown", "a failed check reports unknown");
+  clock = 60001;
+  check("internal/archive/api.go:12", "w1");
+  assert.equal(calls.length, 6, "after a minute the link is checked again");
+});
+
 test("human writing follows UTF-8 authorship spans through Markdown formatting", () => {
   const parts = [
     ['<system_instruction>Generated context</system_instruction>\n\n', 'harness'],
@@ -175,6 +198,93 @@ test("local labels name a message's most specific labels and mark the text they 
   assert.equal(reader.labelMask({ role: 'assistant', text: 'Done.' }, 'Done.'), '');
   const root = reader.messageLabelView({ labels: { ids: ['C'], probs: {} } });
   assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
+});
+
+test("the reader offers each highlight the conversation has marks for, each shown on its own", () => {
+  const typed = 'Please fix it.', reply = 'The endpoint is down.';
+  const human = { role: 'user', kind: 'message', text: typed, authorship: { spans: [{ category: 'typed', start: 0, end: typed.length }] } };
+  const agent = { role: 'assistant', kind: 'message', text: reply, labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} },
+    agent_events: [{ kind: 'obstacle', label: 'Obstacle', group: 'Friction', probability: 0.9, sentence: [0, reply.length], subject: [], response: [] }] };
+  const conversation = { labels: { labeled: true, pending: false }, agent_events: { messages_read: 1 } };
+  const options = reader.readerHighlightOptions(conversation, [human, agent]);
+  assert.deepEqual(plain(options.map(option => [option.id, option.field, option.available])),
+    [['writing', 'reader_writing', true], ['events', 'reader_events', true], ['labels', 'reader_labels', true]]);
+  assert.deepEqual(plain(options[1].legend), [{ name: 'Friction', className: 'event-friction' }]);
+  assert.equal(options[1].note, '1 event in 1 of 1 agent messages read');
+  assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
+  // Human writing is on by default and the classifiers are opt-in; a link
+  // wins over the saved choice, which wins over the default.
+  const shown = (linked, saved) => [...reader.readerHighlightsShown(options, linked, saved)].sort();
+  assert.deepEqual(shown(), ['writing']);
+  assert.deepEqual(shown(() => null, pref => pref === 'pharos-reader-events'), ['events']);
+  assert.deepEqual(shown(field => field === 'reader_labels' ? true : field === 'reader_writing' ? false : null), ['labels']);
+  // Human writing is offered only where there is some, and a classifier only
+  // once it has run; one with nothing here is offered but off.
+  const plainOptions = reader.readerHighlightOptions({ labels: { labeled: false, pending: true }, agent_events: { messages_read: 3 } }, [{ role: 'assistant', kind: 'message', text: 'Done.' }]);
+  assert.deepEqual(plain(plainOptions.map(option => [option.id, option.available, option.note])),
+    [['events', false, '0 events in 0 of 3 agent messages read'], ['labels', false, 'Not labeled yet']]);
+  assert.deepEqual(shown(() => true), ['events', 'labels', 'writing']);
+  assert.equal(reader.readerHighlightsShown(plainOptions, () => true).size, 0);
+  assert.deepEqual(plain(reader.readerHighlightOptions({}, [human]).map(option => option.id)), ['writing']);
+  assert.deepEqual(plain(reader.readerHighlightOptions({}, [agent])), []);
+});
+
+test("agent events mark each event's sentence by group and its context, in UTF-16 offsets", () => {
+  // An emoji is two UTF-16 units: offsets count them as JavaScript does.
+  const body = "The 🚧 endpoint doesn't support pagination. I'll work around it by fetching one day at a time. **Done.**";
+  const at = sentence => [body.indexOf(sentence), body.indexOf(sentence) + sentence.length];
+  const blocked = at("The 🚧 endpoint doesn't support pagination."), workaround = at("I'll work around it by fetching one day at a time.");
+  const message = { role: 'assistant', kind: 'message', text: body, agent_events: [
+    { kind: 'workaround', label: 'Workaround', group: 'Choices you may not see', probability: 0.91, sentence: workaround, subject: [blocked], response: [workaround] },
+    { kind: 'missing_capability', label: 'Missing tool or capability', group: 'Friction', probability: 0.62, sentence: blocked, subject: [], response: [] },
+    { kind: 'obstacle', label: 'Obstacle or roadblock', group: 'Friction', probability: 0.88, sentence: blocked, subject: [], response: [] },
+    { kind: 'surprise', label: 'Surprise', group: 'Reactions and learning', probability: 0.7, sentence: [0, body.length + 4], subject: [], response: [] },
+  ] };
+  const view = reader.messageEventView(message);
+  assert.deepEqual(plain(view.map(event => event.kind)), ['workaround', 'missing_capability', 'obstacle'], 'a range past the text is dropped');
+  assert.deepEqual(plain([view[0].sentenceText, view[0].subjectText, view[0].responseText]),
+    ["I'll work around it by fetching one day at a time.", "The 🚧 endpoint doesn't support pagination.", "I'll work around it by fetching one day at a time."]);
+  // Each marked sentence is a mark of its own, naming its span; an event's
+  // sentence keeps its group's mark over another event's context.
+  const marksOf = events => elements(reader.markdownTree(body, 0, reader.eventMask(body, events, ''))).filter(item => item.tag === 'mark');
+  assert.deepEqual(plain(marksOf(view).map(item => [item.className, text(item)])), [
+    ['agent-event event-friction event-at-0', "The 🚧 endpoint doesn't support pagination."],
+    ['agent-event event-choices event-at-1', "I'll work around it by fetching one day at a time."],
+  ]);
+  // Hovering a mark names the events of its own sentence, wherever Markdown
+  // cut it: a piece as short as "not" names no other sentence's events.
+  const [first, second] = marksOf(view);
+  assert.deepEqual(plain(reader.eventsAtMark(view, first).map(event => event.kind)), ['missing_capability', 'obstacle']);
+  assert.deepEqual(plain(reader.eventsAtMark(view, second).map(event => event.kind)), ['workaround']);
+  const notMessage = { ...message, text: "It is **not** done. It was not run." };
+  const notView = reader.messageEventView({ ...notMessage, agent_events: [
+    { kind: 'unverified', label: 'Unchecked claim', group: 'Choices you may not see', probability: 0.8, sentence: [20, 35], subject: [], response: [] },
+    { kind: 'deferred', label: 'Deferred', group: 'Choices you may not see', probability: 0.7, sentence: [0, 19], subject: [], response: [] }] });
+  const notMarks = elements(reader.markdownTree(notMessage.text, 0, reader.eventMask(notMessage.text, notView, ''))).filter(item => item.tag === 'mark');
+  const notPiece = notMarks.find(item => text(item) === 'not');
+  assert.deepEqual(plain(reader.eventsAtMark(notView, notPiece).map(event => event.kind)), ['deferred']);
+  // Context that is no event's sentence is marked lighter and names the
+  // events it is context of; the likelier of two events on a sentence picks
+  // its hue.
+  const context = reader.messageEventView({ ...message, agent_events: [{ ...message.agent_events[0], subject: [at("**Done.**")] }, { ...message.agent_events[2], group: 'Worth a second look', probability: 0.95 }, message.agent_events[1]] });
+  const contextMarks = marksOf(context);
+  assert.deepEqual(plain(contextMarks.map(item => item.className)), ['agent-event event-second-look event-at-0', 'agent-event event-choices event-at-1', 'event-context event-at-1']);
+  assert.deepEqual(plain(reader.eventsAtMark(context, contextMarks[2]).map(event => event.kind)), ['workaround']);
+  assert.deepEqual(plain(reader.eventsAtMark(view, { className: 'agent-event event-friction' })), []);
+  // Only the text that was scored is marked: Codex reasoning keeps its JSON
+  // event in raw_text and its prose in text, and is marked; a block split out
+  // of a JSON message loses the events (its offsets are the whole message's).
+  assert.equal(reader.messageEventView({ ...message, kind: 'reasoning', raw_text: JSON.stringify({ type: 'reasoning', text: body }) }).length, 3);
+  const json = JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: "I'll work around it." }, { type: 'text', text: body }] } });
+  const split = reader.normalizeMessages([{ ...message, id: 'm-split', text: json }]);
+  assert.equal(split.length, 2);
+  assert.ok(split.every(entry => entry.agent_events === undefined && reader.messageEventView(entry) === null));
+  assert.equal(reader.normalizeMessages([message])[0].agent_events.length, 4, 'a message shown as stored keeps its events');
+  assert.equal(reader.messageEventView({ ...message, text: JSON.stringify({ text: body }) }), null);
+  assert.equal(reader.messageEventView({ role: 'assistant', text: 'Done.' }), null);
+  assert.equal(reader.eventMask('Done.', null, '01010'), '01010');
+  // Thinking is shown as its own text, so its events apply to it.
+  assert.equal(reader.messageEventView({ ...message, kind: 'reasoning' }).length, 3);
 });
 
 test("missing classification, automated prompts and invalid ranges do not imply human writing", () => {

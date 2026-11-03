@@ -15,6 +15,13 @@ a default selection. Production choices must reflect the available CLI's actual
 capabilities rather than the sketch's example models.
 Use a compact star in the model picker to save that default.
 
+A Fast switch, off by default, appears only for models whose CLI advertises a
+faster mode: Claude models reporting `supportsFastMode` (sent as the
+`fastMode` flag setting) and Codex models with a service tier named Fast or the
+`fast` speed tier (sent as `service_tier`, preferring the named tier's id). Antigravity offers none. Fast belongs to the selection, so
+it is saved with the default and locked with the chat; changing the model drops
+it when the new model lacks it, and changing the CLI turns it off.
+
 Without a saved selection, prefer GPT 6.1 Sol with Low effort for Codex,
 Gemini 3.8 Flash with Default effort for Antigravity, and Sonnet 5.5 with Medium
 effort for Claude. Only select models and effort levels offered by the installed
@@ -48,6 +55,16 @@ Reloading restores this tab's open overlay or floating progress panel, including
 the draft and page context. Closed or dismissed surfaces stay closed; restoring
 an overlay preserves the underlying page URI.
 
+Full screen is its own page, `/ask?ask_chat=ID`: the same composer, without its
+glow, filling the page's full width and height, its transcript above the editor.
+While working, the signal trace runs around the page's edge instead.
+Before the first question, the suggestions sit there instead, inside the
+composer, until the user types. The composer's full
+screen button opens it from Home or the overlay and keeps the page context chip;
+pressed again, it returns to the page it came from, where Home shows the chat
+inline and any other page reopens the overlay. Back, the navigation, or opening
+an answer also leave full screen; a pending question then floats as usual.
+
 ## Composer and responses
 
 The prompt editor expands automatically. Focus enlivens the whole composer and its SVG
@@ -61,6 +78,10 @@ it to another surface, call `setWorking` with the active request state, and
 `destroy` it when that surface is removed. Hue cycles slowly while idle and six
 times faster while working, preserving its current phase when speed changes.
 Only the decoration changes hue; content and panel fills retain their colors.
+Hue motion pauses while the decoration is not shown, such as a closed panel or
+full screen's composer, so hidden glows do not restyle every frame. Full screen's
+page-edge signal (`createPharosEdgeTrace`) animates only the transforms of four
+small streaks, one per side, so the compositor moves it without repainting.
 Reduced motion keeps both hue and loading trace still, with loading still visible.
 For an icon, supply its 24×24 SVG outline path to the same effect. The header's
 chat glyph uses this mode so its glow and loading trace follow the bubble inside
@@ -93,14 +114,20 @@ choices, and so does a lone card left after Pharos dropped others the agent
 offered beside it. Typing a follow-up while waiting or changing to ordinary search suppresses
 automatic navigation.
 
-Supported Analyze dashboard destinations display a compact, read-only chart above
-the destination link, using the same URL-based preview loader as Home dashboard
-cards. Chart answers stay in the thread, including a single result; ordinary
-single-link answers retain automatic navigation. Previews load when visible,
-show their time range and update time, and retain the link for empty or unavailable results.
+Supported Analyze dashboard destinations display as a Card Library card for the
+destination's own address, using the same card component and URL-based preview
+loader as Home dashboard cards. The card is the destination link; its plus button
+collects that address to Home in one click, where it renders the same chart, and
+an address already collected shows “In your collection” instead. Chart answers
+stay in the thread, including a single result; ordinary single-link answers
+retain automatic navigation. Previews load when visible, show their time range
+and refresh state, and keep the link for empty or unavailable results.
+A preview in an answer that just arrived loads at once, even while Ask floats or
+is dismissed, so its chart is ready when the user opens the result.
 Reopening a chat loads the addressed moving view rather than freezing its data.
-Retained previews also revalidate when Ask reopens and on dashboard calendar or
-dataset refreshes; hidden charts defer their queries until visible again.
+Retained previews also revalidate when Ask reopens, reusing a preview loaded in
+the last minute, and on dashboard calendar or dataset refreshes; hidden charts
+defer later queries until visible again.
 Preview loading must not change the surrounding page URL, preferences or focus.
 
 Validate destinations through Pharos's own routing and URL builders. If every
@@ -136,7 +163,10 @@ A picture-in-picture icon moves the chat from either Home or the overlay into
 a draggable, dismissible progress panel. Keep the icon in the composer footer,
 immediately before Send/Stop. While processing, show “Browse while you wait”
 below the icon with a small gap. Clear the hint when processing ends or browsing
-is chosen, including when reopening that running request. Drag the panel itself to move it, or
+is chosen, including when reopening that running request. The hint's × dismisses
+it; dismissing it or choosing picture in picture hides it for the next five
+questions (`pharos-ask-browse-hint-snoozed` in UI preferences), so it keeps
+appearing only for people who never browse. Drag the panel itself to move it, or
 tap it once to reopen the chat; drafts and active questions stay intact.
 The panel shows only the latest streamed activity or request state
 and announces a completed response, clarification, or error. Dismissing it keeps
@@ -149,14 +179,14 @@ Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestio
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.
 
-The suggestion catalog in `assets/ask-model.js` interleaves questions about
-instructions, failures, tools, context, usage, models, delegation, prior work,
-findings and activity. Optional repository phrases use names from the Library's
-distinct repository values, and appear on only some eligible questions when
-at least two named repositories exist. Comparisons across repositories remain
-unqualified. Refresh changes both the page of ideas and the repository examples;
-missing metadata leaves the broad questions available. These are invitations to
-investigate, not claims that a pattern or a finding exists in the library.
+Suggestions are generic questions Pharos expects this library to answer
+well, chosen from what it noticed in the user's work; see
+[Ask suggestions](ask-suggestions.md). They never name what was noticed and
+carry no evidence line, so they read as invitations to a conversation rather
+than another set of cards. They appear only once Ask Pharos is enabled.
+Without enough data there are fewer suggestions, or none, never padding.
+Refresh asks for another seeded slate; opening the modal over a page leans
+the slate toward that page.
 
 Hide/Show suggestions remains above the cards. Its collapsed state is stored in
 the library's UI preferences (`pharos-ask-suggestions-hidden`), survives reloads
@@ -224,7 +254,7 @@ accessible in History; Clear does not delete saved chats. Ordinary search remain
 available. Clear keeps the selected CLI/model/effort for the next chat.
 
 Place the icon buttons inside the composer in this order: switch to ordinary
-search, History, Clear, picture in picture, Send/Stop. Show History only for an empty new composer, with no
+search, History, Clear, picture in picture, full screen, Send/Stop. Show History only for an empty new composer, with no
 submitted messages or draft. Show Clear whenever the composer has a draft or a
 conversation, as a text button floating in the composer's upper-right corner.
 In the modal, place a matching Close text button beside Clear. Their transparent

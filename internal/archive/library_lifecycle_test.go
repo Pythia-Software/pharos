@@ -213,7 +213,7 @@ func TestLibraryTransferRetainedEvidence(t *testing.T) {
 	if catalogCount(t, recovered, "copy_evidence") != len(evidence) {
 		t.Fatal("recovery lost evidence authority")
 	}
-	// Background updates are on by default; a recovered library starts with
+	// Background Processing are on by default; a recovered library starts with
 	// them off until someone turns them on.
 	if c := reopenCatalog(t, recovered.CatalogPath); func() bool {
 		defer c.Close()
@@ -769,13 +769,6 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		app.ServeHTTP(w, r)
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/settings/libraries" {
 			t.Fatal("the startup window opened over an open library", w.Code, w.Header().Get("Location"))
-		}
-		w = httptest.NewRecorder()
-		r = httptest.NewRequest(http.MethodGet, "/api/share?id=work", nil)
-		r.Header.Set("Authorization", "Bearer "+app.token)
-		app.ServeHTTP(w, r)
-		if w.Code != http.StatusOK || w.Body.String() != appHTML() {
-			t.Fatal("HTML exports received this Mac's library controls or metadata")
 		}
 		// Readiness: the broker's own, or, scoped to the library, its
 		// service's (the app's window asks before reloading a failed page).

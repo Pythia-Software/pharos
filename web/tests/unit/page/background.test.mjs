@@ -1,4 +1,4 @@
-// background.js: Settings → Background updates' model for a GET
+// background.js: Settings → Background Processing' model for a GET
 // /api/background document (window.pharosBackground). Words come from the
 // server; these tests check structure, ages, times and shares, not copy.
 import { test } from "node:test";
@@ -20,12 +20,14 @@ const document = {
         cost: { seconds: 50, runs: 50, class: "light", text: "Cost A" } },
       { id: "writing", label: "Item B", sub: "Sub B", state: "queued", state_label: "Up next", as_of: minutesAgo(50), next_at: minutesAgo(-1), note: "Note B",
         choices: [{ value: "", label: "Choice 1" }, { value: "daily", label: "Choice 2" }], override: "", cost: { seconds: 358, runs: 7, class: "heavy", text: "Cost B" } },
-      { id: "backup", label: "Item C", state: "unavailable", state_label: "Not set up", as_of: null, next_at: null, cost: null },
+      { id: "preserve", label: "Item C", state: "unavailable", state_label: "Not set up", as_of: null, next_at: null, cost: null },
+      { id: "backup", label: "Item D", state: "manual", state_label: "Only when you ask", as_of: minutesAgo(26 * 60), next_at: null, cost: null },
     ],
+    unscheduled: ["backup", "gone"],
     cadences: [
       { id: "frequent", label: "Row A", state: "current", state_label: "Updated", as_of: minutesAgo(2), next_at: minutesAgo(-3), items: ["conversations"] },
       { id: "hourly", label: "Row B", state: "queued", state_label: "Up next", as_of: null, next_at: null, items: ["writing"] },
-      { id: "daily", label: "Row C", state: "unavailable", state_label: "Not set up", items: ["backup", "gone"] },
+      { id: "daily", label: "Row C", state: "unavailable", state_label: "Not set up", items: ["preserve", "gone"] },
     ],
     everything: { seconds: 410, text: "Everything words" },
   },
@@ -41,9 +43,21 @@ test("one column per cadence, each with its state, its description and its items
   assert.equal(model.mode, "on");
   assert.deepEqual(model.columns.map(column => [column.id, column.description, column.dot]), [["frequent", "Frequent words", "current"], ["hourly", "Hourly words", "busy"], ["daily", "Daily words", "paused"]]);
   assert.equal(model.columns[0].text, "Updated 2 min ago · next in 3 min");
-  assert.deepEqual(model.columns[2].items.map(item => item.id), ["backup"], "an item the document does not list is left out");
+  assert.deepEqual(model.columns[2].items.map(item => item.id), ["preserve"], "an item the document does not list is left out");
+  assert.deepEqual(model.unscheduled.map(item => [item.id, item.text]), [["backup", "Only when you ask · 26 h ago"]], "only when you ask is apart from the columns");
   assert.equal(model.everything, "Everything words");
   assert.equal(background.scheduleModel({}, at), null);
+});
+
+test("label and agent event settings remain available when no labeling work is scheduled", () => {
+  for (const enabled of [false, true]) {
+    const labels = { enabled, can_change: true, status: enabled ? 'Waiting for model' : 'Off' };
+    const agentEvents = { ...labels, can_change: !enabled };
+    const model = plain(background.scheduleModel({ ...document, labels, agent_events: agentEvents }, at));
+    assert.deepEqual(model.labels, labels);
+    assert.deepEqual(model.agentEvents, agentEvents);
+    assert.ok(!model.columns.some(column => column.items.some(item => item.id === 'labels')));
+  }
 });
 
 test("an item carries its cost class, its choices and its state line", () => {
@@ -55,6 +69,8 @@ test("an item carries its cost class, its choices and its state line", () => {
   const fixed = plain(background.scheduleModel(document, at)).columns[0].items[0];
   assert.deepEqual(fixed.choices, [], "a fixed item has no choices");
   assert.equal(fixed.sources, null);
+  assert.equal(fixed.stop, null, "an item nothing stoppable runs for offers Run now");
+  assert.deepEqual(plain(background.itemModel({ ...document.view.items[0], state: "running", stop: { id: "op-1" } }, at)).stop, { id: "op-1" }, "a stoppable run offers Stop");
   const filtered = plain(background.itemModel({ ...document.view.items[0], sources: [{ name: "claude", selected: true }, { name: "codex", selected: false }] }, at));
   assert.deepEqual(filtered.sources, [{ name: "claude", selected: true }, { name: "codex", selected: false }], "the sources scheduled indexing reads, to choose from");
   assert.equal(plain(background.scheduleModel(document, at)).columns[2].items[0].cost, null);
@@ -65,6 +81,55 @@ test("an item carries its cost class, its choices and its state line", () => {
   assert.deepEqual(promoted.temporary, temporary);
   assert.deepEqual(writing.moves, []);
   assert.equal(writing.temporary, null);
+});
+
+test("an item's typical run time leads its state line", () => {
+  const item = { ...document.view.items[3], cost: { seconds: 9000, runs: 7, class: "heavy", text: "Cost D", typical: "Typical D" } };
+  assert.equal(background.itemModel(item, at).text, "Typical D · Only when you ask · 26 h ago");
+  assert.equal(background.itemModel(document.view.items[1], at).text, "Up next", "an unmeasured typical time leaves the state alone");
+});
+
+test("a dragged item moves for a week to another cadence, and dropping it on its usual one ends the week", () => {
+  const item = { ...background.itemModel(document.view.items[1], at), adaptive: true, column: "hourly", usual: "hourly" };
+  assert.equal(background.dropCadence(item, "frequent"), "frequent");
+  assert.equal(background.dropCadence(item, "daily"), "daily");
+  assert.equal(background.dropCadence(item, "hourly"), null, "its own column");
+  assert.equal(background.dropCadence(item, "manual"), null, "only the three cadences");
+  assert.equal(background.dropCadence({ ...item, adaptive: false }, "daily"), null, "a fixed item stays put");
+  const promoted = { ...item, column: "frequent", temporary: { cadence: "frequent" } };
+  assert.equal(background.dropCadence(promoted, "hourly"), "");
+  assert.equal(background.dropCadence(promoted, "daily"), "daily");
+  assert.equal(background.dropCadence(null, "daily"), null);
+  const unscheduled = background.itemModel({ ...document.view.items[1], adaptive: true, cadence: "manual", column: "hourly", usual_cadence: "manual" }, at);
+  assert.equal(unscheduled.column, "manual", "only when you ask is drawn in its own column, whatever its placement");
+  assert.equal(background.dropCadence(unscheduled, "hourly"), "hourly", "so its placement's column takes it");
+});
+
+test("every cadence keeps a column, an empty one too, to drag to", () => {
+  const view = { ...document.view, cadences: document.view.cadences.filter(row => row.id !== "hourly") };
+  const model = plain(background.scheduleModel({ ...document, view }, at));
+  assert.deepEqual(model.columns.map(column => [column.id, column.empty]), [["frequent", false], ["hourly", true], ["daily", false]]);
+  assert.equal(model.columns[1].description, "Hourly words");
+  assert.deepEqual(model.columns[1].items, []);
+});
+
+test("a pause is the hour's or the day's by when it ends", () => {
+  assert.equal(background.pauseLength(minutesAgo(-45), at), "hour");
+  assert.equal(background.pauseLength(minutesAgo(-23 * 60), at), "day");
+  const paused = { ...document, settings: { ...document.settings, mode: "paused", paused_until: minutesAgo(-600) } };
+  assert.equal(plain(background.scheduleModel(paused, at)).pause, "day");
+  assert.equal(plain(background.scheduleModel(document, at)).pause, "");
+});
+
+test("a column's run button waits while it runs; Only when you ask's while one of its items runs or none can", () => {
+  const model = plain(background.scheduleModel(document, at));
+  assert.deepEqual(model.columns.map(column => column.running), [false, false, false]);
+  assert.equal(model.unscheduledRunnable, true);
+  const running = { ...document, view: { ...document.view, cadences: document.view.cadences.map(row => row.id === "hourly" ? { ...row, state: "running" } : row),
+    items: document.view.items.map(item => item.id === "backup" ? { ...item, state: "unavailable" } : item) } };
+  const next = plain(background.scheduleModel(running, at));
+  assert.equal(next.columns[1].running, true);
+  assert.equal(next.unscheduledRunnable, false);
 });
 
 test("state lines: an age and the next time when current, the retry when failed, the run when missed", () => {

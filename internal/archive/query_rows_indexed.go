@@ -104,11 +104,10 @@ func (c *Catalog) toolCubeFresh(ctx context.Context, tx *sql.Tx) (bool, error) {
 	err := tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_generation'),'')=
  COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')||? AND
- COALESCE((SELECT value FROM meta WHERE key='tool_rollup_day'),'')=? AND
  NOT EXISTS(SELECT 1 FROM tool_rollup_dirty) AND
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')=
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') AND
- COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')=?`, "/"+toolRollupVersion, c.clock().Format("2006-01-02"), toolRollupTimezone()).Scan(&fresh)
+ COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')=?`, "/"+toolRollupVersion, toolRollupTimezone()).Scan(&fresh)
 	return fresh, err
 }
 

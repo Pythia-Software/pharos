@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { MAX_WHERE_CLAUSES, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
-import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
+import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { MetricCard, defaultRenderers, type MetricTheme } from "@pythia-software/query-table-ui";
+import { chartSeriesStyle, colorFields } from "./chart-colors";
 import { changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
-import { runAnalysisQuery, type LocalRows } from "./analysis-request";
+import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { onDatasetRefresh } from "./dataset-refresh";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
@@ -16,7 +17,7 @@ import { CreateDashboardCard } from "./create-dashboard-card";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
-export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, query: QueryState, local?: LocalRows, params?: RequestParams) {
+export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, query: QueryState, params?: RequestParams) {
   const key = JSON.stringify([query, params ?? {}]);
   // A result belongs to its query and to the refresh it was fetched for, so
   // results from before a refresh read as loading, never as current.
@@ -27,11 +28,11 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     const [request, parameters] = JSON.parse(key) as [QueryState, RequestParams];
-    runAnalysisQuery(dataset, schema, request, { signal: controller.signal, local, params: parameters })
+    runAnalysisQuery(dataset, schema, request, { signal: controller.signal, params: parameters })
       .then(results => setState({ key, refresh, results, error: "", loading: false }))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, results: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
-  }, [dataset, key, refresh, local]);
+  }, [dataset, key, refresh]);
   const current = state.key === key;
   return { results: current ? state.results : [], loading: !current || state.refresh !== refresh || state.loading, error: current ? state.error : "" };
 }
@@ -69,7 +70,8 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
     {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", measure.additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(measure) ? undefined : `${measure.label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
     {view.view === "compare" ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
-    {trend ? <ChartSelect label="Show as" value={view.share ? "share" : "values"} options={[["values", "Values"], ["share", "Share of total", limits.share]]} title="Values, or each series' share of its period's total" onChange={share => set({ share: share === "share" })} /> : null}
+    {trend ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
+      title="Values; values without zeroes, which leaves out periods with nothing drawn and passes lines over a series' zeroes; or each series' share of its period's total" onChange={shown => set({ share: shown === "share", nonzero: shown === "nonzero" })} /> : null}
     {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} onChange={display => set({ display })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
@@ -104,16 +106,16 @@ const axis = (value?: string) => value === "logarithmic" ? "logarithmic" : "line
 // Compare, distribution, scatter and cycle views over one catalog. Each view
 // shows only the controls it uses; changes are normalized so the saved state
 // always describes the chart on screen.
-export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, local, legacyURL, children }: {
+export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, dataset, state, where, onChange, onView, onFilter, children }: {
   catalog: AnalysisCatalog; schema: FieldSchema<any>; dataset: UsageDataset; state: T; where: WhereTerm[];
-  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; local?: LocalRows; legacyURL?: string; children?: React.ReactNode;
+  onChange: (next: Partial<T>) => void; onView: (view: AnalysisView) => void; onFilter: FilterChange; children?: React.ReactNode;
 }) {
   const originRevision = useOriginMetadata();
   const view = normalizeAnalysis(catalog, state);
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   // Rounding a relative start to midnight is stable within a day.
   const analysis = useMemo(() => analysisQuery(catalog, view, where, { zone }), [catalog, JSON.stringify(view), JSON.stringify(where), zone, new Date().toDateString()]);
-  const result = useAnalysisResult(dataset, schema, analysis.query, local, catalog.request?.params);
+  const result = useAnalysisResult(dataset, schema, analysis.query, catalog.request?.params);
   const bounds = timeBounds(where, catalog.time);
   // Save what was asked for; only drawing and querying normalize.
   const set = (change: Partial<AnalysisState>) => onChange(changeState(catalog, state, change) as Partial<T>);
@@ -138,6 +140,9 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
   const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, catalog.labels), [entry, originRevision, clause, catalog]);
+  // Hours of the day take the sky's colour at that hour.
+  const hourTheme: MetricTheme | undefined = colorFields(clause)[0] === "hour_of_day" && presentation.metric ? { dimensions: { [clause.groupBy[0]]: { layer: "hours",
+    overrides: presentation.metric.buckets.map(bucket => ({ value: bucket.keys[0] as AggregationBucket["keys"][number], color: chartSeriesStyle("hour_of_day", String(bucket.keys[0])).color })) } } } : undefined;
   const empty = !result.loading && !error && entry && (!entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
   const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the minimum of ${view.minSamples.toLocaleString()} ${sampleSubject(catalog, view)}.` : "";
 
@@ -146,22 +151,18 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>
-    <CreateDashboardCard catalog={catalog} state={state} where={where} />
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
-      : <MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers}
+      : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers} theme={hourTheme}
         onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
-        }} />}
+        }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
     {children}
-    {/* A legacy link only where that page still has something of its own
-        (Tools' failure kinds); otherwise it would show this query's table
-        under its default chart. */}
-    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} currentURL={legacyURL} />
+    <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

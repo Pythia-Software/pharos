@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
-// Background updates (docs/background-work.md §11): where measured cost
+// Background Processing (docs/background-work.md §11): where measured cost
 // places an item, when each cadence's work is due, the pass that runs it,
 // and the settings that steer it.
 
@@ -33,6 +36,26 @@ func TestPlaceCadenceMovesByMeasuredCostWithoutFlapping(t *testing.T) {
 	} {
 		if got := placeCadence(test.current, itemCost{Seconds: test.seconds, Runs: test.runs}); got != test.want {
 			t.Errorf("%s: placed %s, want %s", test.name, got, test.want)
+		}
+	}
+}
+
+// An item's typical time is the middle of its recent runs, in one unit, so
+// an outlier at either end does not widen it.
+func TestTypicalWordsSpanTheMiddleOfRecentRuns(t *testing.T) {
+	for _, test := range []struct {
+		runs []float64
+		want string
+	}{
+		{[]float64{3, 4, 5}, "Typically a few seconds"},
+		{[]float64{20, 25, 30}, "Typically 20–30 s"},
+		{[]float64{2, 30, 200}, "Typically up to 3 min"},
+		{[]float64{360, 370, 380}, "Typically about 6 min"},
+		{[]float64{60, 7200, 8000, 9000, 9500, 10800, 90000}, "Typically 2–3 h"},
+	} {
+		_, low, high := typicalRange(test.runs)
+		if got := typicalWords(itemCost{Low: low, High: high}); got != test.want {
+			t.Errorf("%v: %q, want %q", test.runs, got, test.want)
 		}
 	}
 }
@@ -247,6 +270,28 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 // A pass runs the most frequent cadence's due work through the chain, only
 // the stages due (and those before them with work waiting), records each
 // item, and leaves the rest; Run now runs an item outside its cadence.
+// Settings and the status panel list items in backgroundItems order, so it
+// is the order a pass runs them: standalone items, then the chain's in
+// chain order, then those that read the chain's results.
+func TestBackgroundItemsAreListedInRunOrder(t *testing.T) {
+	chained, after, last := false, false, -1
+	for _, item := range backgroundItems {
+		chain := len(item.Stages) > 0 || item.ID == "review"
+		if chained && !chain && !item.afterChain || after && !item.afterChain {
+			t.Fatalf("%s runs before the chain but is listed after it", item.ID)
+		}
+		after = after || item.afterChain
+		chained = chained || chain
+		for _, stage := range item.Stages {
+			index := slices.Index(stageOrder, stage)
+			if index < last {
+				t.Fatalf("%s's stage %s is listed out of chain order", item.ID, stage)
+			}
+			last = index
+		}
+	}
+}
+
 func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
@@ -305,6 +350,113 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 // The settings API: modes, the daily time, the interval, overrides within
 // the allowed choices, and Run now; the status snapshot carries the
 // schedule.
+func TestMessageLabelsSettings(t *testing.T) {
+	useSupportDir(t)
+	catalog, config := testCatalog(t)
+	original := "# Library settings\nlabels_threads = 2\n\n[[sources]]\nname = \"example\"\nkind = \"claude\"\npath = \"/nowhere\"\nenabled = true\n"
+	if err := os.WriteFile(config.Path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, catalog)
+	read := func() map[string]any {
+		t.Helper()
+		response := apiCall(t, server, config.APIToken, http.MethodGet, "/api/background", nil)
+		if response.Code != http.StatusOK {
+			t.Fatalf("read settings: %d %s", response.Code, response.Body.String())
+		}
+		var document map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	if labels := read()["labels"].(map[string]any); labels["enabled"] != false || labels["can_change"] != true {
+		t.Fatalf("disabled settings must remain visible: %v", labels)
+	}
+	// Agent events sit beside labels; their switch is a preference.
+	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
+		t.Fatalf("agent events settings must remain visible while off: %v", events)
+	}
+	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/preferences", map[string]any{"set": map[string]any{agentEventsFlag: true}}); response.Code != http.StatusOK {
+		t.Fatalf("turn agent events on: %d %s", response.Code, response.Body.String())
+	}
+	if events := read()["agent_events"].(map[string]any); events["enabled"] != true || !strings.Contains(firstString(events["status"]), "worker") {
+		t.Fatalf("agent events switch is not read back, or a missing worker is not explained: %v", events)
+	}
+	for _, body := range []string{`{}`, `{"enabled":"true"}`, `{"enabled":null}`} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid setting %s: %d", body, response.Code)
+		}
+	}
+	for _, enabled := range []bool{true, false, true} {
+		response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", map[string]any{"enabled": enabled})
+		if response.Code != http.StatusOK {
+			t.Fatalf("toggle %t: %d %s", enabled, response.Code, response.Body.String())
+		}
+		reloaded, err := LoadConfig(config.Path)
+		if err != nil || reloaded.Labels.Enabled != enabled || server.Config().Labels.Enabled != enabled || reloaded.Labels.Threads != 2 {
+			t.Fatalf("toggle did not persist/apply: %+v %v", reloaded.Labels, err)
+		}
+		if len(reloaded.Sources) != 1 || !reloaded.Sources[0].Enabled {
+			t.Fatal("the setting changed a source")
+		}
+		document := read()
+		labels := document["labels"].(map[string]any)
+		if labels["enabled"] != enabled {
+			t.Fatalf("readback: %v", labels)
+		}
+		if enabled && (!strings.Contains(firstString(labels["status"]), "download") || !strings.Contains(firstString(labels["status"]), "worker")) {
+			t.Fatalf("missing runtime assets are not explained: %v", labels)
+		}
+		listed := false
+		for _, item := range document["view"].(map[string]any)["items"].([]any) {
+			listed = listed || item.(map[string]any)["id"] == "labels"
+		}
+		if listed != enabled {
+			t.Fatalf("scheduled labels listed = %t, enabled = %t", listed, enabled)
+		}
+	}
+	// Each model's threads: saved to the configuration and read back, and
+	// changing labels' keeps agent events' where it was.
+	for _, body := range []string{`{"threads":0}`, `{"threads":1.5}`, `{"threads":"2"}`, `{"agent_events_threads":100000}`} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid threads %s: %d", body, response.Code)
+		}
+	}
+	unchosen := max(1, server.Config().Labels.Threads)
+	for _, body := range []map[string]any{{"threads": 1}, {"agent_events_threads": 1}} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusOK {
+			t.Fatalf("threads %v: %d %s", body, response.Code, response.Body.String())
+		}
+		reloaded, err := LoadConfig(config.Path)
+		if err != nil || reloaded.Labels.Threads != 1 || reloaded.AgentEvents.Threads != map[bool]int{true: unchosen, false: 1}[body["threads"] != nil] || !reloaded.Labels.Enabled {
+			t.Fatalf("threads %v were not saved: %+v %+v %v", body, reloaded.Labels, reloaded.AgentEvents, err)
+		}
+		document := read()
+		if labels, events := document["labels"].(map[string]any), document["agent_events"].(map[string]any); labels["threads"] != 1.0 || events["threads"] != float64(reloaded.AgentEvents.Threads) {
+			t.Fatalf("threads readback: %v %v", labels, events)
+		}
+	}
+	deferred, err := catalog.freshnessDeferred(t.Context())
+	if err != nil || deferred["labels"].generation <= deferred["labels"].completed {
+		t.Fatalf("earlier messages were not scheduled: %v %v", deferred, err)
+	}
+	if catalog.hasLabelsLedger() {
+		t.Fatal("changing settings ran inference")
+	}
+	text, _ := os.ReadFile(config.Path)
+	if !strings.HasPrefix(string(text), "# Library settings\n") || strings.Count(string(text), "labels_enabled =") != 1 {
+		t.Fatalf("configuration was not preserved: %s", text)
+	}
+	// A failed persistence must leave the running opt-in unchanged.
+	if err := os.Remove(config.Path); err != nil {
+		t.Fatal(err)
+	}
+	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", map[string]any{"enabled": false}); response.Code != http.StatusInternalServerError || !server.Config().Labels.Enabled {
+		t.Fatalf("failed save changed the running choice: %d", response.Code)
+	}
+}
+
 func TestBackgroundSettingsAPI(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
@@ -338,6 +490,15 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	view := document["view"].(map[string]any)
 	if cadences, _ := view["cadences"].([]any); len(cadences) != 3 {
 		t.Fatalf("one row per cadence: %v", view["cadences"])
+	}
+	// Back up is off unless chosen: on no schedule, so in no cadence's row.
+	if unscheduled, _ := view["unscheduled"].([]any); !slices.Contains(unscheduled, any("backup")) {
+		t.Fatalf("back up is not listed as unscheduled: %v", view["unscheduled"])
+	}
+	for _, row := range view["cadences"].([]any) {
+		if items, _ := row.(map[string]any)["items"].([]any); slices.Contains(items, any("backup")) {
+			t.Fatalf("an unscheduled item is in a cadence's row: %v", row)
+		}
 	}
 	if headline, _ := view["headline"].(map[string]any); headline["tone"] == nil || headline["title"] == "" {
 		t.Fatalf("the view has a headline: %v", view["headline"])
@@ -465,6 +626,11 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		t.Fatal("Run now of new conversations asks for an index whatever the schedule")
 	}
 	post("/api/background/run", map[string]any{"item": "nothing"}, http.StatusBadRequest)
+	// Ad hoc's run: every item set to only when you ask.
+	post("/api/background/run", map[string]any{"cadence": cadenceManual}, http.StatusAccepted)
+	if requested := server.peekRequested(); !requested["backup"] || requested["findings"] {
+		t.Fatalf("running the manual cadence asks for exactly its items: %v", requested)
+	}
 	if status := getStatus(t, server, "/api/status"); status.raw["background"] == nil {
 		t.Fatal("the status snapshot carries the schedule")
 	}

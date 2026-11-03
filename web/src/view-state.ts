@@ -26,13 +26,23 @@ export function readClassicViewState<T>(name: string, fallback: T, params = new 
   }
 }
 export function writeViewState(name: string, value: unknown): void {
-  const field = viewFields[name];
-  if (!field) throw new Error(`Unregistered view field: ${name}`);
+  writeViewStates({ [name]: value });
+}
+// Fields that change together share one history entry update and one
+// pharos:uri-changed, which every URL observer handles.
+export function writeViewStates(values: Record<string, unknown>): void {
   const url = new URL(location.href);
-  if(!viewFieldApplies(name,url))return;
-  const raw = encodeViewValue(field, value);
-  if (url.searchParams.get(field.param) === raw) return;
-  url.searchParams.set(field.param, raw);
+  let changed = false;
+  for (const [name, value] of Object.entries(values)) {
+    const field = viewFields[name];
+    if (!field) throw new Error(`Unregistered view field: ${name}`);
+    if (!viewFieldApplies(name, url)) continue;
+    const raw = encodeViewValue(field, value);
+    if (url.searchParams.get(field.param) === raw) continue;
+    url.searchParams.set(field.param, raw);
+    changed = true;
+  }
+  if (!changed) return;
   history.replaceState(history.state, "", url);
   window.dispatchEvent(new Event("pharos:uri-changed"));
 }
@@ -162,7 +172,13 @@ export function installClassicDisclosures() {
     }
   });
   observer.observe(document.body, {subtree:true, childList:true, attributes:true, attributeFilter:["data-pharos-target"]});
-  for (const event of ["popstate", "pharos:route", "pharos:view", "pharos:uri-changed"]) window.addEventListener(event, () => restore());
-  restore();
+  // Writes to other fields leave every disclosure as it was. Skip rescanning
+  // the document for them: Open turns writes once per transcript turn.
+  let restored: string | null = null;
+  const disclosuresParam = () => new URLSearchParams(location.search).get(viewFields.disclosures.param);
+  const restoreAll = () => { restored = disclosuresParam(); restore(); };
+  for (const event of ["popstate", "pharos:route", "pharos:view"]) window.addEventListener(event, restoreAll);
+  window.addEventListener("pharos:uri-changed", () => { if (disclosuresParam() !== restored) restoreAll(); });
+  restoreAll();
   return restore;
 }

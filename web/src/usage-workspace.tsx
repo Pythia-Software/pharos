@@ -1,28 +1,33 @@
 import { analyzePages } from "./app-navigation-model";
-import React, { useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import type { FieldSchema, QueryState } from "@pythia-software/query-table-core";
 import { dashboardQueryLinks } from "./dashboard-query-links";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
-import { usageWorkspaceURL, readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { readUsageWorkspace, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { NestedPageLayout, PageLink, useLocationRevision } from "./nested-pages";
 import { resolveCardDashboardURL } from "./saved-card-model";
 import "./usage-workspace.css";
 
 export const UsageWorkspaceLink = PageLink;
 
-export function UsageDashboardLinks({ dataset, query, schema, currentURL }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema; currentURL?: string }) {
+// A dashboard's main chart titles the page: its title takes the heading's
+// place, while the dashboard's name stays the page's h1.
+const DashboardHeadline = createContext<HTMLElement | null>(null);
+export const useDashboardHeadline = () => useContext(DashboardHeadline);
+
+export function UsageDashboardLinks({ dataset, query, schema }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema }) {
   const params = new URLSearchParams(location.search);
-  const analysis = currentURL ? usageAnalysisLink(dataset, query, currentURL, params) : null;
   return <div className="usage-dashboard-links">
     <div className="usage-query-destinations">{dashboardQueryLinks(dataset, query, schema, params).map(link => <UsageWorkspaceLink className="usage-query-destination" key={link.title} href={link.href}>
       <span className="usage-query-destination-heading"><strong>{link.title}</strong><Icon name="arrow-right" /></span>
       {link.sentence.length ? <span className="usage-query-sentence">{link.sentence.map(part => <React.Fragment key={part.keyword}>{part.prefix}<strong>{part.keyword}</strong>{part.text ? ` ${part.text}` : ""}</React.Fragment>)}.</span> : null}
     </UsageWorkspaceLink>)}</div>
-    {analysis ? <UsageWorkspaceLink className="usage-legacy-link" href={analysis.href}>Legacy view{analysis.resetsFilters ? " (resets filters)" : ""}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}
   </div>;
 }
 
+// New records arrive while a dashboard is open (Pharos MCP's own requests,
+// new usage); Refresh reruns its queries.
 export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboard: (topic: UsageTopic) => React.ReactNode; renderTable: (dataset: UsageDataset) => React.ReactNode }) {
   useLocationRevision();
   const address = location.href;
@@ -30,6 +35,7 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
   const restoreCard = mode === "dashboards" && params.has("card_id");
   const [failure, setFailure] = useState<{ address: string; message: string }>();
   const [attempt, setAttempt] = useState(0);
+  const [headline, setHeadline] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!restoreCard) return;
     const controller = new AbortController();
@@ -52,11 +58,11 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
   const title = mode === "dashboards" ? usageTopics[topic].label : `Query · ${usageDatasets[dataset].label}`;
   const pages = analyzePages(params);
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
-    label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title}
-    description={mode === "dashboards" ? usageTopics[topic].description : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
-    actions={<><ResetPage />{mode==="dashboards"&&["tokens","time","parallelism"].includes(topic)?<UsageWorkspaceLink href={usageWorkspaceURL({mode:"dashboards",topic:"thinking-overview",dataset:"model_requests"})}>Waiting and Compaction<Icon name="arrow-right" /></UsageWorkspaceLink>:null}{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
+    label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title} titleSlot={setHeadline}
+    description={mode === "dashboards" ? "" : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
+    actions={<><ResetPage />{mode === "dashboards" ? <button type="button" className="usage-dashboard-refresh" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button> : null}{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
-      {renderDashboard(topic)}</div>
+      <DashboardHeadline.Provider value={headline}>{renderDashboard(topic)}</DashboardHeadline.Provider></div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}
   </NestedPageLayout>;
 }

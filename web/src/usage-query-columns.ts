@@ -1,4 +1,4 @@
-import { ITEM_DETAILS_COLUMN, groupKeyFields, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, ITEM_DETAILS_COLUMN, groupKeyFields, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { toolSummaryDimensions } from "./tools-dashboard-model";
 import type { UsageDataset } from "./usage-workspace-model";
 
@@ -18,6 +18,9 @@ export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
   mcp_calls: [{ kind: "requested", label: "Requested target", dependencies: ["arguments_json"] }],
   skill_usages: [source([...conversation, "evidence_message_id", "created_at"]), { kind: "body", label: "Skill body", dependencies: [...conversation, "evidence_message_id", "body_message_id"] }, { kind: "tool", label: "Tool call", dependencies: ["tool_call_id"] }],
   parallelism: [source(["conversation_id", "location", "started_at"])],
+  rhythm: [source(["conversation_id", "started_at"])],
+  agent_events: [source([...conversation, "message_id"])],
+  agent_event_messages: [source([...conversation, "message_id"])],
 };
 export const usageDrilldownField = (kind: UsageDrilldown) => `usage_drill_${kind}`;
 
@@ -48,6 +51,12 @@ export function withGroupDetail(query: QueryState): QueryState {
     select.find(column => column.field === ITEM_DETAILS_COLUMN) ?? { field: ITEM_DETAILS_COLUMN },
   ];
   return JSON.stringify(columns) === JSON.stringify(query.select) ? query : { ...query, select: columns };
+}
+
+// A new Analyze table fits the screen at the dataset's page size. Restored
+// URLs, saves and last-used queries keep their own sizing choice.
+export function fittedDefaultQuery(schema: FieldSchema): QueryState {
+  return { ...EMPTY_QUERY, select: schema.defaultSelect ?? [], orderBy: schema.defaultSort ?? [], limit: schema.defaultLimit ?? EMPTY_QUERY.limit, fitToScreen: true };
 }
 
 export function usageActionQuery(query: QueryState, schema: FieldSchema, dataset: UsageDataset): QueryState {

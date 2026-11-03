@@ -127,6 +127,29 @@ Changes apply immediately and are saved with the library, including when it
 moves between Macs. Earlier button visibility preferences are kept until you
 change or reset the layout.
 
+## Logs and crash reports
+
+When a page stays blank, or Pharos stops, open **Settings → Logs** (or add
+**Logs & crash reports** to the menu bar; it is off by default). Its sidebar
+lists one page per source and marks with an error or warning icon each source
+that recorded something in the last day (crash reports: the last week):
+
+| Source | What it holds | Written by |
+|---|---|---|
+| Page errors | Uncaught errors, failed and stalled requests, scripts that did not load, and web processes that stopped | the page (`page-errors.js`) and the app |
+| Slow & failed requests | Requests that took 3 s or more, returned an error, or panicked (with the stack), and requests running now | the service |
+| Service output | The library service's stderr by run; a run that panicked or exited with an error is a crash | the app's broker |
+| App output | Everything the app and its services printed, by launch | the Mac app |
+| Background work | Operations on this Mac that failed or were interrupted in the last week | the operation journal |
+| Crash reports | macOS reports for Pharos processes and the web processes the app started | macOS (`~/Library/Logs/DiagnosticReports`) |
+
+**Overview** lists the marked sources first. **Copy report for an agent** copies
+their recent entries, stacks and crashed threads, with the paths of the full
+logs, which live in `~/Library/Application Support/Pharos/logs` (`app.log`, and
+per library `library-<id>/service.log`, `page-errors.jsonl` and
+`requests.jsonl`). Logs stay on this Mac and are bounded: a log over 4 MB starts
+a new file and keeps one previous file.
+
 ## Portable library
 
 A portable library keeps everything Pharos has indexed in one directory,
@@ -472,7 +495,7 @@ copied, then says how much it captured, for example "Captured 4.3 GB from
 MacBook Air. You can eject euclid now; indexing can finish now or later on any
 Mac." **Index now** indexes those captures (see [Indexing
 captures](#indexing-captures)) with per-source progress; **Later** leaves them
-to be indexed from Settings → Background updates (see below), on this Mac or any other. Either
+to be indexed from Settings → Background Processing (see below), on this Mac or any other. Either
 step can be left to run in the background: the header shows its progress, and
 a message says when it finishes.
 
@@ -502,8 +525,8 @@ copied into `archive.toml` by hand.
 Pharos has two verbs for keeping the library current: **capture** copies
 this Mac's source files into the library, and **index** makes conversations
 searchable. Settings → Sources keeps **Configure sources on this Mac**, source
-configuration, and enable switches, with **Open Background updates** linking to
-the controls. Settings → Background updates shows what Pharos keeps current
+configuration, and enable switches, with **Open Background Processing** linking to
+the controls. Settings → Background Processing shows what Pharos keeps current
 on its own, Frequently, Hourly and Daily, with each item's measured cost, and
 offers **Capture & index**: capture
 this Mac, index captures from every Mac, then any pending library upgrade.
@@ -513,7 +536,7 @@ enabled local sources into the library, or **Index captured files**, which
 indexes captures from every Mac. Progress and the index **Stop** control are
 on that page too. The header button beside the library disk runs **Index
 changes**: it indexes what changed in this Mac's sources, without capturing
-them. Settings → Background updates also offers the schedule's controls
+them. Settings → Background Processing also offers the schedule's controls
 (on, paused, only when I ask; the interval and the daily time), measured
 costs, integrity verification, and stoppable/resumable recovery. See
 [Index changes](incremental-sync.md) for controls, repair modes, and API
@@ -912,7 +935,7 @@ the next run resumes it.
 **Stopping an index.** `POST /api/index/cancel` stops the running index, or the
 running Index changes (they share one lock), and answers `{"stopped": true}`, or
 `false` when nothing was running. The **Stop** button beside a running index in
-Settings → Background updates and in the drive panel calls it. It stops the same way a
+Settings → Background Processing and in the drive panel calls it. It stops the same way a
 release does, between records: the record being written finishes and commits, so
 everything already indexed stays. Unlike a release, the service carries on, so
 what the run did write is still linked across Macs, checkpointed and looked up

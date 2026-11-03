@@ -97,6 +97,25 @@ var ErrModelUnavailable = errors.New("labeler model unavailable")
 // tokenizer. A manifest for a framing contract other than this build's is
 // refused.
 func LoadModel(dir, variant string) (*Model, error) {
+	return LoadFramedModel(dir, variant, KestrelFraming)
+}
+
+// Framing is what loading a model needs to know of the framing contract its
+// caller implements: its name, the longest sequence it builds, and whether
+// its models label (labels, thresholds and the decision rule).
+type Framing struct {
+	Contract  string
+	MaxTokens int
+	Labels    bool
+}
+
+// KestrelFraming is the message labeler's framing, kestrel-framing-v1.
+var KestrelFraming = Framing{Contract: FramingContract, MaxTokens: MaxTokens, Labels: true}
+
+// LoadFramedModel is LoadModel for a caller that implements framing: a
+// manifest for any other framing contract is refused, and a model whose
+// framing does not label needs no labels or thresholds.
+func LoadFramedModel(dir, variant string, framing Framing) (*Model, error) {
 	if variant == "" {
 		variant = "int8"
 	}
@@ -109,8 +128,8 @@ func LoadModel(dir, variant string) (*Model, error) {
 		return nil, fmt.Errorf("%w: manifest.json: %v", ErrModelUnavailable, err)
 	}
 	man := &m.Manifest
-	if man.FramingContract != FramingContract {
-		return nil, fmt.Errorf("%w: the model needs framing %q; this build implements %q", ErrModelUnavailable, man.FramingContract, FramingContract)
+	if man.FramingContract != framing.Contract {
+		return nil, fmt.Errorf("%w: the model needs framing %q; this build implements %q", ErrModelUnavailable, man.FramingContract, framing.Contract)
 	}
 	m.InputContract = man.InputContract
 	if m.InputContract == "" {
@@ -144,10 +163,10 @@ func LoadModel(dir, variant string) (*Model, error) {
 			m.PadMultiple = lcm(m.PadMultiple, multiple)
 		}
 	}
-	m.MaxSeq = MaxTokens
+	m.MaxSeq = framing.MaxTokens
 	if man.MaxSeq != 0 {
-		if man.MaxSeq < MaxTokens || man.MaxSeq > 8192 {
-			return nil, fmt.Errorf("%w: max_seq %d: %s frames up to %d tokens, and at most 8192 are allowed", ErrModelUnavailable, man.MaxSeq, FramingContract, MaxTokens)
+		if man.MaxSeq < framing.MaxTokens || man.MaxSeq > 8192 {
+			return nil, fmt.Errorf("%w: max_seq %d: %s frames up to %d tokens, and at most 8192 are allowed", ErrModelUnavailable, man.MaxSeq, framing.Contract, framing.MaxTokens)
 		}
 		m.MaxSeq = man.MaxSeq
 	}
@@ -193,6 +212,9 @@ func LoadModel(dir, variant string) (*Model, error) {
 	if m.Tokenizer, err = LoadTokenizer(data); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrModelUnavailable, err)
 	}
+	if !framing.Labels {
+		return m, nil
+	}
 	if err := m.prepareDecisions(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrModelUnavailable, err)
 	}
@@ -213,18 +235,24 @@ type InputContract struct {
 //     text span (FrameSpans.Text): the model averages only the target's
 //     vectors while attending to the whole input. An item whose text yields
 //     no tokens cannot be labeled and is never sent.
+//   - ids-attention-pool-segments-v1: the same plus segment_ids, which
+//     number the framing's sentences (Framed.Extra[SegmentSpans]) so the
+//     model can pool each one, as the agent event verifier's window does.
 //
 // Both pad to a multiple of 8: the int8 models' outputs change when the
 // padded length is not a multiple of 4 (PadMultiple).
 const (
-	InputContractIDsAttention     = "ids-attention-v1"
-	InputContractIDsAttentionPool = "ids-attention-pool-v1"
+	InputContractIDsAttention             = "ids-attention-v1"
+	InputContractIDsAttentionPool         = "ids-attention-pool-v1"
+	InputContractIDsAttentionPoolSegments = "ids-attention-pool-segments-v1"
 )
 
 // InputContracts are the input contracts this build implements.
 var InputContracts = map[string]InputContract{
 	InputContractIDsAttention:     {Inputs: DefaultInputs, PadMultiple: PadMultiple},
 	InputContractIDsAttentionPool: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool}), PadMultiple: PadMultiple},
+	InputContractIDsAttentionPoolSegments: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool},
+		InputSpec{Name: "segment_ids", Role: RoleSegment}), PadMultiple: PadMultiple},
 }
 
 // Pools reports whether the model pools a role-pool input, so an item with

@@ -724,6 +724,51 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 			t.Fatalf("cancelled log read did not stop: %v", err)
 		}
 	}
+	for content, want := range map[string][]string{
+		antigravityRoot + antigravityChild:                             {antigravityRoot, antigravityChild},
+		"--------" + antigravityRoot + "-":                             {antigravityRoot},
+		"ab" + antigravityRoot:                                         {antigravityRoot},
+		strings.ToUpper(antigravityRoot) + " " + antigravityChild[:35]: nil,
+	} {
+		var found []string
+		antigravityLogIDs([]byte(content), func(start, end int) { found = append(found, content[start:end]) })
+		if !slices.Equal(found, want) {
+			t.Fatalf("IDs in %q = %v, want %v", content, found, want)
+		}
+	}
+}
+
+// The run-log cache keeps every log its directory still has, however many,
+// and forgets the ones the CLI removed.
+func TestAntigravityRunLogCacheFollowsTheDirectory(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"cli-20260101_000001.log", "cli-20260101_000002.log", "cli-20260101_000003.log"} {
+		writeSourceFile(t, filepath.Join(directory, "log", name), "Print mode: conversation="+antigravityRoot+"\n")
+	}
+	made, err := MakeAdapter(SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: directory, Account: "local", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := made.(*antigravityAdapter)
+	cached := func() int {
+		count := 0
+		antigravityLogCache.Range(func(key, _ any) bool {
+			if strings.HasPrefix(key.(string), directory) {
+				count++
+			}
+			return true
+		})
+		return count
+	}
+	if logs, err := adapter.readRunLogs(adapter.runLogs()); err != nil || len(logs) != 3 || cached() != 3 {
+		t.Fatalf("logs=%d cached=%d err=%v", len(logs), cached(), err)
+	}
+	if err := os.Remove(filepath.Join(directory, "log", "cli-20260101_000002.log")); err != nil {
+		t.Fatal(err)
+	}
+	if logs, err := adapter.readRunLogs(adapter.runLogs()); err != nil || len(logs) != 2 || cached() != 2 {
+		t.Fatalf("after removal logs=%d cached=%d err=%v", len(logs), cached(), err)
+	}
 }
 
 // A transcript's start time that could not be read (the file could not be

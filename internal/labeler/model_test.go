@@ -174,4 +174,22 @@ func TestModelInputContracts(t *testing.T) {
 	if model.MaxSeq != MaxTokens || model.HasOutputs([]string{"anything"}) != nil {
 		t.Fatalf("defaults: %+v", model)
 	}
+	// A framing that does not label (the agent event verifier's) needs no
+	// labels or thresholds, and each caller loads only its own framing's models.
+	window := Framing{Contract: "window-test", MaxTokens: 768}
+	verifier := writeModelDir(t, func(m map[string]any) {
+		m["framing_contract"], m["input_contract"], m["max_seq"] = window.Contract, InputContractIDsAttentionPoolSegments, 768
+		delete(m, "labels")
+		delete(m, "thresholds")
+	})
+	segmented, err := LoadFramedModel(verifier, "int8", window)
+	if err != nil || !segmented.Pools() || segmented.Inputs[3] != (InputSpec{"segment_ids", RoleSegment}) || segmented.MaxSeq != 768 {
+		t.Fatalf("segment contract: %+v %v", segmented, err)
+	}
+	if _, err := LoadModel(verifier, "int8"); err == nil {
+		t.Fatal("the labeler loaded another framing's model")
+	}
+	if _, err := LoadFramedModel(writeModelDir(t, func(m map[string]any) { m["framing_contract"], m["max_seq"] = window.Contract, 512 }), "int8", window); err == nil {
+		t.Fatal("max_seq below the framing's longest sequence was accepted")
+	}
 }

@@ -31,6 +31,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"application.go:runApplicationCLI":            {3, "the broker's HTTP shutdown and parent watchdog, and its maintain daemon"},
 	"application.go:startChildLocked":             {1, "subprocess pipe: waits for the child service to exit"},
 	"application.go:runApplicationMCPCLI":         {1, "watchdog for the app's volume in an MCP stdio process"},
+	"application.go:updateRefusal":                {1, "asks each library's service in parallel whether an update may stop it: a read bounded by brokerFreshTimeout that writes nothing"},
 	"capture.go:newHash":                          {1, "a hashing pipeline stage inside a capture, which is the operation"},
 	"backup.go:boundWAL":                          {1, "a WAL poller inside a backup, which is the operation"},
 	"catalog_compact.go:writeCompacted":           {1, "a size poller for progress inside a compaction, which is the operation"},
@@ -46,9 +47,13 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"labeling_routes.go:labelingCLIVersion":       {1, "subprocess: a labeling CLI's --version, bounded by a timeout; writes nothing"},
 	"labels.go:execute":                           {3, "pipeline stages inside a labels run (item building, the writer, batch runners), which is the analysis.labels operation"},
 	"labels.go:chainLabels":                       {1, "the power watch inside a backlog labels run (the analysis.labels operation), which stops it when this Mac goes onto battery"},
+	"agent_events_run.go:chainAgentEvents":        {1, "the power watch inside a backlog agent events run (the analysis.agent_events operation), which stops it when this Mac goes onto battery"},
 	"worker.go:serve":                             {1, "the labeler worker binary's frame reader (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"worker.go:start":                             {1, "the labeler worker binary's model runner (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"labeling_run.go:loop":                        {1, "the offline `pharos labeling run` command's bounded worker pool; it runs outside the service and journals its work in the dataset's own ledger"},
+	"thinking.go:handleThinking":                  {4, "request handling: the Overview's sections computed in parallel over the request's records; writes nothing"},
+	"thinking_models.go:thinkingModels":           {1, "a bounded worker per model inside a Thinking fit, which the request or cache build waits for; writes nothing"},
+	"thinking_cache.go:thinkingCohortKey":         {1, "hashes chunks of a Thinking cohort in parallel for its cache key; writes nothing"},
 }
 
 type allowedWork struct {

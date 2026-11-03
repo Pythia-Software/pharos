@@ -336,6 +336,16 @@ final class MenuFixture: URLProtocol {
         NSApp.sendAction(finder.action!, to: finder.target, from: finder)
         precondition(revealed == nil)
         service.ejecting = false
+        // Logs is off by default; it opens Settings → Logs at each source.
+        precondition(!MenuBarPreferences()["logs"], "Logs must not change the default menu")
+        controller.applyPreferences(["layoutVersion": 2, "order": ["open", "logs", "status", "settings", "quit"]])
+        let logs = menu.items.first { $0.title.hasPrefix("Logs & crash reports") && !$0.isHidden }!
+        let logSources = logs.submenu!.items.filter { !$0.isSeparatorItem }
+        precondition(logs.image != nil && logSources.map(\.title) == MenuBarController.logSources.map(\.1))
+        controller.openWindow = {}
+        NSApp.sendAction(logSources.last!.action!, to: logSources.last!.target, from: logSources.last!)
+        precondition(Mirror(reflecting: controller).children.first { $0.label == "pendingPath" }!.value as? String == "/settings/logs?log_source=crashes")
+        controller.openWindow = nil
         controller.applyPreferences(["layoutVersion": 2, "order": ["quit", "tokens", "space", "open", "status", "settings", "words"]])
         let reordered = menu.items.filter { !$0.isHidden && !$0.isSeparatorItem }.map { String($0.title.split(separator: "\t")[0]) }
         precondition(reordered.first == "Quit Pharos")

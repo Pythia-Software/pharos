@@ -13,10 +13,9 @@ import { now, writingMessages, parallelismRecords, carbonUsage } from "../helper
 import { loadClassicScript } from "../helpers/classic-script.mjs";
 import { canonicalState, analysisQuery, catalogProblems, nativeCycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
-import { humanAnalysisCatalog as human, humanLegacyURL, readHumanLink } from "../../../src/human-analysis-catalog";
+import { humanAnalysisCatalog as human, readHumanLink } from "../../../src/human-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, deriveCarbon } from "../../../src/carbon-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, parallelismSettingsNote } from "../../../src/parallelism-analysis-catalog";
-import { legacyCarbonChart } from "../../../src/carbon-analysis-catalog";
 import { windowedChart } from "../../../src/card-windows";
 import { cardDestination } from "../../../src/card-destinations";
 import { usageDashboardReturn } from "../../../src/usage-workspace-model";
@@ -256,7 +255,11 @@ function hourPair(id, cardHours, { minutes = 0, inProgress = {} } = {}) {
   assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "hour", "total", true], id);
   const result = nativeCycleResult(analysis, core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0]).result;
   const expected = Object.fromEntries(Object.entries(cardHours(item, at.getTime())).map(([hour, value]) => [hour, round(value - (inProgress[hour] ?? 0))]).filter(([, value]) => value));
-  assert.deepEqual(Object.fromEntries(result.buckets.filter(bucket => bucket.value).map(bucket => [`${String(bucket.keys[0]).padStart(2, "0")}:00`, round(bucket.value)])), expected, id);
+  const actual = Object.fromEntries(result.buckets.filter(bucket => bucket.value).map(bucket => [`${String(bucket.keys[0]).padStart(2, "0")}:00`, bucket.value]));
+  assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${id}: the same hours`);
+  // Equivalent aggregations can round on opposite sides of the same decimal
+  // boundary, especially after subtracting the hour still in progress.
+  for (const [hour, value] of Object.entries(expected)) assert.ok(Math.abs(actual[hour] - value) <= 1e-9 * Math.max(1, Math.abs(value)), `${id} ${hour}: ${actual[hour]} != ${value}`);
   assert.ok(Object.keys(expected).length > 3);
 }
 test("writing-hours: typed words by local hour", () => {
@@ -399,20 +402,11 @@ test("old Human Words links: filters that cannot keep their meaning for messages
   // A versioned link is in message terms already: typed_words > 0 is a card's population.
   const card = [{ field: "typed_words", op: ">", value: "0" }];
   assert.deepEqual(readHumanLink(card, true), { where: card, unsupported: [] });
-  // The legacy Writing view applies the original filters.
-  const legacy = new URL(humanLegacyURL([...time, ...dropped]), "http://localhost").searchParams;
-  assert.equal(legacy.get("analyze_view"), "writing");
-  assert.deepEqual(core.decodeQueryStrict(legacy.get("q_writing")).where, [...time, ...dropped]);
   assert.match(human.breakdowns.provider.note, /not its work's combined providers/);
 });
 
-test("old Carbon chart links keep their chart: on the legacy page a link wins over the saved chart, and the dashboard reads it in its terms", () => {
+test("old Carbon chart links keep their chart: the dashboard reads it in its terms", () => {
   const old = { metric: "energy", split: "tier", period: "days", hours: 6, days: 3, seriesLimit: 15, rollingPeriods: 7, display: "cumulative" };
-  const saved = { metric: "co2", split: "provider", period: "month" };
-  const linked = legacyCarbonChart(JSON.stringify(old), saved);
-  assert.deepEqual([linked.metric, linked.split, linked.period, linked.days, linked.rollingPeriods, linked.display], ["energy", "carbon_tier", "days", 3, 7, "cumulative"]);
-  assert.deepEqual([legacyCarbonChart(null, saved).metric, legacyCarbonChart(null, saved).split, legacyCarbonChart(null, saved).period], ["co2", "provider", "month"]);
-  assert.deepEqual([legacyCarbonChart("{broken", null).metric, legacyCarbonChart('{"metric":"nonsense"}', null).split], ["co2", "type"]);
   // The dashboard fills its defaults, reads the link in its terms and marks it.
   const read = readAnalysisLink(carbonCatalogShape, canonicalState(carbonCatalogShape, { metric: "co2", split: "type", period: "day", ...old }), []);
   assert.deepEqual([read.state.metric, read.state.split, read.state.v], ["energy", "carbon_tier", analysisVersion]);

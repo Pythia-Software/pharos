@@ -269,8 +269,11 @@ func refuses(_ work: () throws -> Void, _ message: String) {
             """.write(to: directory.appendingPathComponent("library.toml"), atomically: true, encoding: .utf8)
             StartupResponse.ready = false
             StartupResponse.busy = false
-            let service = ArchiveService(plan: .library(directory), releaseService: { _, _ in
-                StartupResponse.busy ? .stopping("test write in progress") : .notRunning
+            var workBusy = false
+            let refusal = "The update waits for test work, which cannot stop in time."
+            let service = ArchiveService(plan: .library(directory), releaseService: { _, _, forUpdate in
+                if forUpdate && workBusy { return .stopping(#"{"released":false,"error":"\#(refusal)"}"#) }
+                return StartupResponse.busy ? .stopping("test write in progress") : .notRunning
             })
             until("startup stand-in did not start") { FileManager.default.fileExists(atPath: pidFile.path) }
             let pid = Int32(try String(contentsOf: pidFile, encoding: .utf8))!
@@ -322,6 +325,19 @@ func refuses(_ work: () throws -> Void, _ message: String) {
                         expect(!service.pageLoading, "navigation after an ignored error does not rearm the startup beacon")
                     }
                 }
+                // An explicit install asks first and stops nothing while
+                // work cannot stop in time; it reports what it waits for.
+                try FileManager.default.removeItem(at: signalFile)
+                workBusy = true
+                finished = false
+                service.prepareToTerminate(installing: true, unlessBusy: true) { error in
+                    expect(error?.localizedDescription == refusal, "an explicit install reports the work it waits for: \(String(describing: error))")
+                    finished = true
+                }
+                until("refused explicit install did not finish") { finished }
+                expect(!FileManager.default.fileExists(atPath: signalFile.path), "a refused explicit install must not signal the service")
+                expect(service.url != nil && service.error == nil, "a refused explicit install keeps the ready service")
+                workBusy = false
                 StartupResponse.busy = true
                 finished = false
                 service.prepareToTerminate(installing: true) { error in

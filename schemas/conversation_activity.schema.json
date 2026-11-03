@@ -34,7 +34,7 @@
       "width": 145
     },
     {
-      "field": "human_input_tokens_estimate",
+      "field": "human_messages",
       "width": 125
     },
     {
@@ -98,7 +98,7 @@
       "display": {
         "kind": "chip",
         "labels": {
-          "human": "Human input",
+          "human": "Human message",
           "usage": "Agent output"
         }
       }
@@ -194,26 +194,6 @@
       }
     },
     {
-      "name": "human_input_tokens_estimate",
-      "label": "Est. human text tokens",
-      "type": "number",
-      "bindings": {
-        "postgres": {
-          "expr": "human_input_tokens_estimate",
-          "synthetic": true
-        },
-        "sqlite": {
-          "expr": "r.\"human_input_tokens_estimate\"",
-          "expressionNumeric": true
-        }
-      },
-      "aggregate": {
-        "groupable": true
-      },
-      "render": "number",
-      "description": "Ceiling of retained UTF-8 human-supplied text bytes / 4 per classified message, excluding harness and automated spans; includes pasted/quoted text and attachment references, but no image or unretained file bytes. An estimate, not model tokenization."
-    },
-    {
       "name": "human_messages",
       "label": "Human messages",
       "type": "number",
@@ -230,7 +210,8 @@
       "aggregate": {
         "groupable": true
       },
-      "render": "number"
+      "render": "number",
+      "description": "1 on a human message event (a classified user message holding text besides harness instructions and automated prompts); 0 on output events."
     },
     {
       "name": "output_tokens",

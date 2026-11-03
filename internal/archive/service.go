@@ -177,7 +177,15 @@ func (s *Server) stopFor(trigger string, timeout time.Duration) error {
 
 // release answers only once the catalog is closed, so the app can let the
 // library's drive be ejected. The process then exits (see serveUntilStopped).
-func (s *Server) release(w http.ResponseWriter) {
+// With ?for=update (an explicit Install and Relaunch) it first refuses,
+// stopping nothing, while work it would interrupt cannot stop in time.
+func (s *Server) release(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("for") == "update" {
+		if reason := s.updateRefusal(r.Context()); reason != "" {
+			writeJSON(w, map[string]any{"released": false, "error": reason}, http.StatusServiceUnavailable)
+			return
+		}
+	}
 	s.life.mu.Lock()
 	s.life.released = true
 	s.life.mu.Unlock()
@@ -186,6 +194,28 @@ func (s *Server) release(w http.ResponseWriter) {
 		return
 	}
 	writeJSON(w, map[string]any{"released": true}, http.StatusOK)
+}
+
+// releaseCheck answers GET /api/release?for=update: whether a release for
+// an update would go ahead now. The broker asks every library before it
+// stops any of them.
+func (s *Server) releaseCheck(w http.ResponseWriter, r *http.Request) {
+	reason := s.updateRefusal(r.Context())
+	writeJSON(w, map[string]any{"releasable": reason == "", "error": nilIfEmpty(reason)}, http.StatusOK)
+}
+
+// updateRefusal is why stopping this service for an update would interrupt
+// work that cannot stop in time, or "" (see updateInputs). A stop already
+// under way has nothing left to refuse.
+func (s *Server) updateRefusal(ctx context.Context) string {
+	s.life.mu.Lock()
+	stopping := s.life.stopping
+	s.life.mu.Unlock()
+	if stopping {
+		return ""
+	}
+	in, _ := s.ejectInputs(ctx, false)
+	return updateRefusal(computeEjectVerdict(updateInputs(in)))
 }
 
 // serveUntilStopped serves until a signal, a release, the exit of the app

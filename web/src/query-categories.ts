@@ -9,6 +9,7 @@ export const queryCategories = {
   errors: { label: "Error Patterns", tone: "var(--bad)" },
   context: { label: "Context", tone: "var(--gold)" },
   models: { label: "Model Choice", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
+  thinking: { label: "Waiting and Thinking", tone: "color-mix(in srgb,var(--sea) 60%,var(--heat-2))" },
   usage: { label: "Token Usage", tone: "var(--heat-1)" },
   cost: { label: "API Cost", tone: "var(--query-cost-tone)" },
   research: { label: "Research", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
@@ -18,6 +19,7 @@ export const queryCategories = {
   views: { label: "Work Views", tone: "var(--muted)" },
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
+  safety: { label: "Risky actions", tone: "var(--gold)" },
   findings: { label: "Findings", tone: "var(--gold)" },
   library: { label: "Search", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
   tl1: { label: "TL1", tone: "color-mix(in srgb,var(--heat-2) 70%,var(--warn))" },
@@ -35,8 +37,9 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   ])]);
   const has = (...names: string[]) => names.some(name => fields.has(name));
   if (dataset === "findings") return "findings";
-  if (dataset === "parallelism") return "machines";
-  if (dataset === "model_requests") return "models";
+  if (dataset === "safety") return "safety";
+  if (dataset === "parallelism" || dataset === "rhythm") return "machines";
+  if (dataset === "model_requests") return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";

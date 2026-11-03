@@ -1,4 +1,4 @@
-// Settings → Background updates (docs/background-work.md §11): the three
+// Settings → Background Processing (docs/background-work.md §11): the three
 // cadences, each item's cost and state, and the controls that steer them,
 // from GET /api/background. The server says every sentence; this file adds
 // ages, times and durations. It renders into #backgroundSchedule, which
@@ -9,7 +9,7 @@
   'use strict';
   if (window.pharosBackground) return;
   const CSS = `
-#backgroundSchedule{display:grid;gap:18px;min-width:0}
+#backgroundSchedule{display:grid;gap:18px;min-width:0;--bg-indent:22px;container-type:inline-size}
 .bg-card{border:1px solid var(--line);border-radius:8px;padding:18px;background:var(--panel);min-width:0}
 .bg-card h3{margin:0;font-size:var(--fs-lg)}
 .bg-card p{margin:6px 0 0;font-size:var(--fs-sm)}
@@ -23,25 +23,39 @@
 #backgroundSchedule .bg-button:hover:not(:disabled),.bg-seg button:hover{border-color:var(--accent)}
 #backgroundSchedule button:disabled{opacity:.55;cursor:default}
 .bg-everything{flex-basis:100%;margin:0!important;color:var(--muted)}
-.bg-cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}
+.bg-cols{display:grid;grid-template-columns:repeat(var(--bg-across,3),minmax(0,1fr));gap:12px;margin-top:16px}
+.bg-cols.bg-four{--bg-across:2}
+@container (min-width:1240px){.bg-cols.bg-four{--bg-across:4}}
 .bg-col{border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:0;background:var(--bg)}
 .bg-col-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
-.bg-col-head h4{margin:0;font-size:var(--fs-md)}
+.bg-col-head h4{display:flex;align-items:center;gap:8px;margin:0;font-size:var(--fs-md)}
+#backgroundSchedule .bg-run{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--ink);cursor:pointer}
+#backgroundSchedule .bg-run:hover:not(:disabled){border-color:var(--accent)}
+#backgroundSchedule .bg-item-line .bg-run{width:15px;height:15px;border-radius:3px}
+.bg-play{display:inline-block;width:7px;height:10px;margin-right:7px;background:currentColor;clip-path:polygon(0 0,100% 50%,0 100%)}
+.bg-run .bg-play{margin:0 0 0 1px}
+.bg-item-line .bg-run .bg-play{width:5px;height:8px}
+.bg-item[draggable=true]{cursor:grab;position:relative}
+.bg-grip{position:absolute;left:0;top:50%;transform:translateY(-50%);width:8px;height:11px;background:radial-gradient(circle,var(--muted) 1px,transparent 1.3px) 0 0/4px 4px;opacity:.7}
+.bg-item[draggable=true]:hover .bg-grip{opacity:1}
+.bg-item.bg-dragging{opacity:.5}
+.bg-col.bg-drop{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .bg-col-head .bg-state{margin-left:auto}
 .bg-when{font-size:var(--fs-sm);color:var(--muted);margin:4px 0 8px}
 .bg-when select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
 .bg-state{font-size:var(--fs-sm);color:var(--muted);overflow-wrap:anywhere}
 .bg-item{border-top:1px solid var(--line);padding:8px 0}
 .bg-item:last-child{padding-bottom:0}
-.bg-item-head{display:flex;align-items:baseline;gap:8px;width:100%;border:0;background:none;padding:0;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.bg-item-line{display:flex;align-items:center;gap:8px}
+.bg-item-head{display:flex;align-items:baseline;gap:8px;min-width:0;border:0;background:none;padding:0;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .bg-item-head:hover .bg-name{color:var(--accent)}
 .bg-name{font-weight:650;min-width:0;overflow-wrap:anywhere}
 .bg-cost{margin-left:auto;flex:none;font-size:var(--fs-xs);padding:0 7px;border:1px solid var(--line);border-radius:10px;color:var(--muted)}
 .bg-cost.light{color:var(--accent)}
 .bg-cost.heavy{color:var(--warn);border-color:var(--warn)}
-.bg-sub,.bg-item .bg-state{display:block;font-size:var(--fs-sm);color:var(--muted);padding-left:15px}
-.bg-note{display:block;font-size:var(--fs-sm);color:var(--accent);padding-left:15px}
-.bg-detail{margin:8px 0 0 15px;padding:10px 12px;border-radius:6px;background:var(--panel);font-size:var(--fs-sm)}
+.bg-sub,.bg-item .bg-state{display:block;font-size:var(--fs-sm);color:var(--muted);padding-left:var(--bg-indent)}
+.bg-note{display:block;font-size:var(--fs-sm);color:var(--accent);padding-left:var(--bg-indent)}
+.bg-detail{margin:8px 0 0 var(--bg-indent);padding:10px 12px;border-radius:6px;background:var(--panel);font-size:var(--fs-sm)}
 .bg-detail p{margin:0 0 6px}
 .bg-detail .bg-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
 .bg-detail select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:4px 6px;background:var(--bg);color:var(--ink);max-width:100%}
@@ -71,9 +85,16 @@
 .bg-battery-row{display:grid;gap:4px;font-size:var(--fs-sm);font-weight:600;min-width:0}
 .bg-battery-row select{font:inherit;font-weight:400;border:1px solid var(--line);border-radius:5px;padding:5px 6px;background:var(--bg);color:var(--ink);min-width:0}
 .bg-check input{margin-top:3px;accent-color:var(--accent)}
-@media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}`;
+.bg-card .optional-behavior{padding:14px 0 0;border-bottom:0}
+.bg-card .optional-behavior h4{margin:0;font-size:var(--fs-md)}
+.bg-card .optional-behavior p{margin:4px 0 0}
+.bg-threads{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--fs-sm);color:var(--muted)}
+.bg-threads select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
+@media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
+@container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
 
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
+  const CADENCE_LABELS = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
   const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
   const SWATCHES = {frequent: '#8cc6a0', hourly: 'var(--accent)', daily: '#9db1d6'};
 
@@ -134,13 +155,31 @@
     const view = document?.view;
     if (!view) return null;
     const byId = Object.fromEntries((view.items || []).map(item => [item.id, item]));
-    const columns = (view.cadences || []).map(row => ({
+    // Every cadence has a column, an empty one too (the view leaves it
+    // out), so it stays somewhere to drag an item to.
+    const rows = Object.fromEntries((view.cadences || []).map(row => [row.id, row]));
+    const columns = Object.keys(CADENCE_ICONS).map(id => rows[id] || {id, label: CADENCE_LABELS[id], items: []}).map(row => ({
       id: row.id, label: row.label, icon: CADENCE_ICONS[row.id] || '', description: document.descriptions?.[row.id] || row.description || '',
-      dot: DOTS[row.state] ?? '', text: stateText(row, now),
+      dot: DOTS[row.state] ?? '', text: stateText(row, now), running: row.state === 'running', empty: !row.items?.length,
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
-    return {mode: document.settings?.mode || view.mode, settings: document.settings || {}, columns, everything: view.everything?.text || '',
-      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document)};
+    // Only when you ask: on no schedule, so in none of the columns.
+    const unscheduled = (view.unscheduled || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now));
+    // Only when you ask runs as the manual cadence: not while one of its
+    // items runs, nor when none of them can.
+    const unscheduledRunnable = unscheduled.length > 0 && !unscheduled.some(item => item.state === 'running') && !unscheduled.every(item => item.state === 'unavailable');
+    const mode = document.settings?.mode || view.mode;
+    return {mode, pause: mode === 'paused' ? pauseLength(document.settings?.paused_until || view.paused_until, now) : '',
+      settings: document.settings || {}, columns, unscheduled, unscheduledRunnable, everything: view.everything?.text || '',
+      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null,
+      agentEvents: document.agent_events || null};
+  }
+
+  // Which pause choice a pause is: one that ends within the hour is the
+  // hour's, a longer one the day's.
+  function pauseLength(pausedUntil, now = Date.now()) {
+    const until = parse(pausedUntil);
+    return until != null && until - now > 3600000 ? 'day' : 'hour';
   }
 
   // On battery: each cadence's choice, and the low-battery rule. Null on a
@@ -149,12 +188,11 @@
     const power = document?.power, settings = document?.settings || {};
     if (!power?.battery || !settings.battery) return null;
     const words = {same: 'Same as plugged in', slower: `Every ${settings.battery_slower_minutes || 15} min`, wait: 'Wait until plugged in'};
-    const labels = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
     const charge = Number.isFinite(power.percent) && power.percent >= 0 ? ` (${power.percent}%)` : '';
     return {
       status: `${power.on_battery ? 'This Mac is on battery' : 'This Mac is plugged in'}${charge}${power.low_power_mode ? ', in Low Power Mode' : ''}.`,
       onBattery: Boolean(power.on_battery),
-      rows: ['frequent', 'hourly', 'daily'].map(cadence => ({cadence, label: labels[cadence], value: settings.battery[cadence] || 'same',
+      rows: ['frequent', 'hourly', 'daily'].map(cadence => ({cadence, label: CADENCE_LABELS[cadence], value: settings.battery[cadence] || 'same',
         choices: (settings.battery_choices?.[cadence] || ['same', 'wait']).map(value => ({value, label: words[value] || value}))})),
       lowWaits: settings.battery.low_battery_waits !== false,
       lowText: `Below ${settings.low_battery_percent || 20}% or in Low Power Mode, everything waits until plugged in`,
@@ -162,12 +200,24 @@
   }
 
   function itemModel(item, now = Date.now()) {
+    // How long a run typically takes leads the state line, so its cost
+    // reads beside its schedule.
+    const text = [item.cost?.typical || '', stateText(item, now)].filter(Boolean).join(' · ');
     return {id: item.id, label: item.label, sub: item.sub || '', feeds: item.feeds || '', why: item.why || '', note: item.note || '',
-      dot: DOTS[item.state] ?? '', state: item.state, text: stateText(item, now), error: item.error || '',
+      dot: DOTS[item.state] ?? '', state: item.state, text, error: item.error || '',
+      adaptive: Boolean(item.adaptive), column: item.cadence === 'manual' ? 'manual' : item.column || '', usual: item.usual_cadence || '',
       cost: item.cost ? {class: item.cost.class || '', text: item.cost.text || ''} : null,
       choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed),
-      moves: item.cadence_moves || [], temporary: item.temporary_cadence || null,
+      moves: item.cadence_moves || [], temporary: item.temporary_cadence || null, stop: item.stop?.id ? {id: item.stop.id} : null,
       sources: Array.isArray(item.sources) ? item.sources.map(source => ({name: source.name, selected: Boolean(source.selected)})) : null};
+  }
+
+  // What dropping an item on a cadence's column saves as its temporary
+  // schedule: that cadence for a week, "" to end the week when it is the
+  // item's usual cadence, or null when it cannot move there.
+  function dropCadence(item, cadence) {
+    if (!item?.adaptive || !CADENCE_ICONS[cadence] || cadence === item.column) return null;
+    return item.temporary && cadence === item.usual ? '' : cadence;
   }
 
   // The day's cost: each cadence's share of the total, measured or
@@ -181,7 +231,9 @@
   }
 
   // ---- rendering
-  let document_ = null, inFlight = false, fetchedAt = 0, sheet = null;
+  // The Agent Experience switch (web/src/agent-events-flag.ts).
+  const AGENT_EVENTS_KEY = 'pharos-agent-events-v1';
+  let document_ = null, dragging = null, inFlight = false, fetchedAt = 0, sheet = null, labelsSaving = false, labelsRevision = 0;
   const node = (tag, className = '', text) => {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -229,13 +281,61 @@
     return element;
   }
 
+  // A drawn play triangle: the ▶ glyph's rounded corners blur at this size.
+  function play() {
+    const icon = node('span', 'bg-play');
+    icon.setAttribute('aria-hidden', 'true');
+    return icon;
+  }
+
+  // ▶ beside a cadence's name runs all its work now, as the status
+  // panel's does; beside an item's, that item.
+  function runButton(label, body, disabled) {
+    if (typeof body === 'string') body = {cadence: body};
+    const run = button('', async () => {
+      await call('/api/background/run', body);
+      toast(`${label} runs now.`);
+      refresh(true);
+    }, 'bg-run');
+    run.append(play());
+    run.dataset.focusKey = 'run:' + (body.item || body.cadence);
+    run.disabled = disabled;
+    run.title = `Run ${label} now`;
+    run.setAttribute('aria-label', `Run ${label} now`);
+    return run;
+  }
+
+  // Dropping a dragged item on a column moves it there for a week, as its
+  // Promote and Demote buttons do.
+  function dropTarget(section, cadence) {
+    const accepts = () => dropCadence(dragging, cadence) != null;
+    section.ondragover = event => {
+      if (!accepts()) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      section.classList.add('bg-drop');
+    };
+    section.ondragleave = event => { if (!section.contains(event.relatedTarget)) section.classList.remove('bg-drop'); };
+    section.ondrop = event => {
+      section.classList.remove('bg-drop');
+      const item = dragging, value = dropCadence(item, cadence);
+      if (value == null) return;
+      event.preventDefault();
+      dragging = null;
+      save({temporary_cadences: {[item.id]: value}}).catch(error => toast(error.message));
+    };
+  }
+
   function renderColumns(model) {
     const columns = node('div', 'bg-cols');
     for (const column of model.columns) {
       const section = node('section', 'bg-col');
       section.setAttribute('aria-label', column.label);
+      section.dataset.cadence = column.id;
+      dropTarget(section, column.id);
       const head = node('div', 'bg-col-head');
       const title = node('h4', '', `${column.icon} ${column.label}`);
+      title.append(runButton(column.label, column.id, column.running || column.empty));
       const state = node('span', 'bg-state');
       state.append(node('span', `bg-dot ${column.dot}`), column.text);
       head.append(title, state);
@@ -254,22 +354,64 @@
       for (const item of column.items) section.append(renderItem(item));
       columns.append(section);
     }
+    // Only when you ask is one more column; four go two by two until
+    // they fit on one line.
+    if (model.unscheduled?.length) {
+      columns.classList.add('bg-four');
+      columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable));
+    }
     return columns;
+  }
+
+  function renderUnscheduled(items, runnable) {
+    const section = node('section', 'bg-col bg-unscheduled');
+    section.setAttribute('aria-label', 'Only when you ask');
+    const head = node('div', 'bg-col-head'), title = node('h4', '', 'Only when you ask');
+    title.append(runButton('Only when you ask', 'manual', !runnable));
+    head.append(title);
+    section.append(head, node('div', 'bg-when', 'On no schedule: these run when you choose Run now, or once you give them a schedule.'));
+    for (const item of items) section.append(renderItem(item));
+    return section;
   }
 
   function renderItem(item) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
+    if (item.adaptive) {
+      entry.draggable = true;
+      entry.ondragstart = event => {
+        dragging = item;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', item.label);
+        entry.classList.add('bg-dragging');
+      };
+      entry.ondragend = () => {
+        dragging = null;
+        entry.classList.remove('bg-dragging');
+        for (const column of host()?.querySelectorAll('.bg-drop') || []) column.classList.remove('bg-drop');
+        render();
+      };
+    }
     const open = window.pharosView?.read('disclosures', {})['background:' + item.id] === true;
     const head = node('button', 'bg-item-head');
     head.type = 'button';
     head.dataset.viewKey = 'background:' + item.id;
+    head.dataset.focusKey = 'head:' + item.id;
     head.dataset.viewDefault = 'false';
     head.setAttribute('aria-controls', 'background-detail-' + item.id);
     head.setAttribute('aria-expanded', String(open));
     head.append(node('span', `bg-dot ${item.dot}`), node('span', 'bg-name', item.label));
-    if (item.cost?.class) head.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
-    entry.append(head, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
+    // The name opens the details; ▶ beside it runs the item now.
+    const headLine = node('div', 'bg-item-line');
+    headLine.append(head, runButton(item.label, {item: item.id}, item.state === 'running' || item.state === 'unavailable'));
+    if (item.cost?.class) headLine.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
+    entry.append(headLine, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
+    if (item.adaptive) {
+      // A grip under the dot: this item drags to another schedule.
+      const grip = node('span', 'bg-grip');
+      grip.setAttribute('aria-hidden', 'true');
+      entry.append(grip);
+    }
     if (item.note) entry.append(node('span', 'bg-note', item.note));
     const detail = node('div', 'bg-detail');
     detail.id = 'background-detail-' + item.id;
@@ -285,7 +427,13 @@
       label.append(select(item.choices.map(choice => [choice.value, choice.label]), item.override, value => save({overrides: {[item.id]: value}}), `When ${item.label} runs`));
       row.append(label);
     }
-    row.append(button('Run now', async () => {
+    // A running item that can stop offers Stop instead: it ends at its next
+    // safe point, keeping what it finished, and its next run resumes it.
+    row.append(item.stop ? button('Stop', async () => {
+      await call('/api/operations/stop', {id: item.stop.id});
+      toast(`Stopping ${item.label}. What it finished is kept; its next run resumes it.`);
+      refresh(true);
+    }) : button('Run now', async () => {
       await call('/api/background/run', {item: item.id});
       toast(`${item.label} runs next.`);
       refresh(true);
@@ -331,10 +479,14 @@
 
   function render() {
     const target = host();
-    if (!target || !document_) return;
+    // A drag keeps the items it is over.
+    if (!target || !document_ || labelsSaving || dragging) return;
     // A select being used keeps its value until it is changed.
     if (target.contains(document.activeElement) && document.activeElement.matches('select')) return;
+    // The focused run button or item keeps focus across the redraw.
+    const focusKey = document.activeElement?.dataset?.focusKey;
     const focused = document.activeElement?.closest?.('[data-item]')?.dataset.item;
+    const labelsFocused = ['labelsEnabled', 'agentEventsEnabled'].includes(document.activeElement?.id) && document.activeElement.id;
     const model = scheduleModel(document_);
     if (!model) return;
     const content = node('div');
@@ -346,26 +498,31 @@
         paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs until you choose Update everything now.'}[model.mode] || ''));
     const seg = node('div', 'bg-seg');
     seg.setAttribute('role', 'group');
-    seg.setAttribute('aria-label', 'Background updates');
-    for (const [value, label, state] of [['on', 'On', 'on'], ['pause', 'Pause for 1 hour', 'paused'], ['manual', 'Only when I ask', 'manual']]) {
-      const choice = button(label, () => save({mode: value}), '');
-      choice.setAttribute('aria-pressed', String(model.mode === state));
+    seg.setAttribute('aria-label', 'Background Processing');
+    for (const [body, label, pressed] of [[{mode: 'on'}, 'On', model.mode === 'on'],
+      [{mode: 'pause', pause_minutes: 60}, 'Pause for 1 hour', model.pause === 'hour'],
+      [{mode: 'pause', pause_minutes: 1440}, 'Pause for 1 day', model.pause === 'day'],
+      [{mode: 'manual'}, 'Only when I ask', model.mode === 'manual']]) {
+      const choice = button(label, () => save(body), '');
+      choice.setAttribute('aria-pressed', String(pressed));
       seg.append(choice);
     }
     const everything = button('Update everything now', async () => {
       await call('/api/sync/check', {});
       toast('Updating everything now: new conversations first, then every analysis.');
     });
+    everything.prepend(play());
     mode.append(intro, seg, everything);
     if (model.everything) mode.append(node('p', 'bg-everything', model.everything));
     card.append(mode, renderColumns(model));
     if (model.rule) {
       const rule = node('div', 'bg-rule');
       rule.append(node('strong', '', 'How work is placed:'), ...[`usually under ${duration(model.rule.frequent_seconds)} → Frequently`,
-        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it.'].map(text => node('span', '', text)));
+        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
       card.append(rule);
     }
     content.append(card);
+    if (model.labels) content.append(renderLabels(model.labels, model.agentEvents));
     if (model.cost) {
       const cost = node('section', 'bg-card');
       cost.append(node('h3', '', 'What it costs'),
@@ -416,15 +573,103 @@
       node('p', 'muted', 'Background work stops as soon as you eject the library or quit Pharos, and carries on where it left off.'));
     content.append(considerate);
     target.replaceChildren(...content.childNodes);
-    if (focused) target.querySelector(`[data-item="${window.CSS.escape(focused)}"] .bg-item-head`)?.focus({preventScroll: true});
+    if (labelsFocused) target.querySelector(`#${labelsFocused}`)?.focus({preventScroll: true});
+    const keyed = focusKey && target.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`);
+    if (keyed) keyed.focus({preventScroll: true});
+    else if (focused) target.querySelector(`[data-item="${window.CSS.escape(focused)}"] .bg-item-head`)?.focus({preventScroll: true});
+  }
+
+  // Message labels and agent events: both small models run on this Mac
+  // through the labeling worker, so they share a card. Labels save to the
+  // library's configuration; agent events are the agentEventsFlag preference
+  // (agent_events_run.go), so Analyze lists Agent Experience as it changes.
+  function renderLabels(labels, events) {
+    const card = node('section', 'bg-card');
+    card.append(node('h3', '', 'Labeling on this Mac'),
+      node('p', 'muted', 'Small models label your library in the background and the reader highlights what they find. These settings follow the library. Turning one off keeps what it found; a run in progress finishes. Cores apply from each model\'s next run; on battery each uses at most 2.'));
+    card.append(labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
+      'Label each message by what it does: requests, replies, feedback and more.', labels,
+      enabled => call('/api/labels/settings', {enabled}),
+      threads => call('/api/labels/settings', {threads}), labels.can_change));
+    if (events) card.append(labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
+      'Find sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more, and list Analyze → Agent Experience. Reads the last 90 days after a one-time 140 MB download; a backlog catches up only while plugged in.', events,
+      async enabled => {
+        window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
+        await window.pharosPrefs.flush?.();
+        if (enabled) await call('/api/background/run', {item: 'agent_events'}).catch(() => {});
+        return call('/api/background');
+      },
+      threads => call('/api/labels/settings', {agent_events_threads: threads}), events.threads_can_change));
+    return card;
+  }
+
+  // One switch of the labeling card, the App preferences toggle, with its
+  // model's cores: each save returns the next document.
+  function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads, threadsCanChange) {
+    const row = node('div', 'optional-behavior');
+    const copy = node('div');
+    const title = node('h4', '', text);
+    title.id = `${prefix}Title`;
+    const description = node('p', 'muted', about);
+    description.id = `${prefix}Description`;
+    const status = node('p', 'muted', settings.status);
+    status.id = `${prefix}Status`;
+    status.setAttribute('role', 'status');
+    const toggle = node('button', 'toggle');
+    toggle.id = id;
+    toggle.type = 'button';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-labelledby', title.id);
+    toggle.setAttribute('aria-describedby', `${description.id} ${status.id}`);
+    const show = on => { toggle.classList.toggle('on', on); toggle.setAttribute('aria-checked', String(on)); };
+    show(settings.enabled);
+    toggle.disabled = !settings.can_change;
+    toggle.onclick = async () => {
+      const focused = document.activeElement === toggle;
+      const enabled = toggle.getAttribute('aria-checked') !== 'true';
+      show(enabled);
+      labelsSaving = true;
+      labelsRevision++;
+      toggle.disabled = true;
+      let saved = false;
+      try {
+        document_ = await saveSwitch(enabled);
+        saved = true;
+      } catch (error) {
+        show(settings.enabled);
+        status.textContent = error.message;
+        toast(error.message);
+      } finally {
+        labelsSaving = false;
+        toggle.disabled = !settings.can_change;
+      }
+      if (saved) render();
+      if (focused && (document.activeElement === toggle || document.activeElement === document.body)) host()?.querySelector(`#${id}`)?.focus({preventScroll: true});
+    };
+    copy.append(title, description, status);
+    if (settings.thread_choices?.length) {
+      const cores = node('label', 'bg-threads', 'Cores ');
+      const choice = select(settings.thread_choices.map(threads => [threads, String(threads)]), settings.threads, async value => {
+        document_ = await saveThreads(Number(value));
+        render();
+      }, `${text} cores`);
+      choice.disabled = !threadsCanChange;
+      cores.append(choice);
+      copy.append(cores);
+    }
+    row.append(copy, toggle);
+    return row;
   }
 
   async function refresh(force = false) {
     const target = host();
-    if (!target || inFlight || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
+    if (!target || inFlight || labelsSaving || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
     inFlight = true;
+    const revision = labelsRevision;
     try {
-      document_ = await call('/api/background');
+      const next = await call('/api/background');
+      if (revision !== labelsRevision || labelsSaving) return;
+      document_ = next;
       fetchedAt = Date.now();
       render();
     } catch (error) {
@@ -446,6 +691,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, costModel, batteryModel, stateText, ago, until, duration};
+    scheduleModel, itemModel, costModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

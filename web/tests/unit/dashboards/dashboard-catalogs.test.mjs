@@ -1,6 +1,6 @@
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 import { population } from "../../support/query-server.mjs";
-// The Tools, Pharos MCP, Agent Time and Skills catalogs: what each offers and
+// The Tools, Pharos MCP, Tool Time and Skills catalogs: what each offers and
 // why, how their older links read, and the engine rules they added (record
 // views without units, a minimum counted in calls, maxima kept off the trend,
 // timestamp cycles and compound unit keys).
@@ -14,19 +14,20 @@ import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
 import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
 import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
-import { trendNote, trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
+import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
-import { agentTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
+import { agentEventsAnalysisCatalog as agentEvents } from "../../../src/agent-events-analysis-catalog";
+import { toolTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links";
 import { toolMetricPresentation } from "../../../src/tools-dashboard-model";
 import { withTimeRange } from "../../../src/chart-range";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 
-const rows = { conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages() };
-const catalogs = [tools, mcp, time, skills, activity];
+const rows = { conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }) };
+const catalogs = [tools, mcp, time, skills, activity, agentEvents];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics
@@ -254,7 +255,7 @@ test("a unit may combine fields: one observation per tool in a conversation, or 
   assert.equal(run(skills, loads.query)[0].error, undefined);
 });
 
-test("activities read as Agent Time names them, in the trend and in Compare", () => {
+test("activities read as Tool Time names them, in the trend and in Compare", () => {
   const state = { metric: "time", split: "activity" }, query = trendQuery(time, state, month(time), { now });
   const built = trendSeries(time, state, query, run(time, query.query), { now });
   assert.ok(built.series.some(item => item.value === "command:test" && item.label === "test"), JSON.stringify(built.series.map(item => item.label)));
@@ -404,7 +405,6 @@ test("the day boundary: Over time's days are the recorded days the cards count; 
   assert.deepEqual(daily, viewer);
   assert.ok(local(moved[0].called_at) in daily);
   assert.notEqual(local(moved[0].called_at), moved[0].day);
-  assert.match(trendNote(mcp, state), /after a time-zone change a late-evening record can fall on different days/);
   // Hours: every catalog with a timestamp offers them, as UTC clock hours,
   // whose supporting query opens the hourly totals as grouped rows.
   for (const catalog of [mcp, time, skills]) {
@@ -438,7 +438,6 @@ test("a ratio part may state a condition: the empty-search rate pools zero-resul
   const built = trendSeries(mcp, { ...state, split: "none" }, query, run(mcp, query.query), { now });
   const last = built.buckets.at(-1), end = last.date.getTime() + 86400000, start = new Date(last.date); start.setDate(start.getDate() - 6);
   assert.equal(last.values.total, rate(population.filter(row => Date.parse(row.called_at) >= start.getTime() && Date.parse(row.called_at) < end)));
-  assert.match(trendNote(mcp, { ...state, split: "none" }), /requests with no results divided by successful requests with a recorded result count/);
   assert.deepEqual(catalogProblems({ ...mcp, measures: { ...mcp.measures, bad: { ...mcp.measures.empty_rate, ratio: [{ op: "sum", expression: "1" }, "call_count"] } } }), ["bad has an expression part without a label."]);
 });
 
@@ -447,7 +446,6 @@ test("a catalog's request: its parameters reach every request, and its note ever
   const where = month(catalog);
   const compare = analysisQuery(catalog, { view: "compare", metric: "calls", split: "tool_name" }, where, { now });
   assert.match(analysisNote(catalog, { view: "compare", metric: "calls", split: "tool_name" }), /Built under your settings/);
-  assert.match(trendNote(catalog, { metric: "calls", split: "tool_name" }), /Built under your settings/);
   // Parameters ride on /metrics and /query-v3 alike.
   const prior = global.fetch, requests = [];
   global.fetch = async (url, init = {}) => {
@@ -463,17 +461,17 @@ test("a catalog's request: its parameters reach every request, and its note ever
 });
 
 
-test("whole conversations retain input and delegated output across event repositories", () => {
+test("whole conversations retain messages and delegated output across event repositories", () => {
   const records = [
-    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-a", human_input_tokens_estimate: 100, output_tokens: 0 },
-    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-b", human_input_tokens_estimate: 0, output_tokens: 200 },
+    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-a", human_messages: 3, output_tokens: 0 },
+    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-b", human_messages: 0, output_tokens: 200 },
   ];
-  const state = { view: "scatter", unit: "conversation", metric: "human_input", metricY: "output" };
+  const state = { view: "scatter", unit: "conversation", metric: "messages", metricY: "output" };
   for (const split of ["none", "provider_model", "repository_name"]) {
     const query = analysisQuery(activity, { ...state, split }, [], { now }).query;
     const result = core.evaluateMetrics(records, query, schemas.conversation_activity, { now }).metrics[0];
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.buckets.map(bucket => [bucket.value, bucket.y]), [[100, 200]], split);
+    assert.deepEqual(result.buckets.map(bucket => [bucket.value, bucket.y]), [[3, 200]], split);
   }
   const byRepository = analysisQuery(activity, { view: "compare", unit: "records", metric: "output", split: "repository_name" }, [], { now }).query;
   const result = core.evaluateMetrics(records, byRepository, schemas.conversation_activity, { now }).metrics[0];

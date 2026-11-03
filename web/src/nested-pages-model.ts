@@ -3,6 +3,8 @@ export type NestedPage = {
   id: string;
   label: string;
   description?: string;
+  /** Marks a page with something recent to read (Settings → Logs). */
+  attention?: "error" | "warning";
 } & ({ href: string; children?: never } | { href?: string; children: readonly NestedPage[] });
 
 export function nestedPageTrail(pages: readonly NestedPage[], current: string): NestedPage[] {

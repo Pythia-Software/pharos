@@ -35,3 +35,5 @@ func processUsageOf(pid int) (processUsage, error) {
 	}
 	return usage, nil
 }
+
+func resourceProcessTable() []processNode { return nil }

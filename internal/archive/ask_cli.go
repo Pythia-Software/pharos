@@ -23,13 +23,19 @@ type askSelection struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Effort   string `json:"effort"`
+	Fast     bool   `json:"fast,omitempty"`
 }
+
+// Fast marks a model the CLI can run in its faster, higher-cost mode. Codex
+// names that mode's service tier per model; Claude needs no tier.
 type askModel struct {
 	Variants map[string]string `json:"-"`
 	ID       string            `json:"id"`
 	Label    string            `json:"label"`
 	Efforts  []string          `json:"efforts"`
 	Default  bool              `json:"default"`
+	Fast     bool              `json:"fast,omitempty"`
+	fastTier string
 }
 type askProvider struct {
 	checkedAt        time.Time
@@ -209,6 +215,7 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 				Models []struct {
 					Value, ResolvedModel, DisplayName string
 					SupportedEffortLevels             []string
+					SupportsFastMode                  bool
 				}
 			}
 		}
@@ -226,7 +233,7 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 			if m.Value == "default" {
 				label = m.ResolvedModel
 			}
-			result = append(result, askModel{ID: m.ResolvedModel, Label: label, Efforts: askEfforts(m.SupportedEffortLevels), Default: m.Value == "default"})
+			result = append(result, askModel{ID: m.ResolvedModel, Label: label, Efforts: askEfforts(m.SupportedEffortLevels), Default: m.Value == "default", Fast: m.SupportsFastMode})
 		}
 		return result, nil
 	case "Antigravity":
@@ -257,6 +264,8 @@ func askCodexModels(raw json.RawMessage) ([]askModel, error) {
 			Model, DisplayName        string
 			IsDefault                 bool
 			SupportedReasoningEfforts []struct{ ReasoningEffort string }
+			ServiceTiers              []struct{ ID, Name string }
+			AdditionalSpeedTiers      []string
 		}
 		NextCursor *string
 	}
@@ -272,7 +281,18 @@ func askCodexModels(raw json.RawMessage) ([]askModel, error) {
 		for _, e := range m.SupportedReasoningEfforts {
 			efforts = append(efforts, e.ReasoningEffort)
 		}
-		result = append(result, askModel{ID: m.Model, Label: m.DisplayName, Default: m.IsDefault, Efforts: askEfforts(efforts)})
+		model := askModel{ID: m.Model, Label: m.DisplayName, Default: m.IsDefault, Efforts: askEfforts(efforts)}
+		// Catalogs name the fast tier ("priority", named Fast), or list only the
+		// speed tier "fast", which Codex also accepts as a service tier.
+		if slices.ContainsFunc(m.AdditionalSpeedTiers, func(tier string) bool { return strings.EqualFold(tier, "fast") }) {
+			model.Fast, model.fastTier = true, "fast"
+		}
+		for _, tier := range m.ServiceTiers {
+			if tier.ID != "" && (strings.EqualFold(tier.Name, "Fast") || strings.EqualFold(tier.ID, "fast")) {
+				model.Fast, model.fastTier = true, tier.ID
+			}
+		}
+		result = append(result, model)
 	}
 	return result, nil
 }
@@ -308,7 +328,7 @@ func askAGYModels(raw string) []askModel {
 }
 func askValidSelection(p askProvider, s askSelection) bool {
 	for _, m := range p.Models {
-		if m.ID == s.Model && slices.Contains(m.Efforts, s.Effort) {
+		if m.ID == s.Model && slices.Contains(m.Efforts, s.Effort) && (!s.Fast || m.Fast) {
 			return true
 		}
 	}
@@ -420,8 +440,21 @@ func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir strin
 		// as Claude's --allowedTools does.
 		args = []string{"exec", "--json", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
 		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-c", `mcp_servers.pharos.default_tools_approval_mode="approve"`, "-")
+		if s.Fast {
+			for _, m := range p.Models {
+				if m.ID == s.Model && m.fastTier != "" {
+					args = append(args[:len(args)-1], "-c", "service_tier="+jsonText(m.fastTier), "-")
+				}
+			}
+		}
 	case "Claude":
-		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
+		// Print mode runs fast only when the flag settings opt in; the account
+		// can still decline it, and Claude then answers at standard speed.
+		settings := map[string]bool{"disableAllHooks": true}
+		if s.Fast {
+			settings["fastMode"] = true
+		}
+		args = []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", jsonText(settings), "--no-session-persistence", "--permission-mode", "dontAsk"}
 		args = append(args, "--mcp-config", jsonText(map[string]any{"mcpServers": map[string]askMCPServer{"pharos": p.mcp}}), "--allowedTools", "mcp__pharos")
 	case "Antigravity":
 		// Use a dedicated workspace agent, plan mode and the terminal sandbox.

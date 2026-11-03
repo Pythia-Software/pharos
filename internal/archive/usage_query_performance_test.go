@@ -196,7 +196,6 @@ func TestMachineTimeTimestampRangesRequireFreshCube(t *testing.T) {
 	for _, mutation := range []string{
 		"UPDATE meta SET value='older/" + toolRollupVersion + "' WHERE key='tool_rollup_generation'",
 		"UPDATE meta SET value='different' WHERE key='tool_rollup_built_full_revision'",
-		"UPDATE meta SET value='1900-01-01' WHERE key='tool_rollup_day'",
 		"UPDATE meta SET value='different' WHERE key='tool_rollup_timezone'",
 		"INSERT INTO tool_rollup_dirty(workspace_id,revision) VALUES('pending','test')",
 	} {

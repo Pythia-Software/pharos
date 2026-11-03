@@ -12,16 +12,19 @@ import tools from "../../../../schemas/tools.schema.json";
 import toolCalls from "../../../../schemas/tool_calls.schema.json";
 import skillUsages from "../../../../schemas/skill_usages.schema.json";
 import parallelism from "../../../../schemas/parallelism.schema.json";
+import rhythm from "../../../../schemas/rhythm.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
+import agentEvents from "../../../../schemas/agent_events.schema.json";
+import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
-import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
+import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
 import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog.ts";
-import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
+import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
 // A dashboard's trend clause, as its supporting query carries it.
 const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Date.parse("2026-10-20T12:00:00Z") }).supporting.aggregations[0];
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
@@ -170,13 +173,13 @@ test("dashboard previews distinguish source and group filters and retain custom 
 });
 
 test("all eight dashboards offer four distinct native queries that retain source scope", () => {
-  const documents = { model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, mcp_calls: mcpCalls };
+  const documents = { model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
     ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
     ["skills", "skill_usages", trendClause(skillsAnalysisCatalog, { metric: "records", split: "skill_name" })],
-    ["time", "tool_calls", trendClause(agentTimeAnalysisCatalog, { metric: "time", split: "activity" })],
+    ["time", "tool_calls", trendClause(toolTimeAnalysisCatalog, { metric: "time", split: "activity" })],
     ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" }],
     ["tools", "tools", analysisQuery(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_category" }, []).clause],
     ["mcp", "mcp_calls", analysisQuery(mcpAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }, []).clause],
@@ -226,7 +229,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -256,7 +259,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = { model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const schemas = { model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -274,10 +277,9 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
     assert.deepEqual(queryFromURL(tableURL.href), { dataset, query, window: undefined });
   }
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
-  assert.ok(currentUsageAnalyses.every(item => Object.hasOwn(usageTopics, item.topic)));
 });
 
-test("Analyze defaults to its sidebar layout while explicit older analyses remain reachable", () => {
+test("Analyze defaults to its sidebar layout and older analyses open what replaced them", () => {
   assert.equal(isUsageWorkspace(new URLSearchParams()), true);
   assert.equal(isUsageWorkspace(new URLSearchParams("analyze_view=tokens&machine_view=time")), false);
   assert.equal(isUsageWorkspace(new URLSearchParams("analyze_view=writing&writing=messages")), false);
@@ -287,6 +289,29 @@ test("Analyze defaults to its sidebar layout while explicit older analyses remai
   assert.equal(url.searchParams.has("analyze_chart"), false);
   assert.equal(url.searchParams.has("analyze_filters"), false);
   assert.equal(readUsageWorkspace(url.searchParams).topic, "mcp");
+  const canonical = (path, query) => new URL(canonicalAnalyzeURL(path, new URLSearchParams(query)), "http://localhost").searchParams;
+  const workspace = "analyze_mode=dashboards&analyze_data=usage&analyze_topic=tokens&analyze_chart=x";
+  assert.equal(canonical("/analyze", workspace).toString(), workspace, "a workspace link is unchanged");
+  // A link holding its table's query opens that table, without the other pages' state.
+  const usageQuery = encodeQuery({ ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "codex" }] });
+  const table = canonical("/analyze", new URLSearchParams({ analyze_view: "tokens", q_usage: usageQuery, q_writing: "other", analyze_chart: "{}", activity_days: "7" }).toString());
+  assert.deepEqual([...table.keys()].sort(), ["analyze_data", "analyze_mode", "analyze_topic", "q_usage"]);
+  assert.deepEqual([table.get("analyze_mode"), table.get("analyze_data"), table.get("q_usage")], ["query", "usage", usageQuery]);
+  // Otherwise the page's dashboard opens with the link's chart, which the dashboard reads in its terms.
+  const carbon = canonical("/analyze", 'analyze_view=carbon&analyze_chart={"metric":"energy"}');
+  assert.deepEqual([carbon.get("analyze_mode"), carbon.get("analyze_topic"), carbon.get("analyze_chart"), carbon.has("analyze_view")], ["dashboards", "carbon", '{"metric":"energy"}', false]);
+  // Carbon's population and Today window move to the dashboard's parameters.
+  const carbonWhere = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "provider", op: "=", value: "codex" }];
+  const filtered = canonical("/analyze", new URLSearchParams({ analyze_view: "carbon", q_carbon: encodeQuery({ ...EMPTY_QUERY, where: carbonWhere }), carbon_window: "today" }).toString());
+  assert.deepEqual(decodeQueryStrict(filtered.get("analyze_filters")).where, carbonWhere);
+  assert.deepEqual([filtered.get("analyze_window"), filtered.has("q_carbon"), filtered.has("carbon_window")], ["today", false, false]);
+  assert.deepEqual(readDashboardLink(filtered, { metric: "co2" }, () => true, usageTime, undefined, new Date(2026, 10, 2, 12)).where.filter(term => term.field !== usageTime.first && term.field !== usageTime.last), carbonWhere);
+  assert.equal(canonical("/analyze", "analyze_view=carbon&q_carbon=broken").has("analyze_filters"), false);
+  assert.equal(canonical("/analyze", "analyze_view=concurrency").get("analyze_topic"), "parallelism");
+  assert.equal(canonical("/analyze", "analyze_view=tokens&machine_view=parallelism&q_parallelism=x").get("analyze_data"), "parallelism");
+  assert.equal(isUsageWorkspace(canonical("/tools", "tools_view=calls")), true);
+  // The shell moves /tools to /analyze before the page reads it.
+  for (const path of ["/tools", "/analyze"]) assert.deepEqual([canonical(path, "tools_view=summary&q_tools=x&q_library=y").get("analyze_data"), canonical(path, "tools_view=summary&q_tools=x&q_library=y").get("q_tools")], ["tools", "x"]);
 });
 
 
@@ -324,18 +349,6 @@ test("dashboard returns retain edited source filters and disclose incompatible r
   assert.equal(returned.has("analyze_window"), false, "an edited range must not be promoted back to Today");
   assert.equal(returned.has("window_mode"), false);
   assert.deepEqual(decodeQueryStrict(returned.get("analyze_filters")).where, edited);
-});
-
-test("legacy analyses carry the full query and linked chart assumptions or label a reset", () => {
-  const query = { ...EMPTY_QUERY, where: [{ field: "provider", op: "=", value: "claude" }] };
-  const current = new URLSearchParams({ analyze_chart: '{"split":"type"}', analyze_carbon: '{"scenario":"high"}' });
-  const linked = usageAnalysisLink("usage", query, "/analyze?analyze_view=carbon", current);
-  const params = new URL(linked.href, "http://localhost").searchParams;
-  assert.equal(linked.resetsFilters, false);
-  assert.deepEqual(decodeQueryStrict(params.get("q_carbon")), query);
-  assert.equal(params.get("analyze_carbon"), current.get("analyze_carbon"));
-  const reset = usageAnalysisLink("tool_calls", query, "/analyze?machine_view=time", current);
-  assert.equal(reset.resetsFilters, true);
 });
 
 test("changing records drops stale table context while switching modes keeps the current query window", () => {
@@ -494,7 +507,7 @@ test("Tool summary call links keep every dimension of the selected row", () => {
 // their behaviour independently of the compact collection projection.
 import { createPropertyView, ITEM_DETAILS_COLUMN, selectedFields, toServerQuery } from "@pythia-software/query-table-core";
 import { conversationRowURL, primaryUsageSource, usageDetailsSchema, usageRowLinks } from "../../../src/usage-row-model.ts";
-import { usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema, withGroupDetail } from "../../../src/usage-query-columns.ts";
+import { fittedDefaultQuery, usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema, withGroupDetail } from "../../../src/usage-query-columns.ts";
 import { orderedUsageQuery } from "../../../src/usage-query-order.ts";
 import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -539,6 +552,19 @@ test("Analyze keeps every drilldown after the selected data and before native De
     const fresh = usageActionQuery(EMPTY_QUERY, schema, dataset);
     assert.deepEqual(fresh.select.slice(0, original.defaultSelect.length), original.defaultSelect);
   }
+});
+
+test("a new Analyze table fits the screen while an explicit sizing choice survives restoration", () => {
+  const original = loadSchema(usage), schema = usageQuerySchema(original, "usage");
+  const fresh = fittedDefaultQuery(original);
+  assert.equal(fresh.fitToScreen, true);
+  assert.equal(fresh.limit, 50, "a new fitted table keeps the dataset page size");
+  const explicit = { ...EMPTY_QUERY, fitToScreen: false, select: [{ field: "model", width: 240 }], limit: 5 };
+  const restored = usageActionQuery(orderedUsageQuery("usage", decodeQueryStrict(encodeQuery(explicit))), schema, "usage");
+  assert.equal(Boolean(restored.fitToScreen), false, "links encode a manual layout as the absence of fitting");
+  assert.deepEqual(restored.select[0], explicit.select[0]);
+  assert.equal(restored.limit, 5);
+  assert.strictEqual(usageActionQuery(restored, schema, "usage"), restored, "canonicalization settles without resetting the sizing choice");
 });
 
 test("Drilldown ordering reads a conversation forward and browses populations newest first", () => {
@@ -711,7 +737,7 @@ test("dashboard Today uses its pinned timezone and reports an invalid zone", () 
   assert.equal(read().where.find(term => term.op === ">=").value, "2026-11-03T15:00:00.000Z");
   const dashboard = read();
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: dashboard.where }));
-  const supporting = analysisQuery(agentTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
+  const supporting = analysisQuery(toolTimeAnalysisCatalog, dashboard.view, dashboard.where).supporting;
   const queryParams = new URL(usageWorkspaceURL({ mode: "query", dataset: "tool_calls", query: supporting }, params), "http://localhost").searchParams;
   const window = readRollingWindow(queryParams, "tool_calls");
   assert.equal(window.timezone, "Asia/Tokyo", "supporting queries keep the dashboard pin");

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,7 +24,6 @@ type statusSnapshot struct {
 	Eject      ejectVerdict     `json:"eject"`
 	Operations []map[string]any `json:"operations"`
 	Attention  []attentionItem  `json:"attention"`
-	Features   map[string]any   `json:"features"`
 	raw        map[string]any
 }
 
@@ -58,7 +56,7 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	override(t, &resourceSampleInterval, 0)
 	resources, _ := idle.raw["resources"].(map[string]any)
 	processes, _ := resources["processes"].([]any)
-	if len(processes) != 1 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
+	if len(processes) == 0 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
 		!(resources["memory_bytes"].(float64) > 0) || resources["basis"] != resourceBasis || resources["sampled_at"] == nil ||
 		!strings.HasPrefix(firstString(resources["label"]), "Pharos is using ") {
 		t.Fatalf("the snapshot carries this service's resources: %#v", idle.raw["resources"])
@@ -101,9 +99,6 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	getStatus(t, server, "/api/status?fresh=1")
 	if lockScans.Load() == scans {
 		t.Fatal("the fresh check scanned no lock")
-	}
-	if idle.Features["unified_activity"] != false {
-		t.Fatalf("the flag defaults to off: %#v", idle.Features)
 	}
 	if _, ok := idle.raw["journal"].(map[string]any)["recent"]; ok {
 		t.Fatal("journal history belongs to /api/operations, not the status snapshot")
@@ -167,40 +162,31 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	for _, process := range getStatus(t, server, "/api/status?fresh=1").raw["resources"].(map[string]any)["processes"].([]any) {
 		roles[process.(map[string]any)["pid"].(float64)] = firstString(process.(map[string]any)["role"])
 	}
-	if want := map[float64]string{float64(os.Getpid()): "service", float64(command.Process.Pid): "cli:ingest"}; runtime.GOOS == "darwin" && !maps.Equal(roles, want) {
+	if runtime.GOOS == "darwin" && (roles[float64(os.Getpid())] != "service" || roles[float64(command.Process.Pid)] != "cli:ingest" || roles[float64(os.Getppid())] != "") {
 		t.Fatalf("resources list the service and this Mac's Terminal command: %v", roles)
 	}
 	upload.Finish(nil)
 }
 
 // The flag is read through a short cache that saving preferences clears.
-func TestUnifiedActivityFlagFollowsSavedPreferences(t *testing.T) {
+// The library's storage comes from the last drive check, never measured by
+// the snapshot itself; before one there is none.
+func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	override(t, &featureFlagTTL, time.Hour)
-	ctx := context.Background()
-	if catalog.unifiedActivity(ctx) {
-		t.Fatal("the flag defaults to off")
+	t.Cleanup(func() { drives.mu.Lock(); drives.key, drives.state = "", nil; drives.mu.Unlock() })
+	drives.mu.Lock()
+	drives.key, drives.state = "", nil
+	drives.mu.Unlock()
+	library := func() map[string]any { return getStatus(t, server, "/api/status").raw["library"].(map[string]any) }
+	if _, ok := library()["storage_bytes"]; ok {
+		t.Fatal("storage before any drive check")
 	}
-	if response := serveTestBody(server, http.MethodPost, "/api/preferences", `{"set":{"pharos-unified-activity-v1":true}}`); response.Code != http.StatusOK {
-		t.Fatalf("saving: %d %s", response.Code, response.Body.String())
-	}
-	if !catalog.unifiedActivity(ctx) {
-		t.Fatal("a saved flag is read at once, not after the cache expires")
-	}
-	if getStatus(t, server, "/api/status").Features["unified_activity"] != true {
-		t.Fatal("the snapshot reports the flag")
-	}
-	var menu map[string]any
-	_ = json.Unmarshal(serveTest(server, http.MethodGet, "/api/menu-bar/status").Body.Bytes(), &menu)
-	if menu["unified_activity"] != true {
-		t.Fatalf("the native menu's poll carries the flag: %#v", menu)
-	}
-	if err := catalog.SetUIPreferences(ctx, map[string]any{"set": map[string]any{unifiedActivityFlag: "yes"}}); err != nil {
-		t.Fatal(err)
-	}
-	if catalog.unifiedActivity(ctx) {
-		t.Fatal("only the boolean true turns the flag on")
+	drives.cached(config)
+	drives.store(config, &driveState{sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
+	override(t, &statusCoalesce, 0)
+	if got := library()["storage_bytes"]; got != float64(1_200_000) {
+		t.Fatalf("storage from the last drive check, to two figures: %v", got)
 	}
 }
 
@@ -889,10 +875,15 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		return found
 	}
 	document := broker.statusDocument(context.Background())
-	if got, want := pids(document["resources"]), []int{os.Getpid(), servicePID, commandPID, stuckPID}; !slices.Equal(got, want) {
-		t.Fatalf("the machine's total: %v, want %v", got, want)
+	// The broker is this test process, so other tests' children still
+	// running in it are its workers, after the processes it was asked about.
+	total := document["resources"].(*resourceSummary)
+	want := []int{os.Getpid(), servicePID, commandPID, stuckPID}
+	if got := pids(total); len(got) < len(want) || !slices.Equal(got[:len(want)], want) ||
+		slices.ContainsFunc(total.Processes[len(want):], func(r resourceReading) bool { return !strings.HasPrefix(r.Role, "worker:") }) {
+		t.Fatalf("the machine's total: %v, want %v and any workers", got, want)
 	}
-	if total := document["resources"].(*resourceSummary); !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
 		t.Fatalf("the total's line: %+v", total)
 	}
 	entries := document["libraries"].([]map[string]any)

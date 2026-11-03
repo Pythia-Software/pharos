@@ -610,13 +610,22 @@ func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
 }
 
 func TestAskModelCatalogs(t *testing.T) {
-	raw := json.RawMessage(`{"data":[{"model":"available-model","displayName":"Available Model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}],"nextCursor":null}`)
+	raw := json.RawMessage(`{"data":[{"model":"available-model","displayName":"Available Model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"priority","name":"Fast"}],"additionalSpeedTiers":["fast"]},{"model":"standard-model","displayName":"Standard Model","supportedReasoningEfforts":[],"serviceTiers":[]},{"model":"speed-tier-model","displayName":"Speed Tier Model","supportedReasoningEfforts":[],"additionalSpeedTiers":["fast"]}],"nextCursor":null}`)
 	models, err := askCodexModels(raw)
-	if err != nil || len(models) != 1 || !askValidSelection(askProvider{Models: models}, askSelection{Model: "available-model", Effort: "High"}) {
+	if err != nil || len(models) != 3 || !askValidSelection(askProvider{Models: models}, askSelection{Model: "available-model", Effort: "High"}) {
 		t.Fatalf("models: %+v %v", models, err)
 	}
 	if askValidSelection(askProvider{Models: models}, askSelection{Model: "invented", Effort: "High"}) {
 		t.Fatal("invented model accepted")
+	}
+	if !models[0].Fast || models[0].fastTier != "priority" || !askValidSelection(askProvider{Models: models}, askSelection{Model: "available-model", Effort: "High", Fast: true}) {
+		t.Fatalf("fast tier not offered: %+v", models[0])
+	}
+	if models[1].Fast || askValidSelection(askProvider{Models: models}, askSelection{Model: "standard-model", Effort: "Default", Fast: true}) {
+		t.Fatal("fast accepted for a model without a fast tier")
+	}
+	if !models[2].Fast || models[2].fastTier != "fast" {
+		t.Fatalf("a catalog listing only the fast speed tier: %+v", models[2])
 	}
 	agy := askAGYModels("Fetching models...\nmodel-low\tModel (Low)\nmodel-high\tModel (High)\n")
 	if len(agy) != 1 || len(agy[0].Efforts) != 3 {
@@ -1001,8 +1010,12 @@ func TestAskCLIConnections(t *testing.T) {
 	for _, name := range []string{"Codex", "Claude", "Antigravity"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			provider := askProvider{ID: name, path: "/test/cli", mcp: want}
+			provider := askProvider{ID: name, path: "/test/cli", mcp: want, Models: []askModel{{ID: "test-model", Efforts: []string{"Default", "Low"}, Fast: name != "Antigravity", fastTier: map[string]string{"Codex": "priority"}[name]}}}
 			cmd, err := askPrepareCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Low"}, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fast, err := askPrepareCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Low", Fast: true}, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1038,6 +1051,9 @@ func TestAskCLIConnections(t *testing.T) {
 				if config["mcp_servers.pharos.required"] != "true" || config["mcp_servers.pharos.default_tools_approval_mode"] != `"approve"` || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
 					t.Fatalf("missing required MCP startup or sandbox: %v", cmd.Args)
 				}
+				if slices.ContainsFunc(cmd.Args, func(arg string) bool { return strings.HasPrefix(arg, "service_tier=") }) || !slices.Contains(fast.Args, `service_tier="priority"`) || fast.Args[len(fast.Args)-1] != "-" {
+					t.Fatalf("fast tier: %v / %v", cmd.Args, fast.Args)
+				}
 			case "Claude":
 				var config struct {
 					Servers map[string]askMCPServer `json:"mcpServers"`
@@ -1048,6 +1064,16 @@ func TestAskCLIConnections(t *testing.T) {
 				got = config.Servers["pharos"]
 				if len(config.Servers) != 1 || flag("--allowedTools") != "mcp__pharos" || flag("--tools") != "" || flag("--permission-mode") != "dontAsk" || !slices.Contains(cmd.Args, "--strict-mcp-config") {
 					t.Fatalf("missing scoped MCP permissions: %v", cmd.Args)
+				}
+				settings := func(args []string) (value struct{ DisableAllHooks, FastMode bool }) {
+					t.Helper()
+					if err := json.Unmarshal([]byte(args[slices.Index(args, "--settings")+1]), &value); err != nil {
+						t.Fatal(err)
+					}
+					return value
+				}
+				if plain, fast := settings(cmd.Args), settings(fast.Args); !plain.DisableAllHooks || plain.FastMode || !fast.DisableAllHooks || !fast.FastMode {
+					t.Fatalf("fast mode settings: %+v / %+v", plain, fast)
 				}
 			case "Antigravity":
 				agent, err := os.ReadFile(filepath.Join(dir, ".agents", "agents", "pharos-navigation.md"))

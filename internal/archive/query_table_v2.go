@@ -85,10 +85,18 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosSkillUsagesSchema(), nil
 	case "tl1_attempts":
 		return PharosTl1AttemptsSchema(), nil
+	case "safety":
+		return PharosSafetySchema(), nil
 	case "findings":
 		return PharosFindingsSchema(), nil
 	case "parallelism":
 		return PharosParallelismSchema(), nil
+	case "rhythm":
+		return PharosRhythmSchema(), nil
+	case "agent_events":
+		return PharosAgentEventsSchema(), nil
+	case "agent_event_messages":
+		return PharosAgentEventMessagesSchema(), nil
 	}
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }
@@ -787,6 +795,13 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			return queryV2ExecutionResult{}, err
 		}
 	}
+	if dataset == "rhythm" {
+		var err error
+		ctx, err = withHabitsPreferences(ctx, params.Get("habits_settings"))
+		if err != nil {
+			return queryV2ExecutionResult{}, err
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
@@ -862,7 +877,8 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 				}
 				_, covered = table.project(exactNames).preferCoveringScan(where)
 			}
-			if covered {
+			// Model requests read the narrow stored timing projection.
+			if covered || dataset == "model_requests" {
 				// Narrow covered scalar populations can read the full live ledger
 				// without copying command/result payloads. Exact sample/group limits
 				// and the request deadline remain enforced by the adapter.
@@ -1051,8 +1067,12 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"workspace_id", "conversation_id", "call_message_id", "result_message_id", "call_id"}
 	case "parallelism":
 		required = []string{"conversation_id", "started_at", "location"}
+	case "rhythm":
+		required = []string{"conversation_id", "started_at"}
 	case "skill_usages":
 		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
+	case "agent_events", "agent_event_messages":
+		required = []string{"workspace_id", "conversation_id", "message_id"}
 	}
 	if len(required) == 0 {
 		return selected

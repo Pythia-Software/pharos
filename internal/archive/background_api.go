@@ -14,14 +14,14 @@ import (
 
 // The schedule's words and state for surfaces: the status snapshot's
 // background section (the drive panel) and GET /api/background (Settings →
-// Background updates). Every sentence is the server's; pages add ages.
+// Background Processing). Every sentence is the server's; pages add ages.
 
 // runningItem maps an operation kind (or kind/variant) to the item whose
 // work it is.
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
-	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels",
+	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
@@ -57,6 +57,20 @@ func runningItems(views []opView) (map[string]bool, []string) {
 	return items, order
 }
 
+// stoppableItems is the operation that Stop ends for each item a stoppable
+// operation is working on: a top-level one, as the snapshot offers Stop.
+func stoppableItems(views []opView) map[string]OpID {
+	stops := map[string]OpID{}
+	for _, view := range views {
+		if view.Kind != nil && view.Kind.Stop != "" && view.Parent == "" && !view.Foreign && (view.State == opRunning || view.State == opBlocked) {
+			if item := itemOfView(view); item != "" {
+				stops[item] = view.ID
+			}
+		}
+	}
+	return stops
+}
+
 // durationWords is a typical duration: "a few seconds", "about 40 s",
 // "about 6 min", "about 1 h 20 min".
 func durationWords(seconds float64) string {
@@ -73,6 +87,29 @@ func durationWords(seconds float64) string {
 		return fmt.Sprintf("about %d h", hours)
 	}
 	return fmt.Sprintf("about %d h %d min", hours, minutes)
+}
+
+// typicalWords is the middle of an item's recent runs: "Typically 2–3 h",
+// "Typically about 6 min", "Typically up to 30 s".
+func typicalWords(cost itemCost) string {
+	unit, size, step := "h", 3600.0, 0.5
+	switch {
+	case cost.High < 10:
+		return "Typically a few seconds"
+	case cost.High < 60:
+		unit, size, step = "s", 1, 5
+	case cost.High < 3600:
+		unit, size, step = "min", 60, 1
+	}
+	round := func(seconds float64) float64 { return math.Round(seconds/size/step) * step }
+	low, high := round(cost.Low), round(cost.High)
+	switch {
+	case low == high:
+		return fmt.Sprintf("Typically about %g %s", high, unit)
+	case low == 0:
+		return fmt.Sprintf("Typically up to %g %s", high, unit)
+	}
+	return fmt.Sprintf("Typically %g–%g %s", low, high, unit)
 }
 
 // clockWords is a local time of day: "5:00 PM".
@@ -187,7 +224,7 @@ func sourceDomains(config Config, other bool) []string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "power": "Waits until plugged in"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "power": "Waits until on outlet power"}
 
 // stateRank orders states from the one a cadence's row should show first.
 var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable"}
@@ -206,8 +243,10 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		rows[row.Domain] = row
 	}
 	live, order := runningItems(views)
+	stops := stoppableItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
+	unscheduled := []string{}
 	failed, missed, waiting := []map[string]any{}, false, false
 	for _, plan := range plans {
 		item, _ := backgroundItemByID(plan.ID)
@@ -245,18 +284,24 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			column = settings.placed(item)
 		}
 		entry := map[string]any{"id": item.ID, "label": item.Label, "verb": item.Verb, "feeds": item.Feeds, "why": item.Why, "sub": itemSub(item, in),
-			"cadence": plan.Cadence, "cadence_label": cadenceLabels[plan.Cadence], "column": column, "placed": settings.placed(item),
+			"cadence": plan.Cadence, "cadence_label": cadenceLabels[plan.Cadence], "column": column, "placed": settings.placed(item), "usual_cadence": settings.usual(item),
 			"adaptive": item.Adaptive, "fixed": item.Fixed, "opt_in": item.OptIn, "override": settings.Overrides[item.ID],
 			"state": state, "state_label": stateLabels[state], "as_of": nullable(asOf), "next_at": nullableTime(plan.Next), "error": nullable(problem),
 			"choices": itemChoices(item, settings), "cost": nil, "note": nil}
 		entry["cadence_moves"] = itemCadenceMoves(item, settings)
+		// The running operation Stop ends, where it can be stopped.
+		entry["stop"] = nil
+		if id, ok := stops[item.ID]; ok {
+			entry["stop"] = map[string]any{"id": id}
+		}
 		entry["temporary_cadence"] = nil
 		if temporary, ok := settings.Temporary[item.ID]; ok {
 			entry["temporary_cadence"] = temporary
 			entry["note"] = "Temporary schedule; your usual schedule resumes after one week."
 		}
 		if measured {
-			entry["cost"] = map[string]any{"seconds": cost.Seconds, "runs": cost.Runs, "class": costClass(cost, true), "text": durationWords(cost.Seconds)}
+			entry["cost"] = map[string]any{"seconds": cost.Seconds, "runs": cost.Runs, "class": costClass(cost, true), "text": durationWords(cost.Seconds),
+				"typical": typicalWords(cost)}
 		}
 		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
 			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
@@ -281,7 +326,12 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			}
 		}
 		items = append(items, entry)
-		byCadence[column] = append(byCadence[column], entry)
+		if plan.Cadence == cadenceManual {
+			// Only when you ask: on no schedule, so in no cadence's row.
+			unscheduled = append(unscheduled, item.ID)
+		} else {
+			byCadence[column] = append(byCadence[column], entry)
+		}
 		if state == "failed" {
 			failed = append(failed, entry)
 		}
@@ -341,7 +391,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		}
 		everythingText += "."
 	}
-	return map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "items": items, "cadences": rowsOut,
+	return map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "items": items, "cadences": rowsOut, "unscheduled": unscheduled,
 		"headline": backgroundHeadline(settings, items, order, failed, missed, waiting, in.power), "power": in.power,
 		"everything": map[string]any{"seconds": everything, "text": everythingText}}
 }
@@ -368,8 +418,18 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 	case "other-sources":
 		return strings.Join(in.otherSources, ", ")
 	case "labels":
+		if in.labelerProblem != "" {
+			return "Labeling can't run: " + in.labelerProblem
+		}
 		if in.labelsWaiting != "" {
 			return "Labeling is " + in.labelsWaiting
+		}
+	case "agent_events":
+		if in.labelerProblem != "" {
+			return "Finding agent events can't run: " + in.labelerProblem
+		}
+		if in.agentEventsWaiting != "" {
+			return "Finding agent events is " + in.agentEventsWaiting
 		}
 	}
 	return item.Feeds
@@ -425,12 +485,12 @@ func backgroundHeadline(settings backgroundSettings, items []map[string]any, run
 	switch {
 	case settings.Mode == "paused":
 		until, _ := parseTime(settings.PausedUntil)
-		return map[string]any{"tone": "paused", "title": "Background updates paused until " + clockWords(until),
+		return map[string]any{"tone": "paused", "title": "Background Processing paused until " + clockWords(until),
 			"text":   "New conversations aren’t being added, and nothing else updates until then.",
 			"action": map[string]any{"label": "Resume now", "path": "/api/background/settings", "body": map[string]any{"mode": "on"}}}
 	case settings.Mode == "manual":
-		return map[string]any{"tone": "paused", "title": "Background updates are off",
-			"text":   "Nothing updates until you choose Update everything now, or turn background updates on.",
+		return map[string]any{"tone": "paused", "title": "Background Processing is off",
+			"text":   "Nothing updates until you choose Update everything now, or turn Background Processing on.",
 			"action": map[string]any{"label": "Turn on", "path": "/api/background/settings", "body": map[string]any{"mode": "on"}}}
 	case len(running) > 0:
 		item := byID[running[0]]
@@ -464,7 +524,7 @@ func batteryHeadline(policy batteryPolicy, power powerState) map[string]any {
 		} else if power.Percent >= 0 && power.Percent < lowBatteryPercent {
 			title = fmt.Sprintf("Battery at %d%%", power.Percent)
 		}
-		return map[string]any{"tone": "paused", "title": title, "text": "Background updates wait until this Mac is plugged in."}
+		return map[string]any{"tone": "paused", "title": title, "text": "Background Processing waits until this Mac is plugged in."}
 	}
 	waits := []string{}
 	for _, cadence := range []string{cadenceHourly, cadenceDaily} {
@@ -573,6 +633,8 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
+		"labels":       s.labelsSettings(),
+		"agent_events": s.agentEventsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
 			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "temporary_cadences": settings.Temporary, "battery": settings.Battery,
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
@@ -756,7 +818,8 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 }
 
 // postBackgroundRun answers POST /api/background/run: {"item": ID} runs one
-// item now, {"cadence": "daily"} every item of a cadence.
+// item now, {"cadence": "daily"} every item of a cadence ("manual": every
+// item set to only when you ask, the panel's Ad hoc).
 func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	ids := []string{}
 	if id := firstString(body["item"]); id != "" {
@@ -779,7 +842,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		}
 	}
 	if len(ids) == 0 {
-		writeError(w, errors.New(`body is {"item": ID} or {"cadence": "frequent" | "hourly" | "daily"}`), 400)
+		writeError(w, errors.New(`body is {"item": ID} or {"cadence": "frequent" | "hourly" | "daily" | "manual"}`), 400)
 		return
 	}
 	run := []string{}
@@ -794,6 +857,8 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		case item.requiresLabels && !s.Config().Labels.Enabled:
 			// Labels are off here (the broker asks every library after a
 			// download).
+		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
+		case item.requiresAsk && !s.askEnabled(r.Context()):
 		default:
 			run = append(run, id)
 		}

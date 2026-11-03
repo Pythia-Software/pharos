@@ -58,14 +58,16 @@ type Catalog struct {
 	findings findingsState
 	// labels allows one labels run at a time in this process (labels.go);
 	// labelers is the labeler runtime its runs share.
-	labels       sync.Mutex
-	labelers     *labelrt.Manager
-	labelersOnce sync.Once
-	mcpHistory   mcpHistory
-	wal          walBound
-	writers      catalogWriteTracker
-	queries      queryActivity
-	now          func() time.Time
+	labels sync.Mutex
+	// agentEventsRun keeps one agent events pass at a time in this process.
+	agentEventsRun sync.Mutex
+	labelers       *labelrt.Manager
+	labelersOnce   sync.Once
+	mcpHistory     mcpHistory
+	wal            walBound
+	writers        catalogWriteTracker
+	queries        queryActivity
+	now            func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild) as an operation. The service sets it to its start, so a
 	// release cancels the work and waits for it before closing the catalog;
@@ -254,6 +256,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)
 	}
+	if err := c.ensureAgentEventsSchema(); err != nil {
+		return fmt.Errorf("initialize agent events: %w", err)
+	}
 	if err := c.ensureFindingsSchema(); err != nil {
 		return fmt.Errorf("initialize findings tables: %w", err)
 	}
@@ -352,6 +357,9 @@ func (c *Catalog) Initialize() error {
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
 		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
+		// Ask Pharos's compaction signal reads only requests after a
+		// compaction, a few in a thousand.
+		"CREATE INDEX IF NOT EXISTS model_requests_compacted_idx ON model_requests(requested_at) WHERE compacted_before>0",
 
 		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
 		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
@@ -370,6 +378,13 @@ func (c *Catalog) Initialize() error {
 		if _, err := c.DB.Exec(index); err != nil {
 			return err
 		}
+	}
+	// Its triggers read request and tool-call columns migrated above.
+	if err := c.ensureRequestTimings(); err != nil {
+		return fmt.Errorf("initialize request timings: %w", err)
+	}
+	if err := c.ensureRequestEvidence(); err != nil {
+		return fmt.Errorf("initialize request evidence: %w", err)
 	}
 	// Columns such as effort are added above when opening a legacy catalog.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx

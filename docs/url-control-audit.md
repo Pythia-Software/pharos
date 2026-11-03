@@ -141,7 +141,7 @@ Sources: [findings.tsx](../web/src/findings.tsx), [findings-route.ts](../web/src
 |---|---|---|---|
 | Work, selected conversation, message, tool call, timestamp | Work/conversation path plus `conversation/message/call/at` | Older `/work/{id}?conversation=...` form only | Reader rewrites to `/work/{id}/conversation/{id}`; manifest parser requires exact path segment count and does not recognize the resulting path |
 | Transcript Show presets, custom event-category checkboxes | Saved `pharos-transcript-filter` | Missing | Definite gap: changes visible content; browser observed Primary only without URL change |
-| Find in conversation: applied rules/syntax, match options/scope, message-order selector | Local `ConversationSearch` state | Missing | Definite query gap; Library search URL support does not cover this reader search |
+| Find in conversation | Replaced by page Find: `find`, `find_case`, `find_regex` | Present | The reader's own Find was merged into page Find (see url-view-state.md) |
 | Session table / parallel lanes, explorer visibility | `explorer`, `sessions` | Present | Keep |
 | Hierarchy/ranking, metric, Self/Self+children, sort direction, collapsed nodes, selected session, zoom range | `delegation_*` | Present | Existing base; paging and detailed lane state still differ |
 | Visible metric columns, column order, cell tint | Saved delegation preferences | Missing | Definite view gap |
@@ -150,28 +150,19 @@ Sources: [findings.tsx](../web/src/findings.tsx), [findings-route.ts](../web/src
 | Open/close all turns, individual turns/tool payloads, full message text, tool-use summary, source/archive details | Local DOM disclosure state; turn openness partly remembered in memory | Missing | Include under the agreed disclosure scope; message links already reveal their targets |
 | Workspace sidebar show/hide, width, mobile sheet | Local state / saved width | Missing | Include durable visibility/layout choices; exclude mobile navigation menu openness |
 
-Sources: [reader controls in ui.py](../internal/archive/assets/ui.py), [reader categories/model](../internal/archive/assets/reader-model.js), [conversation-search.tsx](../web/src/conversation-search.tsx), [delegation.tsx](../web/src/delegation.tsx), [delegation-route.ts](../web/src/delegation-route.ts), [workspace-inbox.ts](../web/src/workspace-inbox.ts), [matchRoute](../internal/archive/site_link.go).
+Sources: [reader controls in ui.py](../internal/archive/assets/ui.py), [reader categories/model](../internal/archive/assets/reader-model.js), [page-find.ts](../web/src/page-find.ts), [delegation.tsx](../web/src/delegation.tsx), [delegation-route.ts](../web/src/delegation-route.ts), [workspace-inbox.ts](../web/src/workspace-inbox.ts), [matchRoute](../internal/archive/site_link.go).
 
 There are two different controls called sessions visibility: the explorer's existing `sessions=hidden` and the workspace navigator sidebar's visibility. They need distinct ownership/names if both are made linkable.
 
-### Still-reachable legacy views
+### Removed legacy views
 
-These are reachable through explicit old URLs and current “Legacy view” links. The site map deliberately excludes their route vocabulary, so equivalent canonical topics do not imply parity of controls.
-
-Legacy view-state migration is now explicitly excluded from this project. Retain the rows as known gaps, preserve compatibility, and record the exclusion by page/surface in the completeness manifest. An exclusion must not mask a missing control on a canonical page.
-
-| Surface | Existing URL support | Missing view state |
-|---|---|---|
-| Legacy Analyze tabs | `analyze_view`, `machine_view` | Agent help excludes these modes |
-| Machine Activity shared scope | `activity_days/repo/provider/model` plus origin dimensions | Agent help excludes it |
-| Legacy token trend | Table filters in `q_usage`; chart stored in `pharos-usage-chart` | Chart measure/split/period/smoothing/display/scale/legend/series settings do not travel with the table |
-| Legacy Human Words | `writing`, `messages`, `q_writing/q_writing_messages`, `message_query`, `message_cursor` | Writing chart stored in `pharos-writing-view`; advanced message search absent from agent interface |
-| Legacy Agent Time | Source calls/query scope can travel | Hours/share, trend measure, analytics grouping local; `MachineAnalyticsTable` has URL sync off by default |
-| Legacy parallelism | `q_machine_parallelism` and shared scope | No general agent construction; prototype modal settings differ |
-| Legacy Carbon | Chart reads `analyze_chart` on entry | Chart edits only save preference, so an existing chart URL can become stale |
-| `/tools` Calls/Summary/Skills | `tools_view`, relevant `q_*` | Agent uses canonical query pages; custom selected-call dialog is local |
-
-Sources: [legacy components](../web/src/index.tsx), [machine-activity.tsx](../web/src/machine-activity.tsx), [machine-time.tsx](../web/src/machine-time.tsx), [machine-analytics-table.tsx](../web/src/machine-analytics-table.tsx), [legacy routes](../web/src/site-routes.ts).
+The legacy Analyze tabs (`analyze_view`, `machine_view`, `writing`) and the
+`/tools` pages were removed on 2026-11-02. Their links open what replaced
+them (`canonicalAnalyzeURL` in
+[usage-workspace-model.ts](../web/src/usage-workspace-model.ts)): the query
+table whose `q_*` the link holds, or otherwise the page's dashboard with the
+link's `analyze_chart`. Machine Activity's shared scope (`activity_*`) and
+`q_machine_parallelism` are dropped.
 
 ### Global/Settings boundary
 

@@ -73,7 +73,7 @@ body[data-application-setup] #navigator{display:none}
 .application-setup.introduction #application-intro,.application-setup.introduction #library-actions,.application-setup.introduction #libraries{display:none}
 .application-setup .header-icon{min-height:30px;width:30px;padding:0}
 .application-setup [hidden]{display:none!important}
-.application-setup :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.application-setup :focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .application-setup h1:focus,.application-setup h2:focus,.application-setup #next:focus{outline:none}
 .application-setup.flow-open #application-intro,.application-setup.flow-open #library-actions,.application-setup.flow-open #libraries{display:none}
 .application-setup.library-ready #application-intro,.application-setup.library-ready #library-actions,.application-setup.library-ready #libraries{display:none}
@@ -89,7 +89,7 @@ body[data-application-setup] #navigator{display:none}
 .application-setup .wizard-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;border:0;padding:0;margin:18px 0 0;min-width:0}
 .application-setup .wizard-choice{display:flex;flex-direction:column;position:relative;min-width:0;margin:0;padding:22px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-weight:400;cursor:pointer}
 .application-setup .wizard-choice:has(input:checked){border-color:var(--gold);background:color-mix(in srgb,var(--gold) 7%,var(--bg));box-shadow:inset 0 0 0 1px var(--gold)}
-.application-setup .wizard-choice:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:3px}
+.application-setup .wizard-choice:has(input:focus-visible){outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .application-setup .wizard-choice input[type=radio]{position:absolute;top:18px;right:18px;display:block;width:18px;height:18px;min-height:0;margin:0;padding:0;accent-color:var(--accent)}
 .application-setup .wizard-choice>svg{display:block;width:100%;height:110px;margin:0 0 12px;color:var(--gold)}
 .application-setup .wizard-choice strong{font:600 19px/1.3 var(--serif);margin-bottom:8px}
@@ -223,6 +223,29 @@ function nextPharosLibraryName(libraries) {
   while (names.has(name)) name = 'My Library ' + number++;
   return name;
 }
+// Settings → Libraries sends people here when it releases the open library or
+// starts an operation that closes every library. Return them there afterwards.
+function pharosLibraryHome(arrival) {
+  return arrival.has('after')||arrival.has('released')?'/settings/libraries':'/library';
+}
+// A verified operation reopens the selected library; a failed one stays here with its error.
+// A compaction that fails leaves the catalog as it was, so it reopens too: to
+// Library health's Storage when it finished, else to the Libraries page, which
+// shows the failure.
+function pharosLibraryReopen(arrival, state) {
+  const selected=state.libraries.find(l=>l.id===state.selected),after=arrival.get('after');
+  const ended=after==='operation'?state.job?.state==='complete':after==='compact'&&['complete','failed'].includes(state.job?.state);
+  if(!ended||state.busy||!selected?.available)return null;
+  return {library:selected,home:after==='compact'&&state.job.state==='complete'?'/settings':pharosLibraryHome(arrival)};
+}
+function pharosLibraryHeading(state) {
+  const current=state.libraries.find(l=>l.id===state.selected);
+  return !state.libraries.length?'Let’s set up your library.':current?.connected?'Your libraries.':'Choose a library.';
+}
+function pharosLibraryConnect(library, state) {
+  const selected=library.id===state.selected,active=selected&&!!library.connected;
+  return {active,text:active?'Continue browsing':selected?'Reconnect':'Switch to library',label:(active?'Browse ':selected?'Reconnect to ':'Switch to ')+library.name};
+}
 function createPharosSetupWizard() {
   const order=['machines','storage','details','review'];
   return {
@@ -301,21 +324,14 @@ dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.q
 for(const el of [document.querySelector('body > header'),document.querySelector('body > main')])el.inert=true;
 document.documentElement.dataset.theme='dark';
 dialog.showModal();$('welcome-title').focus();
-// Settings → Libraries sends people here when it releases the open library or
-// starts an operation that closes every library. Return them there afterwards.
-const arrival=new URLSearchParams(location.search),libraryHome=arrival.has('after')||arrival.has('released')?'/settings/libraries':'/library';let reopening=false;
+const arrival=new URLSearchParams(location.search),libraryHome=pharosLibraryHome(arrival);let reopening=false;
 if(arrival.has('released'))notice('Library released. You can eject its drive in Finder. Quit Pharos first if the app is on that drive.');
 async function refresh(){
   state=await call('state');
   $('job').hidden=!state.job;
   if(state.job){$('job').textContent=state.job.phase;$('job').classList.toggle('error',state.job.state==='failed'||state.job.state==='paused')}
-  // A verified operation reopens the selected library; a failed one stays here with its error.
-  // A compaction that fails leaves the catalog as it was, so it reopens too: to
-  // Library health's Storage when it finished, else to the Libraries page, which
-  // shows the failure.
-  const selected=state.libraries.find(l=>l.id===state.selected),after=arrival.get('after');
-  const ended=after==='operation'?state.job?.state==='complete':after==='compact'&&['complete','failed'].includes(state.job?.state);
-  if(ended&&!state.busy&&selected?.available&&!reopening){reopening=true;notice('Reopening '+selected.name+'…');const home=after==='compact'&&state.job.state==='complete'?'/settings':libraryHome;act(async()=>{await call('connect',{id:selected.id});location.href=home});return}
+  const reopen=!reopening&&pharosLibraryReopen(arrival,state);
+  if(reopen){reopening=true;notice('Reopening '+reopen.library.name+'…');act(async()=>{await call('connect',{id:reopen.library.id});location.href=reopen.home});return}
   const signature=JSON.stringify({...state,job:null});if(signature===renderSignature)return;renderSignature=signature;
   if((state.libraries.length||state.job)&&introStep!=='setup')showIntroduction('setup');
   const current=state.libraries.find(l=>l.id===state.selected);
@@ -323,7 +339,7 @@ async function refresh(){
   $('application-label').textContent=state.libraries.length?'Libraries':'Setup guide';
   $('libraries').hidden=!state.libraries.length;
   $('application-close').hidden=!current?.connected;
-  $('heading').textContent=!state.libraries.length?'Let’s set up your library.':current?.connected?'Your libraries.':'Choose a library.';
+  $('heading').textContent=pharosLibraryHeading(state);
   if(state.libraries.length)$('library-introduction').textContent=current?.connected?`You’re using ${current.name}. Manage your libraries any time in Settings → Libraries.`:'No library is open. Open one to keep browsing, or create a new library on this Mac or an attached drive.';
   $('library-manager-note').textContent=state.busy?'A library operation is running. You can open a library when it finishes.':'Each library keeps its own history, sources and saved views. Once one is open, manage them in Settings → Libraries.';
   for(const button of document.querySelectorAll('#library-actions button'))button.disabled=state.busy;
@@ -332,7 +348,7 @@ async function refresh(){
   const focused=document.activeElement?.dataset.libraryAction;
   list.replaceChildren();
   for(const l of state.libraries){
-    const selected=l.id===state.selected,active=selected&&l.connected;
+    const {active,text,label}=pharosLibraryConnect(l,state);
     const c=document.createElement('article');c.className='card'+(active?' library-card-current':'');
     const heading=document.createElement('div');heading.className='library-card-heading';
     const title=document.createElement('h3');title.textContent=l.name;
@@ -340,8 +356,8 @@ async function refresh(){
     heading.append(title,tag);
     const p=document.createElement('p');p.className='path';p.textContent=l.config;
     const actions=document.createElement('div');actions.className='row';
-    const connect=document.createElement('button');connect.className=active?'primary':'secondary';connect.textContent=active?'Continue browsing':selected?'Reconnect':'Switch to library';
-    connect.setAttribute('aria-label',(active?'Browse ':selected?'Reconnect to ':'Switch to ')+l.name);connect.dataset.libraryAction='connect:'+l.id;
+    const connect=document.createElement('button');connect.className=active?'primary':'secondary';connect.textContent=text;
+    connect.setAttribute('aria-label',label);connect.dataset.libraryAction='connect:'+l.id;
     connect.disabled=!l.available||state.busy;
     connect.onclick=()=>act(async()=>{connect.disabled=true;try{await call('connect',{id:l.id});location.href=libraryHome}finally{connect.disabled=!l.available||state.busy}});
     actions.append(connect);

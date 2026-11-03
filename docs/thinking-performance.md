@@ -148,6 +148,56 @@ implementation retains the smaller changes with demonstrated benefits.
   have an explicit two-minute budget. This remains exact computation rather
   than approximation.
 
+## November 2026: stored timing projection
+
+Measured on November 1, 2026 on an APFS clone of the November 1, 10 PM euclid
+backup: 1,325,864 requests, 1,775 excluded conversations and 46,826 evidence
+rows.
+
+Before this change, every Waiting and Thinking card hit the 30-second server
+deadline, and the browser abandoned it at 15 seconds. Each card query rebuilt
+the timing projection over the full ledger. Cold Thinking loads took 23–80
+seconds reading records.
+
+### Changes
+
+- **Stored projection.** The timing projection is stored per request in
+  `model_request_timings`, kept current by dirty-conversation triggers and
+  read through a hybrid with live derivation for dirty conversations.
+- **Evidence table.** Validation evidence is stored in
+  `model_request_evidence`. The one-time background builds took about 100 s
+  (timings) and 139 s (evidence) on this library.
+- **Native filters.** These read the stored projection instead of the wide
+  ledger.
+- **Dashboard computation.**
+  - Model fits run in parallel.
+  - The Overview's sections are computed concurrently.
+  - The fit cache key is hashed in parallel chunks.
+  - Dropdown options come from the loaded population.
+  - Records are collected in chunks instead of counting the ledger first.
+- **Card previews.** Model-request previews may read up to 2 million rows, and
+  distribution cards no longer share one batched request.
+
+### Results
+
+- **All dashboard combinations.** 296 view/breakdown/range/filter/evidence
+  combinations (warm population) all succeeded: median 0.29 s, p90 0.68 s, max
+  3.8 s. The slowest cases are the first evaluation of a filter selecting most
+  requests (provider, quality: about 2–2.8 s). All-time validation, which
+  previously timed out at 126 s, takes 0.85 s cold.
+- **Overview.**
+  - Cold, after startup or a source change: 6.1 s, of which 4.9 s is reading
+    records.
+  - Warm: 0.45 s, down from 1.75 s.
+- **Cards** at 7, 30 and 90 days:
+  - Compactions: 0.2, 0.8 and 1.9 s.
+  - Coverage: 0.4–2, 1.0 and 2.5 s.
+  - Each distribution card, run three at a time: up to 2.0, 5.7 and 10.2 s.
+- **Remaining cost.** About 70% of distribution-card time is inside Query
+  Table's SQLite distribution executor (per-metric passes, per-row Go
+  callbacks, and an exact rational sum in box metrics). That needs an upstream
+  release.
+
 ## Reproduction and checks
 
 The read-only probe requires a `.pharos-dev` marker and never initializes or

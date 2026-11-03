@@ -291,6 +291,15 @@ func TestMenuBarTodaySnapshotAndPreference(t *testing.T) {
 			t.Fatal("cost link lost its metric")
 		}
 	}
+	// Streaks are read only when one is in the menu.
+	if got := libraryStatusCall(t, server, "/api/menu-bar/usage"); got["streaks"] != nil {
+		t.Fatalf("streaks without a streak item: %v", got["streaks"])
+	}
+	preferencesCall(t, server, http.MethodPost, "/api/preferences", `{"set":{"pharos-menu-bar":{"enabled":true,"streak":true}}}`)
+	got := libraryStatusCall(t, server, "/api/menu-bar/usage")
+	if streaks, _ := got["streaks"].(map[string]any); streaks == nil || !strings.HasSuffix(streaks["you"].(string), "today pending") || got["links"].(map[string]any)["streak"] != "/analyze?analyze_topic=habits" {
+		t.Fatalf("streaks: %v, links %v", got["streaks"], got["links"])
+	}
 	if menuBarUsagePeriod(map[string]json.RawMessage{}) != "today" {
 		t.Fatal("new configurations should use Today")
 	}

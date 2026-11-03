@@ -1,26 +1,28 @@
 import { EMPTY_QUERY, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
-import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { cardDashboardWhere } from "./card-exploration";
 import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
 import { defaultCardCover } from "./card-cover";
 import { windowedChart } from "./card-windows";
 
-type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
+type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number; nonzero: boolean };
 // Versioned chart states keep source filters as the dashboard population.
 export type CardDashboard = { topic: UsageTopic; chart: AnalysisState & { v: number } };
 export type CardDestination = CardDashboard & { dataset: UsageDataset; detailAction?: string };
 
-const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15 };
+// A card's chart keeps its zeroes, as its cover does, unless both leave
+// them out; the dashboards' own defaults do.
+const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, nonzero: false };
 const tokens = (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
 const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
   // Card charts were linear before the engine; their states say so, since
   // a trend without a scale draws the linear + log split.
-  topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", ...extra },
+  topic, chart: { v: analysisVersion, view, metric, split, period: "day", scale: "linear", nonzero: false, ...extra },
 });
 const activity = engine("activity", "scatter");
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
@@ -68,7 +70,7 @@ const dashboards: Record<string, CardDashboard> = {
   "model-cost-share-trend": tokens("percent_cost", "model_family", { rollingPeriods: 7 }),
   "provider-cost-share": tokens("percent_cost", "provider", { rollingPeriods: 7 }),
   "token-volume-trend": tokens("tokens", "provider", { rollingPeriods: 7 }),
-  "token-volume-log": tokens("tokens", "repository_name", { scale: "logarithmic" }),
+  "token-volume-log": tokens("tokens", "repository_name", { scale: "logarithmic", nonzero: true }),
   "cumulative-api-cost": tokens("cost", "provider", { display: "cumulative" }),
   "mcp-call-trend": mcp("calls", "tool_name", { view: "trend", rollingPeriods: 7 }),
   "mcp-response-size": mcp("bytes", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
@@ -130,8 +132,8 @@ const dashboards: Record<string, CardDashboard> = {
   "human-message-lengths": human("typed", "none", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
   "human-words-per-work": human("typed", "none", { view: "compare", unit: "work", reduce: "mean" }),
   "human-example-phrases": human("words", "kind"),
-  "human-specific-feedback": human("correction_share", "none", { rollingPeriods: 7 }),
-  "session-human-output": activity("human_input", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
+  "human-specific-feedback": human("typed_messages", "none", { rollingPeriods: 7 }),
+  "session-human-output": activity("messages", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
   // Carbon: usage, under the user's assumptions.
   "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", norm: true }),
   "carbon-tiers": carbon("co2", "carbon_tier", { compareAs: "share" }),
@@ -155,7 +157,7 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
-  if (recipe.thinking) return recipe;
+  if (recipe.thinking || recipe.habits) return recipe;
   if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const mapped = dashboardFor(recipe);
   const dashboard = mapped.chart.view === "distribution" && recipe.cover?.minSamples !== undefined ? { ...mapped, chart: { ...mapped.chart, minSamples: recipe.cover.minSamples } } : mapped;
@@ -170,12 +172,21 @@ export function parallelismRibbon(days?: number | null) {
 }
 
 export function cardDestination(recipe: QueryRecipe, query: QueryState, window?: RollingWindow): string {
+  // A Habits card is the page's address, as its "Add to Home" saves it,
+  // landing on its section.
+  if (recipe.habits) {
+    const address = new URL(usageWorkspaceURL({ mode: "dashboards", topic: "habits", dataset: "rhythm" }, new URLSearchParams(recipe.habits.view)), "http://localhost");
+    address.searchParams.set("reveal", `section:${recipe.habits.target}`);
+    return address.pathname + address.search;
+  }
   const url = queryURL(recipe.dataset, query, window), target = recipe.destination;
   if(recipe.thinking) {
     const parsed=new URL(url,"http://localhost");
     parsed.searchParams.set("analyze_mode","dashboards");parsed.searchParams.set("analyze_topic",recipe.thinking.overview?"thinking-overview":"thinking-detail");parsed.searchParams.set("analyze_data","model_requests");
     parsed.searchParams.set("thinking",JSON.stringify(recipe.thinking.state));
-    parsed.searchParams.set("analyze_filters",encodeQuery({...EMPTY_QUERY,where:(query.grouping?.source??query).where}));
+    if(recipe.thinking.open)parsed.searchParams.set("disclosures",JSON.stringify({[recipe.thinking.open]:true}));
+    const own=new Set(recipe.thinking.coverWhere?(recipe.where??[]).map(term=>JSON.stringify(term)):[]);
+    parsed.searchParams.set("analyze_filters",encodeQuery({...EMPTY_QUERY,where:(query.grouping?.source??query).where.filter(term=>!own.has(JSON.stringify(term)))}));
     parsed.searchParams.set("card_query",recipe.dataset);parsed.searchParams.set("card_id",recipe.id);
     const cover=defaultCardCover(recipe);
     if(cover)parsed.searchParams.set("card_cover",JSON.stringify(cover));

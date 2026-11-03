@@ -1,5 +1,5 @@
 import { useViewState } from "./view-state";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, toggleNavigationSection, type AppSection, type NavigationExpansion } from "./app-navigation-model";
@@ -8,6 +8,8 @@ import { PageLink, useLocationRevision } from "./nested-pages";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
 import { focusPageContent } from "./page-focus";
+import { attentionBySource, attentionLabel, withLogSources } from "./logs-model";
+import { useLogsSummary } from "./logs-summary";
 import "./app-shell.css";
 
 type Layout = "wide" | "compact" | "phone";
@@ -17,9 +19,14 @@ function NavigationItems({ pages, current, navigate, expanded, toggle }: {
   pages: readonly NestedPage[]; current: string; navigate: () => void; expanded: NavigationExpansion[string]; toggle: (id: string) => void;
 }) {
   return <>{pages.map(page => page.children ? <details key={page.id} open={isNavigationSectionExpanded(expanded, page.id)}>
-    <summary onClick={event => { event.preventDefault(); toggle(page.id); }}>{page.label}<Icon name="chevron-down" /></summary>
+    <summary onClick={event => { event.preventDefault(); toggle(page.id); }}>{page.label}<AttentionMark attention={page.attention} /><Icon name="chevron-down" /></summary>
     <div className="app-navigation-children"><NavigationItems pages={page.children} current={current} navigate={navigate} expanded={expanded} toggle={toggle} /></div>
-  </details> : <NavigationLink key={page.id} href={page.href} current={page.id === current} navigate={navigate}>{page.label}</NavigationLink>)}</>;
+  </details> : <NavigationLink key={page.id} href={page.href} current={page.id === current} navigate={navigate}>{page.label}<AttentionMark attention={page.attention} /></NavigationLink>)}</>;
+}
+
+function AttentionMark({ attention }: { attention?: NestedPage["attention"] }) {
+  if (!attention) return null;
+  return <span className={`app-navigation-attention ${attention}`} title={attentionLabel(attention)}><Icon name={attention === "error" ? "error" : "severity-high"} /><span className="visually-hidden">{attentionLabel(attention)}</span></span>;
 }
 
 function NavigationLink({ navigate, ...props }: React.ComponentProps<typeof PageLink> & { navigate: () => void }) {
@@ -37,13 +44,24 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   const navigating = useRef(false), previousURL = useRef(location.href);
   const params = new URLSearchParams(location.search), selected = appLocation(location.pathname, params);
-  const sections = appSections(settings, params);
+  const logs = useLogsSummary(selected.section === "settings");
+  const sections = appSections(withLogSources(settings, attentionBySource(logs)), params);
   const { section, page } = appLocationLabel(sections, selected);
   const [expanded, setExpanded] = useViewState<NavigationExpansion>("nav_expanded", {});
   const toggle = (section: string, id: string) => setExpanded(state => toggleNavigationSection(state, section, id));
   const activeBranch = sections.find(item => item.id === branch) ?? section;
   const hasSidebar = layout !== "phone" && section.pages.length > 0;
   const rail = hasSidebar && !collapsed;
+  // The page's offsets follow the sidebar through an attribute on <main>, not
+  // main:has(...): a :has() on main makes every attribute change in the page,
+  // such as opening a transcript turn, re-check or restyle all of it.
+  // Sync after every commit, writing only a change.
+  useLayoutEffect(() => {
+    const main = contentNavigation.parentElement!, value = hasSidebar ? rail ? "open" : "collapsed" : undefined;
+    if (main.dataset.appSidebar === value) return;
+    if (value) main.dataset.appSidebar = value;
+    else delete main.dataset.appSidebar;
+  });
 
   useEffect(() => {
     const header = document.querySelector<HTMLElement>("body > header")!;

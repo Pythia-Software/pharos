@@ -1,9 +1,7 @@
-// The unified activity panel (docs/background-work.md §7–9, §11), shown
-// while the pharos-unified-activity-v1 preference is on. It renders only
-// from the status store (status-store.js) and, while on, is the one renderer
-// of the header's drive chip, its panel and the header's Index changes
-// state; library.js and sync.js leave those alone. Off, it does nothing at
-// all and library.js's drive panel runs as before.
+// The unified activity panel (docs/background-work.md §7–9, §11). It renders
+// only from the status store (status-store.js) and is the one renderer of
+// the header's drive chip, its panel and the header's Index changes state;
+// library.js and sync.js leave those alone.
 //
 // The panel answers, in this order: what is happening and what it means for
 // the pages (the schedule's headline); what runs now, with its progress and
@@ -17,7 +15,7 @@
   'use strict';
   const CSS = `
 .pharos-status-panel{width:min(440px,calc(100vw - 24px))}
-.pharos-status-eject{display:flex;gap:8px;align-items:baseline;margin-top:4px;font-size:12px;color:var(--muted,#666)}
+.pharos-status-eject{display:flex;gap:8px;align-items:baseline;margin:4px 0 12px;font-size:12px;color:var(--muted,#666)}
 .pharos-status-headline{margin:12px 0 10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--ink,#000) 5%,transparent);border-left:3px solid #8cc6a0}
 .pharos-status-headline.busy{border-left-color:var(--accent,#d8ae5e)}
 .pharos-status-headline.behind{border-left-color:var(--warn,#f0955a)}
@@ -29,6 +27,9 @@
 .pharos-status-headline details>summary{cursor:pointer}
 .pharos-status-headline .pharos-button{margin-top:8px}
 .pharos-status-now{margin:0 0 10px}
+.pharos-status-heading{display:flex;align-items:baseline;margin:14px 0 6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
+.pharos-status-heading a{margin-left:auto;font-size:12px;font-weight:400;letter-spacing:normal;text-transform:none}
+.pharos-status-panel .pharos-attention-item>.pharos-sub{margin-top:4px;overflow-wrap:anywhere}
 .pharos-status-line{display:block;overflow-wrap:anywhere}
 .pharos-status-line+.pharos-status-line{margin-top:8px}
 .pharos-status-line>strong{font-weight:650}
@@ -36,27 +37,46 @@
 .pharos-status-step{display:block;font-size:12px}
 .pharos-status-bar{height:5px;border-radius:3px;background:color-mix(in srgb,var(--ink,#000) 10%,transparent);margin:5px 0 3px;overflow:hidden}
 .pharos-status-bar>i{display:block;height:100%;background:var(--accent,#d8ae5e)}
-.pharos-status-load{display:block;font-size:12px;color:var(--muted,#666);margin-top:4px}
+.pharos-status-load{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
+.pharos-status-load>span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0;padding:0 4px;white-space:nowrap}
+.pharos-status-load>span+span{border-left:1px solid var(--line,#ddd)}
+.pharos-status-load>span>span{display:inline-flex;align-items:center;gap:4px}
+.pharos-status-load .app-icon{width:13px;height:13px;flex:none}
+.pharos-status-load b{font-size:13px;font-weight:600;color:var(--ink,#000);font-variant-numeric:tabular-nums}
+/* Opacity only, with the ring on ::after: see .pharos-drive .pharos-dot.busy. */
+.pharos-status-panel .pharos-dot.pulse{position:relative;animation:pharos-status-pulse 1.6s ease-in-out infinite}
+.pharos-status-panel .pharos-dot.pulse::after{content:'';position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 5px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent);opacity:0;animation:pharos-status-ring 1.6s ease-in-out infinite}
+@keyframes pharos-status-pulse{50%{opacity:.55}}
+@keyframes pharos-status-ring{50%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.pharos-status-panel .pharos-dot.pulse,.pharos-status-panel .pharos-dot.pulse::after{animation:none}}
 .pharos-status-cadences{border-top:1px solid var(--line,#ddd)}
 .pharos-status-cadences details{border-bottom:1px solid var(--line,#ddd)}
-.pharos-status-cadences summary{list-style:none;display:grid;grid-template-columns:18px 86px minmax(0,1fr);gap:2px 8px;align-items:baseline;padding:8px 2px;cursor:pointer}
+.pharos-status-cadences summary{list-style:none;display:grid;grid-template-columns:18px minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;padding:8px 0;cursor:pointer}
+.pharos-status-cadences .pharos-status-run{display:inline-flex;align-items:center;justify-content:center;padding:0;min-height:0;width:18px;height:18px;font-size:9px;line-height:1;border-radius:4px;align-self:center}
 .pharos-status-cadences summary::-webkit-details-marker{display:none}
 .pharos-status-cadences .pharos-status-icon{color:var(--muted,#666)}
 .pharos-status-cadences .pharos-status-name{font-weight:650}
-.pharos-status-cadences .pharos-status-state{font-size:13px;min-width:0;overflow-wrap:anywhere}
-.pharos-status-cadences .pharos-status-what{grid-column:3;font-size:12px;color:var(--muted,#666);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pharos-status-cadences .pharos-status-name{display:flex;align-items:baseline;gap:8px;white-space:nowrap}
+.pharos-status-cadences .pharos-status-state{font-size:12px;min-width:0;text-align:right;color:var(--muted,#666);overflow-wrap:anywhere}
+.pharos-status-cadences .pharos-status-what{grid-column:2/-1;font-size:12px;color:var(--muted,#666);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pharos-status-cadences details[open] .pharos-status-what{display:none}
 .pharos-status-items{list-style:none;margin:0 0 8px;padding:0 0 0 26px}
 .pharos-status-items li{display:flex;gap:8px;align-items:baseline;padding:2px 0;font-size:13px}
 .pharos-status-items li>span:last-child{margin-left:auto;text-align:right;color:var(--muted,#666);font-size:12px}
+.pharos-status-items li>span:nth-child(2){flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
+.pharos-status-items li>span:last-child{flex:0 0 auto;max-width:65%}
 .pharos-status-panel .pharos-dot.small{width:7px;height:7px;flex:none;margin-right:6px}
 .pharos-status-panel .pharos-dot.paused{background:transparent;box-shadow:inset 0 0 0 2px var(--muted,#888)}
-.pharos-status-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px}
-.pharos-status-foot a{margin-left:auto}
-.pharos-status-foot small{flex-basis:100%;color:var(--muted,#666);font-size:12px}
 .pharos-status-others{margin-top:10px;font-size:12px;color:var(--muted,#666);overflow-wrap:anywhere}
-.pharos-status-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
-.pharos-status-panel .pharos-panel-head{flex-wrap:wrap}`;
+.pharos-status-others>div+div{margin-top:2px}
+.pharos-panel-head .pharos-sub a{color:inherit}
+.pharos-status-actions{display:flex;gap:6px;flex:none}
+.pharos-status-panel .pharos-panel-head{align-items:flex-start}
+.pharos-status-panel .pharos-panel-head>div:first-child{min-width:0}
+.pharos-status-icon-button{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}
+.pharos-status-icon-button .app-icon{width:16px;height:16px}
+.pharos-status-icon-button[aria-busy=true] .app-icon{animation:pharos-status-pulse 1.6s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.pharos-status-icon-button[aria-busy=true] .app-icon{animation:none}}`;
 
   const node = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -68,6 +88,23 @@
     const b = node('button', 'pharos-button ' + cls, text);
     b.type = 'button';
     if (onclick) b.onclick = onclick;
+    return b;
+  };
+  const svgIcon = name => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    svg.setAttribute('class', 'app-icon');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    use.setAttribute('href', `#ph-icon-${name}`);
+    svg.append(use);
+    return svg;
+  };
+  // An icon-only button: its name is its accessible name and its tooltip.
+  const iconButton = (icon, label, onclick, title = label) => {
+    const b = button('', 'pharos-status-icon-button', onclick);
+    b.append(svgIcon(icon));
+    b.setAttribute('aria-label', label);
+    b.title = title;
     return b;
   };
 
@@ -123,12 +160,15 @@
       default: return label;
     }
   }
-  const SCHEDULE_DOTS = {current: '', running: 'busy', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
-  const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
+  // Running pulses, as the header chip's dot does; queued (Up next) is
+  // steady.
+  const SCHEDULE_DOTS = {current: '', running: 'busy pulse', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
+  const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾', manual: '⚐'};
+  const ROUTINE_TONES = new Set(['good', 'busy']);
 
   // The schedule's part of the panel: its headline, one row per cadence
-  // (open when something in it is happening or wrong), and what Update
-  // everything now costs. Null when the snapshot has no schedule.
+  // (open when something in it is happening or wrong). Null when the
+  // snapshot has no schedule.
   function scheduleModel(background, now = Date.now()) {
     if (!background || !Array.isArray(background.cadences)) return null;
     const items = Object.fromEntries((background.items || []).map(item => [item.id, item]));
@@ -136,13 +176,32 @@
       const members = (row.items || []).map(id => items[id]).filter(Boolean);
       return {id: row.id, label: row.label, icon: CADENCE_ICONS[row.id] || '', dot: SCHEDULE_DOTS[row.state] ?? '', text: scheduleText(row, now),
         open: ['running', 'queued', 'failed', 'missed'].includes(row.state), what: members.map(item => item.label).join(', '),
-        items: members.map(item => ({id: item.id, label: item.label, dot: SCHEDULE_DOTS[item.state] ?? '', text: scheduleText(item, now)}))};
+        run: {cadence: row.id, disabled: row.state === 'running'},
+        items: members.map(item => scheduleItem(item, scheduleText(item, now)))};
     });
+    // Ad hoc: the items set to only when you ask (Back up, unless chosen),
+    // on no schedule, as one more row, run as the manual cadence.
+    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(Boolean);
+    if (adhoc.length) {
+      const running = adhoc.some(item => item.state === 'running'), failed = adhoc.some(item => item.state === 'failed');
+      rows.push({id: 'manual', label: 'Ad hoc', icon: CADENCE_ICONS.manual, dot: running ? SCHEDULE_DOTS.running : failed ? 'bad' : 'paused',
+        text: running ? 'Running now' : 'When you ask', open: running || failed, what: adhoc.map(item => item.label).join(', '),
+        run: {cadence: 'manual', disabled: running || adhoc.every(item => item.state === 'unavailable')},
+        items: adhoc.map(item => scheduleItem(item, ['running', 'failed', 'unavailable'].includes(item.state) ? scheduleText(item, now)
+          : item.as_of ? `Last run ${ago(item.as_of, now)}` : 'Never run'))});
+    }
+    // The headline only when something is out of the ordinary (failed,
+    // behind, paused, waiting for power): Up to date and the running item
+    // are already in the rows below, and what a running item feeds is its
+    // tooltip.
     const headline = background.headline || {};
-    return {headline: {tone: headline.tone || 'good', title: headline.title || '', text: headline.text || '', tech: headline.tech || '',
+    const routine = !headline.title || ROUTINE_TONES.has(headline.tone || 'good');
+    return {headline: routine ? null : {tone: headline.tone, title: headline.title, text: headline.text || '', tech: headline.tech || '',
       action: headline.action?.path ? {label: headline.action.label || '', path: headline.action.path, body: headline.action.body || {}} : null},
-      rows, everything: background.everything?.text || ''};
+      rows};
   }
+  const scheduleItem = (item, text) => ({id: item.id, label: item.label, dot: SCHEDULE_DOTS[item.state] ?? '', text,
+    tooltip: item.state === 'running' && item.feeds ? `${item.feeds} update when this finishes.` : ''});
 
   // A step's measured progress: "812 MB of 2 GB", "42 of 100 conversations".
   function stepAmount(step) {
@@ -171,6 +230,8 @@
     if (step?.count > 0 && step.index > 0) primary.push(`step ${step.index} of ${step.count}`);
     const amount = stepAmount(step);
     if (amount) primary.push(amount);
+    const origin = operationOrigin(operation);
+    if (origin) secondary.push(origin);
     const name = step?.name && step.name !== operation.label ? step.name : '';
     if (name) secondary.push(name);
     if (step?.source && step.source !== name) secondary.push(step.source);
@@ -178,6 +239,15 @@
     return {id: operation.id, label: operation.label, primary, secondary, time: operation.time?.label || '', tooltip,
       fraction: Number.isFinite(step?.fraction) ? step.fraction : null, state: operation.state, background: operation.priority === 'background'};
   }
+  // Where a running operation comes from, so Running now reads against the
+  // schedule below: a background pass names its cadence, other work who
+  // started it.
+  const CADENCE_NAMES = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
+  function operationOrigin(operation) {
+    if (operation.kind === 'background.update') return CADENCE_NAMES[operation.variant] ? `Part of ${CADENCE_NAMES[operation.variant]}` : '';
+    return {user: 'Started by you', schedule: 'Scheduled', chained: 'Follows other work'}[operation.trigger] || '';
+  }
+
   // A line as one string, for tooltips and the other libraries' rows.
   const lineText = line => [[line.label, ...line.primary, ...line.secondary].join(' · '), line.time].filter(Boolean).join(' ');
 
@@ -189,6 +259,8 @@
     if (!view?.library) return view?.service?.name || 'Library';
     return drive.ejectable ? drive.name || 'Library' : library.portable ? 'Library' : 'This Mac';
   };
+  const PANEL_TITLE = 'Background Processing';
+  const baseName = path => String(path || '').replace(/\/+$/, '').split('/').pop() || '';
   const LOCATIONS = {external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"};
 
   // What runs for the selected library: the app's operations that touch it
@@ -208,7 +280,7 @@
     const shown = foreground.length ? foreground : operations.slice(0, 1);
     const common = {lines: shown.map(operationLine), attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
-      return {available: false, title: driveName(view), ...common, stateLabel: view?.service?.stateLabel || null,
+      return {available: false, title: PANEL_TITLE, library: view?.service?.name ? {name: view.service.name, drive: '', path: ''} : null, ...common, stateLabel: view?.service?.stateLabel || null,
         message: operations.length ? null : unavailable || (view?.service?.error ? `${view.service.error}` : null)};
     }
     const drive = library.library?.drive || {};
@@ -219,33 +291,49 @@
     const text = eject.headline || eject.summary || '';
     return {
       available: true, ...common,
-      title: driveName(view),
-      where: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · '),
+      title: PANEL_TITLE,
+      // "Library Pharos on euclid": the library (the app's name for it, else
+      // its folder) and the drive it is on; the path in the tooltip.
+      library: {name: view.service?.name || baseName(library.library?.path) || 'Library', drive: drive.ejectable ? drive.name || 'its drive' : 'this Mac',
+        of: view.service?.count > 1 ? `${view.service.position}/${view.service.count}` : '',
+        path: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · ')},
       verdict: {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
         tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
       // Null without a schedule (an older service).
       schedule: scheduleModel(library.background, now),
-      load: loadModel(view.resources ?? library.resources),
-      others: (view.others || []).map(other => {
+      load: loadModel(view.resources ?? library.resources, library.library?.storage_bytes),
+      // Other libraries are only counted, in the library line ("1/3"); an
+      // app operation touching no library is listed by its own label.
+      others: (view.others || []).filter(other => String(other.id).startsWith('app:')).map(other => {
         const first = (other.operations || []).find(running);
         return {id: other.id, name: other.name || 'Library',
           text: first ? lineText(operationLine(first)) : other.stateLabel || other.eject?.headline || '', tooltip: first?.detail || other.eject?.summary || ''};
       }),
       stop: stoppable.length ? {targets: stoppable.map(operation => ({id: operation.id, method: operation.stop.method || 'POST', path: operation.stop.path, body: operation.stop.body || {id: operation.id}})),
         stopping: requested, title: stoppable.map(operation => operation.label).join(', ')} : stopping ? {targets: [], stopping: true, title: ''} : null,
-      eject: drive.ejectable && nativeEject ? ejectModel(ejectState, drive) : null,
+      eject: drive.ejectable && nativeEject ? ejectModel(ejectState, drive, eject) : null,
     };
   }
 
-  // The Load row (docs/background-work.md §10): the server's line ("Pharos
-  // is using ~45% of one core · 1.2 GB"; in the app, every Pharos process on
-  // this Mac), each process's line in the tooltip. Numbers alone for a
-  // service that sends no line.
-  function loadModel(resources) {
+  // The Load row (docs/background-work.md §10): CPU, memory and disk in
+  // one row (in the app, every Pharos process on this Mac), with the
+  // server's line and each process's in the tooltip. CPU is % of one core,
+  // as Activity Monitor shows it; I/O is what the processes read and write
+  // per second, and Storage what the library keeps on its drive (from the
+  // last drive check). A figure not measured yet is a dash, and I/O stays
+  // out for a service that does not measure it.
+  function loadModel(resources, storage = null) {
     if (!resources || typeof resources !== 'object') return null;
-    const text = resources.label || [Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}% of one core` : '', Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : ''].filter(Boolean).join(' · ');
-    if (!text) return null;
-    return {text, tooltip: (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean).join('\n')};
+    const known = Number.isFinite(resources.cpu_percent) || Number.isFinite(resources.memory_bytes) || resources.label;
+    if (!known) return null;
+    const metrics = [
+      {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}%` : '—'},
+      {id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'},
+    ];
+    if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
+    metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? size(storage) : '—'});
+    const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
+    return {metrics, tooltip: [resources.label || '', ...processes].filter(Boolean).join('\n')};
   }
 
   function attentionModel(item) {
@@ -254,15 +342,29 @@
   }
 
   // The eject flow: Eject asks for a fresh verdict and acts only on it.
-  function ejectModel(state, drive) {
+  // shown is the verdict on screen, which names what the button will do.
+  function ejectModel(state, drive, shown = null) {
     const phase = state?.phase || 'idle';
-    return {phase, name: drive.name || 'the drive', busy: phase === 'checking' || phase === 'ejecting',
+    return {phase, name: drive.name || 'the drive', busy: phase === 'checking' || phase === 'ejecting', label: ejectLabel(phase, shown, state?.message),
       text: state?.eject?.summary || state?.message || '', verdict: state?.eject?.verdict || null,
-      blockers: (state?.eject?.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))};
+      // Waiting lists only what keeps it waiting; the release stops the rest.
+      blockers: (state?.eject?.blockers || []).filter(blocker => phase !== 'waiting' || ejectDecision({verdict: blocker.verdict}) === 'refuse')
+        .map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))};
+  }
+
+  // The Eject button's words: what pressing it does under the shown
+  // verdict. Not safe yet, it waits (stopping what it can) and ejects once
+  // a fresh verdict allows it.
+  function ejectLabel(phase, shown, message = '') {
+    if (phase === 'checking') return 'Checking…';
+    if (phase === 'ejecting') return message || 'Ejecting…';
+    if (phase === 'waiting') return 'Waiting to eject…';
+    const decision = ejectDecision(shown);
+    return decision === 'eject' ? '⏏ Eject' : decision === 'confirm' ? '⏏ Stop and Eject' : '⏏ Eject when safe';
   }
 
   // What the fresh verdict lets Eject do: go ahead, ask first (work stops at
-  // a safe point), or refuse.
+  // a safe point), or refuse (Eject when safe waits).
   const ejectDecision = eject => eject?.verdict === 'safe' ? 'eject' : eject?.verdict === 'safe-in' ? 'confirm' : 'refuse';
 
   // The header chip: the drive's name and a dot. Red (or amber for a
@@ -300,9 +402,8 @@
     return {eject: previous.eject, at: previous.at, pending, next};
   }
 
-  // ---- rendering (only while the flag is on)
-  const enabled = () => window.pharosStatusStore?.enabled() === true;
-  let panel = null, ejectState = null, shown = null, holdTimer = null, sheet = null, subscribed = null;
+  // ---- rendering
+  let panel = null, ejectState = null, shown = null, holdTimer = null;
   const live = (target, content) => window.pharosLibrary?.updateLiveChildren ? window.pharosLibrary.updateLiveChildren(target, content) : target.replaceChildren(...content.childNodes);
   const chip = () => window.pharosLibrary?.ensureChip?.() || document.getElementById('pharosDrive');
   const anchor = () => window.headerToolAnchor?.(chip()) ?? chip();
@@ -352,19 +453,22 @@
   // The operations Stop was pressed for, so a snapshot that arrives before
   // their state changes does not enable it again.
   const stopRequested = new Set();
+  async function sendStops(targets, requested, send = fetch, report = toast) {
+    for (const target of targets) {
+      try {
+        const response = await send(target.path, {method: target.method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(target.body)});
+        if (!response.ok) {
+          // Not stopped: let the user try again.
+          requested.delete(target.id);
+          report((await response.json().catch(() => ({}))).error || response.statusText);
+        }
+      } catch (error) { requested.delete(target.id); report(error.message); }
+    }
+  }
   async function stopAll(targets) {
     for (const target of targets) stopRequested.add(target.id);
     render();
-    for (const target of targets) {
-      try {
-        const response = await fetch(target.path, {method: target.method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(target.body)});
-        if (!response.ok) {
-          // Not stopped: let the user try again.
-          stopRequested.delete(target.id);
-          toast((await response.json().catch(() => ({}))).error || response.statusText);
-        }
-      } catch (error) { stopRequested.delete(target.id); toast(error.message); }
-    }
+    await sendStops(targets, stopRequested);
     render();
     window.pharosStatusStore?.refresh();
   }
@@ -376,7 +480,8 @@
       const document = await window.pharosStatusStore.fresh();
       const decision = ejectDecision(document.eject);
       if (decision === 'eject') return eject();
-      ejectState = {phase: decision === 'confirm' ? 'confirm' : 'refused', eject: document.eject};
+      if (decision === 'refuse') return waitToEject(document.eject);
+      ejectState = {phase: 'confirm', eject: document.eject};
     } catch (error) {
       ejectState = {phase: 'error', message: error?.message || String(error)};
     }
@@ -389,12 +494,61 @@
     render();
     try {
       const document = await window.pharosStatusStore.fresh();
-      if (ejectDecision(document.eject) === 'refuse') { ejectState = {phase: 'refused', eject: document.eject}; render(); return; }
+      if (ejectDecision(document.eject) === 'refuse') return waitToEject(document.eject);
       return eject();
     } catch (error) {
       ejectState = {phase: 'error', message: error?.message || String(error)};
       render();
     }
+  }
+
+  // Eject when safe: stop what Pharos can now, then check again each time
+  // the snapshot changes (and every few seconds while the polled verdict
+  // looks safe but a fresh one does not), and eject on the first fresh
+  // verdict that allows it. A hidden page gets no snapshots, so while the
+  // polled verdict still refuses, a fresh check also runs once the
+  // snapshots have been quiet for waitFallback ms. The release stops whatever is left at a safe
+  // point. It keeps waiting with the panel closed; Cancel ends it.
+  let waitCheck = null, waitTimer = null, waitCheckedAt = 0;
+  const waitFallback = 5000;
+  function waitToEject(verdict) {
+    ejectState = {phase: 'waiting', eject: verdict};
+    const targets = panelModel(storeState()?.view).stop?.targets || [];
+    if (targets.length) stopAll(targets.filter(target => !stopRequested.has(target.id)));
+    render();
+  }
+
+  function cancelEject() {
+    clearTimeout(waitTimer);
+    ejectState = null;
+    render();
+  }
+
+  function checkWaiting(quiet = false) {
+    if (ejectState?.phase !== 'waiting' || waitCheck) return;
+    clearTimeout(waitTimer);
+    // A fresh check probes every capture and index lock: run it once the
+    // polled verdict allows ejecting, or once snapshots have been quiet
+    // (each one rearms this), and at most every 2 s.
+    if (!quiet && ejectDecision(storeState()?.view?.library?.eject) === 'refuse') {
+      waitTimer = setTimeout(() => checkWaiting(true), waitFallback);
+      return;
+    }
+    const wait = 2000 - (Date.now() - waitCheckedAt);
+    if (wait > 0) { waitTimer = setTimeout(() => checkWaiting(quiet), wait); return; }
+    waitCheckedAt = Date.now();
+    waitCheck = (async () => {
+      try {
+        const document = await window.pharosStatusStore.fresh();
+        if (ejectState?.phase !== 'waiting') return;
+        if (ejectDecision(document.eject) !== 'refuse') { waitCheck = null; return eject(); }
+        ejectState = {phase: 'waiting', eject: document.eject};
+        render();
+      } catch {
+        // Keep waiting; the next snapshot or the retry checks again.
+      } finally { waitCheck = null; }
+      if (ejectState?.phase === 'waiting') waitTimer = setTimeout(checkWaiting, 3000);
+    })();
   }
 
   async function eject() {
@@ -421,17 +575,26 @@
     const content = node('div');
     const head = node('div', 'pharos-panel-head'), title = node('div'), heading = node('h2', '', model.title);
     title.append(heading);
-    if (model.available && model.where) title.append(node('div', 'pharos-sub', model.where));
+    if (model.library) title.append(libraryLine(model.library));
     head.append(title);
     const actions = node('div', 'pharos-status-actions');
     actions.dataset.key = 'actions';
+    // Stop sits beside Eject: both act on everything running.
+    if (model.stop) {
+      const label = model.stop.stopping ? 'Stopping…' : 'Stop';
+      const stop = iconButton('stop', label, () => stopAll(model.stop.targets), model.stop.title ? `${label}: ${model.stop.title}` : label);
+      stop.dataset.key = 'stop';
+      stop.disabled = Boolean(model.stop.stopping);
+      stop.setAttribute('aria-busy', String(Boolean(model.stop.stopping)));
+      actions.append(stop);
+    }
     if (model.eject) {
-      const label = model.eject.phase === 'checking' ? 'Checking…' : model.eject.phase === 'ejecting' ? model.eject.text : '⏏ Eject';
-      const ejectButton = button(label, '', checkEject);
+      const words = model.eject.label.replace(/^⏏ /, '');
+      const ejectButton = iconButton('eject', `${words} ${model.eject.name}`, checkEject, words);
+      ejectButton.setAttribute('aria-busy', String(model.eject.busy || model.eject.phase === 'waiting'));
       ejectButton.id = 'pharosStatusEject';
       ejectButton.dataset.key = 'eject';
-      ejectButton.disabled = model.eject.busy || model.eject.phase === 'confirm';
-      ejectButton.setAttribute('aria-label', `Eject ${model.eject.name}`);
+      ejectButton.disabled = model.eject.busy || model.eject.phase === 'confirm' || model.eject.phase === 'waiting';
       actions.append(ejectButton);
     }
     if (actions.childElementCount) head.append(actions);
@@ -450,18 +613,19 @@
     verdict.append(node('span', 'pharos-dot small' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
     if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
     content.append(verdict);
-    if (model.eject && ['confirm', 'refused', 'error'].includes(model.eject.phase)) {
+    if (model.eject && ['confirm', 'waiting', 'error'].includes(model.eject.phase)) {
       const flow = node('div', 'pharos-row');
       flow.dataset.key = `eject-${model.eject.phase}`;
-      flow.append(node('p', 'pharos-note' + (model.eject.phase === 'confirm' ? '' : ' pharos-error'), model.eject.text));
+      if (model.eject.phase === 'waiting') flow.append(node('p', 'pharos-note', `Pharos ejects ${model.eject.name} as soon as it is safe, stopping what it can now. Waiting for:`));
+      else flow.append(node('p', 'pharos-note' + (model.eject.phase === 'confirm' ? '' : ' pharos-error'), model.eject.text));
       for (const blocker of model.eject.blockers) flow.append(node('p', 'pharos-note pharos-sub', blocker));
       if (model.eject.phase === 'confirm') flow.append(button(`Stop and Eject ${model.eject.name}`, 'primary', confirmEject));
-      else flow.append(button('Check again', '', checkEject));
-      flow.append(button('Cancel', '', () => { ejectState = null; render(); }));
+      else if (model.eject.phase === 'error') flow.append(button('Check again', '', checkEject));
+      flow.append(button('Cancel', '', cancelEject));
       content.append(flow);
     }
     const schedule = model.schedule;
-    if (schedule?.headline.title) {
+    if (schedule?.headline) {
       const headline = node('div', `pharos-status-headline ${schedule.headline.tone}`);
       headline.dataset.key = 'headline';
       headline.append(node('strong', '', schedule.headline.title));
@@ -478,36 +642,33 @@
       content.append(headline);
     }
     appendNow(content, model);
-    if (schedule?.rows.length) content.append(cadenceList(schedule.rows));
-    appendAttention(content, model.attention);
-    const foot = node('div', 'pharos-status-foot');
-    foot.dataset.key = 'foot';
-    const everything = button('Update everything now', '', () => post('/api/sync/check', {}));
-    everything.disabled = indexBusy(state?.view, window.pharosLibrary?.localBusy?.());
-    const settings = node('a', '', 'Schedule settings');
+    if (model.load) content.append(loadRow(model.load));
+    // Settings sits on the Schedule heading's line, at the right.
+    const settings = node('a', '', 'Settings');
     settings.href = '/settings/sync';
     settings.onclick = event => { event.preventDefault(); navigate('/settings/sync'); };
-    foot.append(everything, settings);
-    if (schedule?.everything) foot.append(node('small', '', schedule.everything));
-    content.append(foot);
+    const scheduleHeading = sectionHeading('Schedule', 'schedule-heading');
+    scheduleHeading.append(settings);
+    content.append(scheduleHeading);
+    if (schedule?.rows.length) content.append(cadenceList(schedule.rows));
+    appendAttention(content, model.attention);
     if (model.others.length) {
       const others = node('div', 'pharos-status-others');
       others.dataset.key = 'others';
-      others.append('Other libraries: ');
-      model.others.forEach((other, index) => {
-        const entry = node('span');
+      for (const other of model.others) {
+        const entry = node('div');
         entry.dataset.key = `other:${other.id}`;
-        entry.append(index ? ', ' : '', node('strong', '', other.name), other.text ? ` (${other.text})` : '');
+        entry.append(node('strong', '', other.name));
+        if (other.text) entry.append(` · ${other.text}`);
         if (other.tooltip) entry.title = other.tooltip;
         others.append(entry);
-      });
+      }
       content.append(others);
     }
     commit(content, scrollTop);
   }
 
-  // A schedule action or Update everything now; the snapshot shows what
-  // it changed.
+  // A schedule action; the snapshot shows what it changed.
   async function post(path, body) {
     try {
       const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
@@ -518,6 +679,27 @@
 
   // Now: each shown operation with its step, measured amount, time range
   // and progress, then the Load line.
+  function loadRow(load) {
+    const row = node('div', 'pharos-status-load');
+    row.dataset.key = 'load';
+    for (const metric of load.metrics) {
+      const cell = node('span');
+      cell.dataset.key = `load:${metric.id}`;
+      const label = node('span');
+      label.append(svgIcon(metric.id), metric.label);
+      cell.append(label, node('b', '', metric.value));
+      row.append(cell);
+    }
+    if (load.tooltip) row.title = load.tooltip;
+    return row;
+  }
+
+  const sectionHeading = (text, key) => {
+    const element = node('div', 'pharos-status-heading', text);
+    element.dataset.key = key;
+    return element;
+  };
+
   function appendNow(content, model) {
     if (!model.lines.length) return;
     const now = node('div', 'pharos-status-now');
@@ -543,24 +725,22 @@
       if (line.tooltip) item.title = line.tooltip;
       now.append(item);
     }
-    if (model.load) {
-      const load = node('span', 'pharos-status-load', model.load.text);
-      load.dataset.key = 'load';
-      if (model.load.tooltip) load.title = model.load.tooltip;
-      now.append(load);
-    }
-    if (model.stop) {
-      const stop = button(model.stop.stopping ? 'Stopping…' : 'Stop', '', () => stopAll(model.stop.targets));
-      stop.dataset.key = 'stop';
-      stop.disabled = Boolean(model.stop.stopping);
-      if (model.stop.title) stop.title = model.stop.title;
-      now.append(stop);
-    }
-    content.append(now);
+    content.append(sectionHeading('Running now', 'now-heading'), now);
   }
 
   // One row per cadence, opening to its items. A row the user opened or
   // closed stays so while the panel is open.
+  // "Library Pharos on euclid", the name linking to Settings → Libraries.
+  function libraryLine(library) {
+    const line = node('div', 'pharos-sub'), link = node('a', '', library.name);
+    link.href = '/settings/libraries';
+    link.onclick = event => { event.preventDefault(); navigate('/settings/libraries'); };
+    if (library.of) link.textContent += ` (${library.of})`;
+    line.append('Library ', link, ` on ${library.drive}`);
+    if (library.path) line.title = library.path;
+    return line;
+  }
+
   function cadenceList(rows) {
     const list = node('div', 'pharos-status-cadences');
     list.dataset.key = 'cadences';
@@ -571,14 +751,32 @@
       details.dataset.viewDefault = String(Boolean(row.open));
       details.setAttribute('data-view-capture-initial', '');
       details.open = window.pharosView?.read('disclosures', {})[details.dataset.viewKey] ?? row.open;
-      const summary = node('summary'), state = node('span', 'pharos-status-state');
-      state.append(node('span', 'pharos-dot small' + (row.dot ? ` ${row.dot}` : '')), row.text);
-      summary.append(node('span', 'pharos-status-icon', row.icon), node('span', 'pharos-status-name', row.label), state, node('span', 'pharos-status-what', row.what));
+      // Icon, the cadence's dot and name, then its state at the line's end,
+      // aligned with its items' dots and states.
+      const summary = node('summary'), name = node('span', 'pharos-status-name');
+      name.append(node('span', 'pharos-dot small' + (row.dot ? ` ${row.dot}` : '')), row.label);
+      if (row.run) {
+        // Run this cadence's items now; inside the summary, so it must not
+        // also open or close the row.
+        const run = button('▶', 'pharos-status-run', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          post('/api/background/run', {cadence: row.run.cadence});
+          toast(`${row.label} runs now.`);
+        });
+        run.dataset.key = 'run';
+        run.disabled = row.run.disabled;
+        run.title = `Run ${row.label} now`;
+        run.setAttribute('aria-label', `Run ${row.label} now`);
+        name.append(run);
+      }
+      summary.append(node('span', 'pharos-status-icon', row.icon), name, node('span', 'pharos-status-state', row.text), node('span', 'pharos-status-what', row.what));
       const items = node('ul', 'pharos-status-items');
       for (const item of row.items) {
         const entry = node('li');
         entry.dataset.key = `item:${item.id}`;
         entry.append(node('span', 'pharos-dot small' + (item.dot ? ` ${item.dot}` : '')), node('span', '', item.label), node('span', '', item.text));
+        if (item.tooltip) entry.title = item.tooltip;
         items.append(entry);
       }
       details.append(summary, items);
@@ -594,12 +792,12 @@
     section.dataset.key = 'attention';
     section.setAttribute('aria-label', 'Needs attention');
     for (const item of actionable) {
-      const entry = node('div', 'pharos-attention-item'), line = node('div', 'pharos-running-head'), text = node('div');
+      // The title and its action on one line; the detail below, full width.
+      const entry = node('div', 'pharos-attention-item'), line = node('div', 'pharos-running-head');
       entry.dataset.key = `attention:${item.id}`;
-      text.append(node('strong', item.severity === 'warning' ? 'pharos-warn' : '', item.title));
-      if (item.detail) text.append(node('div', 'pharos-sub', item.detail));
-      line.append(text, button(item.action.label, '', () => navigate(item.action.path)));
+      line.append(node('strong', item.severity === 'warning' ? 'pharos-warn' : '', item.title), button(item.action.label, '', () => navigate(item.action.path)));
       entry.append(line);
+      if (item.detail) entry.append(node('div', 'pharos-sub', item.detail));
       section.append(entry);
     }
     content.append(section);
@@ -622,8 +820,7 @@
   }
 
   function open({fromURL = false, focus = true} = {}) {
-    if (!enabled() || !chip()) return;
-    if (panel) return;
+    if (!chip() || panel) return;
     window.pharosLibrary?.closePanel?.({fromURL: true});
     if (!fromURL) window.pharosView?.write('overlay', 'drive');
     panel = node('section', 'pharos-drive-panel pharos-status-panel');
@@ -642,7 +839,7 @@
     if (!fromURL && window.pharosView?.read('overlay', 'none') === 'drive') window.pharosView.write('overlay', 'none');
     panel.remove();
     panel = null;
-    if (ejectState?.phase !== 'ejecting') ejectState = null;
+    if (ejectState?.phase !== 'ejecting' && ejectState?.phase !== 'waiting') ejectState = null;
     chip()?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) anchor()?.focus();
   }
@@ -668,39 +865,23 @@
   window.addEventListener('resize', place);
 
   function render() {
-    if (!enabled()) return;
     renderChip();
     renderHeader();
     renderPanel();
+    checkWaiting();
   }
 
-  function activate() {
-    if (enabled()) {
-      if (!sheet) {
-        sheet = node('style');
-        sheet.textContent = CSS;
-        document.head.append(sheet);
-      }
-      subscribed ??= window.pharosStatusStore?.subscribe(render) || null;
-      window.pharosStatusStore?.start();
-      render();
-    } else {
-      close();
-      subscribed?.();
-      subscribed = null;
-      shown = null;
-      window.pharosStatusStore?.start(); // stops it
-      window.pharosLibrary?.renderAlerts?.();
-      window.pharosLibrary?.refresh?.();
-    }
-  }
-  window.addEventListener('pharos:unified-activity', activate);
 
   window.pharosStatusPanel = {
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
-    panelModel, chipModel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, scheduleModel, scheduleText, ago, until, span,
+    panelModel, chipModel, ejectLabel, operationLine, lineText, currentOperations, settleVerdict, ejectDecision, indexBusy, sendStops, stepAmount, scheduleModel, scheduleText, ago, until, span,
   };
-  if (enabled()) activate();
+  const sheet = node('style');
+  sheet.textContent = CSS;
+  document.head.append(sheet);
+  window.pharosStatusStore?.subscribe(render);
+  window.pharosStatusStore?.start();
+  render();
   window.dispatchEvent(new Event('pharos:drive-view-ready'));
 })();

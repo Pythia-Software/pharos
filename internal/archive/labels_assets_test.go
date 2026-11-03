@@ -145,6 +145,20 @@ func TestLabelsAssetDownloadsVerifiesAndUnpacks(t *testing.T) {
 	if got := labelsAssetStatus(asset); got != "not yet downloaded" {
 		t.Fatalf("before: %q", got)
 	}
+	// A failed attempt (here a release without the asset) is reported until
+	// one succeeds.
+	unpublished := asset
+	unpublished.URL = server.URL + "/unpublished/{name}"
+	if err := fetchLabelsAssets(t.Context(), []labelsAsset{unpublished}, nil, nil); err == nil {
+		t.Fatal("fetched an unpublished asset")
+	}
+	if got := labelsAssetStatus(asset); !strings.Contains(got, "failed") || !strings.Contains(got, "404") {
+		t.Fatalf("after a failed attempt: %q", got)
+	}
+	if err := fetchLabelsAssets(t.Context(), []labelsAsset{asset}, nil, nil); err != nil || fileExists(asset.failure()) {
+		t.Fatalf("the next attempt: %v (failure kept %v)", err, fileExists(asset.failure()))
+	}
+	os.RemoveAll(asset.dir())
 	var reported int64
 	if err := fetchLabelsAsset(t.Context(), asset, func(done, total int64) { reported = done }); err != nil {
 		t.Fatal(err)
@@ -158,7 +172,8 @@ func TestLabelsAssetDownloadsVerifiesAndUnpacks(t *testing.T) {
 	if fileExists(asset.partial()) || !strings.HasPrefix(labelsAssetStatus(asset), "downloaded to ") {
 		t.Fatalf("partial kept or status %q", labelsAssetStatus(asset))
 	}
-	if err := fetchLabelsAsset(t.Context(), asset, nil); err != nil || len(server.seenRanges()) != 1 {
+	// Two requests so far: the download after the failure, and this one's.
+	if err := fetchLabelsAsset(t.Context(), asset, nil); err != nil || len(server.seenRanges()) != 2 {
 		t.Fatalf("a present asset was fetched again: %v (%d requests)", err, len(server.seenRanges()))
 	}
 }
@@ -293,6 +308,10 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 	config.Labels = configured
 	config.Labels.ModelDir = ""
 	srv := testServer(t, config, catalog)
+	// An unpublished model keeps the stage pending without attempting a
+	// download. Once published, the service must fetch it without a broker.
+	published := labelsAssets.Model
+	labelsAssets.Model.SHA256 = "PENDING"
 	if err := catalog.writeTransaction(t.Context(), "test", markSyncDeferred); err != nil {
 		t.Fatal(err)
 	}
@@ -304,25 +323,43 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 		t.Fatalf("labeled without the model (ledger %v, %+v)", catalog.hasLabelsLedger(), row)
 	}
 	waiting := config.Labels.labelsWaiting()
-	if !strings.Contains(waiting, "the labeling model: not yet downloaded") {
+	if !strings.Contains(waiting, "the labeling model: not available") {
 		t.Fatalf("waiting: %q", waiting)
 	}
-	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.Contains(sub, "not yet downloaded") {
+	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.Contains(sub, "not available") {
 		t.Fatalf("the labels item says %q", sub)
 	}
+	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, waiting for the download") {
+		t.Fatalf("Settings says %q", status)
+	}
+	// Without a worker no download helps, so that leads.
+	worker := srv.Config().Labels.Worker
+	srv.configMu.Lock()
+	srv.config.Labels.Worker = ""
+	srv.configMu.Unlock()
+	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, but labeling can't run: this Pharos has no labeling worker") ||
+		!strings.Contains(status, "also waiting for the download") {
+		t.Fatalf("Settings without a worker says %q", status)
+	}
+	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.HasPrefix(sub, "Labeling can't run") {
+		t.Fatalf("the labels item without a worker says %q", sub)
+	}
+	srv.configMu.Lock()
+	srv.config.Labels.Worker = worker
+	srv.configMu.Unlock()
 	status, err := catalog.LabelsStatus(t.Context(), config.Labels.withAssets())
 	if err != nil || status["waiting"] != waiting {
 		t.Fatalf("status: %v %v", status, err)
 	}
-	var out bytes.Buffer
-	if err := fetchLabelsCLI(t.Context(), config.Labels, &out); err != nil || !strings.Contains(out.String(), "downloaded to") {
-		t.Fatalf("fetch: %v %s", err, out.String())
-	}
+	labelsAssets.Model = published
 	if err := srv.finishDeferredStages(t.Context(), findingsAuto, map[string]bool{"authorship": true, "labels": true}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := labelCount(t, catalog, ""); n < 20 {
 		t.Fatalf("after the download the stage labeled %d messages", n)
+	}
+	if !published.present() {
+		t.Fatal("the labels stage did not download the model")
 	}
 }
 
@@ -334,8 +371,19 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 	server := newAssetServer(t, archive)
 	override(t, &labelsAssets, labelsAssetSet{Model: server.asset(archive, "")})
 	override(t, &labelsRuntimePinned, false)
+	configPath := filepath.Join(t.TempDir(), "library.toml")
+	if err := os.WriteFile(configPath, []byte("labels_enabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var asked atomic.Int32
 	library := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/labels/settings" {
+			if err := setRootValue(configPath, "labels_enabled", "true"); err != nil {
+				t.Error(err)
+			}
+			writeJSON(w, map[string]any{}, http.StatusOK)
+			return
+		}
 		if r.URL.Path == "/api/background/run" && r.Header.Get("Authorization") == "Bearer token" {
 			asked.Add(1)
 		}
@@ -346,12 +394,23 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 	defer cancel()
 	m := &applicationManager{ctx: ctx, client: &http.Client{Timeout: 5 * time.Second}, operations: newBrokerOperations(filepath.Join(t.TempDir(), "operations.json")),
 		children: map[string]*applicationChild{"lib": {endpoint: applicationEndpoint{URL: library.URL, Token: "token"}}}}
-	m.startLabelsFetch(LabelerSettings{Enabled: false})
-	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()})
+	m.token = "app-token"
+	m.registry.Selected = "lib"
+	m.registry.Libraries = []registeredLibrary{{LibraryDescriptor: LibraryDescriptor{ID: "lib"}, Config: configPath}}
+	m.startLabelsFetch(LabelerSettings{Enabled: false}, AgentEventSettings{})
+	m.startLabelsFetch(LabelerSettings{Enabled: true, ModelDir: t.TempDir()}, AgentEventSettings{})
 	if len(m.operations.reg.views()) != 0 {
 		t.Fatal("a download started for a library without labels, or with its own model")
 	}
-	m.startLabelsFetch(LabelerSettings{Enabled: true})
+	// Enabling from the UI starts the same download as opening an enabled
+	// library, without restarting the service.
+	request := httptest.NewRequest(http.MethodPost, "/api/labels/settings", strings.NewReader(`{"enabled":true}`))
+	request.Header.Set("Authorization", "Bearer app-token")
+	response := httptest.NewRecorder()
+	m.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("enable through the app: %d %s", response.Code, response.Body.String())
+	}
 	if !waitFor(10*time.Second, func() {
 		for asked.Load() == 0 {
 			time.Sleep(10 * time.Millisecond)

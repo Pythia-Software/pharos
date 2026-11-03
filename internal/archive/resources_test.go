@@ -40,8 +40,8 @@ func (f *fakeUsage) set(pid int, usage processUsage) {
 // the totals carry the server's line.
 func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	source := &fakeUsage{procs: map[int]processUsage{
-		10: {CPUSeconds: 5, ChildCPUSeconds: 1, Footprint: 300e6, Started: 1},
-		20: {CPUSeconds: 2, Footprint: 41_234_567, Started: 7},
+		10: {CPUSeconds: 5, ChildCPUSeconds: 1, Footprint: 300e6, Started: 1, DiskBytes: 1e9, DiskKnown: true},
+		20: {CPUSeconds: 2, Footprint: 41_234_567, Started: 7, DiskBytes: 5e6, DiskKnown: true},
 	}}
 	clock := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
 	sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
@@ -51,7 +51,7 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	if len(first) != 2 || first[0].PID != 10 || first[1].PID != 20 || sampler.reads != 3 {
 		t.Fatalf("each PID read once, the unreadable one left out: %+v (%d reads)", first, sampler.reads)
 	}
-	if first[0].CPUPercent != nil || first[0].MemoryBytes != 300e6 || first[1].MemoryBytes != 41e6 {
+	if first[0].CPUPercent != nil || first[0].DiskBytesPerSecond != nil || first[0].MemoryBytes != 300e6 || first[1].MemoryBytes != 41e6 {
 		t.Fatalf("no CPU from one reading; memory rounded to two figures: %+v", first)
 	}
 	summary := summarizeResources("Pharos", first)
@@ -71,13 +71,20 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	// Two seconds after the first: 1 s of own CPU and 0.5 s of a child that
 	// exited (a git call) is 75 % of one core; 20 used 0.004 s.
 	clock = clock.Add(2*time.Second - resourceSampleInterval/2)
-	source.set(10, processUsage{CPUSeconds: 6, ChildCPUSeconds: 1.5, Footprint: 1_234_000_000, Started: 1})
-	source.set(20, processUsage{CPUSeconds: 2.004, Footprint: 41e6, Started: 7})
+	// Disk is bytes read and written per second: 10 moved 24 MB, 20 1 MB.
+	source.set(10, processUsage{CPUSeconds: 6, ChildCPUSeconds: 1.5, Footprint: 1_234_000_000, Started: 1, DiskBytes: 1.024e9, DiskKnown: true})
+	source.set(20, processUsage{CPUSeconds: 2.004, Footprint: 41e6, Started: 7, DiskBytes: 6e6, DiskKnown: true})
 	second := sampler.sample(processes[:2])
 	if second[0].CPUPercent == nil || *second[0].CPUPercent != 75 || *second[1].CPUPercent != 0 {
 		t.Fatalf("CPU over the interval: %+v", second)
 	}
+	if second[0].DiskBytesPerSecond == nil || *second[0].DiskBytesPerSecond != 12e6 || *second[1].DiskBytesPerSecond != 500e3 {
+		t.Fatalf("disk over the interval: %v %v", second[0].DiskBytesPerSecond, second[1].DiskBytesPerSecond)
+	}
 	summary = summarizeResources("Pharos", second)
+	if *summary.DiskBytesPerSecond != 13e6 {
+		t.Fatalf("disk total, to two figures: %v", *summary.DiskBytesPerSecond)
+	}
 	if *summary.CPUPercent != 75 || summary.Label != "Pharos is using ~75% of one core · 1.3 GB" || summary.SampledAt != formatTime(clock) {
 		t.Fatalf("totals: %+v", summary)
 	}
@@ -184,6 +191,15 @@ func TestProcessUsageMatchesTheKernel(t *testing.T) {
 	}
 	defer child.Wait()
 	defer child.Process.Kill()
+	found := false
+	for _, process := range expandResourceProcesses([]resourceProcess{{PID: os.Getpid(), Role: "service"}}, resourceProcessTable()) {
+		if process.PID == child.Process.Pid {
+			found = process.OwnOnly && strings.HasPrefix(process.Role, "worker:")
+		}
+	}
+	if !found {
+		t.Fatal("live subprocess missing from resource rows")
+	}
 	if other, err := processUsageOf(child.Process.Pid); err != nil || other.Footprint == 0 {
 		t.Fatalf("another of this user's processes: %+v %v", other, err)
 	}
@@ -231,5 +247,32 @@ func TestResourceSamplingIsCheap(t *testing.T) {
 	t.Logf("one sample and its summary: %.1f µs of CPU; at one sample per 1.5 s, %.4f%% of one core", perSample*1e6, share)
 	if share > 1 {
 		t.Fatalf("sampling costs %.3f%% of one core", share)
+	}
+}
+
+func TestResourceWorkerTree(t *testing.T) {
+	roots := []resourceProcess{{PID: 10, Role: "service", Library: "a"}, {PID: 20, Role: "cli:ingest", Library: "b"}}
+	table := []processNode{{PID: 12, Parent: 11, Name: "model"}, {PID: 11, Parent: 10, Name: "labeler"}, {PID: 20, Parent: 10}, {PID: 21, Parent: 20, Name: "git"}, {PID: 10, Parent: 1}, {PID: 99, Parent: 1}}
+	processes := expandResourceProcesses(roots, table)
+	if len(processes) != 5 {
+		t.Fatalf("process tree: %+v", processes)
+	}
+	source := &fakeUsage{procs: map[int]processUsage{}}
+	clock := time.Now()
+	sampler := &resourceSampler{read: source.read, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+	for _, p := range processes {
+		if !p.OwnOnly || (p.PID == 21 && p.Library != "b") || (p.PID == 12 && p.Library != "a") {
+			t.Fatalf("attribution: %+v", p)
+		}
+		source.set(p.PID, processUsage{CPUSeconds: 1})
+	}
+	sampler.sample(processes)
+	clock = clock.Add(2 * time.Second)
+	for _, p := range processes {
+		source.set(p.PID, processUsage{CPUSeconds: 2, ChildCPUSeconds: 100})
+	}
+	summary := summarizeResources("Pharos", sampler.sample(processes))
+	if summary.CPUPercent == nil || *summary.CPUPercent != 250 {
+		t.Fatalf("workers counted once: %+v", summary)
 	}
 }

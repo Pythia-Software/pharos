@@ -84,7 +84,9 @@ credentials stay in Keychain.
 
 Releases select the macOS 26.5 SDK by default: the standalone macOS 27
 Command Line Tools SDK references a SwiftUI macro plugin not included with
-those tools. Set `SDKROOT` explicitly to use another compatible SDK.
+those tools. The app build passes the selected SDK directly to `swiftc` using
+`-sdk`; Swift does not honor `SDKROOT` alone. Local app builds use the same
+default. Set `SDKROOT` explicitly to use another compatible SDK.
 
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
@@ -423,6 +425,14 @@ writes, stops its MCP connections, and takes an exclusive lease only after old
 processes exit. Another CLI command or another app instance defers installation;
 it is never force-killed for an update. Before an explicit Install and Relaunch,
 Pharos performs this preparation through Sparkle's public user-driver callbacks.
+An explicit install first asks the broker (or a portable service) to release
+its libraries with `POST /api/release?for=update`, as an eject does: work that
+stops at its next safe point within 7 s is stopped there, and work that cannot
+(a library copy, move, restore, compaction or delivery, catalog preparation,
+a service still opening, or work Pharos cannot identify) refuses the install
+before anything is stopped. Pharos then says what it is waiting for, and the
+user installs with Check for Updates once it finishes. Another process's work
+on the library does not hold an update, which leaves the drive mounted.
 If an install-on-quit handoff is unsafe, Pharos resumes the staged installer and
 cancels it through the public Skip reply before allowing ordinary Quit. Ordinary
 Quit sends SIGTERM to its owned service, which can finish closing independently;

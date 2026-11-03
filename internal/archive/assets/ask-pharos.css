@@ -1,5 +1,5 @@
 /* A reusable effect: the hue filter only touches the ribbon and its aura. */
-.pharos-glow,#pharos-ask .pharos-product{--pharos-bg:light-dark(#eee7d8,#10241b);--pharos-panel:light-dark(#fffaf0,#183529);--pharos-ink:light-dark(#2c2821,#f3ebdc);--pharos-muted:light-dark(#756c5f,#b5ab93);--pharos-line:light-dark(#d5c8b3,#2d4f40);--pharos-sea:light-dark(#315845,#8cc6a0);--pharos-gold:light-dark(#ad823b,#f0cf7e);--pharos-violet:light-dark(#9674c8,#bba2ef);--pharos-aqua:light-dark(#5bafa4,#83d4c0);}
+.pharos-glow,.pharos-pip-ghost,#pharos-ask .pharos-product{--pharos-bg:light-dark(#eee7d8,#10241b);--pharos-panel:light-dark(#fffaf0,#183529);--pharos-ink:light-dark(#2c2821,#f3ebdc);--pharos-muted:light-dark(#756c5f,#b5ab93);--pharos-line:light-dark(#d5c8b3,#2d4f40);--pharos-sea:light-dark(#315845,#8cc6a0);--pharos-gold:light-dark(#ad823b,#f0cf7e);--pharos-violet:light-dark(#9674c8,#bba2ef);--pharos-aqua:light-dark(#5bafa4,#83d4c0);}
 .pharos-glow{position:relative;isolation:isolate;--pharos-edge-opacity:.8;--pharos-glow-blur:14px;--pharos-glow-spread:7px}
 .pharos-glow .pharos-glow-aura::before{--pharos-glow-violet:light-dark(color-mix(in srgb,var(--pharos-violet) 38%,transparent),color-mix(in srgb,var(--pharos-violet) 15%,transparent));--pharos-glow-gold:light-dark(color-mix(in srgb,var(--pharos-gold) 30%,transparent),color-mix(in srgb,var(--pharos-gold) 10%,transparent));--pharos-glow-aqua:light-dark(color-mix(in srgb,var(--pharos-aqua) 25%,transparent),color-mix(in srgb,var(--pharos-aqua) 10%,transparent));content:"";position:absolute;inset:0;border-radius:inherit;background:radial-gradient(ellipse at 12% 8%,var(--pharos-glow-violet),transparent 56%),radial-gradient(ellipse at 85% 95%,var(--pharos-glow-gold),transparent 55%),radial-gradient(ellipse at 50% 65%,var(--pharos-glow-aqua),transparent 75%);filter:blur(var(--pharos-glow-blur));pointer-events:none}
 .pharos-glow-paint{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
@@ -132,6 +132,11 @@
 #pharos-ask .pharos-picker-back svg{width:14px;height:14px}
 #pharos-ask .pharos-picker-choice[aria-pressed="true"]{background:color-mix(in srgb,var(--pharos-sea) 9%,var(--pharos-panel));color:var(--pharos-sea)}
 #pharos-ask .pharos-picker-choice[aria-pressed="false"] svg{visibility:hidden}
+#pharos-ask .pharos-fast-switch{position:relative;flex:none;width:28px;height:16px;border-radius:8px;background:var(--pharos-line);transition:background .16s}
+#pharos-ask .pharos-fast-switch::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--pharos-panel);box-shadow:0 1px 2px color-mix(in srgb,var(--pharos-ink) 30%,transparent);transition:left .16s}
+#pharos-ask .pharos-fast-toggle[aria-checked="true"] .pharos-fast-switch{background:var(--pharos-sea)}
+#pharos-ask .pharos-fast-toggle[aria-checked="true"] .pharos-fast-switch::after{left:14px}
+@media(prefers-reduced-motion:reduce){#pharos-ask .pharos-fast-switch,#pharos-ask .pharos-fast-switch::after{transition:none}}
 #pharos-ask .pharos-composer-actions{position:relative;display:flex;align-items:center;gap:5px;flex:none;margin-left:auto}
 #pharos-ask .pharos-send,#pharos-ask .pharos-icon-control{display:inline-flex;flex:none;align-items:center;justify-content:center;width:34px;min-height:34px!important;padding:7px;border:0;border-radius:9px}
 #pharos-ask .pharos-send{background:var(--pharos-sea);color:var(--pharos-panel)!important}
@@ -185,6 +190,7 @@
 #pharos-ask .pharos-turn{display:grid;gap:20px}
 #pharos-ask .pharos-message{display:grid;grid-template-columns:38px minmax(0,1fr);gap:12px;align-items:start}
 #pharos-ask .pharos-message-body{min-width:0}
+#pharos-ask .pharos-agent-message>.pharos-message-body>:not([hidden]):not(:not([hidden])~*){margin-top:0;padding-top:0}
 #pharos-ask .pharos-user-question{margin:0;padding:10px 13px;border:0;border-radius:12px;background:color-mix(in srgb,var(--pharos-ink) 7%,var(--pharos-panel));color:var(--pharos-ink);white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}
 #pharos-ask .pharos-avatar{position:relative;display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:12px;border:1px solid color-mix(in srgb,currentColor 28%,var(--pharos-panel));background:color-mix(in srgb,currentColor 6%,var(--pharos-panel))}
 #pharos-ask .pharos-user-avatar{color:var(--pharos-muted)}
@@ -212,16 +218,18 @@
 #pharos-ask .pharos-activity ol{margin:8px 0;padding-left:22px;max-height:150px;overflow:auto}
 #pharos-ask .pharos-activity li{padding:3px 0}
 #pharos-ask .pharos-skeleton{display:grid;gap:8px;padding:14px 0 5px}
-#pharos-ask .pharos-skeleton span{display:block;height:7px;border-radius:4px;background:linear-gradient(100deg,color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-aqua) 23%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)));background-size:200% 100%;animation:pharos-wait-shimmer 2200ms linear infinite}
-#pharos-ask .pharos-skeleton span:nth-child(2){width:78%;animation-delay:160ms}
-#pharos-ask .pharos-skeleton span:nth-child(3){width:56%;animation-delay:320ms}
+/* The shimmer moves a wider copy of the gradient with transform, which the compositor runs; animating background-position repaints every frame. */
+#pharos-ask .pharos-skeleton span{position:relative;display:block;height:7px;overflow:hidden;border-radius:4px;background:color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel))}
+#pharos-ask .pharos-skeleton span::before{content:'';position:absolute;inset:0 auto 0 0;width:400%;background:linear-gradient(100deg,color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-aqua) 23%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)));background-size:50% 100%;animation:pharos-wait-shimmer 2200ms linear infinite}
+#pharos-ask .pharos-skeleton span:nth-child(2){width:78%}#pharos-ask .pharos-skeleton span:nth-child(2)::before{animation-delay:160ms}
+#pharos-ask .pharos-skeleton span:nth-child(3){width:56%}#pharos-ask .pharos-skeleton span:nth-child(3)::before{animation-delay:320ms}
 #pharos-ask .pharos-send:disabled{filter:grayscale(1);opacity:.45;cursor:default}
 #pharos-ask .pharos-destinations{display:grid;gap:9px;margin-top:8px}
 #pharos-ask .pharos-destinations:has(>.pharos-results-label[hidden]){margin-top:0}
 #pharos-ask .pharos-results-label{font-size:13px;color:var(--pharos-ink);margin:0 0 4px}
 #pharos-ask .pharos-omitted{font-size:12px;color:var(--pharos-muted);margin:2px 0 0}
-#pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);transition:transform 150ms ease}
-#pharos-ask .pharos-destination:hover{transform:translateY(-2px);border-color:var(--pharos-violet)}
+#pharos-ask .pharos-destination{position:relative;display:flex;flex-direction:column;gap:3px;text-decoration:none;padding:13px 38px 14px 14px;border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink)}
+#pharos-ask .pharos-destination:hover{border-color:var(--pharos-violet)}
 #pharos-ask .pharos-destination strong{font-weight:500;font-size:15px;overflow-wrap:anywhere}
 /* Generated link summaries run to a sentence or two and may quote filter values. */
 #pharos-ask .pharos-destination>span:last-of-type{font-size:12px;line-height:1.45;color:var(--pharos-muted);overflow-wrap:anywhere;text-wrap:pretty}
@@ -245,9 +253,8 @@
 #pharos-ask .pharos-other-send svg{width:17px;height:17px}
 #pharos-ask .pharos-other-send:disabled{opacity:.4;cursor:default}
 #pharos-ask .pharos-search-notice{font-size:12px;color:var(--pharos-sea);margin:12px 0 0}
-@keyframes pharos-breathe{50%{transform:scale(1.08);box-shadow:0 0 20px color-mix(in srgb,var(--pharos-violet) 25%,transparent)}}
 @keyframes pharos-lamp-pulse{50%{opacity:.4}}
-@keyframes pharos-wait-shimmer{to{background-position:-200% 50%}}
+@keyframes pharos-wait-shimmer{from{transform:translateX(-50%)}to{transform:none}}
 @keyframes pharos-signal-trace{to{stroke-dashoffset:-1780}}
 @media(prefers-reduced-motion:reduce){#pharos-ask .pharos-product *,#pharos-ask .pharos-product *::before{animation:none!important;transition:none!important}}
 @media(max-width:450px){#pharos-ask .pharos-search-head .pharos-ai-mode{margin:0 0 10px 16px}}
@@ -292,15 +299,51 @@
 .pharos-ask-dialog #pharos-ask{margin:0;width:100%}
 .pharos-ask-dialog #pharos-ask .pharos-product{--pharos-product-padding:0px;max-width:none;padding:0;border:0;border-radius:0;background:transparent}
 .pharos-ask-dialog #pharos-ask .pharos-suggestions{display:none}
-#pharos-ask .pharos-browse{position:relative}
-#pharos-ask .pharos-browse-hint{position:absolute;right:0;top:calc(100% + 7px);z-index:5;width:max-content;max-width:calc(100vw - 48px);padding:8px 11px;border:1px solid color-mix(in srgb,var(--pharos-gold) 45%,var(--pharos-line));border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 4px 16px color-mix(in srgb,var(--pharos-ink) 12%,transparent);font-size:12px;font-weight:400;line-height:1.4;white-space:nowrap;pointer-events:none}
+#pharos-ask .pharos-browse-anchor{display:flex;position:relative}
+#pharos-ask .pharos-fullscreen[aria-pressed="true"] .pharos-fullscreen-enter,#pharos-ask .pharos-fullscreen:not([aria-pressed="true"]) .pharos-fullscreen-exit{display:none}
+#pharos-ask .pharos-fullscreen:focus-visible{outline:2px solid var(--pharos-violet);outline-offset:2px}
+/* Full screen: the composer is the whole Ask page, without its glow. The
+   transcript fills the space above the editor; before the first question,
+   suggestions sit there instead. */
+main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
+#askPage{height:100%}
+#askPage>#pharos-ask{max-width:none;height:100%;margin:0}
+#askPage #pharos-ask .pharos-product{--pharos-product-padding:0px;display:flex;flex-direction:column;max-width:none;height:100%;padding:0;border:0;border-radius:0;background:var(--pharos-panel)}
+#askPage #pharos-ask .pharos-regular{margin:24px}
+#askPage #pharos-ask :is(.pharos-ai,.pharos-ai-frame,.pharos-ai-inner,.pharos-thread-wrap){display:flex;flex-direction:column;flex:1;min-height:0}
+#askPage #pharos-ask .pharos-ai-frame{padding:0;border-radius:0}
+#askPage #pharos-ask .pharos-ai-inner{--pharos-composer-inset:24px}
+#askPage #pharos-ask .pharos-ai-frame>.pharos-glow-paint{display:none}
+/* While working, a signal travels around the page's edge instead of the
+   composer's (createPharosEdgeTrace). Only the streaks' transforms animate;
+   their glow is a blur of a small static layer, never of the page. */
+#pharos-ask .pharos-page-trace{display:none}
+#askPage #pharos-ask .pharos-page-trace{display:block;position:absolute;inset:0;z-index:20;overflow:hidden;pointer-events:none;--pharos-trace-length:240px;--pharos-trace-colors:transparent,var(--pharos-aqua) 45%,var(--pharos-violet) 75%,var(--pharos-gold)}
+#askPage #pharos-ask .pharos-page-trace[data-trace-working="false"]{display:none}
+#askPage #pharos-ask .pharos-page-trace>i{position:absolute;top:0;left:0;width:var(--pharos-trace-length);height:3px;background:linear-gradient(90deg,var(--pharos-trace-colors));transform:translateX(-200vmax)}
+#askPage #pharos-ask .pharos-page-trace>i::before{content:"";position:absolute;inset:-5px;background:inherit;filter:blur(5px);opacity:.75}
+#askPage #pharos-ask .pharos-page-trace>i:is([data-side="right"],[data-side="left"]){width:3px;height:var(--pharos-trace-length);transform:translateY(-200vmax)}
+#askPage #pharos-ask .pharos-page-trace>i[data-side="right"]{left:auto;right:0;background:linear-gradient(180deg,var(--pharos-trace-colors))}
+#askPage #pharos-ask .pharos-page-trace>i[data-side="bottom"]{top:auto;bottom:0;background:linear-gradient(270deg,var(--pharos-trace-colors))}
+#askPage #pharos-ask .pharos-page-trace>i[data-side="left"]{background:linear-gradient(0deg,var(--pharos-trace-colors))}
+/* Reduced motion keeps a still edge while working. */
+@media(prefers-reduced-motion:reduce){#askPage #pharos-ask .pharos-page-trace[data-trace-working="true"]{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--pharos-violet) 55%,transparent)}}
+#askPage #pharos-ask .pharos-thread-viewport{flex:1;min-height:0;max-height:none}
+#askPage #pharos-ask .pharos-question-field{margin-top:auto}
+#askPage #pharos-ask .pharos-ai-inner>.pharos-suggestions{--pharos-product-padding:var(--pharos-composer-inset);margin:auto 0 14px;padding-bottom:6px;border-bottom:1px solid var(--pharos-line)}
+#askPage #pharos-ask .pharos-ai-inner>.pharos-suggestions:not([hidden])+.pharos-question-field{margin-top:0}
+#askPage #pharos-ask .pharos-browse-hint{top:auto;bottom:calc(100% + 7px)}
+#askPage #pharos-ask .pharos-browse-hint::after{top:auto;bottom:-5px;transform:rotate(225deg)}
+#pharos-ask .pharos-browse-hint{position:absolute;right:0;top:calc(100% + 7px);z-index:5;width:max-content;max-width:calc(100vw - 48px);padding:8px 11px;border:1px solid color-mix(in srgb,var(--pharos-gold) 45%,var(--pharos-line));border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 4px 16px color-mix(in srgb,var(--pharos-ink) 12%,transparent);font-size:12px;font-weight:400;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px}
+#pharos-ask .pharos-browse-hint[hidden]{display:none}
+/* Outranks the coarse-pointer button minimum so the bubble keeps one line; ::before supplies the touch target. */
+#pharos-ask .pharos-product .pharos-browse-hint-dismiss{position:relative;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;min-height:18px!important;margin:-2px -5px -2px 0;padding:0;border:0;border-radius:5px;background:transparent;color:var(--pharos-muted);font-size:15px;line-height:1}
+#pharos-ask .pharos-browse-hint-dismiss:hover{background:color-mix(in srgb,var(--pharos-muted) 12%,transparent);color:var(--pharos-ink)}
+#pharos-ask .pharos-browse-hint-dismiss:focus-visible{outline:2px solid var(--pharos-violet);outline-offset:1px}
+@media(pointer:coarse){#pharos-ask .pharos-browse-hint-dismiss::before{content:"";position:absolute;inset:-13px}}
 #pharos-ask .pharos-browse-hint::after{content:"";position:absolute;right:12px;top:-5px;width:8px;height:8px;border-left:inherit;border-top:inherit;background:inherit;transform:rotate(45deg)}
-#pharos-ask .pharos-browse:has(.pharos-browse-hint:not([hidden]))::after{display:none}
+#pharos-ask .pharos-browse-anchor:has(.pharos-browse-hint:not([hidden])) .pharos-browse::after{display:none}
 #pharos-ask .pharos-browse:focus-visible{outline:2px solid var(--pharos-violet);outline-offset:2px}
-#pharos-ask .pharos-browse{position:relative}
-#pharos-ask .pharos-browse-hint{position:absolute;right:0;top:calc(100% + 7px);z-index:5;width:max-content;max-width:calc(100vw - 48px);padding:8px 11px;border:1px solid color-mix(in srgb,var(--pharos-gold) 45%,var(--pharos-line));border-radius:9px;background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 4px 16px color-mix(in srgb,var(--pharos-ink) 12%,transparent);font-size:12px;font-weight:400;line-height:1.4;white-space:nowrap;pointer-events:none}
-#pharos-ask .pharos-browse-hint::after{content:"";position:absolute;right:12px;top:-5px;width:8px;height:8px;border-left:inherit;border-top:inherit;background:inherit;transform:rotate(45deg)}
-#pharos-ask .pharos-browse:has(.pharos-browse-hint:not([hidden]))::after{display:none}
 #pharos-ask .pharos-page-context{display:inline-flex;align-items:center;gap:4px;max-width:100%;margin:0 5px 0 0;padding:0 2px 0 7px;border:1px solid var(--pharos-line);border-radius:6px;background:color-mix(in srgb,var(--pharos-muted) 8%,var(--pharos-panel));font-size:12px;line-height:22px;color:var(--pharos-muted);vertical-align:baseline;white-space:nowrap;user-select:none;-webkit-user-drag:element;cursor:grab;touch-action:none}
 #pharos-ask .pharos-page-context:active{cursor:grabbing}
 #pharos-ask .pharos-chip-dragging{opacity:.4}
@@ -310,7 +353,7 @@
 .pharos-floating{position:fixed;z-index:100;right:20px;bottom:20px;box-sizing:border-box;display:flex;align-items:center;gap:4px;width:330px;max-width:calc(100vw - 16px);padding:8px;border:1px solid transparent;border-radius:14px;background:transparent;color:var(--pharos-ink);box-shadow:0 8px 32px #0003;font:13px/1.4 "Avenir Next",Avenir,-apple-system,sans-serif}
 .pharos-floating[hidden]{display:none}
 .pharos-floating button{background:transparent;color:inherit;border:0;border-radius:7px;padding:7px}
-.pharos-floating button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.pharos-floating button:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:1px}
 .pharos-floating-drag{cursor:grab;touch-action:none;flex:none;font-size:20px}
 .pharos-floating-drag:active{cursor:grabbing}
 .pharos-floating-open{display:flex;align-items:center;gap:12px;min-width:0;flex:1;text-align:left;cursor:pointer;touch-action:none}
@@ -320,12 +363,24 @@
 .pharos-floating-open strong,.pharos-floating-open span{display:block}
 .pharos-floating-open span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
 .pharos-floating-dismiss{font-size:20px;cursor:pointer}
+.pharos-pip-ghost{position:fixed;z-index:101;box-sizing:border-box;display:flex;align-items:flex-end;padding:12px 16px;overflow:hidden;border:1px solid var(--pharos-line);background:var(--pharos-panel);color:var(--pharos-ink);box-shadow:0 8px 32px #0003;font:13px/1.4 "Avenir Next",Avenir,-apple-system,sans-serif;pointer-events:none}
+.pharos-pip-ghost .pharos-floating-copy{min-width:0}
+.pharos-pip-ghost strong,.pharos-pip-ghost span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pharos-pip-ghost span{opacity:.8}
 .pharos-floating-announcement{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 
 #pharos-ask .pharos-destination-result{min-width:0}
 #pharos-ask .pharos-destination-result.has-preview{border:1px solid var(--pharos-line);border-radius:9px;overflow:hidden;background:var(--pharos-panel)}
 #pharos-ask .has-preview:has(.pharos-destination:hover){border-color:var(--pharos-violet)}
 #pharos-ask .has-preview>.pharos-destination{border:0;border-top:1px solid var(--pharos-line);border-radius:0;transform:none}
-#pharos-ask .pharos-chart-preview{margin:0;padding:12px;min-width:0;--query-cover-bg:var(--pharos-panel);--query-tone:var(--pharos-sea)}
-#pharos-ask .pharos-chart-preview-meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin-bottom:10px;color:var(--pharos-muted);font-size:11px}
-#pharos-ask .pharos-chart-preview-cover{height:auto;min-height:220px;padding:0;overflow:hidden}
+#pharos-ask .pharos-chart-preview{margin:0;min-width:0;--query-card-width:100%}
+#pharos-ask .pharos-chart-preview .query-card{transform:none;cursor:default}
+#pharos-ask .pharos-chart-preview .query-card:hover{border-color:var(--pharos-violet)}
+#pharos-ask .pharos-chart-preview :is(.query-drag-tip,.query-cover-head>svg:first-child){display:none}
+#pharos-ask .pharos-chart-preview>.card-library-collected{padding:8px 4px 0;font-size:11px}
+
+#pharos-ask .pharos-work-preview{box-sizing:content-box;min-height:36px;margin:0;padding:8px 12px;min-width:0;font-size:12px;line-height:18px}
+#pharos-ask .pharos-work-preview-line{margin:0;overflow:hidden;color:var(--pharos-ink);text-overflow:ellipsis;white-space:nowrap}
+#pharos-ask .pharos-work-preview-line+.pharos-work-preview-line{color:var(--pharos-muted)}
+#pharos-ask .pharos-work-preview-line span+span::before{content:"·";margin:0 6px;color:var(--pharos-muted)}
+#pharos-ask .pharos-work-preview-status{margin:0;color:var(--pharos-muted)}

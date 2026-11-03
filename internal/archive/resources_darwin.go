@@ -148,6 +148,21 @@ func processUsageOf(pid int) (processUsage, error) {
 		ChildCPUSeconds: seconds(info.ChildUserTime + info.ChildSystemTime),
 		Footprint:       info.PhysFootprint,
 		Resident:        info.ResidentSize,
+		DiskBytes:       info.DiskioBytesread + info.DiskioByteswritten,
+		DiskKnown:       true,
 		Started:         info.ProcStartAbstime,
 	}, nil
+}
+
+// resourceProcessTable reads the process tree without launching a subprocess.
+func resourceProcessTable() []processNode {
+	entries, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return nil
+	}
+	nodes := make([]processNode, 0, len(entries))
+	for _, entry := range entries {
+		nodes = append(nodes, processNode{PID: int(entry.Proc.P_pid), Parent: int(entry.Eproc.Ppid), Name: unix.ByteSliceToString(entry.Proc.P_comm[:])})
+	}
+	return nodes
 }

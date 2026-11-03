@@ -3167,6 +3167,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -3289,6 +3290,7 @@
           "split": "error_signature",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 2
         },
         "dataset": "tool_calls",
@@ -3499,7 +3501,8 @@
           "metric": "calls",
           "split": "repository_path",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect failed file edits"
@@ -3590,7 +3593,8 @@
           "metric": "calls",
           "split": "repository_command",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect reported test failures"
@@ -3729,7 +3733,7 @@
         "showLegend": true,
         "showHeadline": false
       },
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output.",
       "where": [
         {
@@ -3747,6 +3751,7 @@
           "split": "tool_source",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -3838,6 +3843,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "tool_calls",
@@ -3924,7 +3930,8 @@
           "metric": "calls",
           "split": "repository_path",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore frequently read paths"
@@ -4124,7 +4131,8 @@
           "metric": "calls",
           "split": "host",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore recorded web sites"
@@ -4220,7 +4228,8 @@
           "metric": "calls",
           "split": "mcp_server_method",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore connected tool methods"
@@ -4345,7 +4354,8 @@
           "metric": "conversations",
           "split": "skill_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "skill_usages",
         "detailAction": "Inspect conversations using each skill"
@@ -4521,7 +4531,8 @@
           "metric": "typed",
           "split": "none",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily word counts"
@@ -4608,6 +4619,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "writing_messages",
@@ -4706,6 +4718,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "model_family",
@@ -4818,6 +4831,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -4940,6 +4954,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -5284,6 +5299,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "tool_calls",
@@ -5429,7 +5445,7 @@
           "duration_source"
         ]
       },
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "days": [
         7
       ],
@@ -5450,6 +5466,7 @@
           "split": "command_source",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "tool_calls",
@@ -5546,7 +5563,7 @@
         "minSamples": 3,
         "density": "compact"
       },
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output. Each nonempty recorded call is one observation. Require three calls per tool/source cohort before selecting six cohorts by observation count. All cohorts remain in the destination. Shared logarithmic token axis; median, quartiles, Tukey whiskers, sampled outliers and extremes. Hover supplies mean, range, and sample size. Zero-size calls are excluded from this size comparison.",
       "where": [
         {
@@ -5564,6 +5581,7 @@
           "split": "tool_source",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "tool_calls",
@@ -5767,7 +5785,8 @@
           "metric": "repositories",
           "split": "error_signature",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Compare cross-repository errors"
@@ -5871,7 +5890,8 @@
           "metric": "calls",
           "split": "repository_error",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Explore repository error evidence"
@@ -6014,7 +6034,8 @@
           "metric": "repositories",
           "split": "skill_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "skill_usages",
         "detailAction": "Inspect skills across repositories"
@@ -6643,6 +6664,7 @@
           "split": "repository_path",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "path_conversation",
           "reduce": "max"
         },
@@ -6764,7 +6786,8 @@
           "metric": "typed_share",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Explore authorship by repo"
@@ -6888,6 +6911,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -6994,6 +7018,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cache_read_share",
           "split": "provider_model",
@@ -7100,6 +7125,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider_model_effort",
@@ -7339,6 +7365,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "delegated_run_depth",
@@ -7449,6 +7476,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "price_status",
@@ -7672,6 +7700,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "mcp_calls",
@@ -8198,7 +8227,8 @@
           "metric": "words",
           "split": "kind",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Inspect human contributions"
@@ -9182,7 +9212,8 @@
           "metric": "conversations",
           "split": "url",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect shared web references"
@@ -9350,6 +9381,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "hour",
           "reduce": "total"
         },
@@ -9450,6 +9482,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
           "norm": true
@@ -9559,6 +9592,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "writing_messages",
@@ -9643,7 +9677,8 @@
           "metric": "words_per_message",
           "split": "none",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "writing_messages",
         "detailAction": "Inspect message lengths"
@@ -9742,6 +9777,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "conversation",
           "reduce": "mean"
         },
@@ -9781,6 +9817,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "work",
           "reduce": "mean"
         },
@@ -9863,6 +9900,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "unit": "conversation",
           "reduce": "mean"
         },
@@ -10056,6 +10094,7 @@
           "split": "none",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation"
         },
         "dataset": "writing_messages",
@@ -10128,10 +10167,11 @@
         "chart": {
           "v": 2,
           "view": "trend",
-          "metric": "correction_share",
+          "metric": "typed_messages",
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "writing_messages",
@@ -10198,6 +10238,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -10272,6 +10313,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -10391,6 +10433,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "percent",
           "split": "model_family",
@@ -10516,6 +10559,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "percent_cost",
           "split": "model_family",
@@ -10648,6 +10692,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider_model",
@@ -10845,6 +10890,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegated_runs",
           "split": "provider_model_effort",
@@ -10864,8 +10910,8 @@
     },
     {
       "id": "session-human-output",
-      "title": "Human input and output",
-      "description": "Estimated human-supplied text tokens versus recorded output per whole conversation over the last {days} days; log–log axes.",
+      "title": "Messages and output",
+      "description": "Your messages versus recorded output per whole conversation over the last {days} days; log–log axes.",
       "dataset": "conversation_activity",
       "field": "event_at",
       "category": "models",
@@ -10882,7 +10928,7 @@
         {
           "id": "session-human-output",
           "op": "sum",
-          "expression": "SUM([human_input_tokens_estimate])",
+          "expression": "SUM([human_messages])",
           "expressionY": "SUM([output_tokens])",
           "groupBy": [
             "root_provider",
@@ -10900,7 +10946,7 @@
           "display": {
             "kind": "scatter",
             "maxGroups": 2000,
-            "xLabel": "Est. human text tokens (log)",
+            "xLabel": "Human messages (log)",
             "yLabel": "Recorded output tokens (log)",
             "xScale": {
               "mode": "log"
@@ -10931,28 +10977,22 @@
         ],
         "summaries": [
           {
-            "id": "mc_human_input",
+            "id": "mc_human_messages",
             "op": "sum",
-            "field": "human_input_tokens_estimate",
-            "label": "Estimated human-supplied text tokens"
+            "field": "human_messages",
+            "label": "Human messages"
           },
           {
             "id": "mc_output",
             "op": "sum",
             "field": "output_tokens",
             "label": "Recorded output tokens"
-          },
-          {
-            "id": "mc_human_messages",
-            "op": "sum",
-            "field": "human_messages",
-            "label": "Classified human messages"
           }
         ],
-        "valueField": "mc_human_input",
+        "valueField": "mc_human_messages",
         "unit": "tokens",
         "subjects": "whole conversations",
-        "action": "Explore human input and output",
+        "action": "Explore messages and output",
         "labelFields": [
           "root_provider",
           "root_model_family",
@@ -10965,23 +11005,24 @@
         "kind": "scatter",
         "height": 300
       },
-      "action": "Explore Conversation Input and Output",
-      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X estimates human-supplied text once per classified message as ceil(retained UTF-8 bytes / 4), excluding harness and automated spans. Includes pasted/quoted text and attachment references; excludes image and unretained file bytes. This is not a tokenizer result, request context size, or cache-read volume. Human messages use their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by human input. Missing classification/lineage is not evidence of absent human effort.",
+      "action": "Explore Conversations",
+      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X counts classified user messages holding any text besides harness instructions and automated prompts, at their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by messages. Missing classification/lineage is not evidence of absent human effort.",
       "destination": {
         "topic": "activity",
         "chart": {
           "v": 2,
           "view": "scatter",
-          "metric": "human_input",
+          "metric": "messages",
           "split": "provider_model",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation",
           "metricY": "output",
           "scaleY": "logarithmic"
         },
         "dataset": "conversation_activity",
-        "detailAction": "Explore human input and output"
+        "detailAction": "Explore messages and output"
       }
     },
     {
@@ -11108,6 +11149,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegated_runs",
           "split": "provider_model_effort",
@@ -11235,6 +11277,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "agent_sessions",
           "split": "provider_model_role",
@@ -11326,6 +11369,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "effort",
@@ -11574,6 +11618,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model",
@@ -11716,6 +11761,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "input",
           "split": "provider_model",
@@ -11812,6 +11858,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model",
@@ -11916,6 +11963,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "conversations",
           "split": "provider_model",
@@ -12010,6 +12058,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_provider_model",
@@ -12217,6 +12266,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider_model",
@@ -12517,6 +12567,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cache_read_share",
           "split": "repository_name",
@@ -12811,7 +12862,8 @@
           "metric": "failure_rate",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Compare repository failure rates"
@@ -12847,7 +12899,7 @@
       "measures": [],
       "title": "Failures per conversation",
       "description": "Error calls per affected agent conversation over the last {days} days; tools with three or more affected conversations.",
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. One observation is the error-call count for one tool in one recorded agent conversation. Only affected conversations contribute; zero-error conversations are excluded. A conversation using several failing tools contributes one observation under each. Require three affected conversations per tool before selecting six tools by observation count. All individual affected conversations remain inspectable, including tools below the cover cutoff. Boxes share a logarithmic count axis with quartiles, median, Tukey whiskers, sampled outliers, and extremes. Counts do not establish consecutive retries or recovery.",
       "exploration": {
         "keys": [
@@ -12917,6 +12969,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "tool_conversation",
           "minSamples": 3
         },
@@ -12995,6 +13048,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -13014,7 +13068,7 @@
       ],
       "unit": "calls",
       "measures": [],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "exploration": {
         "keys": [
           "repository_name",
@@ -13095,6 +13149,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation",
           "minSamples": 3
         },
@@ -13363,7 +13418,8 @@
           "metric": "calls",
           "split": "app_provider",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect Pharos calling clients"
@@ -13426,7 +13482,8 @@
           "metric": "calls",
           "split": "query_source",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "mcp_calls",
         "detailAction": "Inspect requested archive sources"
@@ -13536,6 +13593,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "mcp_calls",
@@ -13734,6 +13792,7 @@
           "split": "skill_evidence",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "minSamples": 3
         },
         "dataset": "skill_usages",
@@ -13984,6 +14043,7 @@
           "split": "skill_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "skill_path",
           "minSamples": 3
         },
@@ -14260,7 +14320,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "note": "Count retained web-category calls with a nonempty extracted search_query, including errors and calls without retained results. Exclude SQL, metadata, and other non-web queries. One parent call counts once; only the first supported query may be extracted from a batched request. Stored query text is trimmed and capped at 500 characters, without topic or near-duplicate normalization. Missing capture is not absence of research. Calls use start-time selection. These are observed search attempts, not effort, useful results, knowledge gained, or research quality. One repository/recorded agent-conversation pair is one sample, including single-search conversations. Zero-search conversations are absent, missing IDs are excluded, and missing repositories remain Unspecified. Require three searching conversations per repository before selecting six cohorts by sample count. Sparse cohorts stay in the destination. Boxes share a log-count axis. This is individual agent-transcript activity, not whole top-level conversations including delegation.",
       "exploration": {
         "keys": [
@@ -14354,6 +14414,7 @@
           "split": "repository_name",
           "period": "day",
           "scale": "logarithmic",
+          "nonzero": false,
           "unit": "conversation",
           "minSamples": 3
         },
@@ -14580,6 +14641,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "minSamples": 10
         },
         "dataset": "mcp_calls",
@@ -14697,6 +14759,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "percent_cost",
           "split": "provider",
@@ -14791,6 +14854,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -14901,6 +14965,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -15023,6 +15088,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -15176,6 +15242,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "repository_name",
@@ -15314,6 +15381,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "root_conversations",
           "split": "root_repository_name",
@@ -15396,6 +15464,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "channel",
@@ -15474,6 +15543,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "channel",
@@ -15552,6 +15622,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "machine_id",
@@ -15630,6 +15701,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "machine_id",
@@ -15708,6 +15780,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "execution_machine_id",
@@ -15786,6 +15859,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "execution_machine_id",
@@ -15947,6 +16021,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "effort",
@@ -16049,6 +16124,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -16197,6 +16273,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -16346,6 +16423,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "output",
           "split": "repository_name",
@@ -16449,6 +16527,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "output_share",
           "split": "repository_name",
@@ -16603,6 +16682,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "effort",
@@ -16762,6 +16842,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model",
@@ -16924,6 +17005,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider_model_effort",
@@ -17673,6 +17755,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegated_share",
           "split": "root_repository_name",
@@ -17819,6 +17902,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "delegating_share",
           "split": "root_repository_name",
@@ -17971,6 +18055,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -18652,15 +18737,15 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools.",
       "id": "machine-time",
-      "title": "Recorded machine time",
+      "title": "Recorded tool time",
       "description": "Tool and command time over the last {days} days, by the kind of work.",
       "days": [
         7,
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "where": [
         {
           "field": "duration_ms",
@@ -18678,7 +18763,7 @@
             "activity"
           ],
           "groupLimit": 10000,
-          "label": "Recorded machine time by day"
+          "label": "Recorded tool time by day"
         }
       ],
       "cover": {
@@ -18700,7 +18785,7 @@
             "id": "card_duration_ms",
             "op": "sum",
             "field": "duration_ms",
-            "label": "Recorded machine time by day"
+            "label": "Recorded tool time by day"
           },
           {
             "id": "card_count",
@@ -18721,7 +18806,7 @@
             "activity"
           ],
           "groupLimit": 10000,
-          "label": "Recorded machine time by day"
+          "label": "Recorded tool time by day"
         }
       },
       "destination": {
@@ -18733,10 +18818,11 @@
           "split": "activity",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "seriesLimit": 6
         },
         "dataset": "tool_calls",
-        "detailAction": "Explore machine time"
+        "detailAction": "Explore tool time"
       }
     },
     {
@@ -18745,15 +18831,15 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools.",
       "id": "machine-activities",
-      "title": "Where machine time goes",
+      "title": "Where tool time goes",
       "description": "Share of recorded tool time by kind of work over the last {days} days.",
       "days": [
         7,
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "where": [
         {
           "field": "duration_ms",
@@ -18771,7 +18857,7 @@
             "id": "mt_time",
             "op": "sum",
             "field": "duration_ms",
-            "label": "Recorded machine time"
+            "label": "Recorded tool time"
           },
           {
             "id": "mt_calls",
@@ -18811,7 +18897,7 @@
             "activity"
           ],
           "groupLimit": 10000,
-          "label": "Recorded machine time by activity",
+          "label": "Recorded tool time by activity",
           "display": {
             "kind": "pie"
           }
@@ -18836,6 +18922,7 @@
           "split": "activity",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "tool_calls",
@@ -18848,7 +18935,7 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools. Operations group a program and subcommand (for example “go test”) or a named tool.",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools. Operations group a program and subcommand (for example “go test”) or a named tool.",
       "id": "machine-operations",
       "title": "Longest-running operations",
       "description": "Commands and tools with the most recorded time over the last {days} days.",
@@ -18856,7 +18943,7 @@
         7,
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tool Time",
       "where": [
         {
           "field": "duration_ms",
@@ -18875,7 +18962,7 @@
             "id": "mt_time",
             "op": "sum",
             "field": "duration_ms",
-            "label": "Recorded machine time"
+            "label": "Recorded tool time"
           },
           {
             "id": "mt_calls",
@@ -18923,7 +19010,8 @@
           "metric": "time",
           "split": "operation_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect slow operations"
@@ -18988,6 +19076,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -19060,6 +19149,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -19147,7 +19237,8 @@
           "metric": "active_hours",
           "split": "level_band",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "parallelism",
         "detailAction": "See each day's timeline"
@@ -19212,6 +19303,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
           "norm": true
@@ -19278,6 +19370,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "hour",
           "reduce": "total"
         },
@@ -19364,7 +19457,8 @@
           "metric": "agent_hours",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "parallelism",
         "detailAction": "Compare repositories"
@@ -19479,6 +19573,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
           "norm": true
@@ -19584,6 +19679,7 @@
           "split": "carbon_tier",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "usage",
@@ -19670,7 +19766,8 @@
           "metric": "co2",
           "split": "repository_name",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "usage",
         "detailAction": "Compare repositories"
@@ -19756,7 +19853,8 @@
           "metric": "co2",
           "split": "model_family",
           "period": "day",
-          "scale": "linear"
+          "scale": "linear",
+          "nonzero": false
         },
         "dataset": "usage",
         "detailAction": "Compare models"
@@ -19859,6 +19957,7 @@
           "split": "provider",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "usage",
@@ -19962,6 +20061,7 @@
           "split": "effort",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "compareAs": "share"
         },
         "dataset": "usage",
@@ -20265,6 +20365,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "model",
@@ -20382,6 +20483,7 @@
           "display": "interval",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "tokens",
           "split": "provider",
@@ -20439,11 +20541,12 @@
         "showHeadline": false,
         "height": 300,
         "timeline": {
-          "scale": "logarithmic"
+          "scale": "logarithmic",
+          "nonzero": true
         }
       },
       "action": "Explore Tokens and Cost",
-      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Each line shows one repository’s daily tokens independently. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
+      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Each line shows one repository’s daily tokens independently and passes over its idle days; days with no tokens at all are left out. Vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
       "exploration": {
         "keys": [
           "day",
@@ -20498,6 +20601,7 @@
           "display": "interval",
           "scale": "logarithmic",
           "seriesLimit": 15,
+          "nonzero": true,
           "v": 2,
           "metric": "tokens",
           "split": "repository_name",
@@ -20624,6 +20728,7 @@
           "display": "cumulative",
           "scale": "linear",
           "seriesLimit": 15,
+          "nonzero": false,
           "v": 2,
           "metric": "cost",
           "split": "provider",
@@ -20722,6 +20827,7 @@
           "split": "tool_name",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "rollingPeriods": 7
         },
         "dataset": "mcp_calls",
@@ -20736,7 +20842,7 @@
         30,
         90
       ],
-      "category": "models",
+      "category": "thinking",
       "idea": "models-01",
       "unit": "seconds",
       "id": "thinking-wait-distribution",
@@ -20759,13 +20865,11 @@
         }
       ],
       "thinking": {
-        "state": {
-          "view": "histogram",
-          "groupBy": "none"
-        }
+        "overview": true,
+        "state": {}
       },
-      "action": "Explore Thinking",
-      "note": "Same request population as Thinking. The compact native histogram uses automatic bins; the full dashboard uses shared rounded logarithmic edges. Neither measures pure inference or first-token latency."
+      "action": "Explore Waiting and Compaction",
+      "note": "Same request population as Waiting and Compaction, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency."
     },
     {
       "dataset": "model_requests",
@@ -20775,7 +20879,58 @@
         30,
         90
       ],
-      "category": "models",
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "compactions",
+      "id": "thinking-compactions",
+      "title": "Context compactions",
+      "description": "Requests that follow a context compaction, day by day by model, over the last {days} days.",
+      "where": [
+        {
+          "field": "compacted_before",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "measures": [
+        {
+          "id": "compactions_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "model"
+          ],
+          "groupLimit": 10000,
+          "label": "Compactions by day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "compactions_daily",
+        "kind": "auto",
+        "maxGroups": 6,
+        "showOther": true,
+        "showLegend": true,
+        "height": 240
+      },
+      "thinking": {
+        "overview": true,
+        "state": {},
+        "open": "thinking:conversation",
+        "coverWhere": true
+      },
+      "action": "Explore Waiting and Compaction",
+      "note": "One compaction is a request whose stream compacted its context since the previous request. Waiting and Compaction pairs the waits, context and output before and after each compaction within one stream, model and effort."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
       "idea": "models-01",
       "unit": "seconds",
       "id": "thinking-model-effort",
@@ -20816,7 +20971,58 @@
         30,
         90
       ],
-      "category": "models",
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "seconds",
+      "id": "thinking-preceding-tool",
+      "title": "Wait by preceding tool",
+      "description": "Observed waits after each tool's result, by the tool that ran, over the last {days} days.",
+      "measures": [
+        {
+          "id": "wait_tools",
+          "display": {
+            "kind": "box"
+          },
+          "op": "count",
+          "groupBy": [
+            "preceding_tool"
+          ],
+          "distribution": {
+            "kind": "box",
+            "input": "[gap_seconds]",
+            "whiskers": "tukey"
+          },
+          "label": "Wait by preceding tool"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "wait_tools",
+        "kind": "box",
+        "maxGroups": 8,
+        "density": "compact",
+        "minSamples": 20
+      },
+      "thinking": {
+        "state": {
+          "view": "wait-box",
+          "groupBy": "preceding_tool",
+          "sortBy": "median",
+          "sortDirection": "desc"
+        }
+      },
+      "action": "Explore Thinking",
+      "note": "The gap from a tool result to the next response, grouped by the tool whose result arrived last. A large result adds context to read, so tools differ in more than speed. The cover keeps tools with at least 20 timed requests; Thinking shows every tool with its support counts."
+    },
+    {
+      "dataset": "model_requests",
+      "field": "requested_at",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "category": "thinking",
       "idea": "models-01",
       "unit": "tokens",
       "id": "thinking-reasoning-effort",
@@ -20857,7 +21063,7 @@
         30,
         90
       ],
-      "category": "models",
+      "category": "thinking",
       "idea": "models-01",
       "unit": "requests",
       "id": "thinking-timing-coverage",
@@ -20878,7 +21084,8 @@
       ],
       "thinking": {
         "overview": true,
-        "state": {}
+        "state": {},
+        "open": "thinking:coverage"
       },
       "action": "Explore Waiting and Compaction",
       "note": "Includes missing timestamps, stale anchors, cross-stream links and excluded durations. The overview explains how timing is reconstructed and provides source-specific validation."
@@ -20956,6 +21163,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "writing_messages",
@@ -21034,6 +21242,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "writing_messages",
@@ -21107,6 +21316,7 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "parallelism",
@@ -21181,10 +21391,235 @@
           "split": "none",
           "period": "day",
           "scale": "linear",
+          "nonzero": false,
           "cycle": "weekday"
         },
         "dataset": "parallelism",
         "detailAction": "Inspect daily totals"
+      }
+    },
+    {
+      "id": "habits-streak",
+      "title": "Your streak",
+      "description": "Days in a row with a message you typed; your longest run; and your engaged time yesterday and over the last seven days.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-streaks",
+        "view": {},
+        "window": "Today",
+        "kind": "Summary",
+        "loading": {
+          "kind": "list",
+          "count": 4,
+          "height": 121
+        }
+      }
+    },
+    {
+      "id": "habits-weekday-streak",
+      "title": "Your weekday streak",
+      "description": "Days in a row with a message you typed, counting weekdays only; your longest run; and your engaged time yesterday and over the last seven days.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-streaks",
+        "view": {
+          "habits_streak": "weekdays"
+        },
+        "window": "Today",
+        "kind": "Summary",
+        "loading": {
+          "kind": "list",
+          "count": 4,
+          "height": 121
+        }
+      }
+    },
+    {
+      "id": "habits-calendar-you",
+      "title": "Your active days",
+      "description": "Each square is a day of you; darker is more time.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-calendar",
+        "view": {},
+        "window": "Past 17 weeks",
+        "kind": "Calendar",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 130
+        }
+      }
+    },
+    {
+      "id": "habits-calendar-agents",
+      "title": "Days with agents you started",
+      "description": "Each square is a day of agents you started; darker is more time.",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-calendar",
+        "view": {
+          "habits_calendar": "agents"
+        },
+        "window": "Past 17 weeks",
+        "kind": "Calendar",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 130
+        }
+      }
+    },
+    {
+      "id": "habits-punchcard-you",
+      "title": "When you work",
+      "description": "Minutes per week of you in each weekday hour, coloured by time of day.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-punchcard",
+        "view": {},
+        "window": "Past 90 days",
+        "kind": "Distribution",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 115
+        }
+      }
+    },
+    {
+      "id": "habits-punchcard-away",
+      "title": "When agents work while you're away",
+      "description": "Minutes per week of agents you started, while you're away in each weekday hour, coloured by time of day.",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-punchcard",
+        "view": {
+          "habits_punchcard": "unattended"
+        },
+        "window": "Past 90 days",
+        "kind": "Distribution",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 115
+        }
+      }
+    },
+    {
+      "id": "habits-days",
+      "title": "Your days",
+      "description": "Each of the last 28 days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-days",
+        "view": {},
+        "window": "Past 28 days",
+        "kind": "Timeline",
+        "loading": {
+          "kind": "columns",
+          "count": 28,
+          "height": 160
+        }
+      }
+    },
+    {
+      "id": "habits-pace",
+      "title": "Your pace",
+      "description": "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-pace",
+        "view": {},
+        "window": "Past 28 days",
+        "kind": "Summary",
+        "loading": {
+          "kind": "list",
+          "count": 4,
+          "height": 121
+        }
+      }
+    },
+    {
+      "id": "habits-automations",
+      "title": "Automatic agent runs",
+      "description": "What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-automations",
+        "view": {
+          "habits_punchcard_days": "30"
+        },
+        "window": "Past 30 days",
+        "kind": "Ranking",
+        "loading": {
+          "kind": "list",
+          "count": 6,
+          "height": 161
+        }
       }
     }
   ],

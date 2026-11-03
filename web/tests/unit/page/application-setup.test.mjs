@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import {assets, loadClassicScript} from '../helpers/classic-script.mjs';
 
 const source=readFileSync(join(assets,'application.html'),'utf8').match(/<script id="setup-wizard-model">([\s\S]*?)<\/script>/)[1];
-const model=vm.runInNewContext(source+';({createPharosSetupWizard,nextPharosLibraryName})',{TextEncoder,URLSearchParams});
+const model=vm.runInNewContext(source+';({createPharosSetupWizard,nextPharosLibraryName,pharosLibraryHome,pharosLibraryReopen,pharosLibraryHeading,pharosLibraryConnect})',{TextEncoder,URLSearchParams});
 const create=model.createPharosSetupWizard;
 const plain=value=>structuredClone(value);
 
@@ -68,6 +68,34 @@ test('new libraries get an unused proposed name',()=>{
   assert.equal(model.nextPharosLibraryName([{name:'My Library'},{name:'My Library 2'},{name:'Research'}]),'My Library 3');
 });
 
+test('the startup window reopens the selected library after a verified operation and returns to where it was sent from',()=>{
+  const arrival=query=>new URLSearchParams(query);
+  const local={id:'local',name:'Local',available:true},archive={id:'archive',name:'Archive',available:true};
+  const state=(job,more={})=>({selected:'local',busy:false,libraries:[local,archive],job:job&&{state:job,phase:'Done'},...more});
+  const reopen=(query,value)=>{const result=model.pharosLibraryReopen(arrival(query),value);return result&&[result.library.id,result.home]};
+  assert.equal(model.pharosLibraryHome(arrival('')),'/library');
+  for(const query of ['after=operation','released=1'])assert.equal(model.pharosLibraryHome(arrival(query)),'/settings/libraries');
+  assert.deepEqual(reopen('after=operation',state('complete')),['local','/settings/libraries']);
+  for(const job of [null,'running','failed'])assert.equal(reopen('after=operation',state(job)),null,'reopened after '+job);
+  assert.equal(reopen('after=operation',state('complete',{busy:true})),null);
+  assert.equal(reopen('after=operation',state('complete',{libraries:[{...local,available:false},archive]})),null);
+  assert.equal(reopen('',state('complete')),null);
+  assert.equal(reopen('released=1',state('complete')),null);
+  assert.deepEqual(reopen('after=compact',state('complete')),['local','/settings']);
+  assert.deepEqual(reopen('after=compact',state('failed')),['local','/settings/libraries']);
+});
+
+test('after a release the startup window offers to reconnect the released library',()=>{
+  const local={id:'local',name:'Local'},archive={id:'archive',name:'My archive'};
+  assert.equal(model.pharosLibraryHeading({selected:'',libraries:[]}),'Let’s set up your library.');
+  const connected={selected:'archive',libraries:[local,{...archive,connected:true}]},released={...connected,libraries:[local,archive]};
+  assert.equal(model.pharosLibraryHeading(connected),'Your libraries.');
+  assert.equal(model.pharosLibraryHeading(released),'Choose a library.');
+  assert.deepEqual(plain(model.pharosLibraryConnect(connected.libraries[1],connected)),{active:true,text:'Continue browsing',label:'Browse My archive'});
+  assert.deepEqual(plain(model.pharosLibraryConnect(archive,released)),{active:false,text:'Reconnect',label:'Reconnect to My archive'});
+  assert.deepEqual(plain(model.pharosLibraryConnect(local,released)),{active:false,text:'Switch to library',label:'Switch to Local'});
+});
+
 test('library changes save before writing and keep navigation guarded until the old page unloads',async()=>{
   for(const kind of ['connect','open','create'])for(const failing of ['', 'save', 'write', 'navigate']){
     const globals={pharosLibrarySwitching:false};
@@ -90,10 +118,12 @@ test('library changes save before writing and keep navigation guarded until the 
   }
 });
 
-test('Settings keeps its old document guarded and controls locked after switch, open, create, restore and transfer navigate',async()=>{
+test('Settings sends each library change and keeps its old document guarded and controls locked after it navigates',async()=>{
   const forms={open:'open',create:'create',recover:'restore',transfer:'transfer'};
-  const destinations={create:'/settings/sources',recover:'/app?after=operation',transfer:'/app?after=operation'};
-  for(const kind of ['connect','open','create','recover','transfer']){
+  const destinations={create:'/settings/sources',recover:'/app?after=operation',transfer:'/app?after=operation',disconnect:'/app?released=1'};
+  const bodies={connect:{id:'archive'},open:{path:'/Libraries/Archive'},create:{name:'Research',path:'/Libraries/Research',location:'mac'},
+    recover:{backup:'/Backups/Library',path:'/Libraries/Restored'},transfer:{source:'local',target:'archive',move:true},disconnect:{id:'local'}};
+  for(const kind of ['connect','open','create','recover','transfer','disconnect']){
     const created=[],ids=new Map(),calls=[];
     const node=(tag='div')=>{
       const value={tagName:tag.toUpperCase(),children:[],dataset:{},value:'',textContent:'',isConnected:true,
@@ -106,13 +136,15 @@ test('Settings keeps its old document guarded and controls locked after switch, 
     let ready,arrived;
     const rendered=new Promise(resolve=>{ready=resolve}),navigated=new Promise(resolve=>{arrived=resolve});
     get('library-settings-current').replaceChildren=function(...children){this.children=children;ready()};
-    const local={id:'local',name:'Local',available:true},archive={id:'archive',name:'Archive',available:true};
+    get('librarySettings').querySelectorAll=selector=>selector==='input[name=library-settings-mode]'?[{value:'copy',checked:false},{value:'move',checked:true}]:[];
+    // Release is offered for the open library when it is on a drive.
+    const local={id:'local',name:'Local',available:true,config:kind==='disconnect'?'/Volumes/Drive/Local/library.toml':'/Libraries/Local/library.toml'},archive={id:'archive',name:'Archive',available:true};
     const model=loadClassicScript('managed-library.js',{
       pharosManagedLibrary:local,
       document:{body,activeElement:body,getElementById:get,createElement:node,createElementNS:(_,tag)=>node(tag)},
       location:{assign:path=>arrived(path)},
       fetch:async(path,options)=>{
-        if(options?.method==='POST')calls.push(path);
+        if(options?.method==='POST')calls.push([path,JSON.parse(options.body)]);
         return {ok:true,json:async()=>path==='/api/app/state'?{libraries:[local,archive],mcp:'local'}:{saved:true}};
       },
     });
@@ -126,6 +158,7 @@ test('Settings keeps its old document guarded and controls locked after switch, 
     get('library-settings-from').value='local';
     get('library-settings-to').value='archive';
     const activate=kind==='connect'?()=>created.find(value=>value.dataset.libraryID==='archive').onclick():
+      kind==='disconnect'?()=>created.find(value=>value.textContent==='Release for eject').onclick():
       ()=>get('library-settings-'+forms[kind]+'-form').onsubmit({preventDefault(){}});
     activate();
     assert.equal(await navigated,destinations[kind]||'/settings/libraries');
@@ -133,7 +166,7 @@ test('Settings keeps its old document guarded and controls locked after switch, 
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(model.pharosLibrarySwitching,true);
     activate();await new Promise(resolve=>setImmediate(resolve));
-    assert.deepEqual(calls,['/api/app/'+kind],'the old page must not accept another action during navigation');
+    assert.deepEqual(calls,[['/api/app/'+kind,bodies[kind]]],'the old page must send one '+kind+' and accept no other action during navigation');
   }
 });
 

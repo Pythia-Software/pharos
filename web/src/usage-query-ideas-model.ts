@@ -35,12 +35,18 @@ const messages = [sum("typed_words", "Your words"), sum("pasted_words", "Likely 
 const calls = [count("idea_calls", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(COUNT(),0)", "Failure rate", true), duration("duration_ms", "Recorded tool time"), count("idea_timed", "Timed calls", "duration_ms"), { id: "idea_mean_duration", op: "avg" as const, field: "duration_ms", label: "Time per timed run", display: { kind: "duration" as const, sourceUnit: "milliseconds" as const } }];
 const toolTotals = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(SUM([call_count]),0)", "Failure rate", true), duration("total_duration_ms", "Recorded tool time"), sum("timed_count", "Timed calls"), { ...ratio("idea_mean_duration", "SUM([total_duration_ms])/NULLIF(SUM([timed_count]),0)", "Time per timed run"), display: { kind: "duration" as const, sourceUnit: "milliseconds" as const } }];
 const context = [sum("result_tokens", "Context added (tokens)"), sum("carried_tokens", "Context carried (tokens)")];
-const activity = [sum("human_messages", "Human messages"), sum("human_input_tokens_estimate", "Estimated human input tokens"), sum("output_tokens", "Recorded output tokens"), distinct("conversation_id", "Conversations")];
+const activity = [sum("human_messages", "Human messages"), sum("output_tokens", "Recorded output tokens"), distinct("conversation_id", "Conversations")];
 const skills = [count("idea_evidence", "Evidence records"), distinct("conversation_id", "Conversations"), ratio("idea_body_bytes", "SUM(IF([content_bytes]>0,[content_bytes],0))", "Retained body bytes")];
 const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(SUM([call_count]),0)", "Failure rate", true), sum("estimated_output_tokens", "Estimated output tokens"), sum("truncated_count", "Truncated responses"), duration("duration_ms", "Server time")];
 // Counting method and turn-gap assumptions must stay separate. Unit hours are
 // additive; elapsed occupancy is repeated across units and must not be summed.
+// Rhythm: wall hours add up within one actor; messages and turns per actor.
+const rhythm = [sum("elapsed_hours", "Wall hours"), sum("active_hours", "Active hours"), sum("messages", "Typed messages"), sum("turns", "Turns started"), distinct("unit_id", "Conversations")];
 const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id", "Units"), { id: "idea_peak", op: "max" as const, field: "level", label: "Peak recorded concurrency" }];
+
+// Agent events: each row is one event; agent_event_messages: one row per message read.
+const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("conversation_id", "Conversations"), distinct("message_id", "Messages")];
+const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
@@ -61,10 +67,10 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("writing_messages", "apps", "Compare", "App and provider", "Compare human writing by source app and provider", ["source_kind", "provider"], messages),
   ],
   conversation_activity: [
-    idea("conversation_activity", "repos", "Compare", "Input and output by repo", "Compare human input estimates and recorded output without treating the ratio as quality", ["repository_name"], activity),
+    idea("conversation_activity", "repos", "Compare", "Messages and output by repo", "Compare human messages and recorded output without treating the ratio as quality", ["repository_name"], activity),
     idea("conversation_activity", "models", "Compare", "Root model and effort", "Compare activity attributed to each root model and effort", ["root_provider", "root_model_family", "root_effort"], activity),
     idea("conversation_activity", "events", "Compare", "Event kinds", "Inspect where human-message and output observations enter the activity ledger", ["event_kind"], activity),
-    idea("conversation_activity", "threads", "Explore", "By conversation", "Open conversations contributing human input and output in the selected dates", ["conversation_id"], [...activity, conversation]),
+    idea("conversation_activity", "threads", "Explore", "By conversation", "Open conversations contributing human messages and output in the selected dates", ["conversation_id"], [...activity, conversation]),
   ],
   tool_calls: [
     idea("tool_calls", "commands", "Time and reliability", "Command families", "Compare parsed command families using total time, timed-run means and failure rates", ["operation_key", "operation_name"], calls, "idea_duration_ms"),
@@ -96,11 +102,26 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("mcp_calls", "output", "Compare", "Response size and truncation", "Compare estimated output, bytes and truncated responses for each Pharos tool", ["tool_name"], [sum("estimated_output_tokens", "Estimated output tokens"), sum("response_bytes", "Response bytes"), ...mcp.filter(column => column.field !== "estimated_output_tokens")]),
     idea("mcp_calls", "sources", "Compare", "Requested archive sources", "Compare explicit source filters from retained Pharos request arguments", ["query_source"], mcp),
   ],
+  rhythm: [
+    idea("rhythm", "actors", "Compare", "Time by actor", "Compare your engaged hours with your agents' time with you, unattended and automated", ["actor"], rhythm),
+    idea("rhythm", "weeks", "Over time", "Weekly rhythm", "Wall hours per week for you and each kind of agent time", ["week", "actor"], rhythm, "idea_elapsed_hours", true),
+    idea("rhythm", "automations", "Compare", "Automations", "Turns and agent hours each schedule, script or orchestration started", ["initiator", "automation"], rhythm, "idea_turns"),
+  ],
   parallelism: [
     idea("parallelism", "repos", "Compare", "Activity by repository", "Compare additive unit hours, keeping counting and gap assumptions separate", ["counting", "gap_minutes", "repository_name"], occupancy),
     idea("parallelism", "weeks", "Over time", "Weekly activity", "Agent/workspace hours per week with each counting method and gap separate", ["week", "counting", "gap_minutes"], occupancy, "idea_unit_hours", true),
     idea("parallelism", "levels", "Compare", "Concurrency bands", "Compare unit-hours by concurrency band without summing repeated elapsed time", ["counting", "gap_minutes", "level_band"], occupancy),
     idea("parallelism", "threads", "Explore", "Conversation activity", "Inspect hourly occupancy records and open their source conversation when recorded", ["counting", "gap_minutes", "conversation_id"], [...occupancy, conversation]),
+  ],
+  agent_events: [
+    idea("agent_events", "kinds", "Compare", "Events by kind", "Compare how often each kind of event occurs, and in how many conversations", ["family"], agentEvents),
+    idea("agent_events", "weeks", "Over time", "Weekly events", "Events per week by kind group", ["week", "family_group"], agentEvents, "idea_events", true),
+    idea("agent_events", "repos", "Compare", "Events by repository", "Compare events and affected conversations across repositories", ["repository_name"], agentEvents),
+    idea("agent_events", "threads", "Explore", "Conversations with the most events", "Rank conversations by their events and open them in the reader", ["conversation_id"], [...agentEvents, conversation]),
+  ],
+  agent_event_messages: [
+    idea("agent_event_messages", "repos", "Compare", "Messages read by repository", "Compare messages read, keyword hits and events across repositories", ["repository_name"], agentEventMessages),
+    idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
   ],
 };
 
@@ -178,8 +199,8 @@ usageQueryIdeas.writing_messages.push(
   recordIdea("writing_messages", "pasted-messages", "Most pasted messages", "Read the individual messages with the most likely-pasted words and inspect their classified source text", ["conversation_id", "id"], [workTitle, ...messages, message], "idea_pasted_words"),
 );
 usageQueryIdeas.conversation_activity.push(
-  recordIdea("conversation_activity", "root-threads", "Top-level threads", "Explore human input and recorded output across root conversations and their delegated activity", ["root_conversation_id"], [{ id: "idea_root_title", op: "max", field: "root_title", label: "Root conversation" }, ...activity, rootThread], "idea_output_tokens"),
-  withExample("conversation_activity", recordIdea("conversation_activity", "recent-events", "Latest activity events", "Inspect recent human-input and usage observations; message links are available only when the event records a message ID", ["event_kind", "conversation_id", "id"], [{ id: "idea_event_at", op: "max", field: "event_at", label: "Observed at" }, ...activity, conversation], "idea_event_at"), "event_at", "message_id", "Source message"),
+  recordIdea("conversation_activity", "root-threads", "Top-level threads", "Explore human messages and recorded output across root conversations and their delegated activity", ["root_conversation_id"], [{ id: "idea_root_title", op: "max", field: "root_title", label: "Root conversation" }, ...activity, rootThread], "idea_output_tokens"),
+  withExample("conversation_activity", recordIdea("conversation_activity", "recent-events", "Latest activity events", "Inspect recent human-message and usage observations; message links are available only when the event records a message ID", ["event_kind", "conversation_id", "id"], [{ id: "idea_event_at", op: "max", field: "event_at", label: "Observed at" }, ...activity, conversation], "idea_event_at"), "event_at", "message_id", "Source message"),
 );
 usageQueryIdeas.tool_calls.push(
   idea("tool_calls", "repeated-operations", "Explore", "Repeated operations", "Find command families repeated within the same conversation, then inspect their exact invocations and outcomes", ["conversation_id", "operation_key", "operation_name"], [...calls, conversation], "idea_calls"),

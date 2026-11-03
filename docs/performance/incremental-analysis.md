@@ -111,7 +111,9 @@ reads workspace/link metadata globally, and daily aggregation reads all cube
 partitions on affected days. The measured speedup does not imply that every
 read is bounded by the changed call count. Competing publication is
 rejected; busy publication retries reuse temporary data. Full fallback handles
-upgrades, broad attribution/pricing changes, timezone/day rollover, and repair.
+upgrades, broad attribution/pricing changes, timezone changes, and repair.
+A new day no longer forces it (November 2026): the cube groups each call by
+its own local day.
 
 Findings cache conversation inputs and static call classifications, with
 independent prompt-message revisions. Each refresh still performs full candidate

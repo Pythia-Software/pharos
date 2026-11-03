@@ -1,11 +1,10 @@
 // The conversation reader's model, without the DOM: message bodies, normalized
 // events, token accounting and context samples, tool calls and their results,
 // turns, file paths, the Show filter's categories, Find, harness XML blocks,
-// message summaries, local labels, and Markdown parsing.
+// message summaries, local labels, agent events, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
-// it before its inline script, which renders with them, and a shared export
-// inlines it (sharedPage in share.go). Node tests load it with vm
-// (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
+// it before its inline script, which renders with them. Node tests load it
+// with vm (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
 // of it for the service; testdata/ holds the fixtures both must agree on.
 
 // Wall-clock ages shared by the reader and the session hierarchy. Accept both
@@ -185,7 +184,9 @@ function normalizeMessages(messages){
     const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
     const base={...message,...(message.authorship?{authorship_text:message.authorship_text??message.text}:{}),native_id:message.native_id||message.id||`event-${index}`,raw_text:original};
     let emitted=false;
-    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
+    // Agent events' ranges index the stored text, so only an entry showing that
+    // text keeps them (a block split out of a JSON message does not).
+    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};if(normalized.agent_events&&String(normalized.text??'')!==String(message.text??''))delete normalized.agent_events;messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
     const blocks=Array.isArray(value?.message?.content)?value.message.content:Array.isArray(value?.content)?value.content:Array.isArray(value)?value:null;
     if(!['tool_result','delegation_result','error'].includes(message.kind)&&blocks&&blocks.some(block=>['text','input_text','output_text','tool_use','tool_result','thinking'].includes(block?.type))){
@@ -231,6 +232,7 @@ function conversationGraph(messages){
 }
 // A compact outline for result cards, using the reader's normalized graph.
 // Inline delegations stay under their owning turn; paired results are not turns.
+// Each entry lists the messages it owns, so a search match opens its entry.
 function conversationOutline(conversation){
   const graph=conversationGraph(conversationMessages(conversation)),seen=new Set();
   const agents=events=>events.filter(message=>message.kind==='delegation'&&!seen.has(message)).map(message=>{
@@ -239,11 +241,11 @@ function conversationOutline(conversation){
     return {id:message.native_id||message.call_id||message.id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
       prompt:String(input.description||input.prompt||input.task||messageSummary(message)||'Sub-agent'),
       human:{role:'user',text:input.prompt||input.description||input.task||messageSummary(message)},
-      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
+      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),messages:ownedMessages([message],graph),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
   });
   let turnNumber=0;
   return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
-    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of
@@ -309,6 +311,17 @@ function filePathParts(path,roots){
   const root=(Array.isArray(roots)?roots:[roots]).filter(value=>typeof value==='string'&&value!=='/').map(value=>value.replace(/\/$/,'')).sort((a,b)=>b.length-a.length).find(value=>path===value||path.startsWith(value+'/'))||'',inside=Boolean(root),absolute=/^(\/|[A-Za-z]:[\\/])/.test(path),relative=inside?path.slice(root.length+1):path,cut=relative.lastIndexOf('/'),directory=cut>=0?relative.slice(0,cut+1):'',filename=cut>=0?relative.slice(cut+1):relative;
   return{root,inside,absolute,directory,filename};
 }
+
+// Linked disclosure and content state (reader_expanded, reader_collapsed and
+// reader_content). An identity the link leaves out keeps the reader's native
+// default, so an absent, [] or {} override agrees with a fresh reader.
+function readerDisclosureOpen(id,expanded,collapsed,initial){return expanded.has(id)?true:collapsed.has(id)?false:initial}
+function readerDisclosureToggle(id,open,expanded,collapsed){
+  const opened=new Set(expanded),closed=new Set(collapsed);
+  if(open){opened.add(id);closed.delete(id)}else{closed.add(id);opened.delete(id)}
+  return{expanded:[...opened].sort(),collapsed:[...closed].sort()};
+}
+function readerContentShown(state,key,fallback){return state&&Object.hasOwn(state,key)?state[key]===true:fallback}
 
 // Transcript filter and find
 const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Token usage','Token usage events']];
@@ -457,12 +470,110 @@ function messageLabelView(message,taxonomy=[]){
 // classification finds them, otherwise all of it. Typed text stays '1'
 // (human-written); the rest is '2'.
 function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
+
+// Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
+// message where something happened (an obstacle, a discovery, a workaround),
+// with what it was about (subject) and what the agent did (response). Ranges
+// are UTF-16 offsets of the message's stored text (messages.text), so they
+// apply only where the reader shows that text unchanged: a reply's card, or
+// thinking's own text (Codex keeps the JSON event in raw_text and the prose
+// in text). normalizeMessages drops them from blocks it splits out. Each event's sentence is
+// marked in its group's hue; subject and response sentences that are not
+// themselves events get a lighter mark. Groups follow this fixed order, and
+// each has the class event-<suffix>.
+const EVENT_GROUPS=[['Friction','friction'],['Reactions and learning','learning'],['Worth a second look','second-look'],['Choices you may not see','choices']];
+function eventGroupClass(group){return 'event-'+(EVENT_GROUPS.find(([name])=>name===group)?.[1]||EVENT_GROUPS[0][1])}
+// The text events are shown on: thinking's own text (the reader shows it as a
+// Reasoning row), otherwise what the message card shows.
+function eventText(message){return ['thinking','reasoning','analysis'].includes(message?.kind)?String(message.text??''):displayText(message)}
+function messageEventView(message,text=eventText(message)){
+  const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
+  const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
+  const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
+  const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
+    probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
+    sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
+  return view.length?view:null;
+}
+// The distinct sentences a message's events mark, in text order: the events'
+// own sentences, and their subject and response sentences (context).
+function eventSpans(events){
+  const distinct=ranges=>[...new Map(ranges.map(range=>[range[0]+':'+range[1],range])).values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  return{sentences:distinct(events.map(event=>event.sentence)),context:distinct(events.flatMap(event=>[...event.subject,...event.response]))};
+}
+// eventMask overlays a message's events on mask (a flag per character).
+// Each marked sentence gets its own flag, so Markdown keeps it a mark of its
+// own whose class names it (event-at-N, the Nth sentence or context span):
+// a flag is a private-use character, 8 per span, the low 3 bits the group
+// (7 for context). Context goes first, then each event's sentence, so a
+// sentence that is an event keeps its event's hue; of two events on one
+// sentence the likelier picks it.
+const EVENT_FLAG_BASE=0xE000,EVENT_FLAG_SPANS=800,EVENT_CONTEXT_GROUP=7;
+function eventMask(text,events,mask=''){
+  if(!events?.length)return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0'),spans=eventSpans(events),index=(list,range)=>list.findIndex(item=>item[0]===range[0]&&item[1]===range[1]);
+  const paint=(range,span,group)=>{if(span<0||span>=EVENT_FLAG_SPANS)return;const flag=String.fromCharCode(EVENT_FLAG_BASE+span*8+group);for(let at=range[0];at<range[1]&&at<flags.length;at++)flags[at]=flag};
+  for(const range of spans.context)paint(range,index(spans.context,range),EVENT_CONTEXT_GROUP);
+  for(const event of [...events].sort((a,b)=>(a.probability??0)-(b.probability??0))){const group=EVENT_GROUPS.findIndex(([name])=>name===event.group);paint(event.sentence,index(spans.sentences,event.sentence),Math.max(0,group))}
+  return flags.join('');
+}
+// The events a highlighted mark belongs to, by the span its class names: the
+// events of that sentence, or for a context mark, those whose subject or
+// response it is.
+function eventsAtMark(events,mark){
+  const classes=String(mark?.className??'').split(/\s+/),at=classes.find(name=>/^event-at-\d+$/.test(name));if(!at)return [];
+  const spans=eventSpans(events),span=Number(at.slice(9)),same=(a,b)=>a&&b&&a[0]===b[0]&&a[1]===b[1];
+  if(classes.includes('event-context')){const range=spans.context[span];return events.filter(event=>[...event.subject,...event.response].some(item=>same(item,range)))}
+  const range=spans.sentences[span];return events.filter(event=>same(event.sentence,range));
+}
 const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
+function markClass(flag){
+  if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
+  const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
+}
+// Highlights: the kinds of marks the reader can show, each switched on or
+// off on its own. Each is a boolean view field, so a link keeps the choice,
+// with the last choice saved as the fallback for links without it. Human
+// writing is shown unless turned off; the classifiers' marks are opt-in.
+// Showing a highlight only toggles a class on the panel (show-<id>); the
+// marks are always rendered. Where a message's labels and its human writing
+// cover the same text, the label's hue wins.
+const READER_HIGHLIGHTS=[
+  {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
+  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Each message in the hue of what it does (message classifier). Hover highlighted text for its labels.'}];
+// The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
+// each has anything to show (available, else why not in title), a note on
+// its coverage, and a legend of the hues it uses here (label families or
+// event groups). Human writing is offered only where there is some; a
+// classifier only once it has run on the library, so its row can say why a
+// conversation has nothing to show.
+function readerHighlightOptions(conversation,messages,taxonomy=[]){
+  const options=[];
+  for(const option of READER_HIGHLIGHTS){
+    if(option.id==='writing'){if(messages.some(hasHumanWriting))options.push({...option,available:true,note:'',legend:[]});continue}
+    if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
+      const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
+      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:`${count} event${count===1?'':'s'} in ${views.length} of ${summary.messages_read??0} agent messages read`,
+        legend:EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)}))});continue}
+    const summary=conversation?.labels;if(!summary)continue;
+    const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
+    options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',
+      legend:[...LABEL_FAMILIES,['','Other']].filter(([key])=>families.has(key)).map(([key,name])=>({name,family:key}))});
+  }
+  return options;
+}
+// The ids of the highlights shown: a linked value (true or false) wins, then
+// the saved choice, then the option's fallback. One with nothing to show is off.
+function readerHighlightsShown(options,linked=()=>null,saved=(pref,fallback)=>fallback){
+  return new Set(options.filter(option=>{if(!option.available)return false;const value=linked(option.field);return typeof value==='boolean'?value:saved(option.pref,option.fallback)===true}).map(option=>option.id));
+}
 function markdownText(text,mask=''){
   if(!/[^0]/.test(mask))return [text];
   const result=[];let start=0;
   while(start<text.length){const flag=mask[start]||'0';let end=start+1;while(end<text.length&&(mask[end]||'0')===flag)end++;
-    const part=text.slice(start,end);result.push(MARK_CLASSES[flag]?markdownElement('mark',MARK_CLASSES[flag],part):part);start=end;
+    const part=text.slice(start,end),className=markClass(flag);result.push(className?markdownElement('mark',className,part):part);start=end;
   }return result;
 }
 
@@ -498,6 +609,26 @@ function markdownLinkKind(href){
     }catch{return null}
   }
   return {kind:'file',icon:'file',detail:'Checking file on this Mac…'};
+}
+// Only local files and servers are checked on this Mac; Pharos routes,
+// fragments, mail and websites never are. Repeated links share a check for a
+// minute, and at most four run at once for long transcripts.
+function markdownLinkProbed(kind){return kind?.kind==='file'||kind?.kind==='server'}
+function markdownLinkChecker(check,{now=Date.now,concurrency=4,size=256,ttl=60000}={}){
+  const checks=new Map(),queue=[];let active=0;
+  const pump=()=>{
+    while(active<concurrency&&queue.length){
+      const {href,workspace,resolve}=queue.shift();active++;
+      new Promise(done=>done(check(href,workspace))).then(resolve,()=>resolve({status:'unknown',detail:'Could not check availability on this Mac'})).finally(()=>{active--;pump()});
+    }
+  };
+  return (href,workspace)=>{
+    const key=JSON.stringify([href,workspace]),cached=checks.get(key);
+    if(cached&&cached.until>now())return cached.promise;
+    const promise=new Promise(resolve=>queue.push({href,workspace,resolve}));
+    if(checks.size>=size)checks.delete(checks.keys().next().value);
+    checks.set(key,{promise,until:now()+ttl});pump();return promise;
+  };
 }
 function markdownInline(text,parent,depth=0,mask=''){
   if(depth>8){parent.children.push(...markdownText(text,mask));return}

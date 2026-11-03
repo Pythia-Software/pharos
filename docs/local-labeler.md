@@ -10,10 +10,21 @@ in [shipping-encoder.md](labeler-research/shipping-encoder.md)).
 
 **Status: prototype, off by default.** Labels are stored in the catalog,
 shown by `pharos labels status` and `pharos labels explain`, and highlighted
-in the conversation reader when its **Labels** toggle is on
+in the conversation reader when its **Message labels** highlight is on
 ([In the reader](#in-the-reader)). No query table or MCP tool reads them yet.
 
 ## Turning it on
+
+In **Settings → Background Processing → Labeling on this Mac** (below the
+schedule), turn on **Message labels** (beside it, **Agent events (preview)**
+turns on [agent events](agent-events.md)). This saves `labels_enabled` in the library's configuration
+and applies it immediately, without restarting Pharos. The control stays
+visible while off, reports missing downloads or workers while on, and
+queues earlier messages for the background schedule. In the app, enabling
+also starts any missing model/runtime download. Turning it off prevents
+future automatic runs; a run already in progress finishes and existing
+labels remain available in the reader. The setting follows the library to
+its other Macs when they next open it.
 
 The model's weights are not in the repository or the app: each Mac
 downloads them once, after install, into its own support directory
@@ -28,10 +39,10 @@ runtime instead, and comes first:
 | `labels_variant` | — | `int8` (default) or `fp32` |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | intra-op threads per worker (default 4) |
+| `labels_threads` | — | intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → Cores |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
-| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
+| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
 | `labels_idle_seconds` | — | how long finished workers stay warm for the next run (default 120) |
 
 Relative paths resolve against the configuration file's folder. To build the
@@ -256,12 +267,19 @@ run` apart. A second run reports that labeling is already running.
   time. A larger backlog (the first run on a library) continues as a
   background `analysis.labels` run (variant `backlog`) when this Mac is
   plugged in ([Scheduling and power](#scheduling-and-power)).
+- Every run takes conversations newest first (by start time), as agent
+  events do, so a backlog labels recent conversations before older history.
 - No page read starts labeling. Pages read whatever ledger exists.
 
 ## In the reader
 
-A conversation whose messages have labels gets a **Labels** toggle beside
-Show (`transcriptLabelsControl` in `ui.py`):
+The reader's **Highlight** row, under Show, has a checkbox per kind of mark:
+**Human writing** (on by default), **Agent events** ([agent
+events](agent-events.md#in-the-reader)) and **Message labels**. Each is
+switched on its own (`transcriptHighlightControl` in `ui.py`, with the options
+from `readerHighlightOptions` in `reader-model.js`), in the full reader and in
+a library card's Browse preview. A library that has labeling on offers
+Message labels on every conversation:
 
 - **On**, each labeled message's text is highlighted in its family's hue:
   Report, Control, Deliberation, Input, Feedback, Request, Frame, Difficulty
@@ -269,22 +287,23 @@ Show (`transcriptLabelsControl` in `ui.py`):
   eight hues in that order, stepped for each theme). A message labeled only at
   a root (asks or steers, responds or reports) is grey. The family is that
   of the message's likeliest specific label; a legend lists the families the
-  conversation uses.
+  conversation uses. Where labels and human writing cover the same text, the
+  label's hue wins; an agent event's sentence keeps its event hue.
 - **What is highlighted** is the text the labels describe: a person's typed
   pieces when authorship finds them, otherwise the whole message
   (`labelMask`). Pasted or quoted context in a typed message stays plain.
 - **Hovering** highlighted text shows the item's segment in words (typed
   text, agent reply…) and its most specific labels, each with its family,
   the model's probability and the taxonomy's definition (`messageLabelView`).
-- **The setting** is view state, `reader_labels` in the URL, so a copied link
-  keeps it; the last choice is saved as the fallback for links without it.
-  The toggle only shows or hides the highlight; nothing re-renders.
+- **The setting** is view state, `reader_labels` in the URL (beside
+  `reader_writing` and `reader_events`), so a copied link keeps it; the last
+  choice is saved as the fallback for links without it. A checkbox only
+  shows or hides the highlight; nothing re-renders.
 - A conversation with a dirty mark, or never built, says "Still labeling
-  this conversation" or "Not labeled yet" (the toggle is disabled until it
-  has labels).
+  this conversation" or "Not labeled yet" (the checkbox is disabled until
+  it has labels).
 - **Only prose messages** are highlighted. Thinking and delegations render as
-  activity rows and are labeled but not shown yet; shared exports carry no
-  labels.
+  activity rows and are labeled but not shown yet.
 
 `WorkConversation` attaches them (`messageLabelsAttacher` in `labels.go`):
 each message's `labels` (`segment`, `ids` in the model's order, `probs` for
@@ -426,6 +445,7 @@ The build pins the assets it downloads in `internal/archive/labels/assets.json`
 |---|---|---|
 | `model` | name `kestrel-68m-tpool`, version `1`, SHA-256 and size of the archive | the Pharos release `labeler-kestrel-68m-tpool-1`, asset `kestrel-68m-tpool-1.tar.gz` (URL pattern `…/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz`) |
 | `onnxruntime` | `onnxruntime-osx-arm64` 1.31.1, SHA-256, size, and the library's path inside | Microsoft's ONNX Runtime release, as `macos/fetch-onnxruntime.sh` pins it; only needed when no `libonnxruntime.dylib` sits beside the worker |
+| `agent_events_model` | name `jayhawk-68m`, version `1`, SHA-256 and size of the archive | the agent event verifier ([agent-events.md](agent-events.md)), from the release `labeler-jayhawk-68m-1` by the same URL pattern; fetched where `agent_events_enabled` is on |
 
 - **Where.** `<support>/labeler/<name>-<version>/`, where `<support>` is
   this Mac's support directory (`~/Library/Application Support/Pharos`, or
@@ -450,7 +470,12 @@ The build pins the assets it downloads in `internal/archive/labels/assets.json`
 - **Until then** labeling waits: the stage keeps its work pending, `pharos
   labels status` and the Message labels item say "waiting for the download"
   with each asset's state (not yet downloaded, downloading with progress,
-  partly downloaded), and `pharos labels run` fails saying so.
+  the last attempt's failure and time, partly downloaded), and `pharos
+  labels run` fails saying so. A failure is recorded beside the download
+  (`labeler/<name>-<version>.failed`) until an attempt succeeds.
+- **Without a worker** no download helps, so Settings and the Message
+  labels and Agent events items lead with that ("can't run"), and `pharos
+  labels status` reports it as `problem`.
 - **Precedence.** `labels_model_dir` / `labels_runtime` (or their
   environment variables), then the app bundle (the worker in
   `Contents/MacOS`, its runtime beside it, a model in
@@ -481,9 +506,15 @@ model. To publish a new model version:
    so a switch relabels).
 
 The app release itself needs nothing new: `pharos` embeds the descriptor,
-and the worker ships in `Contents/MacOS/pharos-labeler-ort` with or without
-ONNX Runtime beside it. Bundling the runtime (`Contents/MacOS/libonnxruntime.dylib`
-and its license) saves the 35 MB download.
+and `macos/build-app.sh` builds the worker into
+`Contents/MacOS/pharos-labeler-ort` (universal, with cgo) and bundles the
+pinned ONNX Runtime beside it as `Contents/MacOS/libonnxruntime.dylib`, its
+license and notices in `Contents/Resources/licenses`, re-signed with the
+app's identity. The worker alone is signed without library validation
+(`com.apple.security.cs.disable-library-validation`), so a hardened,
+Developer ID signed worker can still load the download or a configured
+`labels_runtime`, which Microsoft or whoever built them signed. The pinned
+runtime is arm64 only: an Intel Mac sets `labels_runtime`.
 
 ## Worker protocol `pharos-labeler/1`
 
@@ -657,7 +688,8 @@ ledger and pass, uses the same pieces.
 
 **1. The model directory.** Each model has its own directory (in the app,
 `Contents/Resources/labeler/<model>/`) with a `manifest.json` that
-`labeler.LoadModel` verifies:
+`labeler.LoadFramedModel` verifies against the caller's `labeler.Framing`
+(`LoadModel` is the message labeler's, `KestrelFraming`):
 - the variant's ONNX file and `tokenizer.json`, with their SHA-256s;
 - `framing_contract` and `input_contract`, which this build must implement;
 - `inputs`: names for the contract's roles;
@@ -667,7 +699,8 @@ ledger and pass, uses the same pieces.
 - `pad_multiple` (or `padding.multiple`): a padding multiple beyond the
   contract's 8;
 - `memory_mb`: one worker's memory estimate (default 1,600);
-- labels, thresholds and so on, for a model that labels.
+- labels, thresholds and so on, for a model that labels (`Framing.Labels`;
+  the agent event verifier does not).
 
 The hello carries `max_seq` and the inputs. The worker must announce at
 least that `max_seq`, and batches never exceed a lower `max_batch` it
@@ -682,10 +715,11 @@ registered (`labeler.RegisterRole`) with:
   `NonEmptyRows` and `ContiguousRuns`, or written from scratch.
 
 `BatchInputs` and `ValidateRun` dispatch through the registry, so a new role
-(a `segment` role numbering sentences 1…K, values in `[0, 16]`, zero on
-padding, one contiguous run each) is one registration in the main process
-and in the worker, with no change to the protocol, the batcher or the
-workers' loops. The tensors stay int32 `[batch, seq]`. Register the role
+is one registration in the main process and in the worker, with no change
+to the protocol, the batcher or the workers' loops. The `segment` role
+(`ids-attention-pool-segments-v1`, the agent event verifier's) is built in:
+it numbers a framing's sentences 1…K from `Framed.Extra[SegmentSpans]`,
+values in `[0, 16]`, zero on padding, one contiguous run each. The tensors stay int32 `[batch, seq]`. Register the role
 and the input contract (`labeler.InputContracts`) in the PR that adds the
 model.
 
@@ -767,10 +801,6 @@ every output, as LAPWING did.
   never predicts `P.frame.criteria`. See the research for per-segment scores.
 - **Long messages** use the unvalidated `chunk-union-v1`; a message's
   `segment` column is its first chunk's.
-- **The model's release is not published yet.** The descriptor pins
-  `kestrel-68m-tpool-1.tar.gz` (142,017,459 bytes); until the release
-  `labeler-kestrel-68m-tpool-1` carries it, downloads fail with 404 and are
-  retried, and labeling waits.
 - **Old downloads stay.** A new model version downloads beside the old one,
   which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the

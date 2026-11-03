@@ -23,7 +23,8 @@ type operationKind struct {
 	Holds string
 	// Affects lists the freshness domains (§5) the operation brings current.
 	Affects string
-	// Stop names the existing stopper: index, view, backup, cloud, or "".
+	// Stop names the existing stopper: index, view, backup, cloud, work (the
+	// work's own, Op.setStopper), or "".
 	Stop string
 	// OnEject says what a stop or a release does to it.
 	OnEject string
@@ -74,7 +75,7 @@ var operationKinds = []operationKind{
 		OnEject: "Stops between workspaces; the next index resumes it. The chain after the sources ignores Stop and stops only on release.", Latency: "batch", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "background.update", Label: "Background update", Verb: "Updating in the background",
 		VariantLabels: map[string]string{"frequent": "Frequent update", "hourly": "Hourly update", "daily": "Daily update", "requested": "Update now"},
-		Holds: "D:w W:w I:w", Affects: "capt:this/*, conv:*, an.*, findings, upgrade", Stop: "index",
+		Holds:         "D:w W:w I:w", Affects: "capt:this/*, conv:*, an.*, findings, upgrade", Stop: "index",
 		OnEject: "Stops after the record in progress; each item runs again at its next time.", Latency: "batch", Journal: journalLonger(10 * time.Second), Priority: priorityBackground},
 	{Kind: "background.capture", Label: "Capture & index", Verb: "Capturing and indexing", VariantLabels: map[string]string{"sources": "Read other sources", "preserve": "Preserve originals"},
 		Holds: "D:w W:w I:w C(this):w", Affects: "capt:this/*, conv:*", Stop: "index",
@@ -115,8 +116,10 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; it runs again on the next index or Tools request.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.authorship", Label: "Classify your writing", Verb: "Classifying your writing", Holds: "D:w W:w", Affects: "an.authorship",
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
-	{Kind: "analysis.labels", Label: "Label messages", Verb: "Labeling messages", VariantLabels: map[string]string{"backlog": "Label earlier messages"}, Holds: "D:w W:w", Affects: "an.labels",
+	{Kind: "analysis.labels", Label: "Label messages", Verb: "Labeling messages", VariantLabels: map[string]string{"backlog": "Label earlier messages"}, Holds: "D:w W:w", Affects: "an.labels", Stop: "work",
 		OnEject: "Stops between batches; the next run resumes it.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
+	{Kind: "analysis.agent_events", Label: "Find agent events", Verb: "Finding agent events", VariantLabels: map[string]string{"backlog": "Find earlier agent events"}, Holds: "D:w W:w", Affects: "an.agent_events", Stop: "work",
+		OnEject: "Stops between chunks of conversations; the next run resumes it.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.findings", Label: "Update findings", Verb: "Updating findings", Holds: "D:w W:w", Affects: "findings",
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "analysis.refresh", Label: "Update analyses", Verb: "Updating analyses", Holds: "D:w W:w", Affects: "an.git, an.tools, findings",
@@ -151,6 +154,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; closing the catalog stores what is still queued.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "ask.save", Label: "Save an Ask Pharos answer", Verb: "Saving an Ask Pharos answer", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops retrying; an answer not yet saved is lost, as when the service stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
+	{Kind: "ask.suggestions", Label: "Choose Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops; the suggestions already chosen stay until the next run.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "ask.models", Label: "Check Ask Pharos models", Verb: "Checking Ask Pharos models", Holds: "—", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "maintenance.capture-compress", Label: "Compress cold captures", Verb: "Compressing cold captures", Holds: "D:w C(this):w", Affects: "—",
@@ -167,6 +172,8 @@ var operationKinds = []operationKind{
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "repositories.merge", Label: "Merge repositories (Terminal)", Verb: "Merging repositories", Holds: "D:w W:w", Affects: "an.identities, an.git",
 		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "analysis.agent_events.import", Label: "Import agent events (Terminal)", Verb: "Importing agent events", Holds: "D:w W:w", Affects: "an.agent_events",
+		OnEject: "Pharos cannot stop it; the import is one transaction, so a kill leaves the previous events.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "tools.ledger.build", Label: "Build the Tools ledger", Verb: "Building the Tools ledger", Holds: "D:w W:w", Affects: "an.ledger, an.tools",
 		OnEject: "Stops between conversations; building the ledger again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 
