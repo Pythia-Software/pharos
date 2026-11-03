@@ -10,15 +10,15 @@ import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/que
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
   const {page, settled, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
-  const labels = page.getByRole('switch', {name:'Enable message labels',exact:true});
+  const labels = page.getByRole('switch', {name:'Message labels',exact:true});
   await labels.focus();
   for (const enabled of [true, false]) {
     const saved = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
     await page.keyboard.press('Space');
     await saved;
     await page.waitForFunction(enabled => {
-      const box = document.getElementById('labelsEnabled');
-      return box?.checked === enabled && !box.disabled && document.activeElement === box;
+      const toggle = document.getElementById('labelsEnabled');
+      return toggle?.getAttribute('aria-checked') === String(enabled) && !toggle.disabled && document.activeElement === toggle;
     }, enabled);
     if (enabled) await shot('enabled');
   }

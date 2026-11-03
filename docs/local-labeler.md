@@ -15,8 +15,9 @@ in the conversation reader when its **Message labels** highlight is on
 
 ## Turning it on
 
-In **Settings → Background Updates → Message labels**, turn on **Enable
-message labels**. This saves `labels_enabled` in the library's configuration
+In **Settings → Background Processing → Labeling on this Mac** (below the
+schedule), turn on **Message labels** (beside it, **Agent events (preview)**
+turns on [agent events](agent-events.md)). This saves `labels_enabled` in the library's configuration
 and applies it immediately, without restarting Pharos. The control stays
 visible while off, reports missing downloads or workers while on, and
 queues earlier messages for the background schedule. In the app, enabling
@@ -38,10 +39,10 @@ runtime instead, and comes first:
 | `labels_variant` | — | `int8` (default) or `fp32` |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | intra-op threads per worker (default 4) |
+| `labels_threads` | — | intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → Cores |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
-| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
+| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
 | `labels_idle_seconds` | — | how long finished workers stay warm for the next run (default 120) |
 
 Relative paths resolve against the configuration file's folder. To build the

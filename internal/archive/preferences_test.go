@@ -45,10 +45,25 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	previewScope := func(server *Server) string {
 		response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", "")
 		_, scope, ok := strings.Cut(response.Body.String(), "window.pharosPreviewScope=")
-		if !ok || len(strings.Trim(scope, "\";")) != 64 {
+		scope, _, _ = strings.Cut(scope, ";")
+		if !ok || len(strings.Trim(scope, "\"")) != 64 {
 			t.Fatalf("missing opaque preview scope: %s", response.Body.String())
 		}
 		return scope
+	}
+	// A configuration that turns Agent Experience on says so beside the
+	// preferences, which do not record it.
+	configured := func(server *Server) string {
+		_, flags, _ := strings.Cut(preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", "").Body.String(), "window.pharosConfiguredFlags=")
+		return flags
+	}
+	if flags := configured(server); flags != "{};" {
+		t.Fatalf("configured flags without agent_events_enabled: %q", flags)
+	}
+	enabled := config
+	enabled.AgentEvents.Enabled = true
+	if flags := configured(testServer(t, enabled, catalog)); flags != `{"`+agentEventsFlag+`":true};` {
+		t.Fatalf("configured flags with agent_events_enabled: %q", flags)
 	}
 	scope := previewScope(server)
 	if scope != previewScope(testServer(t, config, catalog)) {

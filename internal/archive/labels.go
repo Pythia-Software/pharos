@@ -186,6 +186,10 @@ type LabelerSettings struct {
 	// ThreadBudget and MemoryBudgetMB bound every model's workers together
 	// (labeler.Budget); IdleSeconds is how long finished workers stay warm.
 	ThreadBudget, MemoryBudgetMB, IdleSeconds int
+	// PeerThreads is what the other model's workers use beside these
+	// (agent events' beside labels', and the reverse), so that the default
+	// budget fits both models at the threads Settings chose.
+	PeerThreads int
 }
 
 func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
@@ -238,12 +242,12 @@ func (c *Catalog) labelerManager(settings LabelerSettings) *labelrt.Manager {
 }
 
 // labelsBudget is what settings allow every model's workers together:
-// labels_thread_budget, else the run's own workers and threads or half the
+// labels_thread_budget, else both models' workers and threads or half the
 // cores, whichever is more; and labels_memory_budget_mb.
 func labelsBudget(settings LabelerSettings) labelrt.Budget {
 	threads := settings.ThreadBudget
 	if threads <= 0 {
-		threads = max(max(1, settings.Workers)*max(1, settings.Threads), runtime.NumCPU()/2)
+		threads = max(max(1, settings.Workers)*max(1, settings.Threads)+settings.PeerThreads, runtime.NumCPU()/2)
 	}
 	return labelrt.Budget{Threads: threads, MemoryMB: settings.MemoryBudgetMB}
 }
@@ -1331,6 +1335,8 @@ func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) erro
 		ctx = withWorkProgress(ctx, op.mirrorWork)
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		// Stop ends it between batches; the next run resumes it.
+		op.setStopper(cancel)
 		var unplugged atomic.Bool
 		go func() {
 			ticker := time.NewTicker(labelsPowerCheck)

@@ -507,6 +507,25 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 	if refused := serveTestBody(server, http.MethodPost, "/api/operations/stop", `{"id":"nope"}`); refused.Code != http.StatusNotFound {
 		t.Fatalf("stopping an unknown operation: %d", refused.Code)
 	}
+	// Work with its own stopper (a labels backlog): refused until the work
+	// has registered it, then it cancels the work's context.
+	workCtx, stopWork := context.WithCancel(context.Background())
+	defer stopWork()
+	_, backlog := server.begin(workCtx, OperationSpec{Kind: "analysis.labels", Variant: "backlog", Trigger: triggerChained, Priority: priorityBackground})
+	stop := func() int {
+		return serveTestBody(server, http.MethodPost, "/api/operations/stop", fmt.Sprintf(`{"id":%q}`, backlog.ID())).Code
+	}
+	if code := stop(); code != http.StatusConflict || backlog.State() != opRunning {
+		t.Fatalf("a stop before the work can stop: %d, state %q", code, backlog.State())
+	}
+	backlog.setStopper(stopWork)
+	if code := stop(); code != http.StatusOK || workCtx.Err() == nil || backlog.State() != opStopping {
+		t.Fatalf("the work's stopper did not run: %d, ctx %v, state %q", code, workCtx.Err(), backlog.State())
+	}
+	backlog.Finish(workCtx.Err())
+	if backlog.State() != opCancelled {
+		t.Fatalf("a stopped backlog ended %q", backlog.State())
+	}
 }
 
 // A polled snapshot takes no lock: it knows of another process's capture

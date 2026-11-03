@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -642,6 +643,25 @@ func TestLabelsForPower(t *testing.T) {
 	settings.ThreadBudget = 6
 	if got, bulk := labelsForPower(settings, powerState{Battery: true, OnBattery: true}); got != settings || bulk {
 		t.Fatalf("on battery with labels_thread_budget: %+v %v", got, bulk)
+	}
+}
+
+// The default budget fits both models at the threads Settings chose for
+// each: agent events run with their own threads beside labels'.
+func TestLabelerBudgetFitsBothModels(t *testing.T) {
+	labels := AgentEventSettings{Threads: runtime.NumCPU()}.withPeer(LabelerSettings{Threads: 4, Workers: 1})
+	if got, want := labelsBudget(labels).Threads, 4+runtime.NumCPU(); got != want {
+		t.Fatalf("labels' budget %d, want %d", got, want)
+	}
+	events := AgentEventSettings{Threads: 2}.labeler(LabelerSettings{Threads: 4, Workers: 1})
+	if events.Threads != 2 || events.PeerThreads != 4 {
+		t.Fatalf("agent events' settings: %+v", events)
+	}
+	if inherited := (AgentEventSettings{}).labeler(LabelerSettings{Threads: 3, Workers: 1}); inherited.Threads != 3 {
+		t.Fatalf("without agent_events_threads, agent events use labels_threads: %+v", inherited)
+	}
+	if got := labelsBudget(events).Threads; got != max(6, runtime.NumCPU()/2) {
+		t.Fatalf("agent events' budget %d", got)
 	}
 }
 

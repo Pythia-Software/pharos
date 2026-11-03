@@ -373,6 +373,16 @@ func TestMessageLabelsSettings(t *testing.T) {
 	if labels := read()["labels"].(map[string]any); labels["enabled"] != false || labels["can_change"] != true {
 		t.Fatalf("disabled settings must remain visible: %v", labels)
 	}
+	// Agent events sit beside labels; their switch is a preference.
+	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
+		t.Fatalf("agent events settings must remain visible while off: %v", events)
+	}
+	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/preferences", map[string]any{"set": map[string]any{agentEventsFlag: true}}); response.Code != http.StatusOK {
+		t.Fatalf("turn agent events on: %d %s", response.Code, response.Body.String())
+	}
+	if events := read()["agent_events"].(map[string]any); events["enabled"] != true || !strings.Contains(firstString(events["status"]), "worker") {
+		t.Fatalf("agent events switch is not read back, or a missing worker is not explained: %v", events)
+	}
 	for _, body := range []string{`{}`, `{"enabled":"true"}`, `{"enabled":null}`} {
 		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
 			t.Fatalf("invalid setting %s: %d", body, response.Code)
@@ -404,6 +414,27 @@ func TestMessageLabelsSettings(t *testing.T) {
 		}
 		if listed != enabled {
 			t.Fatalf("scheduled labels listed = %t, enabled = %t", listed, enabled)
+		}
+	}
+	// Each model's threads: saved to the configuration and read back, and
+	// changing labels' keeps agent events' where it was.
+	for _, body := range []string{`{"threads":0}`, `{"threads":1.5}`, `{"threads":"2"}`, `{"agent_events_threads":100000}`} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid threads %s: %d", body, response.Code)
+		}
+	}
+	unchosen := max(1, server.Config().Labels.Threads)
+	for _, body := range []map[string]any{{"threads": 1}, {"agent_events_threads": 1}} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusOK {
+			t.Fatalf("threads %v: %d %s", body, response.Code, response.Body.String())
+		}
+		reloaded, err := LoadConfig(config.Path)
+		if err != nil || reloaded.Labels.Threads != 1 || reloaded.AgentEvents.Threads != map[bool]int{true: unchosen, false: 1}[body["threads"] != nil] || !reloaded.Labels.Enabled {
+			t.Fatalf("threads %v were not saved: %+v %+v %v", body, reloaded.Labels, reloaded.AgentEvents, err)
+		}
+		document := read()
+		if labels, events := document["labels"].(map[string]any), document["agent_events"].(map[string]any); labels["threads"] != 1.0 || events["threads"] != float64(reloaded.AgentEvents.Threads) {
+			t.Fatalf("threads readback: %v %v", labels, events)
 		}
 	}
 	deferred, err := catalog.freshnessDeferred(t.Context())
