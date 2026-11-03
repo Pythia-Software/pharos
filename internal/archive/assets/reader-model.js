@@ -683,3 +683,54 @@ function transcriptAnchor(messages,{message='',at='',call=''}={}){
   for(const item of messages){const when=Date.parse(item.created_at),delta=Math.abs(when-time);if(!item.id||!Number.isFinite(when))continue;if(delta<distance||delta===distance&&when<bestTime){best=item.id;distance=delta;bestTime=when}}
   return best;
 }
+
+// Session signals (session_shape.go SessionSignals): the forensic signals
+// that fired in a session, for the reader's strip. Labels are the Session
+// Shape dashboard's (web/src/session-shape-model.ts sessionSignalLabels).
+// A chip steps through the messages that triggered its signal: it reveals
+// one and highlights the others, and each click moves to the next.
+const SESSION_SIGNALS=[
+  ['failed_calls','Failed calls','Calls that failed, other than rejections, interrupts and hook blocks.'],
+  ['failure_streak_max','Longest failure streak','The longest run of consecutive failed calls.'],
+  ['rejections','Rejections','Calls you rejected.'],
+  ['interrupts','Interrupts','Calls interrupted before they finished.'],
+  ['hook_blocks','Hook blocks','Calls a hook blocked.'],
+  ['identical_retries','Identical retries','Three or more consecutive calls with the same tool and byte-identical input.'],
+  ['thrash_retries','Edit–verify–edit retries','Within one turn, an edit to a file, a test or build command, then another edit to that file.'],
+  ['churned_files','Churned files','A file edited three or more times within fewer than 10 messages.'],
+  ['mid_task_compactions','Mid-task compactions','A compaction with the same tools in use just before and just after it.'],
+  ['context_pressure','Context pressure',"A request whose input exceeded 90% of the model's context window."],
+  ['corrections','Corrections','A message you typed with a correction cue in the typed text.'],
+  ['unverified_handbacks','Unverified handbacks','A handback after an edit with no test or build command after the last edit.'],
+  ['long_unprompted_runs','Long unprompted runs','More than 150 tool calls with no message you typed between them.'],
+  ['ended_on_failure','Ended on a failed call','Experimental: the last tool call failed and nothing you typed follows. It does not say the work was abandoned.']];
+// At most this many of a signal's messages are highlighted at once, so a
+// link stays short; stepping still reaches every one.
+const SESSION_SIGNAL_HIGHLIGHTS=40;
+// The chips, in SESSION_SIGNALS order, and a note naming the signals the
+// session lacks the evidence for: those are not counted, not zero.
+function sessionSignalStrip(payload){
+  const fired=new Map((payload?.signals||[]).filter(item=>Array.isArray(item?.message_ids)&&item.message_ids.length).map(item=>[item.signal,item]));
+  const chips=SESSION_SIGNALS.filter(([id])=>fired.has(id)).map(([signal,label,note])=>{const item=fired.get(signal),messageIds=item.message_ids.map(String);
+    return{signal,label,note,count:typeof item.count==='number'?item.count:messageIds.length,messageIds}});
+  const coverage=payload?.coverage||{},missing=[];
+  if(coverage.has_tool_data===false)missing.push('tool call signals (no tool ledger)');
+  if(coverage.has_authorship===false)missing.push('corrections and turn signals (prompts not all classified yet)');
+  if(coverage.has_context_window===false)missing.push("context pressure (the model's window is unknown)");
+  return{chips,note:missing.length?`Not enough evidence for ${missing.join('; ')}.`:''};
+}
+// Which of a chip's messages the URL reveals, or -1.
+function sessionSignalActive(search,chip){
+  const reveal=new URLSearchParams(search).get('reveal')||'';
+  return reveal.startsWith('message:')?chip.messageIds.indexOf(reveal.slice(8)):-1;
+}
+// The URL parameters for a chip's click: the next of its messages revealed
+// (the first, unless one is revealed already), the others highlighted, and
+// any other attention cleared.
+function sessionSignalAttention(search,chip){
+  const params=new URLSearchParams(search),ids=chip.messageIds,index=(sessionSignalActive(search,chip)+1)%ids.length;
+  params.delete('highlight');params.delete('reveal');
+  for(const id of ids.slice(0,SESSION_SIGNAL_HIGHLIGHTS))if(id!==ids[index])params.append('highlight','message:'+id);
+  params.set('reveal','message:'+ids[index]);
+  return params;
+}

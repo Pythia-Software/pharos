@@ -65,6 +65,10 @@ APP_HTML = r'''<!doctype html>
     .conversation-panel{padding:0;overflow:hidden;border-radius:4px;box-shadow:none}
     .conversation-head{padding:18px 22px;background:var(--panel)}
     .conversation-title-row h2{margin:0;font-size:var(--fs-2xl)}.provider-mark{display:none}
+    /* Session signals (mountSessionSignals): neutral chips; the one whose message is revealed is bold, never coloured as good or bad. */
+    .session-signals{margin-top:8px;font-size:var(--fs-sm)}.session-signals-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+    .session-signal{border:1px solid var(--line);border-radius:20px;padding:2px 9px;background:none;color:inherit;font:inherit;font-size:var(--fs-sm);cursor:pointer}.session-signal:hover{border-color:var(--muted)}.session-signal[aria-pressed=true]{font-weight:700;border-color:var(--ink)}
+    .session-signals-none,.session-signals-note{color:var(--muted);font-size:var(--fs-sm)}.session-signals-note{margin:4px 0 0}
     .conversation-head .chips{margin-top:7px;gap:14px}.conversation-head .chip{padding:0;border:0;color:var(--muted)}
     .conversation-toolbar{margin-top:12px}.conversation-toolbar input{padding:4px 10px}
     .conversation-toolbar button{font-size:var(--fs-sm);white-space:nowrap}
@@ -1313,6 +1317,27 @@ renderConversation=(conversation,repoRoot='')=>{
   const panel=enhanceTurnSummaries(renderConversationBase(conversation,repoRoot),conversation);
   setupTokenOverview(panel,conversation);setupConversationSearch(panel);return panel;
 };
+// Session signals (sessionSignalStrip): the forensic signals that fired in
+// this session, as chips under the conversation's head. They load after the
+// transcript, so a session whose shape is derived afresh never delays it. A
+// chip writes reveal and highlight to the URL; the attention runtime scrolls
+// and marks the message and never moves focus.
+async function mountSessionSignals(panel,path){
+  let payload;try{payload=await api(path)}catch{return}
+  const head=panel.querySelector('.conversation-head');if(!panel.isConnected||!head)return;
+  const{chips,note}=sessionSignalStrip(payload),box=node('div','session-signals'),row=node('div','session-signals-chips');
+  row.setAttribute('role','group');row.setAttribute('aria-label','Session signals');row.append(node('span','transcript-filter-label','Session signals'));box.append(row);
+  const buttons=chips.map(chip=>{const button=node('button','session-signal');button.type='button';
+    button.title=`${chip.note} Steps through the ${chip.messageIds.length===1?'message':chip.messageIds.length+' messages'} where it fired.`;
+    button.onclick=()=>{history.replaceState(history.state,'',location.pathname+'?'+sessionSignalAttention(location.search,chip));dispatchEvent(new Event('pharos:uri-changed'))};
+    row.append(button);return[button,chip]});
+  if(!chips.length)row.append(node('span','session-signals-none','None fired'));
+  if(note)box.append(node('p','session-signals-note',note));
+  const sync=()=>{for(const[button,chip]of buttons){const at=sessionSignalActive(location.search,chip);button.setAttribute('aria-pressed',String(at>=0));button.textContent=at>=0?`${chip.label} · ${at+1} of ${chip.messageIds.length}`:`${chip.label} · ${Number(chip.count).toLocaleString()}`}};
+  for(const name of ['pharos:uri-changed','popstate'])addEventListener(name,sync);
+  conversationMapCleanups.push(()=>{for(const name of ['pharos:uri-changed','popstate'])removeEventListener(name,sync)});
+  sync();head.append(box);
+}
 function setupConversationSearch(panel){
   // Page Find searches the transcript. Message and tool-call targets reveal
   // their owning content; matches hidden by the Show filter are counted.
@@ -1475,6 +1500,7 @@ try{await loadConversation(index)}catch(error){if(ticket===mounting&&host.isConn
 if(ticket!==mounting||!host.isConnected)return;
 c.title||=w.title;showReader(renderConversation(c,roots));
 const panel=host.querySelector('.conversation-panel');bindReaderView(panel);
+mountSessionSignals(panel,`${workPath}/conversations/${encodeURIComponent(c.id)}/signals`);
 if(delegationExplorer){const context=node('div');panel.querySelector('.conversation-head').prepend(context);delegationExplorer.conversation(c.id,context)}
 if(conversations.length>1&&!window.pharosDelegation){const choice=node('div','conversation-choice'),label=node('label','',`Showing conversation #${index+1} from this workspace`);selector=node('select','conversation-selector');selector.id='workspaceConversation';selector.setAttribute('aria-label','Choose conversation from this workspace');label.htmlFor=selector.id;conversations.forEach((other,i)=>{const option=node('option','',conversationLabel(i));option.value=String(i);selector.append(option)});selector.value=String(index);selector.onchange=()=>selectConversation(Number(selector.value));choice.append(label,selector);panel.querySelector('.conversation-head').prepend(choice)}
 if(panel.hasFailures){let cursor=0;const jump=node('button','button-with-icon','Next failed action');jump.title='Navigate reported tool failures; this does not indicate the session outcome';jump.onclick=()=>{const filter=host.querySelector('input[type=search]');filter.value='';filter.dispatchEvent(new Event('input'));const target=panel.revealFailure(cursor++);if(!target)return;target.scrollIntoView({behavior:'smooth',block:'center'});target.querySelector('summary')?.focus()};host.querySelector('.conversation-toolbar').append(jump)}
