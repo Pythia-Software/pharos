@@ -267,6 +267,8 @@ run` apart. A second run reports that labeling is already running.
   time. A larger backlog (the first run on a library) continues as a
   background `analysis.labels` run (variant `backlog`) when this Mac is
   plugged in ([Scheduling and power](#scheduling-and-power)).
+- Every run takes conversations newest first (by start time), as agent
+  events do, so a backlog labels recent conversations before older history.
 - No page read starts labeling. Pages read whatever ledger exists.
 
 ## In the reader

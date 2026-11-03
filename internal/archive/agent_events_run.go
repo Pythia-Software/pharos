@@ -491,13 +491,7 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		ids = slices.DeleteFunc(slices.Clone(opts.Conversations), func(id string) bool { return p.conversations[id] == nil })
 		all = true
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		a, b := p.conversations[ids[i]], p.conversations[ids[j]]
-		if a.started != b.started {
-			return a.started > b.started
-		}
-		return ids[i] < ids[j]
-	})
+	newestFirst(p, ids)
 	structures := map[string]string{}
 	for _, id := range ids {
 		structures[id] = labelsStructure(p, builder.sessions, id)

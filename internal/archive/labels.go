@@ -393,6 +393,18 @@ type labelsSeq struct {
 // its own rows: its work's mirror status, its conversation row, whether its
 // reasoning extraction is current, and its agent sessions' kinds. A
 // conversation whose fingerprint changed is rebuilt even without a dirty mark.
+// newestFirst orders conversations by when they started, the most recent
+// first, so that a backlog labels what was just said before older history.
+func newestFirst(p *labelingPass, ids []string) {
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := p.conversations[ids[i]], p.conversations[ids[j]]
+		if a.started != b.started {
+			return a.started > b.started
+		}
+		return ids[i] < ids[j]
+	})
+}
+
 func labelsStructure(p *labelingPass, sessions map[string][]string, id string) string {
 	info := p.conversations[id]
 	parts := []string{info.workspace, p.representative[info.workspace], info.provider, info.parent, info.started, fmt.Sprint(p.current[id])}
@@ -510,7 +522,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	return stats, err
 }
 
-// labelsWork chooses the conversations to rebuild: dirty ones, ones whose
+// labelsWork chooses the conversations to rebuild, newest first: dirty ones, ones whose
 // structure changed or that were never built, and forks of any of those
 // (they copy their parent's history); everything for Full, a new model or a
 // new contract. Conversations no longer in the catalog lose their labels.
@@ -557,7 +569,7 @@ func (c *Catalog) labelsWork(ctx context.Context, builder *labelsItemBuilder, id
 	for id := range p.conversations {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	newestFirst(p, ids)
 	stats.Conversations = len(ids)
 	if len(opts.Conversations) > 0 {
 		ids = slices.DeleteFunc(slices.Clone(opts.Conversations), func(id string) bool { return p.conversations[id] == nil })
