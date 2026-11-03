@@ -252,7 +252,8 @@ and first-party plugins, Pythia's included, use them like anyone else's.
    often; what stays out (private work items, text when `text` is false,
    pseudonymised fields, described as "this receiver can check guesses"); the
    finest grouping its aggregates allow ("totals by day, model and
-   repository"), and that aggregates carry no text but those groups; the
+   repository"), any summary of a text field it may take ("the latest title
+   of each group") and any minimum group size; the
    library's export delay; and, for an exporter, a summary of what it would
    send today, computed from its permissions (datasets, rows, date range).
    **Yes** or **No**.
@@ -446,14 +447,29 @@ a grant is mechanical. Every field it names must be granted; its group keys
 and period must be ones the dataset allows (listed in `/grant`); aggregate mode
 allows no selection.
 
-**Aggregate means no row's text.** Every field has a type (text, number, time
-or list), listed in `/grant`. In aggregate mode, a text or list field may
-appear only as a group key the dataset allows (in the keys, or in a filter);
-`min` and `max` take numbers and times, `sum` and `avg` numbers, and
-`count_distinct` any granted field. Without this, `max(title)` over groups
-fine enough to hold one work item each would return titles one by one. A
-group of one still shows that item's numbers, as any total over one thing
-does; the consent screen's "finest grouping" is what bounds that.
+**What an aggregate may reveal is the manifest's choice.** Which restriction
+fits depends on the plugin, so a dataset's aggregate grant can declare either,
+both or neither, and the consent screen names what it declares:
+
+- **By default** an aggregate carries no row's text. Every field has a type
+  (text, number, time or list), listed in `/grant`. A text or list field may
+  appear only as a group key the dataset allows (in the keys, or in a filter);
+  `min` and `max` take numbers and times, `sum` and `avg` numbers, and
+  `count_distinct` any granted field. Without this, `max(title)` over groups
+  fine enough to hold one work item each would return titles one by one.
+- **`summaries`** names the operations allowed on particular fields in place
+  of the default, for example `{"title": ["max"]}` for a plugin that shows
+  the latest title per repository and week. Consent says "the latest title of
+  each group".
+- **`min_group_size`** leaves out every group built from fewer than that many
+  of the dataset's units (work items, conversations or usage records), so a
+  group of one never shows its numbers. Consent says so, and that other
+  answers, such as a coarser total, can still reveal what a left-out group
+  held.
+
+A declarative plugin's queries are part of what the person consents to, so
+its consent screen can describe exactly what each send computes; the same
+checks apply to them when the manifest is read.
 
 ### Export datasets
 
@@ -1105,11 +1121,4 @@ its cursor (`--twice` runs again from that cursor).
 
 ## Open questions
 
-- **A minimum group size for aggregates.** Aggregates now carry no row's text,
-  but a group that holds one work item still shows its numbers. A manifest
-  could declare a minimum, but hiding small groups is leaky: a total minus the
-  visible groups reveals what was hidden, and folding them into "other" leaks
-  whenever only one was folded. The current design has none; the finest
-  grouping is shown at consent and is what the person agrees to.
-
-The cloud receiver's side is sketched in [plugin receiver](plugin-receiver.md).
+None outstanding. The cloud receiver's side is sketched in [plugin receiver](plugin-receiver.md).

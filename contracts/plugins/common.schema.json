@@ -51,7 +51,7 @@
       "pattern": "^[a-z][a-z0-9_-]*/[1-9][0-9]*$"
     },
     "field_type": {
-      "description": "What a field holds. In aggregate mode, min and max take only number and time fields, sum and avg only numbers, and a text or list field may appear only as a group key the dataset allows.",
+      "description": "What a field holds. In aggregate mode, unless the grant's summaries say otherwise for a field, min and max take only number and time fields, sum and avg only numbers, and a text or list field may appear only as a group key the dataset allows.",
       "enum": [
         "text",
         "number",
@@ -280,6 +280,7 @@
                 "field_not_granted",
                 "mode_not_granted",
                 "group_key_not_allowed",
+                "summary_not_granted",
                 "text_not_granted",
                 "export_not_granted",
                 "limit_reached",

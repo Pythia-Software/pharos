@@ -62,9 +62,13 @@ Some rules span documents and are checked by Pharos rather than by the schemas:
   having, selection and ordering) is granted for its dataset, its keys and
   period are ones the dataset allows (`/grant` lists them), and a declarative
   manifest's sends satisfy this when it is parsed;
-- in aggregate mode, a text or list field appears only as an allowed group key
-  (as a key or in a filter), `min` and `max` take number and time fields, and
-  `sum` and `avg` numbers (`/grant` lists each field's type);
+- in aggregate mode, a field the grant's `summaries` does not list follows the
+  default: a text or list field appears only as an allowed group key (as a key
+  or in a filter), `min` and `max` take number and time fields, and `sum` and
+  `avg` numbers (`/grant` lists each field's type); a field it lists takes
+  exactly the operations listed;
+- with `min_group_size`, groups built from fewer units than that are left out
+  of every aggregate answer;
 - a declarative receiver URL is under one of `destinations`;
 - the permissions hash is SHA-256 over RFC 8785 canonical JSON of the
   permissions with defaults filled in;

@@ -116,6 +116,10 @@ class ContractTests(unittest.TestCase):
                 {**importer, "permissions": {"produce": {"kinds": ["usage-records/1"]}}}),
             "an unversioned dataset": ("plugin-manifest.schema.json",
                 {**manifest, "permissions": {**manifest["permissions"], "read": {"datasets": {"usage": {"fields": ["day"], "mode": "rows"}}}}}),
+            "summary rules on a rows grant": ("plugin-manifest.schema.json",
+                {**manifest, "permissions": {**manifest["permissions"], "read": {"datasets": {"library/1": {"fields": ["title"], "mode": "rows", "summaries": {"title": ["max"]}}}}}}),
+            "a minimum group size of one": ("plugin-manifest.schema.json",
+                {**manifest, "permissions": {**manifest["permissions"], "read": {"datasets": {"usage/1": {"fields": ["at"], "mode": "aggregate", "min_group_size": 1}}}}}),
             "two triggers in one entry": ("plugin-manifest.schema.json",
                 {**manifest, "triggers": [{"manual": {}, "after_index": {}}]}),
             "priced cost without an amount": ("usage-record.schema.json", {**record, "cost": {"status": "priced"}}),
@@ -162,6 +166,14 @@ class ContractTests(unittest.TestCase):
         for description, (ref, instance) in cases.items():
             with self.subTest(case=description):
                 self.assertNotEqual(self.errors(ref, instance), [], f"{description} should be refused")
+
+    def test_aggregate_grants_can_choose_their_restriction(self):
+        manifest = example("manifest.webhook.json")
+        grant = {"fields": ["activity_at", "repository_name", "title"], "mode": "aggregate",
+                 "summaries": {"title": ["max"]}, "min_group_size": 5}
+        read = {**manifest["permissions"]["read"], "datasets": {"library/1": grant}}
+        self.assertEqual(self.errors("plugin-manifest.schema.json",
+                                     {**manifest, "permissions": {**manifest["permissions"], "read": read}}), [])
 
     def test_openapi_references_resolve(self):
         for name in ("connector-api.openapi.json", "receiver-api.openapi.json"):

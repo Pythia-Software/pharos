@@ -220,9 +220,11 @@ type exportQuery struct {
 // checkExportQuery walks every field the query names (filters, period, keys,
 // summaries, having, select, order) and refuses the first that is not granted,
 // not allowed as a key or period, or not allowed by the mode. In aggregate
-// mode a text or list field may only be an allowed group key (as a key or in a
-// filter), min and max take numbers and times, sum and avg numbers. It is
-// complete: the language names fields only in those places.
+// mode a summary on a field the grant's summaries lists must use a listed
+// operation; on any other field the default applies: a text or list field may
+// only be an allowed group key (as a key or in a filter), min and max take
+// numbers and times, sum and avg numbers. It is complete: the language names
+// fields only in those places.
 func checkExportQuery(dataset exportDataset, grant datasetGrant, query exportQuery) error
 
 // compileExportQuery turns a checked query into the Query Table request for the
@@ -236,6 +238,12 @@ translation: literals and `any` become `WhereTerm`s, `period` a calendar key
 with its interval and time zone, summaries `SummaryColumn`s, `having` the
 result's where. When Query Table changes its wire format, only
 `compileExportQuery` changes.
+
+A grant's `min_group_size` compiles to a `having` on the count of distinct
+units, added after the query's own: work items (`library/1`, and `usage/1`
+through its `work_item`), conversations (`conversations/1`) and records
+(`automation-usage/1`). Left-out groups are simply absent from the answer and
+from the period sent to a receiver.
 
 ### Export datasets
 
@@ -610,7 +618,8 @@ Go tests on `testCatalog`/`testServer` unless marked.
 | 10. A restored or copied library sends nothing until resumed; its takeover replaces everything, and retracts only at its last run | `TestRestoredLibraryPausesThenTakesOver`: a takeover over several partial runs, a privacy change during it, a second restore before it completes |
 | A commit whose answer was lost is acknowledged by the next hello, not sent again | `TestUnansweredCommitIsAcknowledgedByTheNextHello` |
 | No side channels: tokens, versions, counts and 403/404 do not move for private activity | `TestPrivateActivityLeavesNoTrace` |
-| Export queries naming any ungranted field, key or period are refused, wherever the field appears | `TestExportQueryChecksEveryField` |
+| Export queries naming any ungranted field, key or period are refused, wherever the field appears; aggregate summaries follow the grant's `summaries` or the default | `TestExportQueryChecksEveryField` |
+| Groups smaller than a grant's `min_group_size` are absent from every aggregate answer | `TestMinimumGroupSizeLeavesOutSmallGroups` |
 | A cursor older than the feed's retention gets `cursor_expired`, and a full send follows | `TestExpiredChangeTokensResync` |
 | Limits stop a run: runtime, memory, bytes, requests | `TestSupervisorStopsARunAtEachLimit` (slow) |
 | A drop cannot escape, name a real host, or carry an undeclared kind or namespace | `TestDropValidationRefusesMistakes` |

@@ -383,6 +383,57 @@
                   "aggregate",
                   "rows"
                 ]
+              },
+              "summaries": {
+                "description": "Aggregate mode: the summary operations allowed on each field listed, in place of the default rules for that field (min and max on numbers and times, sum and avg on numbers, count_distinct on anything; text and list fields otherwise only as group keys). Listing max for title allows the latest title per group. The consent screen names each one.",
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "count_distinct",
+                      "sum",
+                      "avg",
+                      "min",
+                      "max"
+                    ]
+                  }
+                }
+              },
+              "min_group_size": {
+                "description": "Aggregate mode: groups built from fewer than this many of the dataset's units (work items, conversations or usage records) are left out of every answer. Other answers, such as a coarser total, can still reveal their sum; the consent screen says so.",
+                "type": "integer",
+                "minimum": 2
+              }
+            },
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "rows"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "summaries"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "min_group_size"
+                    ]
+                  }
+                ]
               }
             }
           }
