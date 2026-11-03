@@ -553,7 +553,7 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 				return "", errAuditUnstable
 			}
 			if isCodexSource(unit.Source.Kind) {
-				path = (sourceFiles{view: view}).rolloutFile(path)
+				path = rolloutFile(path)
 			}
 			paths = append(paths, path)
 		}
@@ -686,7 +686,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 			databases = append(databases, strings.TrimPrefix(part.item, "sqlite:"))
 		} else if isCodexSource(unit.Source.Kind) {
 			// A compressed rollout is frozen as it is, under its own name.
-			files = append(files, sourceFiles{}.rolloutFile(part.item))
+			files = append(files, rolloutFile(part.item))
 		} else {
 			files = append(files, part.item)
 		}

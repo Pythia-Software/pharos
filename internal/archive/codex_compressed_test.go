@@ -87,7 +87,8 @@ func TestCodexCompressedRolloutsAreIndexedCapturedAndProbed(t *testing.T) {
 	// Both forms, mid-resume: Codex reads the plain one, which has grown.
 	both := filepath.Join(day, "rollout-2026-09-01T02-00-00-"+probeID3+".jsonl")
 	writeSourceFile(t, both, codexLines(probeID3, 3))
-	writeCompressedRollout(t, both+".zst", codexLines(probeID3, 1), time.Now())
+	resumed, _ := os.Stat(both)
+	writeCompressedRollout(t, both+".zst", codexLines(probeID3, 1), resumed.ModTime().Add(-time.Hour))
 	// Archived and compressed.
 	archived := filepath.Join(root, "archived_sessions", "rollout-2026-08-01T00-00-00-"+probeID4+".jsonl")
 	writeSourceFile(t, archived, codexLines(probeID4, 1))
@@ -344,5 +345,88 @@ func TestCodexSingleCompressedRolloutSourceKeepsIdentityFromCapture(t *testing.T
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
 	if got, origin := codexMessageCount(t, other, probeID1); got != 2 || origin != plain {
 		t.Fatalf("captured single rollout: %d messages from %q", got, origin)
+	}
+}
+
+// A source configured as one rollout file follows it through compression and
+// resume, live and in verification of its retained copy.
+func TestCodexSingleRolloutSourceFollowsCompressionAndResume(t *testing.T) {
+	useHost(t, "host-a")
+	plain := filepath.Join(t.TempDir(), "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
+	writeSourceFile(t, plain, codexLines(probeID1, 1))
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: plain, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+	server := automaticTestServer(t, source)
+	ingestSource(t, server.Catalog, source)
+	appendSourceFile(t, plain, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"user_message","message":"later"}}`+"\n")
+	compressed := compressRollout(t, plain)
+	ingestSource(t, server.Catalog, source)
+	if got, origin := codexMessageCount(t, server.Catalog, probeID1); got != 2 || origin != plain {
+		t.Fatalf("after compression: %d messages from %q", got, origin)
+	}
+	adapter, err := MakeAdapter(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := server.Catalog.acquireRetainedInput(t.Context(), adapter, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unit syncUnit
+	if err := input.Adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
+		unit = unitOf(input.Adapter.Config(), parts, false)
+		unit.Reader = input.Adapter
+		return true
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if result := server.Catalog.auditUnit(t.Context(), unit, "manual", 0); result.Outcome != "passed" {
+		t.Fatalf("retained compressed single rollout verification = %+v", result)
+	}
+	input.Close()
+	// Resumed: the plain file comes back, newer, and the compressed one goes.
+	writeSourceFile(t, plain, readCompressedRollout(t, compressed))
+	os.Remove(compressed)
+	appendSourceFile(t, plain, `{"type":"event_msg","timestamp":"2026-09-01T02:00:00Z","payload":{"type":"user_message","message":"resumed"}}`+"\n")
+	ingestSource(t, server.Catalog, source)
+	if got, _ := codexMessageCount(t, server.Catalog, probeID1); got != 3 {
+		t.Fatalf("after resume: %d messages", got)
+	}
+}
+
+// An ordinary capture of a source with SQLite naming records keeps the plain
+// copy it took before compression; indexing that capture reads the newer,
+// compressed rollout.
+func TestCodexCaptureWithNamingRecordsReadsNewerCompressedRollout(t *testing.T) {
+	useHost(t, "host-a")
+	_, config := testCatalog(t)
+	root := t.TempDir()
+	plain := filepath.Join(root, "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+probeID1+".jsonl")
+	writeSourceFile(t, plain, codexLines(probeID1, 1))
+	state := filepath.Join(root, "state_5.sqlite")
+	db, err := sql.Open("sqlite", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, "CREATE TABLE threads(id TEXT,name TEXT,rollout_path TEXT);INSERT INTO threads VALUES('"+probeID1+"','Captured name','"+plain+"')")
+	db.Close()
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+	config.Sources = []SourceConfig{source}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	appendSourceFile(t, plain, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"user_message","message":"later"}}`+"\n")
+	compressRollout(t, plain)
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(state, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	useHost(t, "host-b")
+	other, _ := testCatalog(t)
+	indexCaptures(t, other, config.CaptureRoot, "host-a")
+	if got, origin := codexMessageCount(t, other, probeID1); got != 2 || origin != plain {
+		t.Fatalf("captured: %d messages from %q", got, origin)
 	}
 }

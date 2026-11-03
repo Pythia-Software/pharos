@@ -110,7 +110,7 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 | `tl1` | Registered installations via consistent SQLite snapshots and native transcripts | None |
 | `tl1-export` | Owner-produced canonical JSON | TL1 release contract only |
 | `conductor` | Consistent read-only SQLite snapshot transaction and schema inspection | None |
-| `codex` | Native rollout/session JSONL, including rollouts Codex compressed to `.jsonl.zst` (read as the plain file while both exist) | None |
+| `codex` | Native rollout/session JSONL, including rollouts Codex compressed to `.jsonl.zst` (when both forms exist, the newer is read, and the plain one when they are as new) | None |
 | `claude` | Native project session JSONL | None |
 | `antigravity` | Per-conversation step transcripts (`transcript_full.jsonl`) with titles, workspaces, and subagent parents from `conversation_summaries.db`, and each model request's served model and token usage from the protobuf `gen_metadata` rows of `conversations/<id>.db`. Antigravity leaves its cost and credit fields unset, so cost comes from Pharos's price table | None |
 | `chatgpt-export` | User-provided `conversations.json` | None |

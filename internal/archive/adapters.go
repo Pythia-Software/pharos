@@ -178,7 +178,7 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 		}
 		return &canonicalAdapter{baseAdapter{config: config, capability: capability}}, nil
 	case "codex":
-		return &jsonlAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}, provider: "codex"}, nil
+		return &jsonlAdapter{baseAdapter: baseAdapter{config: resolveRolloutSource(config), capability: "retrieval-only"}, provider: "codex"}, nil
 	case "claude":
 		return &jsonlAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}, provider: "claude"}, nil
 	case "chatgpt", "chatgpt-export":
@@ -692,7 +692,7 @@ func (a *jsonlAdapter) preferRollouts(paths []string, infos map[string]fs.FileIn
 			if compressedRollout(plain) {
 				plain, compressed = compressed, plain
 			}
-			if a.files().preferRollout(plain, compressed, infos[plain], infos[compressed]) != path {
+			if preferRollout(plain, compressed, infos[plain], infos[compressed]) != path {
 				continue
 			}
 		}

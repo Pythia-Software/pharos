@@ -141,18 +141,15 @@ func rolloutStem(path string) string {
 }
 
 // preferRollout picks which of a rollout's two forms to read when both are
-// listed: Codex reads the plain one while both exist. In a capture, a form
-// whose original has since disappeared is a superseded copy: the plain file
-// last seen before compression, or the compressed one before a resume.
-func (s sourceFiles) preferRollout(plain, compressed string, plainInfo, compressedInfo fs.FileInfo) string {
-	if s.view != nil {
-		plainGone, compressedGone := s.view.missing(plain), s.view.missing(compressed)
-		switch {
-		case plainGone && !compressedGone:
-			return compressed
-		case plainGone && compressedGone && compressedInfo.ModTime().After(plainInfo.ModTime()):
-			return compressed
-		}
+// listed: the newer, and the plain one when they are as new. Compression keeps
+// the mtime and an append moves it, so this is the form Codex itself reads
+// while both exist, and in a capture or retained input it passes over a copy
+// superseded since (the plain file captured before an append and compression,
+// or the compressed one captured before a resume) however that input was
+// assembled.
+func preferRollout(plain, compressed string, plainInfo, compressedInfo fs.FileInfo) string {
+	if compressedInfo.ModTime().After(plainInfo.ModTime()) {
+		return compressed
 	}
 	return plain
 }
@@ -160,7 +157,7 @@ func (s sourceFiles) preferRollout(plain, compressed string, plainInfo, compress
 // rolloutFile is the file to read for a rollout known by its plain path (a
 // part item or origin): the plain file, or its compressed form when that is
 // the one preferRollout reads.
-func (s sourceFiles) rolloutFile(plain string) string {
+func rolloutFile(plain string) string {
 	if !strings.HasSuffix(strings.ToLower(plain), ".jsonl") {
 		return plain
 	}
@@ -172,7 +169,17 @@ func (s sourceFiles) rolloutFile(plain string) string {
 	if err != nil {
 		return plain + ".zst"
 	}
-	return s.preferRollout(plain, plain+".zst", plainInfo, compressedInfo)
+	return preferRollout(plain, plain+".zst", plainInfo, compressedInfo)
+}
+
+// resolveRolloutSource follows a source configured as one rollout file to
+// whichever form of it is there now, since Codex renames it on compression
+// and on resume.
+func resolveRolloutSource(config SourceConfig) SourceConfig {
+	if lower := strings.ToLower(config.Path); strings.HasSuffix(lower, ".jsonl") || compressedRollout(lower) {
+		config.Path = rolloutFile(plainRollout(config.Path))
+	}
+	return config
 }
 
 // contentInfo describes a compressed rollout as the plain file it stands for:
@@ -204,27 +211,6 @@ func (s sourceFiles) contentInfo(path string, info fs.FileInfo) fs.FileInfo {
 		return info
 	}
 	return originalInfo{FileInfo: info, size: size.(int64)}
-}
-
-// missing reports whether the captured file at path is one whose original
-// had disappeared at the last capture.
-func (v *captureView) missing(path string) bool {
-	if v == nil || v.manifest == nil {
-		return false
-	}
-	if v.gone[v.original(path)] {
-		return true
-	}
-	rel, ok := v.rel(path)
-	if !ok {
-		return false
-	}
-	for _, file := range v.manifest.Files {
-		if file.Captured == rel {
-			return file.MissingSince != ""
-		}
-	}
-	return false
 }
 
 // OpenContent is Open for a reader of the content: a file the harness itself

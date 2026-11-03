@@ -42,9 +42,6 @@ type captureView struct {
 	manifest *captureManifest
 	// mappings pair original paths with absolute captured paths.
 	mappings []capturePathMapping
-	// gone lists original paths that had disappeared when a view that has no
-	// file entries (an SQLite replay's dependencies) was acquired.
-	gone map[string]bool
 }
 
 // Retained readers and membership belong to this exact capture inventory.

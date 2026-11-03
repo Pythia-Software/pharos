@@ -288,7 +288,7 @@ func freezeCodexAuditRecord(ctx context.Context, unit syncUnit, dir string, budg
 			}
 		}
 		// A compressed rollout is frozen as it is, under its own name.
-		path = adapter.files().rolloutFile(path)
+		path = rolloutFile(path)
 		original := part.item
 		if compressedRollout(path) {
 			original += ".zst"
