@@ -221,6 +221,12 @@ func heredocDelimiter(rest string) string {
 // shellWords splits a simple command into words, removing quotes. It stops at
 // a redirection so "cat <<EOF" and "go test > log" read as cat and go test.
 func shellWords(text string) []string {
+	words, _ := shellWordsRest(text)
+	return words
+}
+
+// shellWordsRest also returns the text from the first redirection on.
+func shellWordsRest(text string) ([]string, string) {
 	words := []string{}
 	var word strings.Builder
 	inWord := false
@@ -260,14 +266,16 @@ func shellWords(text string) []string {
 				inWord = true
 			}
 		case '<', '>':
+			start := index
 			if inWord && isAllDigits(word.String()) {
+				start -= word.Len()
 				word.Reset()
 				inWord = false
 			}
 			if inWord {
 				words = append(words, word.String())
 			}
-			return words
+			return words, text[start:]
 		default:
 			word.WriteByte(char)
 			inWord = true
@@ -276,7 +284,7 @@ func shellWords(text string) []string {
 	if inWord {
 		words = append(words, word.String())
 	}
-	return words
+	return words, ""
 }
 
 func matchSubstitution(text string, start int) int {
@@ -516,8 +524,14 @@ func shellProgram(text string) (string, string) {
 			}
 			continue
 		}
-		if (word == "run" || word == "exec" || word == "x" || word == "dlx") && (program == "npm" || program == "pnpm" || program == "yarn" || program == "bun") && position+1 < len(rest) && !strings.HasPrefix(rest[position+1], "-") {
-			return program, word + " " + rest[position+1]
+		if (word == "run" || word == "exec" || word == "x" || word == "dlx") && (program == "npm" || program == "pnpm" || program == "yarn" || program == "bun") {
+			target := position + 1
+			if target < len(rest) && rest[target] == "--" {
+				target++
+			}
+			if target < len(rest) && !strings.HasPrefix(rest[target], "-") {
+				return program, word + " " + rest[target]
+			}
 		}
 		return program, word
 	}
@@ -635,7 +649,7 @@ func shellCategory(program, subcommand, text string) string {
 		if len(verb) > 1 {
 			script = verb[1]
 		}
-		if (first == "exec" || first == "x" || first == "dlx") && script != "" {
+		if first == "exec" || first == "x" || first == "dlx" {
 			return shellRunnerCategory(text, first)
 		}
 		// pnpm, yarn and bun run a package script named directly ("pnpm typecheck").
@@ -687,7 +701,7 @@ var shellRunnerOptions = map[string]bool{"-p": true, "--package": true, "--with"
 // the marker ("npx", "exec", "run") and the runner's own options. A runner
 // whose target is unknown, or absent, is a run.
 func shellRunnerCategory(text, marker string) string {
-	words := shellWords(text)
+	words, redirect := shellWordsRest(text)
 	start := -1
 	for index, word := range words {
 		if strings.ToLower(path.Base(word)) == marker {
@@ -696,6 +710,10 @@ func shellRunnerCategory(text, marker string) string {
 		}
 	}
 	for start >= 0 && start < len(words) && strings.HasPrefix(words[start], "-") {
+		if words[start] == "--" {
+			start++
+			break
+		}
 		if shellRunnerOptions[words[start]] {
 			start++
 		}
@@ -704,7 +722,8 @@ func shellRunnerCategory(text, marker string) string {
 	if start < 0 || start >= len(words) {
 		return "run"
 	}
-	target := strings.Join(words[start:], " ")
+	// The runner's redirections apply to its target: "pnpm exec cat > f" writes f.
+	target := strings.TrimSpace(strings.Join(words[start:], " ") + " " + redirect)
 	program, subcommand := shellProgram(target)
 	if category := shellCategory(program, subcommand, target); category != "other" {
 		return category
