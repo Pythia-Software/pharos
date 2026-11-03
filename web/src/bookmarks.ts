@@ -1,3 +1,4 @@
+import type { DashboardCardTarget } from "./dashboard-card-model";
 import { queryRecipes } from "./curiosity-data";
 import { cardDestination } from "./card-destinations";
 import type { WindowChoice } from "./day-window";
@@ -10,7 +11,7 @@ import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQuer
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
-  dashboard?: boolean; dashboardTarget?: "ribbon";
+  dashboard?: boolean; dashboardTarget?: Exclude<DashboardCardTarget, "chart">;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
 };
 

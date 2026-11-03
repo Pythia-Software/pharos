@@ -42,11 +42,13 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
   const start = () => {
     const url = dashboardCardURL(location.href, from.catalog, from.state, from.where), targets = dashboardCardTargets(url);
     const chosen = targets.find(item => item.id === target) ?? targets[0];
-    setDraft({ url, targets, target: chosen.id, title: chosen.title, description: dashboardCardDescription(url), renamed: false, error: "" });
+    setDraft({ url, targets, target: chosen.id, title: chosen.title, description: dashboardCardDescription(url, chosen.id), renamed: false, error: "" });
     setSaved(false);
   };
   const update = (change: Partial<Draft>) => setDraft(current => current && { ...current, ...change });
-  const choose = (id: DashboardCardTarget) => setDraft(current => current && { ...current, target: id, title: current.renamed ? current.title : current.targets.find(item => item.id === id)!.title });
+  // An unedited title or description follows the chosen chart.
+  const choose = (id: DashboardCardTarget) => setDraft(current => current && { ...current, target: id, title: current.renamed ? current.title : current.targets.find(item => item.id === id)!.title,
+    description: current.description === dashboardCardDescription(current.url, current.target) ? dashboardCardDescription(current.url, id) : current.description });
   const current: { preview?: QueryPreview; error?: string } = preview.key === key ? preview : {};
   let windowLabel = "Saved", presentation: ReturnType<typeof dashboardCardPresentation> | undefined;
   if (draft) try { windowLabel = dashboardCardWindow(draft.url, draft.target); presentation = dashboardCardPresentation(draft.url, draft.target); } catch { /* The preview reports the invalid definition. */ }

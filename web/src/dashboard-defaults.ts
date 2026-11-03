@@ -19,6 +19,7 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   tokens: { ...defaultTokenChart, ...daily },
   human: { metric: "typed", split: "none", ...daily },
   parallelism: { metric: "agent_hours", split: "level_band", ...daily },
+  habits: { metric: "wall_hours", split: "actor", ...daily },
   tools: { metric: "calls", split: "tool_category", view: "compare" },
   mcp: { metric: "calls", split: "tool_name", view: "compare" },
   carbon: { metric: "co2", split: "type", ...daily },

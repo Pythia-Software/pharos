@@ -140,6 +140,58 @@
       "field": "guide_open"
     },
     {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_calendar"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_calendar"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_day"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_punchcard"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_punchcard"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_punchcard_days"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_punchcard_days"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_streak"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_streak"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_weekends"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_weekends"
+    },
+    {
+      "file": "web/src/habits-card.ts",
+      "field": "habits_weeks"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_weeks"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "history_collapsed"
     },
@@ -5669,6 +5721,153 @@
       "control": "onClick={event => { if (event.metaKey || event.ctrlKey) return; event.preventDefault(); navigate(detailURL(win.id)); }}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
+    },
+    {
+      "key": "09297a595a9c5edc:0",
+      "file": "web/src/habits.tsx",
+      "owner": "DayDetail",
+      "tag": "button",
+      "control": "onClick={onVacation}",
+      "contract": "settings",
+      "reason": "Marks the selected day as a vacation in the saved habit settings; it does not change the linked view. Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "5668b411f8230e87:0",
+      "file": "web/src/habits.tsx",
+      "owner": "DayDetail",
+      "tag": "input",
+      "control": "aria-label=\"Day\" data-view-field=\"habits_day\" value={day?.day ?? \"\"} onChange={event => onSelect(event.target.value)}",
+      "binding": "habits_day",
+      "contract": "view.habits_day",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "782e951cbf10c182:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "HabitsSettingsPanel",
+      "control": "onChange={update}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "807c26364addf6f8:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "CalendarChart",
+      "control": "onSelect={setSelected}",
+      "contract": "view.habits_day",
+      "reason": "Selects or clears the calendar day through habits_day."
+    },
+    {
+      "key": "a2a903535d89bfce:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={calendar} onChange={setCalendar}",
+      "contract": "view.habits_calendar",
+      "reason": "Writes habits_calendar through useViewState."
+    },
+    {
+      "key": "afce7374875b6312:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={mode} onChange={setMode}",
+      "contract": "view.habits_streak",
+      "reason": "Writes habits_streak through useViewState."
+    },
+    {
+      "key": "bb9fd842bddd5bee:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "DayDetail",
+      "control": "onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))}",
+      "contract": "view.habits_day",
+      "reason": "Selects the calendar day through habits_day; its vacation switch saves to the habit settings (pharos-habits-v1), not the view."
+    },
+    {
+      "key": "d73e684db4c89234:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={weeks} onChange={setWeeks}",
+      "contract": "view.habits_weeks",
+      "reason": "Writes habits_weeks through useViewState."
+    },
+    {
+      "key": "dc058267a3b501a8:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanel",
+      "tag": "ChartSelect",
+      "control": "value={weekends} onChange={setWeekends}",
+      "contract": "view.habits_weekends",
+      "reason": "Writes habits_weekends through useViewState."
+    },
+    {
+      "key": "7d1a49d4d82e3d7d:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Engaged gap\" value={settings.engagedGap} onChange={event => set(\"engagedGap\", Number(event.target.value))}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "8e1155cb1eb61aee:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "button",
+      "control": "aria-label={`Remove vacation day ${formatDay(day)}`} onClick={() => onChange(toggleVacation(settings, day))}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "d28f5bb046885d3c:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"habits-settings\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "edaf1f43e1dc62ce:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsSettingsPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Day starts at\" value={settings.dayStart} onChange={event => set(\"dayStart\", Number(event.target.value))}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "60df250855d67a01:0",
+      "file": "web/src/habits.tsx",
+      "owner": "number",
+      "tag": "input",
+      "control": "value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isInteger(value) && value >= low && value <= high) set(key, value); }}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
+    },
+    {
+      "key": "81a76fa7daf2c4df:0",
+      "file": "web/src/habits.tsx",
+      "owner": "Punchcard",
+      "tag": "ChartSelect",
+      "control": "value={days} onChange={onDays}",
+      "contract": "view.habits_punchcard_days",
+      "reason": "Writes habits_punchcard_days through useViewState."
+    },
+    {
+      "key": "90e4c03eeaad2a02:0",
+      "file": "web/src/habits.tsx",
+      "owner": "Punchcard",
+      "tag": "ChartSelect",
+      "control": "value={view} onChange={onView}",
+      "contract": "view.habits_punchcard",
+      "reason": "Writes habits_punchcard through useViewState."
     },
     {
       "key": "0cc6b34321064cd2:0",

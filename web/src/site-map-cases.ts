@@ -101,7 +101,8 @@ function chartCases(map: SiteMap): ChartCase[] {
       const chart = { ...current, ...switchView(catalog, current, to as AnalysisView) } as Record<string, unknown>;
       cases.push({ topic, view: to, written: `switchView ${from} to ${to}`, chart, verdict: chartVerdict(topic, chart) });
     }
-    for (const card of map.cards.items.filter(card => card.page === `analyze/${topic}`)) {
+    // (Habits section cards carry the page's selectors, not a chart.)
+    for (const card of map.cards.items.filter(card => card.page === `analyze/${topic}` && card.chart)) {
       const chart = card.chart as Record<string, unknown>;
       cases.push({ topic, view: String(chart.view ?? merge.view ?? "trend"), written: `card ${card.id}`, chart, verdict: chartVerdict(topic, chart) });
     }

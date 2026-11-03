@@ -10,6 +10,8 @@ import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurr
 import { loadConcurrencyData } from "./concurrency-store";
 import type { ConcurrencyData } from "./concurrency-data";
 import { ribbonCardTitle, ribbonCover } from "./parallelism-ribbon-card";
+import { habitsCardPreview, isHabitsCardTarget, loadHabitsSummary, readHabitsCardView } from "./habits-card";
+import type { HabitsSummary } from "./habits-model";
 import { isOriginDimension, loadOriginMetadata, originLabel } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
 import { toolMetricPresentation } from "./tools-dashboard-model";
@@ -19,9 +21,14 @@ import type { QueryPreview } from "./query-previews";
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
 // A dashboard address carries no authored cover, so its card fits the chart.
-// A ribbon card reads the captured timing snapshot the ribbon draws (local
-// stands in for it in tests).
-export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData): Promise<QueryPreview> {
+// A ribbon card reads the captured timing snapshot the ribbon draws, and a
+// Habits card the habits summary its section draws (timing and habits stand
+// in for them in tests).
+export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary): Promise<QueryPreview> {
+  if (isHabitsCardTarget(target)) {
+    const view = readHabitsCardView(readDashboardCard(address, new Date(now)).params);
+    return habitsCardPreview(target, view, habits ?? await loadHabitsSummary(view, signal));
+  }
   return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now));
 }
 

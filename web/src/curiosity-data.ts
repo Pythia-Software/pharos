@@ -24,6 +24,9 @@ import type { ThinkingState } from "./thinking-model";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
 import { weekdayRecipes } from "./weekday-recipes";
+import { habitsCardRecipes } from "./habits-card-recipes";
+import type { HabitsCardTarget } from "./habits-card";
+import type { CardLoadingSpec } from "./card-loading-model";
 import { cardDestination, refineCardDestination, type CardDestination } from "./card-destinations";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
@@ -49,9 +52,13 @@ export type QueryRecipe = {
   // coverWhere: the recipe's where narrows only the cover; the dashboard keeps
   // the whole population (compaction pairs need the requests around each one).
   thinking?: {overview?:boolean; state:Partial<ThinkingState>; open?: string; coverWhere?: boolean};
+  // A Habits section: the page at view (its habits_* fields), drawn as its
+  // dashboard card; window, kind and loading are that card's.
+  habits?: { target: HabitsCardTarget; view: Record<string, string>; window: string; kind: string; loading: CardLoadingSpec };
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
-export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset }): string {
+export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset; habits?: QueryRecipe["habits"] }): string {
+  if (item.habits) return item.habits.window;
   if (item.dataset === "tl1_attempts" && item.window && !item.period) return item.window.days === 365 ? "Last year" : `Last ${item.window.days}d`;
   return item.period === "current" ? "Now" : item.period === "all" || !item.window ? "All time" : windowLabel(item.window.mode === "today" ? "today" : item.window.days);
 }
@@ -107,6 +114,7 @@ const baseRecipes: QueryRecipe[] = [
   ...dashboardCardRecipes,
   ...thinkingCardRecipes,
   ...weekdayRecipes,
+  ...habitsCardRecipes,
 ];
 export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
 

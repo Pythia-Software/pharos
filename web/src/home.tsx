@@ -1,7 +1,7 @@
 import { readWindowChoice } from "./day-window";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
-import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
+import { migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
 import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, supportsToday, type QueryPreview, type QuerySuggestion, type WindowActivity } from "./curiosity-data";
 import { loadUsageHistory } from "./usage-history";
 import { queryFromURL, queryHasTimeFilter, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
@@ -12,11 +12,10 @@ import { Icon } from "./icons";
 import "./home.css";
 import { AskPharosHome } from "./ask-pharos";
 import { cardTemplates } from "./card-library-model";
-import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
-import { dashboardCardPresentation, dashboardCardWindow, readDashboardCard } from "./dashboard-card-model";
+import { collectCardTemplate, dashboardCardPresentation, dashboardCardWindow, readDashboardCard } from "./dashboard-card-model";
 import { EMPTY_QUERY } from "@pythia-software/query-table-core";
 
 function collectionSpec(item: Bookmark) {
@@ -120,7 +119,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
 
   async function keep(item: QuerySuggestion, before?: string) {
     try {
-      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
+      const saved = await collectCardTemplate(item);
       if (before) moveBookmark(saved.id, before);
       setMessage(`Collected “${item.title}”.`); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));

@@ -12,6 +12,7 @@ import { CardLoading } from "./card-loading";
 import type { CardLoadingSpec } from "./card-loading-model";
 import { ChartTooltip } from "./chart-tooltip";
 import { HumanStudyCover } from "./human-study-cover";
+import { HabitsCoverChart } from "./habits-charts";
 
 export function QueryChip({ title, description, active, onClick }: { title: string; description: string; active?: boolean; onClick: () => void }) {
   return <button type="button" className="query-chip" title={description} aria-pressed={active} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
@@ -24,7 +25,8 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
   const presentation = compactMetricPresentation(preview);
   const coverMetric = preview.metrics?.find(metric => metric.clause.id === preview.coverMetricId)?.clause;
   const ranked = presentation?.ranked || Boolean(!presentation && (preview.insights || preview.ranking || preview.groupSummary));
-  const summary = ranked || preview.study ? undefined : presentation ? presentation.summary : preview.summary;
+  // A study or Habits chart is titled by its card; the summary only labels it.
+  const summary = ranked || preview.study || preview.habits ? undefined : presentation ? presentation.summary : preview.summary;
   const headlineMetric = presentation ? presentation.headlineMetric : ranked ? undefined : preview.headlineMetric;
   const max = Math.max(1, ...preview.ranking?.map(item => item.value) ?? []);
   return <>
@@ -32,7 +34,7 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
       <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
       {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
     </span> : null}
-    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} {...preview.dashboardTrend} />
+    {preview.study ? <HumanStudyCover study={preview.study} /> : preview.habits ? <HabitsCoverChart cover={preview.habits} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} {...preview.dashboardTrend} />
       : preview.metrics ? <CompactMetric preview={preview} />
       : preview.insights ? <span className="query-findings">
       <span className="query-finding-heading">{preview.headline}</span>
