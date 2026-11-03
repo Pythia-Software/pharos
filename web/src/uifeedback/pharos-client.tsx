@@ -10,6 +10,7 @@ import { annotationForUpload, restoreReview, type FeedbackReview, type PharosAnn
 declare global {
   interface Window {
     pharosFeedback?: { annotations: () => PharosAnnotation[]; clear: (ids: string[]) => void; toast: (message: string) => void; annotate: () => void };
+    pharosSendFeedback?: () => void;
     uiFeedback?: { safeURL: typeof safeURL; capture: (element: HTMLElement, id: string) => Promise<Screenshot>; removeScreenshot: (id: string) => void };
   }
 }
@@ -139,4 +140,6 @@ if (toolbar) { const button = document.createElement("button"); button.type = "b
   const open = (opener: HTMLButtonElement) => { const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); root.render(<Composer close={() => { root.unmount(); host.remove(); restoreFocus(opener); }} />); };
   button.onclick = () => open(button);
   const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) header.onclick = () => open(header);
+  // The Mac app's context menu; focus returns to the header button, or More.
+  window.pharosSendFeedback = () => open(header instanceof HTMLButtonElement ? header : button);
 }

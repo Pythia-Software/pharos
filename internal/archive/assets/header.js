@@ -256,7 +256,7 @@ function initHeaderHistory(changed) {
 function initHeaderControls(close = {}) {
   const root = document.querySelector('body>header .header-icons');
   const active = document.getElementById('headerActive'), toolbox = document.getElementById('headerToolbox');
-  if (!root || !active || !toolbox) return;
+  if (!root || !active || !toolbox) return null;
   let tools = normalizeHeaderTools(pharosPrefs.get(HEADER_LAYOUT_KEY, null), (key, fallback) => pharosPrefs.get(key, fallback));
   const layoutOverflow = initHeaderOverflow(() => tools);
   let dragId = null;
@@ -502,4 +502,7 @@ function initHeaderControls(close = {}) {
   const overflow = get('headerOverflowTools');
   if (overflow) new MutationObserver(syncAppearances).observe(overflow, { subtree: true, childList: true, attributes: true });
   new MutationObserver(syncTabs).observe(liveTabs, { subtree: true, childList: true, attributes: true });
+  // Puts a tool in the header when something outside the editor turns its
+  // feature on, so the header can turn it off again.
+  return { show: id => { if (!tools.includes(id)) commit(editHeaderTools(tools, id, headerToolAddPosition(tools, id)), `${definition(id).label} added to the header.`); } };
 }

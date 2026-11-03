@@ -763,7 +763,7 @@ $('#navBack').onclick=$('#headerBackOnly').onclick=()=>history.back();$('#navFor
 document.addEventListener('keydown',event=>{if(!(event.metaKey||event.ctrlKey)||event.altKey||event.shiftKey||(event.key!=='['&&event.key!==']'))return;const target=event.target;if(target.closest?.('input,textarea,select,[contenteditable="true"]'))return;event.preventDefault();(event.key==='['?$('#navBack'):$('#navForward')).click()});
 {let open=false;try{open=localStorage.getItem(NAV_OPEN_KEY)==='true'}catch{}setNavOpen(open)}
 syncNavButtons();
-initHeaderControls({
+const headerControls=initHeaderControls({
   navigator:()=>setNavOpen(false),
   annotations:()=>setFeedbackEnabled(false),
   summary:()=>{if(!$('#usageSummary').hidden)setUsageSummaryOpen(false)},
@@ -1709,6 +1709,8 @@ api('/api/authorship').then(a=>{if(load!==healthLoad)return;const t=a.totals||{}
 window.pharosOpenDetail=detail;
 // React pages navigate through the shell so history, bookmarks, and the navigator stay in step.
 window.pharosNavigate=openHistoryEntry;
+// The Mac app's context menu (PharosApp.swift) runs these.
+window.pharosPageAction=action=>{if(action==='logs')openHistoryEntry('/settings/logs');else if(action==='feedback')window.pharosSendFeedback?.();else if(action==='annotate')window.pharosFeedback?.annotate()};
 window.addEventListener('pharos:bookmarks',()=>{syncBookmarkState();if($('#bookmarksDrawer').classList.contains('open'))renderBookmarks()});
 document.querySelector('button[data-view=tools]')?.remove();window.pharosNameVisit=page=>recordVisit(true,page);
 // Query Table renders its own SVG controls. Keep its React-owned nodes intact:
@@ -1720,7 +1722,7 @@ window.pharosLoadOriginal=loadOriginal;
 window.pharosMessageSummary=compactMessageSummary;
 window.pharosTurnSummaries=turnSummaryData;
 window.pharosCopyText=copyFeedbackText;
-window.pharosFeedback={annotations:()=>feedbackAnnotations.map(item=>({...item})),clear:ids=>{feedbackAnnotations=feedbackAnnotations.filter(item=>!ids.includes(item.id));saveFeedback()},toast:feedbackToast,annotate:()=>{setFeedbackEnabled(true);setFeedbackMode(true)}};
+window.pharosFeedback={annotations:()=>feedbackAnnotations.map(item=>({...item})),clear:ids=>{feedbackAnnotations=feedbackAnnotations.filter(item=>!ids.includes(item.id));saveFeedback()},toast:feedbackToast,annotate:()=>{headerControls?.show('annotations');setFeedbackEnabled(true);setFeedbackMode(true)}};
 renderFeedback();if($('#search'))search();
 routeFromLocation();
 </script><script src="/assets/ask-model.js"></script><script src="/assets/ask-glow.js"></script><script src="/assets/ask-prompt.js"></script><script src="/assets/ask-pharos.js"></script><script src="/assets/query-tables.js"></script></body></html>'''
