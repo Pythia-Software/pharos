@@ -9,7 +9,7 @@ import { resolveRollingQuery, rollingQueryMatches, rollingWindowField, type Quer
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
 import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest } from "./record-keyword-model";
-import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
+import { cardCoverQuery, humanStudyCoverMatches, withCardGroups, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 import { activityPresentation } from "./machine-activity-data";
@@ -42,7 +42,7 @@ export type QueryPreview = {
   habits?: HabitsCover;
   grid?: GridCover;
 };
-type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget };
+type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
@@ -349,13 +349,19 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   if (signal?.aborted) return;
   // A Habits template draws as the dashboard card at its address.
   jobs = jobs.map(job => job.options?.recipe?.habits && !job.options.dashboard ? { ...job, options: { ...job.options, dashboard: job.options.url, dashboardTarget: job.options.recipe.habits.target } } : job);
+  // A collected card's own group count joins its cover or chart.
+  jobs = jobs.map(job => {
+    if (job.options?.groups === undefined || job.options.dashboard) return job;
+    const { groups, ...options } = job.options, chart = withCardGroups(job.query, { recipe: options.recipe, cover: options.cover, metricId: options.coverMetricId }, groups);
+    return { ...job, query: chart.query, options: { ...options, cover: chart.cover } };
+  });
   const dashboards = jobs.filter(job => job.options?.dashboard);
   if (dashboards.length) {
     const pending = [...dashboards];
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget); if (!signal?.aborted) publish(job.id, preview); }
+        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups); if (!signal?.aborted) publish(job.id, preview); }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };
