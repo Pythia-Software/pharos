@@ -5,7 +5,7 @@ import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL } from "./usage-workspace-model";
-import { readBookmarks, writeBookmarks, type Bookmark } from "./bookmarks";
+import { cardLabels, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
 import type { QueryCategory } from "./query-categories";
 import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
@@ -58,13 +58,25 @@ export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisStat
   return `${measure}${view.view === "trend" ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
 }
 
-export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart"): Bookmark {
+export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}): Bookmark {
   if (!dashboardCardTargets(url).some(item => item.id === target)) throw new Error("This chart cannot be a card.");
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks();
-  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), savedAt: Date.now() };
+  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...dashboardCardLabels(url, target, labels), savedAt: Date.now() };
   writeBookmarks([...items, item]);
   return item;
+}
+
+// Every dashboard card's call to action unless its author names another.
+export const DASHBOARD_CARD_ACTION = "Explore this dashboard";
+
+// The editors show each label's effective value; one equal to its default is
+// not stored, so the card keeps following the chart it shows.
+export function dashboardCardLabels(url: string, target: DashboardCardTarget = "chart", labels: CardLabels): CardLabels {
+  const chosen = cardLabels(labels);
+  if (chosen.action === DASHBOARD_CARD_ACTION) delete chosen.action;
+  try { if (chosen.category === dashboardCardPresentation(url, target).category) delete chosen.category; } catch { /* An invalid definition keeps the chosen category. */ }
+  return chosen;
 }
 
 // Ask offers a chart's own address as a card; the same address is collected once.
