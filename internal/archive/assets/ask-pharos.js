@@ -51,6 +51,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     mode=!providers.length?'missing':accessEnabled?'enabled':showInvitation?'available':'declined';
     connectProvider.replaceChildren(...providers.map(p=>{const option=document.createElement('option');option.value=option.textContent=p.id;return option;}));
     if(!accessEnabled||!providers.length){surfaceRestorePending=false;accessEnabled=false;stop();render();return;}
+    if(!ideasRequested)void loadIdeas();
     if(status.settings.selection?.provider&&!providers.some(p=>p.id===status.settings.selection.provider)){regularOverride=true;setChoices({provider:status.settings.selection.provider,model:'',effort:'Default'});stop();render();report(new Error(status.settings.selection.provider+' is unavailable. Choose another CLI in Settings → Ask Pharos.'));return;}
     loadingModels=true;render();
     const provider=askSelectionProvider(status.settings.selection,providers);
@@ -61,23 +62,28 @@ window.initPharosAsk = function(root, {previews} = {}) {
     render();
     if(restored&&presentation==='modal')question.focus({preventScroll:true});
   }
-  let ideaRepositories=[],ideaVariation=0,ideas=askPromptSuggestions();
+  // Suggestions come from the library (GET /api/ask/suggestions); chosenIdea
+  // is the one the draft began as, sent with the question.
+  let ideaSeed=0,ideas=[],chosenIdea=null,ideaRetry=null,ideaRetries=0;
   const suggestions = find('.pharos-suggestions');
   const ideaViewport=find('.pharos-idea-viewport'),ideaRow=find('.pharos-suggestion-list');
   const ideaToggle=find('.pharos-idea-toggle'),ideaActions=find('.pharos-idea-actions');
   const ideaHiddenKey='pharos-ask-suggestions-hidden';
   let ideasHidden=window.pharosPrefs?.get(ideaHiddenKey,false)===true;
   const browseHintKey='pharos-ask-browse-hint-snoozed';
-  let ideaContextRequested=false;
-  const ideaContextController=new AbortController();
+  let ideasRequested=false;
+  const ideaController=new AbortController();
   const defaultIdeaCorners=[[0],[2],[1,3],[3],[0,2],[1],[0,2],[1,3],[2]];
-  let ideaCorners=ideas.map((_,index)=>[...defaultIdeaCorners[index%defaultIdeaCorners.length]]);
-  // Choose each ribbon once. Resize, carousel movement and theme changes keep it stable.
-  let ideaRibbons=ideaCorners.map(corners=>{
-    const phase=Math.floor(Math.random()*360);
-    return corners.map((_,index)=>({phase:(phase+index*(110+Math.floor(Math.random()*140)))%360,roundness:Math.random(),reach:Math.random(),depth:Math.random()}));
-  });
-  let ideaOrder=ideas.map((_,index)=>index);
+  let ideaCorners=[],ideaRibbons=[],ideaOrder=[];
+  // Choose each ribbon once per list. Resize, carousel movement and theme changes keep it stable.
+  function dressIdeas(){
+    ideaCorners=ideas.map((_,index)=>[...defaultIdeaCorners[index%defaultIdeaCorners.length]]);
+    ideaRibbons=ideaCorners.map(corners=>{
+      const phase=Math.floor(Math.random()*360);
+      return corners.map((_,index)=>({phase:(phase+index*(110+Math.floor(Math.random()*140)))%360,roundness:Math.random(),reach:Math.random(),depth:Math.random()}));
+    });
+    ideaOrder=ideas.map((_,index)=>index);
+  }
   let ideaPage = 0, ideaCenter=1,ideaPaused=matchMedia('(prefers-reduced-motion: reduce)').matches,ideaElapsed = 0, ideaLastTick = Date.now();
   let ideaCount=3,ideaStride=0,ideaSize='',ideaMoving=false,ideaScrollEnd=null,ideaMotion=null;
   const ideaCycleMs = 30000;
@@ -90,7 +96,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   let ticker = null,pollTimer=null;
   let serial = 0;
   let frozenAt = null;
-  let sessions=[],activeSessionId=null,activeCreatedAt=0,activeUpdatedAt=0,openingSession=null;
+  let sessions=[],activeSessionId=null,activeCreatedAt=0,activeUpdatedAt=0,openingSession=null,openingChat=null;
   const sessionLoads=askLoadSequence();
   let historyQuery="",historyOffset=0,historyMore=false,historyLoad=0,historyTimer=null;
   let draftPending=null,cancelQueue=Promise.resolve();
@@ -137,17 +143,21 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const headerButton=document.getElementById('askPharosToggle');
   if(headerButton)headerButton.disabled=false;
   const composerGlow=createPharosGlow(find('.pharos-ai-frame'));
-  const glows=[composerGlow,createPharosGlow(floating,{radius:13})];
+  const glows=[composerGlow,createPharosGlow(floating,{radius:13})],pageTrace=createPharosEdgeTrace(find('.pharos-page-trace'));
   if(headerButton)glows.push(createPharosGlow(headerButton.querySelector('.ask-pharos-icon'),{outline:document.querySelector('#ph-icon-chat path').getAttribute('d')}));
   const browseButton=find('.pharos-browse'),browseHint=find('.pharos-browse-hint'),windowClose=find('.pharos-window-close'),composerHeader=find('.pharos-composer-header');
-  let presentation='home',returnFocus=null,contextURI='',floatPosition=null,drag=null,suppressReopen=false,navigatedTurn=null,popOutMotion=null;
+  const fullscreenButton=find('.pharos-fullscreen'),pageHost=document.getElementById('askPage');
+  let presentation='home',returnFocus=null,contextURI='',floatPosition=null,drag=null,suppressReopen=false,navigatedTurn=null,popOutMotion=null,fullscreenReturn=null,holdFloating=false;
   function updateSurface() {
     const turn=turns.at(-1),state=askFloatingState(turn,{navigated:!!turn&&turn.id===navigatedTurn});
-    glows.forEach(glow=>glow.setWorking(!!pending));
+    glows.forEach(glow=>glow.setWorking(!!pending));pageTrace.setWorking(!!pending);
     floating.hidden=presentation!=='floating';
     floating.dataset.ready=String(state.ready);
     floating.querySelector('.pharos-floating-open span').textContent=state.message;
     browseButton.parentElement.hidden=ai.hidden;
+    const fullscreen=presentation==='page',fullscreenLabel=fullscreen?'Exit full screen':'Full screen';
+    fullscreenButton.hidden=ai.hidden||!pageHost;
+    fullscreenButton.setAttribute('aria-pressed',String(fullscreen));fullscreenButton.setAttribute('aria-label',fullscreenLabel);fullscreenButton.dataset.tooltip=fullscreenLabel;
     const showBrowseHint=askShowBrowseHint({pending:!!pending&&!ai.hidden,browsing:!!pending?.browsing,presentation,hint:!!pending?.hint});
     browseHint.hidden=!showBrowseHint;
     if(showBrowseHint)browseButton.setAttribute('aria-describedby','pharos-browse-hint');else browseButton.removeAttribute('aria-describedby');
@@ -158,13 +168,13 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(composerHeader.parentElement!==headerHost)headerHost.prepend(composerHeader);
     composerHeader.hidden=windowClose.hidden&&find('.pharos-clear-chat').hidden;
     if(headerButton){
-      const ready=String(presentation!=='home'&&presentation!=='modal'&&state.ready),title=state.ready&&presentation!=='home'?'Ask Pharos · '+state.message:'Ask Pharos about this page';
+      const inline=['home','page'].includes(presentation),ready=String(!inline&&presentation!=='modal'&&state.ready),title=state.ready&&!inline?'Ask Pharos · '+state.message:'Ask Pharos about this page';
       if(headerButton.dataset.ready!==ready)headerButton.dataset.ready=ready;
       if(headerButton.title!==title)headerButton.title=title;
     }
   }
   function restoreHome() {
-    if(presentation==='modal'||homeHost===mountHost||!['/','/home'].includes(location.pathname))return;
+    if(holdFloating||presentation==='modal'||homeHost===mountHost||!['/','/home'].includes(location.pathname))return;
     const returning=presentation!=='home'||root.parentElement!==homeHost;
     if(!returning)return;
     presentation='home';if(root.parentElement!==homeHost)homeHost.append(root);
@@ -181,6 +191,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   // page is not a subject; reopening or restoring keeps the prompt as it was.
   function openOverlay(fromHeader=false) {
     surfaceRestorePending=false;
+    if(presentation==='page'){question.focus({preventScroll:true});return;}
     if(presentation==='modal')return;
     returnFocus=document.activeElement;
     if(fromHeader&&['/','/home'].includes(location.pathname)){contextURI='';promptEditor.removeChip('page');}
@@ -190,10 +201,12 @@ window.initPharosAsk = function(root, {previews} = {}) {
     presentation='modal';overlay.append(root);overlay.showModal();
     previews?.revalidate();
     render();sizeThread();sizeOverlay();question.focus({preventScroll:true});
+    // Suggestions lean toward the page the modal opened over.
+    if(accessEnabled&&!turns.length)void loadIdeas();
     if(mode==='available'||mode==='declined')openModal(consent);
   }
   function browse(focus=true) {
-    surfaceRestorePending=false;
+    surfaceRestorePending=false;fullscreenReturn=null;
     if(pending)pending.browsing=true;
     closePicker();closeHistory();
     presentation='floating';
@@ -212,9 +225,51 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(presentation==='home')homeHost.append(root);
     updateSurface();restoreFocus();
   }
+  // Full screen is the Ask page (/ask): the same composer, alone on its own
+  // page. Leaving it returns to the page it was opened from.
+  function enterFullscreen() {
+    surfaceRestorePending=false;
+    if(presentation==='page'||!pageHost)return;
+    fullscreenReturn=askPageURI(location.href);
+    closePicker();closeHistory();
+    if(overlay.open)overlay.close();
+    presentation='page';pageHost.append(root);
+    // A chat still loading is the one the user chose; the route reopens it.
+    window.pharosNavigate?.(askFullscreenURL(location.href,requestedChat()));
+    previews?.revalidate();
+    render();question.focus({preventScroll:true});
+  }
+  // Changing pages cancels a chat still loading. Home's route reopens the chat
+  // it names; the dialog and picture in picture resume it here.
+  function requestedChat(){return openingSession!==null&&openingChat?openingChat:activeSessionId;}
+  function fullscreenExit(){const id=requestedChat(),target=askFullscreenExit(location.href,fullscreenReturn,id);fullscreenReturn=null;closePicker();closeHistory();return {...target,id};}
+  function resumeChat(id){if(id&&id!==activeSessionId&&openingSession===null)void openSession(id);}
+  function exitFullscreen() {
+    surfaceRestorePending=false;
+    if(presentation!=='page')return;
+    const target=fullscreenExit();
+    presentation='dismissed';overlay.append(root);
+    window.pharosNavigate?.(target.href);
+    if(target.presentation==='modal')openOverlay();else question.focus({preventScroll:true});
+    resumeChat(target.id);
+  }
+  // The address decides: /ask shows the chat full screen, and leaving it any
+  // other way, such as Back or the navigation, ends full screen.
+  function syncFullscreen() {
+    if(!pageHost)return;
+    const onPage=location.pathname==='/ask';
+    if(onPage&&presentation!=='page'){
+      closePicker();closeHistory();
+      if(overlay.open)overlay.close();
+      presentation='page';pageHost.append(root);previews?.revalidate();render();
+    }else if(!onPage&&presentation==='page'){
+      fullscreenReturn=null;presentation='dismissed';overlay.append(root);
+      if(pending)browse(false);else updateSurface();
+    }
+  }
   // Opening an answer's page shrinks the chat into picture in picture, so a follow-up stays one click away.
   function openDestination(turn,href) {
-    const from=presentation==='modal'||presentation==='home'?root.getBoundingClientRect():null;
+    const from=['modal','home','page'].includes(presentation)?root.getBoundingClientRect():null;
     navigatedTurn=turn.id;browse();
     window.pharosNavigate?.(href);
     animatePopOut(from);
@@ -247,7 +302,17 @@ window.initPharosAsk = function(root, {previews} = {}) {
   listen(window,'pharos:ask-open',()=>openOverlay(true));
   windowClose.addEventListener('click',closeOverlay);
   function snoozeBrowseHint(){window.pharosPrefs?.set(browseHintKey,askBrowseHintSnooze());if(pending)pending.hint=false;}
-  browseButton.addEventListener('click',()=>{snoozeBrowseHint();browse();});
+  browseButton.addEventListener('click',()=>{
+    snoozeBrowseHint();
+    if(presentation!=='page'){browse();return;}
+    // From full screen, picture in picture returns to the page it was opened
+    // from and stays floating there, even on Home.
+    const target=fullscreenExit();browse(false);
+    holdFloating=true;try{window.pharosNavigate?.(target.href);}finally{holdFloating=false;}
+    resumeChat(target.id);
+    floating.querySelector('.pharos-floating-open').focus({preventScroll:true});
+  });
+  fullscreenButton.addEventListener('click',()=>{if(presentation==='page')exitFullscreen();else enterFullscreen();});
   find('.pharos-browse-hint-dismiss').addEventListener('click',()=>{snoozeBrowseHint();updateSurface();browseButton.focus();});
   overlay.addEventListener('cancel',event=>{if(event.defaultPrevented)return;event.preventDefault();closeOverlay();});
   // Nested model/history menus consume Escape before closing the whole search.
@@ -289,6 +354,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(!restored)return false;
     if(restored==='modal')openOverlay();
     else if(restored==='floating')browse(false);
+    else if(restored==='page'){if(typeof savedSurface.fullscreenReturn==='string')fullscreenReturn=savedSurface.fullscreenReturn;}
     else if(restored!=='home'){presentation='dismissed';overlay.append(root);}
     contextURI=typeof savedSurface.contextURI==='string'?savedSurface.contextURI:'';
     // The saved prompt replaces this when it can be restored; one too long to
@@ -302,7 +368,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function sessionRecords(){return activeSessionId?[currentSession(),...sessions.filter(s=>s.id!==activeSessionId)]:sessions;}
   function writeHistory(){try{if(activeSessionId)sessionStorage.setItem(activeKey,activeSessionId);else sessionStorage.removeItem(activeKey);}catch{}}
   function syncChatURL(id, push=false){
-    if(disposed||presentation!=='home')return;
+    if(disposed||!['home','page'].includes(presentation))return;
     const href=askChatURL(location.href,id);
     if(href===location.href)return;
     history[push?'pushState':'replaceState'](history.state,'',href);
@@ -362,6 +428,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ai.classList.add('pharos-history-open');ai.style.setProperty('--pharos-history-space',above?'0px':height+8+'px');
   }
   function activateSession(session) {
+    chosenIdea=null;
     activeSessionId=session.id;activeCreatedAt=session.createdAt;activeUpdatedAt=session.updatedAt;
     turns=session.conversation.map(turn=>({...turn}));question.value=session.draft||'';clarificationDraft=session.clarificationDraft||'';setChoices(session.selection);writeHistory();
     threadFollowing=true;
@@ -376,7 +443,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const request=sessionLoads.next();
     stop();saveChat(false);flushDraft();closeHistory();closePicker();
     const focused=document.activeElement;
-    openingSession=request;syncComposer();
+    openingSession=request;openingChat=id;syncComposer();
     try {
       await writeQueue;
       const session=await loadSession(id);
@@ -386,6 +453,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     finally{if(openingSession===request){openingSession=null;syncComposer();if(askFocusAfterLoad({navigate,current:!disposed&&sessionLoads.current(request),before:focused,active:document.activeElement,body:document.body}))question.focus({preventScroll:true});}}
   }
   function clearChat(navigate=true){
+    chosenIdea=null;
     sessionLoads.invalidate();openingSession=null;
     stop();saveChat(false);flushDraft();closeHistory();closePicker();
     turns=[];activeSessionId=null;activeCreatedAt=0;activeUpdatedAt=0;question.value='';clarificationDraft='';threadFollowing=true;writeHistory();syncChatURL(null,!!navigate);renderThread();render();if(navigate)question.focus({preventScroll:true});
@@ -396,7 +464,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(turns.length||question.value.length)return;
     const id=new URL(location.href).searchParams.get('ask_chat')||sessionStorage.getItem(activeKey);
     if(id){
-      openingSession=request;syncComposer();
+      openingSession=request;openingChat=id;syncComposer();
       try{const session=await loadSession(id);if(disposed||!sessionLoads.current(request)||turns.length||question.value.length)return;activateSession(session);syncChatURL(id);renderThread();}
       catch(error){if(!disposed&&sessionLoads.current(request))report(error);}
       finally{if(openingSession===request){openingSession=null;syncComposer();}}
@@ -405,7 +473,6 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function render() {
     const enabled = mode === 'enabled' && !regularOverride;
     ai.hidden = !enabled;
-    suggestions.hidden = !enabled || turns.length>0;
     regular.hidden = enabled;
     invite.hidden = mode !== 'available' || !showInvitation || invitationDismissed || consent.open;
     find('.pharos-ai-mode').hidden = mode !== 'enabled';
@@ -476,6 +543,12 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const lastView=turnViews.get(turns.at(-1).id);lastView?.fitOther?.();
     const last=lastView?.element,previous=turnViews.get(turns.at(-2)?.id)?.get('.pharos-agent-message');
     if(!last)return;
+    // Full screen sizes the transcript in CSS: it fills the page above the editor.
+    if(presentation==='page'){
+      threadViewport.style.removeProperty('max-height');threadViewport.style.removeProperty('height');
+      if(threadFollowing)threadViewport.scrollTop=threadViewport.scrollHeight;
+      syncThreadScroll();drawEdge();return;
+    }
     const content=thread.getBoundingClientRect(),end=last.getBoundingClientRect();
     const padding=thread.scrollHeight-(end.bottom-content.top);
     const gap=previous?end.top-previous.getBoundingClientRect().bottom:0;
@@ -516,12 +589,20 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(!actions.history&&!chatHistory.hidden)closeHistory();
     turns.forEach(syncClarification);
   }
+  // Full screen shows suggestions inside the composer until the user types.
+  function syncSuggestions() {
+    const inside=presentation==='page';
+    if(inside&&suggestions.nextElementSibling!==find('.pharos-question-field'))find('.pharos-question-field').before(suggestions);
+    else if(!inside&&suggestions.previousElementSibling!==ai)ai.after(suggestions);
+    const hidden=ai.hidden||turns.length>0||!ideas.length||(inside&&question.value.trim().length>0);
+    if(suggestions.hidden!==hidden){suggestions.hidden=hidden;if(!hidden)renderIdeas();}
+  }
   function syncComposer() {
     const hasThread=turns.length>0;
     thread.hidden=!hasThread;
     threadWrap.hidden=!hasThread;
     ai.classList.toggle('pharos-has-thread',hasThread);
-    suggestions.hidden=ai.hidden||hasThread;
+    syncSuggestions();
     question.disabled=openingSession!==null;
     question.placeholder=openingSession!==null?'Loading conversation…':hasThread?'Ask a follow-up or refine your question...':'What would you like to find in your work?';
     syncComposerActions();
@@ -699,22 +780,29 @@ window.initPharosAsk = function(root, {previews} = {}) {
       });
     });
   }
-  const wrapIdea=index=>((index%ideas.length)+ideas.length)%ideas.length;
+  const wrapIdea=index=>ideas.length?((index%ideas.length)+ideas.length)%ideas.length:0;
   const readingIdeas=()=>{const center=ideaStride?wrapIdea(Math.round(ideaViewport.scrollLeft/ideaStride)):ideaCenter;return Array.from({length:ideaCount},(_,index)=>ideaOrder[wrapIdea(center-Math.floor(ideaCount/2)+index)]);};
-  function updateIdeaText(){
-    ideas=askPromptSuggestions({repositories:ideaRepositories,variation:ideaVariation});
-    for(const button of ideaRow.children)button.querySelector('.pharos-idea-text').textContent=ideas[Number(button.dataset.idea)];
-    markReading();drawIdeas();
+  // Replace the list in place: a refresh or a background update keeps the
+  // carousel's controls and preferences.
+  function showIdeas(items,announce=''){
+    if(ideaMotion){ideaMotion.cancel();ideaMotion=null;}clearTimeout(ideaScrollEnd);ideaScrollEnd=null;ideaMoving=false;ideaViewport.removeAttribute('data-moving');
+    ideas=items;dressIdeas();ideaCenter=Math.min(1,Math.max(0,ideas.length-1));ideaPage=0;ideaElapsed=0;ideaLastTick=Date.now();ideaSize='';ideaRow.replaceChildren();
+    render();syncComposer();renderIdeas();sizeModal();
+    if(announce)find('.pharos-idea-announcement').textContent=announce;
   }
-  async function loadIdeaContext(){
-    if(ideaContextRequested||!accessEnabled||ideasHidden)return;
-    ideaContextRequested=true;
+  async function loadIdeas(announce=''){
+    if(!accessEnabled||disposed)return;
+    ideasRequested=true;clearTimeout(ideaRetry);
+    const page=presentation==='modal'?contextURI:askPageURI(location.href);
     try{
-      const response=await fetch('/api/query/library/distinct?field=repository_name&limit=12',{signal:ideaContextController.signal});
+      const response=await fetch('/api/ask/suggestions?'+new URLSearchParams({seed:String(ideaSeed),page:page||''}),{signal:ideaController.signal});
       if(!response.ok)return;
       const result=await response.json();if(disposed)return;
-      ideaRepositories=Array.isArray(result.values)?result.values:[];updateIdeaText();
-    }catch{/* Suggestions remain useful without optional repository metadata. */}
+      showIdeas(askSuggestionItems(result.suggestions),announce);
+      // The first suggestions are still being chosen in the background.
+      if(result.pending)ideaRetry=setTimeout(()=>void loadIdeas(),askSuggestionRetryDelay(ideaRetries++));
+      else ideaRetries=0;
+    }catch{/* Without suggestions the composer works as before. */}
   }
   function syncIdeaVisibility(){
     ideaToggle.textContent=ideasHidden?'Show suggestions':'Hide suggestions';
@@ -732,10 +820,10 @@ window.initPharosAsk = function(root, {previews} = {}) {
     for(let slot=0;slot<ideas.length*3;slot++){
       const id=ideaOrder[slot%ideas.length],button=find('#pharos-suggestion-template').content.firstElementChild.cloneNode(true);
       button.dataset.idea=id;button.dataset.slot=slot;button.dataset.corners=ideaCorners[id].join(',');
-      button.querySelector('.pharos-idea-text').textContent=ideas[id];
+      button.querySelector('.pharos-idea-text').textContent=ideas[id].text;
       button.addEventListener('click',()=>{
         if(button.hasAttribute('data-xray')){moveIdeas(Number(button.dataset.slot)-(ideas.length+ideaCenter),true);return;}
-        stop();closePicker();question.value=ideas[id];autoFit();drawEdge();saveChat();question.focus();const end=question.value.length+promptEditor.chips().length;question.setSelectionRange(end,end);
+        stop();closePicker();question.value=ideas[id].text;chosenIdea=ideas[id];syncSuggestions();autoFit();drawEdge();saveChat();question.focus();const end=question.value.length+promptEditor.chips().length;question.setSelectionRange(end,end);
       });
       ideaRow.append(button);
     }
@@ -763,7 +851,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
       const inert=slot<first-1||slot>last+1;
       if(button.inert&&!inert)repaint=true;
       button.inert=inert;
-      button.setAttribute('aria-label',reading?ideas[Number(button.dataset.idea)]:'Bring '+ideas[Number(button.dataset.idea)]+' into view');
+      const text=ideas[Number(button.dataset.idea)].text;
+      button.setAttribute('aria-label',reading?text:'Bring '+text+' into view');
     });
     const size=height+'px';
     if(suggestions.style.getPropertyValue('--pharos-idea-height')!==size){suggestions.style.setProperty('--pharos-idea-height',size);repaint=true;}
@@ -777,10 +866,10 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ideaMoving=false;ideaMotion=null;ideaViewport.removeAttribute('data-moving');ideaViewport.style.scrollSnapType='';markReading();updateIdeaClock();
   }
   function renderIdeas() {
-    if(suggestions.hidden||ideasHidden)return;
-    void loadIdeaContext();
+    if(!ideasRequested&&accessEnabled)void loadIdeas();
+    if(suggestions.hidden||ideasHidden||!ideas.length)return;
     buildIdeas();const width=ideaViewport.clientWidth;if(!width)return;
-    ideaCount=width>=600?3:1;
+    ideaCount=width>=600?Math.min(3,ideas.length):1;
     const cardWidth=(width-2*(ideaCount===3?44:28)-(ideaCount-1)*14)/ideaCount;
     const size=width+':'+cardWidth;
     if(size!==ideaSize){
@@ -830,13 +919,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   find('.pharos-more-ideas').addEventListener('click',()=>moveIdeas(Math.ceil(ideaCount/2),true));
   find('.pharos-idea-previous').addEventListener('click',()=>moveIdeas(-Math.ceil(ideaCount/2),true));
   find('.pharos-idea-play').addEventListener('click',()=>{advanceIdeas();ideaPaused=!ideaPaused;ideaLastTick=Date.now();updateIdeaClock();});
-  find('.pharos-idea-refresh').addEventListener('click',()=>{
-    if(ideaMotion){ideaMotion.cancel();ideaMotion=null;}clearTimeout(ideaScrollEnd);ideaScrollEnd=null;ideaMoving=false;ideaViewport.removeAttribute('data-moving');
-    ideaVariation++;ideas=askPromptSuggestions({repositories:ideaRepositories,variation:ideaVariation});
-    // Move by one page without clumping related subjects together.
-    ideaOrder=[...ideaOrder.slice(3),...ideaOrder.slice(0,3)];ideaCenter=1;ideaPage=0;ideaElapsed=0;ideaLastTick=Date.now();ideaSize='';ideaRow.replaceChildren();renderIdeas();
-    find('.pharos-idea-announcement').textContent='Prompt suggestions refreshed.';
-  });
+  find('.pharos-idea-refresh').addEventListener('click',()=>{ideaSeed++;void loadIdeas('Prompt suggestions refreshed.');});
   ideaViewport.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight'].includes(event.key)&&!event.altKey&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey){event.preventDefault();moveIdeas((event.key==='ArrowLeft'?-1:1)*Math.ceil(ideaCount/2),true);}});
   ideaViewport.addEventListener('scroll',()=>{
     markReading();if(ideaMotion||frozenAt!==null)return;
@@ -976,7 +1059,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ticker=setInterval(()=>tickRequest(request),1000);
     try {
       await writeQueue;await cancelQueue;
-      const session=await api('send',{id:activeSessionId,turnID:turn.id,prompt:turn.prompt,draft:question.value,selection:copySelection(choices),retry,currentURI:turn.currentURI,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone},controller.signal,activity=>{
+      const session=await api('send',{id:activeSessionId,turnID:turn.id,prompt:turn.prompt,draft:question.value,selection:copySelection(choices),retry,currentURI:turn.currentURI,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,...(turn.offer&&{suggestion:turn.offer})},controller.signal,activity=>{
         if(pending?.request!==request)return;
         if(!turn.activity.length){pending.started=Date.now()-activity.elapsedMs;turn.startedAt=pending.started;}
         turn.activity=[...(turn.activity||[]),activity].slice(-40);turn.elapsedMs=Date.now()-pending.started;updateTurn(turn);
@@ -1004,14 +1087,15 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const prompt=value.trim();closePicker();closeHistory();
     if(!activeSessionId){sessionLoads.invalidate();activeSessionId=crypto.randomUUID();activeCreatedAt=Date.now();}
     syncChatURL(activeSessionId);threadFollowing=true;
-    const turn={id:crypto.randomUUID(),prompt,currentURI:presentation==='modal'?contextURI:askPageURI(location.href),cli:choices.provider,model:choices.model,modelLabel:modelLabel(),effort:choices.effort,...(choices.fast&&{fast:true}),status:'loading',message:'',reply:'',cards:[],elapsedMs:0};
+    const turn={id:crypto.randomUUID(),prompt,currentURI:['modal','page'].includes(presentation)?contextURI:askPageURI(location.href),cli:choices.provider,model:choices.model,modelLabel:modelLabel(),effort:choices.effort,...(choices.fast&&{fast:true}),status:'loading',message:'',reply:'',cards:[],elapsedMs:0,...(chosenIdea&&{offer:{id:chosenIdea.id,text:chosenIdea.text}})};
+    chosenIdea=null;
     turns.push(turn);appendTurn(turn);if(!preserveDraft)question.value='';clarificationDraft='';autoFit();startRequest(turn,false);
   }
   function ask(){submitQuestion(question.value);}
   find('.pharos-send').addEventListener('click',()=>{if(pending)stop();else ask();});
   ai.addEventListener('submit', event => {event.preventDefault(); ask();});
   find('#pharos-question').addEventListener('keydown', event => {if(event.target===question&&event.key === 'Enter' && !event.shiftKey && !event.isComposing){event.preventDefault();if(!pending)ask();}});
-  question.addEventListener('input', () => {contextURI=promptEditor.chips().find(chip=>chip.id==='page')?.value||'';if(pending)pending.edited=true;autoFit();saveChat();});
+  question.addEventListener('input', () => {contextURI=promptEditor.chips().find(chip=>chip.id==='page')?.value||'';if(!question.value.trim())chosenIdea=null;if(pending)pending.edited=true;syncSuggestions();autoFit();saveChat();});
   function syncTheme(){appearance=document.documentElement.dataset.theme==='dark'?'dark':'light';drawEdge();drawIdeas();}
   const themeObserver=new MutationObserver(syncTheme);themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']});
   const configChanged=event=>{if(event.detail!==root)void refreshStatus().then(visitChanged).catch(report);};listen(window,'pharos:ask-config',configChanged);
@@ -1025,14 +1109,15 @@ window.initPharosAsk = function(root, {previews} = {}) {
     void askWriteVisit(()=>api('visits',input)).catch(report);
   };
   listen(window,'pharos:visit',visitChanged);
-  const routeChanged=()=>{surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();restoreHome();if(presentation!=='home')return;if(!['/','/home'].includes(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};
+  const routeChanged=()=>{surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();syncFullscreen();restoreHome();if(!['home','page'].includes(presentation))return;if(!askChatPage(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};
   listen(window,'pharos:route',routeChanged);
-  listen(window,'pharos:view',()=>{restoreHome();if(presentation==='home'&&pending&&!['/','/home'].includes(location.pathname))browse();});
+  // Header tabs switch views with pharos:view alone, so full screen ends here too.
+  listen(window,'pharos:view',()=>{syncFullscreen();restoreHome();if(presentation==='home'&&pending&&!['/','/home'].includes(location.pathname))browse();});
   listen(window,'pagehide',()=>{
     // A second reload during startup must not replace the state still loading.
-    if(!surfaceRestorePending)try{sessionStorage.setItem(surfaceKey,JSON.stringify({page:askPageURI(location.href),id:activeSessionId||sessionStorage.getItem(activeKey),presentation,contextURI,floatPosition,prompt:promptEditor.document()}));}catch{}
+    if(!surfaceRestorePending)try{sessionStorage.setItem(surfaceKey,JSON.stringify({page:askPageURI(location.href),id:activeSessionId||sessionStorage.getItem(activeKey),presentation,contextURI,floatPosition,fullscreenReturn,prompt:promptEditor.document()}));}catch{}
     if(draftPending){const payload=draftPending;draftPending=null;void fetch('/api/ask/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});}
   });
-  render();syncTheme();void refreshStatus().then(visitChanged).catch(report);
-  return ()=>{disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mountHost.append(root);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaContextController.abort();sessionLoads.invalidate();stop();glows.forEach(glow=>glow.destroy());clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
+  syncFullscreen();render();syncTheme();void refreshStatus().then(visitChanged).catch(report);
+  return ()=>{disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mountHost.append(root);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
 };

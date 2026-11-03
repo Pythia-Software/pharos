@@ -49,12 +49,13 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
   </>;
 }
 
-// With editing, the card is its own editor: its title and description are
-// fields in place, and it neither opens nor carries tools.
+// With editing, the card is its own editor: its title and description (and,
+// when offered, its category and call to action) are fields in place, and it
+// neither opens nor carries tools.
 export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, editing, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
   preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
-  loadingSpec?: CardLoadingSpec; editing?: { onTitle: (title: string) => void; onDescription: (description: string) => void };
+  loadingSpec?: CardLoadingSpec; editing?: { onTitle: (title: string) => void; onDescription: (description: string) => void; onAction?: (action: string) => void; onCategory?: (category: QueryCategory) => void };
   onOpen: (url: string) => void; onReveal?: () => void; onKeep?: () => void; onEdit?: () => void; onRemove?: () => void; onMove?: (direction: -1 | 1) => void; onReload?: () => void;
   onDragStart?: (event: React.DragEvent) => void; onDragEnd?: () => void; onDrop?: (event: React.DragEvent) => void;
 }) {
@@ -79,7 +80,9 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
     onKeyDown: onMove ? event => { if (event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) { event.preventDefault(); onMove(event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1); } } : undefined,
   };
   const cover = <ChartTooltip><span className={`query-cover${denseList ? " query-cover-dense-list" : ""}${presentation?.kind === "box" ? " query-cover-box" : ""}${headlineMetric ? " query-cover-headline" : ""}`} style={{ height: error || !preview ? loadingSpec?.height : coverHeight }} title={error} aria-busy={!preview && !error || undefined} aria-label={error ? "Preview unavailable" : preview ? `${coverLabel}${preview.note ? `. ${preview.note}` : ""}` : "Loading preview"}>
-        <span className="query-cover-head"><Icon name="grip" /><span className="query-category">{style.label}</span>{preview?.refreshing || preview?.refreshError ? <span className={`query-preview-refresh${preview.refreshing ? " is-refreshing" : ""}`} role="status"
+        <span className="query-cover-head"><Icon name="grip" />{editing?.onCategory ? <select className="query-category" aria-label="Category" value={category} onChange={event => editing.onCategory!(event.target.value as QueryCategory)}>
+          {(Object.keys(queryCategories) as QueryCategory[]).map(key => <option key={key} value={key}>{queryCategories[key].label}</option>)}
+        </select> : <span className="query-category">{style.label}</span>}{preview?.refreshing || preview?.refreshError ? <span className={`query-preview-refresh${preview.refreshing ? " is-refreshing" : ""}`} role="status"
           aria-label={preview.refreshing ? "Refreshing preview" : "Showing saved preview; refresh failed"}
           title={`${preview.refreshing ? "Refreshing" : `Could not refresh: ${preview.refreshError}`}${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name={preview.refreshError ? "severity-high" : "refresh"} /></span> : null}<span className="query-window" title={windowLabel === "Saved" ? "The time range saved with this query" : "Rolling lookback; evaluated when the query runs"}>{windowLabel}</span></span>
         {error ? <span className="query-preview-unavailable" role="status">
@@ -100,7 +103,8 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
           <input className="query-title" aria-label="Title" placeholder="Name this card" required maxLength={200} value={title} onChange={event => editing.onTitle(event.target.value)} />
           <textarea className="query-description" aria-label="Description" placeholder="Add a description" maxLength={500} rows={3} value={description} onChange={event => editing.onDescription(event.target.value)} />
         </> : <><span className="query-title">{title}</span><span className="query-description">{description}</span></>}
-        <span className="query-destination">{actionLabel ?? preview?.action ?? (preview?.buckets ? "Explore the timeline" : "Explore this view")}<Icon name="arrow-right" /></span>
+        <span className="query-destination">{editing?.onAction ? <input className="query-action" aria-label="Call to action" placeholder="Name the call to action" maxLength={60} value={actionLabel ?? ""} onChange={event => editing.onAction!(event.target.value)} />
+          : actionLabel ?? preview?.action ?? (preview?.buckets ? "Explore the timeline" : "Explore this view")}<Icon name="arrow-right" /></span>
       </span>;
   return <article ref={card} className={`query-card${discovery ? " discovery" : ""}${before ? " insert-before" : ""}`} data-card-id={id} data-pharos-target={`card:${id.split(":")[0]}`} data-category={category} data-xray={xray ? "" : undefined} data-revealable={xray && onReveal ? "" : undefined} aria-hidden={xray && !onReveal || undefined}
     style={{ "--query-tone": style.tone, "--query-lean": `${lean}deg` } as React.CSSProperties}

@@ -82,12 +82,16 @@ type backgroundItem struct {
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool
+	// requiresAsk items exist only where Ask Pharos is enabled on this Mac.
+	requiresAsk bool
+	// afterChain items read what the chain writes, so a pass runs them last.
+	afterChain bool
 }
 
 // backgroundItems in the order they run within a pass (runBackgroundItems),
 // which is the order Settings and the status panel list them: new data and
 // the other standalone work first, then the analysis chain's items in chain
-// order.
+// order, then work that reads the chain's results.
 var backgroundItems = []backgroundItem{
 	{ID: "conversations", Label: "New conversations", Verb: "Adding new conversations", Feeds: "Search, Home and Work pages", Cadence: cadenceFrequent, Fixed: true,
 		Kinds: []string{"index.changes.automatic"}, Why: "It reads only what changed since the last check."},
@@ -117,6 +121,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
+	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
+		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks' summaries for questions worth suggesting, after the analyses they read change."},
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
@@ -485,6 +491,9 @@ type backgroundInputs struct {
 	agentEventsWaiting string
 	// labelerProblem is why neither can run, whatever is downloaded.
 	labelerProblem string
+	// ask is whether Ask Pharos is enabled here; suggestionsStale whether
+	// its suggestions' inputs changed since they were chosen.
+	ask, suggestionsStale bool
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -539,7 +548,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask {
 			continue
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
@@ -627,6 +636,17 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				}
 			} else {
 				plan.Next = nextDaily
+			}
+		case item.ID == "suggestions":
+			plan.Pending = in.suggestionsStale
+			switch {
+			case !plan.Pending:
+			case plan.Cadence == cadenceFrequent:
+				plan.Next = at
+			case plan.Cadence == cadenceHourly:
+				plan.Next = plan.LastDone.Add(hourlyEvery)
+			case plan.Cadence == cadenceDaily:
+				daily()
 			}
 		case item.ID == "upgrade":
 			plan.Pending = in.upgradePending
@@ -818,6 +838,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	if in.labels || in.agentEvents {
 		in.labelerProblem = config.Labels.withAssets().labelerProblem()
 	}
+	if s.askEnabled(ctx) {
+		in.ask, in.suggestionsStale = true, s.Catalog.askSuggestionsStale(ctx, time.Now())
+	}
 	return in
 }
 
@@ -983,7 +1006,8 @@ func backgroundSteps(ids []string) []StepPlan {
 
 // runBackgroundItems runs each item in turn, recording each one's outcome:
 // first the items that bring in new data (captures), then the chain's
-// stages together, in chain order. A stage reads what the stages before it
+// stages together, in chain order, then the items that read the chain's
+// results. A stage reads what the stages before it
 // wrote, so those with work waiting come along, read after the captures
 // wrote their inputs, unless their own item is held: set to only when you
 // ask, waiting for power, or on a slower cadence than this pass (Run now
@@ -992,9 +1016,7 @@ func backgroundSteps(ids []string) []StepPlan {
 // they run again. Findings only measure unless the daily review is in the
 // pass. It reports whether any item succeeded (and so may have changed
 // what pages show).
-func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (bool, error) {
-	var failure error
-	succeeded := false
+func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (succeeded bool, failure error) {
 	record := func(id string, started time.Time, err error) {
 		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
 		succeeded = succeeded || err == nil
@@ -1013,26 +1035,31 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 		item, _ := backgroundItemByID(id)
 		return len(item.Stages) > 0 || id == "review"
 	}
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			break
-		}
-		if chainItem(id) {
-			continue
-		}
-		item, _ := backgroundItemByID(id)
-		next(id)
-		started := time.Now()
-		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
-		err := s.runBackgroundItem(ctx, op, id)
-		if ctx.Err() != nil && err == nil {
-			err = ctx.Err()
-		}
-		record(id, started, err)
-		if err != nil && failure == nil {
-			failure = fmt.Errorf("%s: %w", item.Label, err)
+	standalone := func(after bool) {
+		for _, id := range ids {
+			item, _ := backgroundItemByID(id)
+			if ctx.Err() != nil {
+				break
+			}
+			if chainItem(id) || item.afterChain != after {
+				continue
+			}
+			next(id)
+			started := time.Now()
+			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
+			err := s.runBackgroundItem(ctx, op, id)
+			if ctx.Err() != nil && err == nil {
+				err = ctx.Err()
+			}
+			record(id, started, err)
+			if err != nil && failure == nil {
+				failure = fmt.Errorf("%s: %w", item.Label, err)
+			}
 		}
 	}
+	standalone(false)
+	// Named results: what these record reaches the caller.
+	defer standalone(true)
 	stages := map[string]bool{}
 	chainItems := []string{}
 	for _, item := range backgroundItems {

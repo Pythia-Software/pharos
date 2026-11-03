@@ -104,7 +104,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 857
+   "controls": 858
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -156,7 +156,8 @@
    "analyze/query/parallelism": ["section:analyze","section:queryTableUsage"],
    "analyze/query/rhythm": ["section:analyze","section:queryTableUsage"],
    "analyze/query/agent_events": ["section:analyze","section:queryTableUsage"],
-   "analyze/query/agent_event_messages": ["section:analyze","section:queryTableUsage"]
+   "analyze/query/agent_event_messages": ["section:analyze","section:queryTableUsage"],
+   "ask": ["section:ask","section:askPage"]
   }
  },
  "generated_by": "web/generate-site-map.mjs from web/src/site-map.ts",
@@ -553,6 +554,12 @@
    "description": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
    "route": "/findings",
    "fixed": {"optimize_area":"safety","view":"settings"}
+  },
+  "ask": {
+   "path": "ask",
+   "title": "Ask Pharos",
+   "description": "Ask Pharos full screen: a new chat on its own page, without the rest of the app.",
+   "route": "/ask"
   },
   "work": {
    "path": "work",

@@ -6,12 +6,13 @@ import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, cre
 import type { CardCover } from "./card-cover";
 import { preferences } from "./preferences";
 import { normalizedDashboardChart } from "./analysis-catalogs";
+import { queryCategories, type QueryCategory } from "./query-categories";
 import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQueryMatches, updateQueryWindowURL, type QueryDataset, type RollingWindow } from "./query-links";
 
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
-  dashboard?: boolean; dashboardTarget?: Exclude<DashboardCardTarget, "chart">;
+  dashboard?: boolean; dashboardTarget?: Exclude<DashboardCardTarget, "chart">; action?: string; category?: QueryCategory;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
 };
 
@@ -121,12 +122,23 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   return item;
 }
 
-export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string): Bookmark {
+// A card may name its own call to action and category. Each is stored only
+// when chosen; an absent one keeps the card's derived default.
+export type CardLabels = { action?: string; category?: QueryCategory };
+export function cardLabels(labels: CardLabels): CardLabels {
+  const action = labels.action?.trim();
+  if (action && action.length > 60) throw new Error("Use a call to action up to 60 characters.");
+  if (labels.category && !Object.hasOwn(queryCategories, labels.category)) throw new Error("Choose a category from the list.");
+  return { ...action ? { action } : {}, ...labels.category ? { category: labels.category } : {} };
+}
+
+export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string, labels?: CardLabels): Bookmark {
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url, current.query);
   if (!current) throw new Error("This saved view is no longer in your collection.");
   if (spec && items.some(item => item.id !== id && item.title === title.trim() && queryFromURL(item.url, item.query)?.dataset === spec.dataset)) throw new Error("Another saved query in this table has that name.");
-  const updated = { ...current, title: title.trim(), description: description.trim() };
+  const updated: Bookmark & { description: string } = { ...current, title: title.trim(), description: description.trim() };
+  if (labels) { delete updated.action; delete updated.category; Object.assign(updated, cardLabels(labels)); }
   if (coverMetricId !== undefined) {
     if (coverMetricId && !validCoverValue(spec?.query, coverMetricId)) throw new Error("Choose a metric from this saved view.");
     if (coverMetricId) {

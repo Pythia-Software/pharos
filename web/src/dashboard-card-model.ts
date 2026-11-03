@@ -5,7 +5,7 @@ import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL } from "./usage-workspace-model";
-import { collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark } from "./bookmarks";
+import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
 import { defaultCardCover } from "./card-cover";
 import type { QuerySuggestion } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
@@ -65,19 +65,31 @@ export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisStat
   return `${measure}${view.view === "trend" ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
 }
 
-export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", templateId?: string): Bookmark {
+export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}, templateId?: string): Bookmark {
   if (!dashboardCardTargets(url).some(item => item.id === target)) throw new Error("This chart cannot be a card.");
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks();
-  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, ...templateId ? { templateId } : {}, title: title.trim(), description: description.trim(), savedAt: Date.now() };
+  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...templateId ? { templateId } : {}, ...dashboardCardLabels(url, target, labels), savedAt: Date.now() };
   writeBookmarks([...items, item]);
   return item;
+}
+
+// Every dashboard card's call to action unless its author names another.
+export const DASHBOARD_CARD_ACTION = "Explore this dashboard";
+
+// The editors show each label's effective value; one equal to its default is
+// not stored, so the card keeps following the chart it shows.
+export function dashboardCardLabels(url: string, target: DashboardCardTarget = "chart", labels: CardLabels): CardLabels {
+  const chosen = cardLabels(labels);
+  if (chosen.action === DASHBOARD_CARD_ACTION) delete chosen.action;
+  try { if (chosen.category === dashboardCardPresentation(url, target).category) delete chosen.category; } catch { /* An invalid definition keeps the chosen category. */ }
+  return chosen;
 }
 
 // A template becomes a saved query, or for a Habits section the dashboard
 // card its page saves, either way remembering the template it came from.
 export async function collectCardTemplate(item: QuerySuggestion): Promise<Bookmark> {
-  if (item.habits) return collectDashboardCard(item.url, item.title, item.description, item.habits.target, item.instanceId);
+  if (item.habits) return collectDashboardCard(item.url, item.title, item.description, item.habits.target, { action: item.action }, item.instanceId);
   return collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
 }
 

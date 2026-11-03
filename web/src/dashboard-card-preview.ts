@@ -4,7 +4,7 @@ import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
-import { dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
+import { DASHBOARD_CARD_ACTION, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
 import { loadConcurrencyData } from "./concurrency-store";
@@ -36,7 +36,7 @@ function ribbonPreview(address: string, data: ConcurrencyData, now: number): Que
   readDashboardCard(address, new Date(now));
   const settings = dashboardCardRibbon(address), cover = ribbonCover(data, settings, new Date(now));
   const ready = cover.buckets.some(bucket => Object.keys(bucket.values).length);
-  return { state: ready ? "ready" : "empty", total: cover.buckets.length, summary: ribbonCardTitle(settings), action: "Explore this dashboard",
+  return { state: ready ? "ready" : "empty", total: cover.buckets.length, summary: ribbonCardTitle(settings), action: DASHBOARD_CARD_ACTION,
     emptyLabel: "No captured activity in this range", buckets: cover.buckets, series: cover.series,
     note: `Average concurrent ${settings.counting === "agent" ? "sessions" : "workspaces"} in each period, including idle time, by repository.`,
     dashboardTrend: { prepared: true, xLabel: cover.hourly ? "hours" : "day", yLabel: cover.label, unit: "" } };
@@ -71,7 +71,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     // Retain only the selected series and never smooth these amounts twice.
     const series = built.series.filter(item => !built.selected.length || built.selected.includes(item.key) !== built.excluded);
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
-    return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: "Explore this dashboard",
+    return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, state),
       dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
         unit: percent ? "percent" : catalog.measures[state.metric].format.kind === "duration" ? "ms" : catalog.measures[state.metric].unit,
@@ -93,7 +93,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   }
   const presented = toolMetricPresentation(entry, clause.groupBy, catalog.labels).metric as AggregationResultEntry;
   const ready = entry.buckets.some(bucket => bucket.distribution?.kind === "box" ? Boolean(bucket.distribution.summary) : bucket.distribution?.kind === "histogram" ? bucket.distribution.n > 0 : bucket.value !== null);
-  return { state: ready ? "ready" : "empty", total: entry.processedRows ?? entry.buckets.length, summary: clause.label ?? "Dashboard chart", action: "Explore this dashboard",
+  return { state: ready ? "ready" : "empty", total: entry.processedRows ?? entry.buckets.length, summary: clause.label ?? "Dashboard chart", action: DASHBOARD_CARD_ACTION,
     emptyLabel: analysisEmptyLabel(catalog, state), note: analysisNote(catalog, state), metrics: [{ clause, result: presented }], coverMetricId: clause.id, preserveScale: true,
     groupLabels: state.view === "cycle" && analysis.native ? Object.fromEntries(entry.buckets.map(bucket => [JSON.stringify(bucket.keys), state.cycle === "hour" ? hoursOfDay[Number(bucket.keys[0])] : weekdays[Number(bucket.keys[0]) - 1]])) : undefined,
     fields: [...schema.fields, { name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "derived" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "derived" } }] };

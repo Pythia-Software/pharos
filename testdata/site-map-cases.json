@@ -190,6 +190,7 @@
  ],
  "nodes": [
   {"path":"home","url":"/"},
+  {"path":"ask","url":"/ask"},
   {"path":"cards","url":"/cards"},
   {"path":"cards","url":"/cards?card_search=tokens&card_topic=usage&card_sort=title","state":{"card_search":"tokens","card_topic":"usage","card_sort":"title"}},
   {"path":"cards","url":"/cards?card_data=tool_calls&card_topic=all&card_kind=Ranking","state":{"card_data":"tool_calls","card_kind":"Ranking","card_topic":"all"}},
