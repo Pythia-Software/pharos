@@ -684,6 +684,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
 	case path == "/api/search/text" || path == "/api/search/text/validate":
 		if r.Method != "POST" {
 			writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
