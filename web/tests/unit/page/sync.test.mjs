@@ -54,7 +54,7 @@ test("empty-library status keeps polling until the first content arrives", async
   assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 3);
 });
 
-test("settings history stays still during activity polls and refreshes on request or navigation", async () => {
+test("settings tables stay still during activity polls and refresh on request or navigation", async () => {
   for (const library_empty of [false, true]) {
     let reads = 0, activityReads = 0;
     const timers = [];
@@ -69,19 +69,20 @@ test("settings history stays still during activity polls and refreshes on reques
     });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(reads, 1);
-    const history = script.window.pharosSync.status().history;
+    const tables = script.window.pharosSync.tableStatus();
     await timers.shift()();
-    assert.equal(activityReads, 2, "activity keeps polling while the table is static");
+    assert.equal(activityReads, 2, "activity keeps polling while the tables are static");
     assert.equal(reads, 2);
-    assert.equal(script.window.pharosSync.status().source_states[0].attempted_at, 2, "source status stays live");
-    assert.equal(script.window.pharosSync.status().history, history, "automatic polling retains the same history snapshot");
+    assert.equal(script.window.pharosSync.status().source_states[0].attempted_at, 2, "the live status follows the poll");
+    assert.equal(script.window.pharosSync.tableStatus(), tables, "automatic polling retains the same table snapshot");
     await script.window.pharosSync.refresh();
-    assert.equal(reads, 3, "manual Refresh loads a new snapshot");
-    assert.equal(script.window.pharosSync.status().history[0].run_id, "run-3");
+    assert.equal(reads, 3, "Run Now loads a new snapshot");
+    assert.equal(script.window.pharosSync.tableStatus().history[0].run_id, "run-3");
+    assert.equal(script.window.pharosSync.tableStatus().source_states[0].attempted_at, 3);
     script.window.dispatchEvent(new script.window.Event("pharos:route"));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(reads, 4, "returning to the page loads a new snapshot");
-    assert.equal(script.window.pharosSync.status().history[0].run_id, "run-4");
+    assert.equal(script.window.pharosSync.tableStatus().history[0].run_id, "run-4");
     assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 4);
   }
 });

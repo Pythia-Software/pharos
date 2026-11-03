@@ -11,6 +11,7 @@ declare global {
   interface Window {
     pharosSync: {
       status: () => SyncRecord | null;
+      tableStatus: () => SyncRecord | null;
       refresh: () => Promise<void>;
       format: { seconds: (value: unknown) => string; memory: (value: unknown) => string; when: (value: unknown) => string; number: (value: unknown) => string; percent: (value: unknown) => string };
     };
@@ -100,10 +101,13 @@ function Diagnostics({ status, tables }: { status: SyncRecord; tables: ReturnTyp
 }
 
 export function SyncTables() {
-  const [status, setStatus] = useState<SyncRecord | null>(() => window.pharosSync?.status() ?? null);
+  // The tables read a snapshot that background polls leave alone; the busy
+  // note reads the live status.
+  const read = () => ({ live: window.pharosSync?.status() ?? null, snapshot: window.pharosSync?.tableStatus() ?? null });
+  const [{ live, snapshot: status }, setStatus] = useState(read);
   const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
-    const update = () => setStatus(window.pharosSync?.status() ?? null);
+    const update = () => setStatus(previous => { const next = read(); return next.live === previous.live && next.snapshot === previous.snapshot ? previous : next; });
     window.addEventListener("pharos:sync-status", update); update();
     return () => window.removeEventListener("pharos:sync-status", update);
   }, []);
@@ -111,15 +115,15 @@ export function SyncTables() {
   const history = useMemo(() => syncTables({history: status?.history}).history, [status?.history]);
   const selectedRun = (status?.history ?? []).find((run: SyncRecord) => runKey(run) === selected);
   if (!status?.settings) return <p className="muted" role="status">Loading capture and index history…</p>;
-  const latest = status.history?.[0];
+  const latest = status.history?.[0], current = live ?? status;
   return <>
     <section className="sync-panel" aria-label="Recent runs">
       <div className="sync-section-head"><div><h3>Recent runs</h3><p className="muted">Index changes on this Mac{latest ? <> · Last run <Timestamp value={latest.finished_at} /> · {resultLabel(latest)}</> : null}</p></div>
-        {status.busy ? <span className="sync-result">{status.pause_reason || "Indexing in progress"}</span> : null}</div>
+        {current.busy ? <span className="sync-result">{current.pause_reason || "Indexing in progress"}</span> : null}</div>
       {latest ? <div className="sync-summary" aria-label="Last run cost">{[
         ["Conversations indexed", format("number", latest.conversations)], ["Elapsed time", format("seconds", latest.seconds)], ["CPU time", format("seconds", latest.cpu_seconds)], ["RAM peak", format("memory", latest.rss_observed_peak_bytes)],
       ].map(([label, value]) => <div key={label} className="sync-metric"><span>{label}</span><strong>{value}</strong></div>)}</div> : null}
-      <p className="muted">Automatic table refresh is off. Use Run Now to refresh this table’s history.</p>
+      <p className="muted">These tables update only when you use Run Now or their auto-refresh.</p>
       <HistoryQueryTable table={history} label="Recent run history" onInspect={setSelected} />
       <p className="muted">Counts cover whole indexed conversations, not just newly added messages. CPU and RAM reflect the whole Pharos process, including other work. History includes up to 200 runs on this Mac.</p>
     </section>

@@ -116,7 +116,7 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
-import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange } from "./dataset-refresh";
+import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -174,7 +174,7 @@ declare global {
     pharosCopyText?: (text: string) => Promise<void>;
     pharosQueryTables?: {
       createLink: () => Promise<{ url: string; query?: QueryState; dataset?: Dataset }>;
-      refresh: (dataset: Dataset) => void;
+      refreshDashboards: (dataset: Dataset) => void;
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
@@ -599,7 +599,6 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [detailsReady, attentionSchema, attention, nativeDetailSurface]);
   const apiRef = useRef(api);
   apiRef.current = api;
-  useEffect(() => dataset === "safety" ? onSafetyChange(() => apiRef.current.refresh()) : undefined, [dataset]);
   // A new search starts from its first page.
   const searched = useRef(find);
   useEffect(() => {
@@ -650,15 +649,6 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     }
   }, [dataset, api.query, visible, api.restoration.ready, api.error]);
 
-  useEffect(() => {
-    const refresh = () => {
-      const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
-      const current = apiRef.current;
-      if (selected?.mode === "today" || refreshTodayHost(current.query.hostState) !== current.query.hostState) current.setQuery(previous => ({ ...resolveRollingQuery(previous, selected?.mode === "today" ? selected : undefined), hostState: refreshTodayHost(previous.hostState), offset: 0 }));
-    };
-    window.addEventListener("pharos:day-change", refresh);
-    return () => window.removeEventListener("pharos:day-change", refresh);
-  }, [dataset]);
   // Drilldowns filter source records, including canonical computed fields.
   const sourceSchema = useMemo(() => ({ ...schema, fields: api.computed.catalogue }), [schema, api.computed.catalogue]);
   // Inactive controllers retain their query state, but their controls must not
@@ -1523,7 +1513,7 @@ function ToolLedgerBanner() {
   const running = status?.backfill.running ?? false;
   const wasRunning = useRef(false);
   useEffect(() => {
-    if (wasRunning.current && !running) { tableApis.get("tools")?.refresh(); tableApis.get("tool_calls")?.refresh(); tableApis.get("skill_usages")?.refresh(); window.dispatchEvent(new Event("pharos:usage-refresh")); }
+    if (wasRunning.current && !running) window.dispatchEvent(new Event("pharos:usage-refresh"));
     wasRunning.current = running;
   }, [running]);
   async function build() {
@@ -1534,7 +1524,7 @@ function ToolLedgerBanner() {
   if (!status || (!running && status.pending_conversations === 0 && !status.backfill.error)) return null;
   const percent = status.backfill.total ? Math.round(status.backfill.done / status.backfill.total * 100) : 0;
   return <div className="tool-ledger-banner" role="status">
-    {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%). Tables refresh as it goes.</span>
+    {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%).</span>
       : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need a tool ledger rebuild. Building it re-reads their retained messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
     {running ? null : <button type="button" onClick={() => void build()}>Build tool ledger</button>}
   </div>;
@@ -1595,9 +1585,10 @@ if (concurrencyPrototypeEnabled) {
 }
 startConcurrencySummary();
 // Carbon and Parallelism settings shape Usage and parallelism values on the
-// server. Refresh their tables and cards once the saved settings have landed.
+// server. Refresh their cards once the saved settings have landed; query
+// tables rerun only through their own Run Now and auto-refresh.
 window.addEventListener("pharos:preferences-saved", event => {
-  for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refresh(dataset as Dataset);
+  for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refreshDashboards(dataset as Dataset);
 });
 window.pharosQueryTables = {
   summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
@@ -1608,14 +1599,9 @@ window.pharosQueryTables = {
     const link = await api.links.create(query);
     return { url: link.url, query, dataset };
   },
-  refresh(dataset) {
+  refreshDashboards(dataset) {
     window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));
-    tableApis.get(dataset)?.refresh();
-    if (dataset === "usage") {
-      tableApis.get("writing")?.refresh();
-      tableApis.get("writing_messages")?.refresh();
-      window.dispatchEvent(new Event("pharos:usage-refresh"));
-    }
+    if (dataset === "usage") window.dispatchEvent(new Event("pharos:usage-refresh"));
   },
   filterRepository(repository) {
     filterLibrary([{ field: "repository_name", op: "=", value: repository }]);

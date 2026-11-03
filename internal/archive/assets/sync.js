@@ -1,5 +1,6 @@
 (() => {
-  let status = null;
+  // The live status, and the snapshot the Settings query tables show.
+  let status = null, tableStatus = null;
   let busy = false;
   let timer = null;
   let activeRun = null;
@@ -246,9 +247,11 @@
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
         const latest = await call('/api/sync/status');
-        // Keep history still while it is being reviewed. Page visits, Refresh
-        // and actions replace it; activity, source status and alerts stay live.
-        status = automatic && status?.settings ? {...latest, history: status.history} : latest;
+        // Query tables stay still while they are being reviewed: page visits,
+        // their Run Now and auto-refresh, and actions replace them; activity
+        // and alerts stay live.
+        status = latest;
+        if (!automatic || !tableStatus?.settings) tableStatus = latest;
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
@@ -263,7 +266,7 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
   }
   window.addEventListener('pharos:route', () => refresh());
-  window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};
   refresh();
