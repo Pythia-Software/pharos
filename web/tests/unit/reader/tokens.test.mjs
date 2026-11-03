@@ -15,7 +15,7 @@ test("all source accounting formats reconcile against shared fixtures", () => {
   assert.ok(tokenCases.length > 0);
   for (const item of tokenCases) {
     // Fixture events are protocol accounting envelopes, stored as metadata.
-    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), kind: "metadata", text: JSON.stringify(value) })));
+    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), kind: "metadata", role: "system", text: JSON.stringify(value) })));
     assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), item.total, item.name);
   }
 });
@@ -132,8 +132,11 @@ test("nested subagent checkpoints count once and remain nested sessions", () => 
 });
 
 test("only protocol metadata marks a continuation", () => {
-  const count = (total, last) => ({ kind: "metadata", text: JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total }, last_token_usage: { total_tokens: last } } } }) });
-  const quoted = { kind: "message", role: "user", text: JSON.stringify({ type: "session_meta", payload: { forked_from_id: "parent" } }) };
-  const reports = conversationTokenReports([quoted, count(1100, 100), count(1300, 200)]);
-  assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), 1300);
+  const count = (total, last) => ({ kind: "metadata", role: "system", text: JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total }, last_token_usage: { total_tokens: last } } } }) });
+  const marker = JSON.stringify({ type: "session_meta", payload: { forked_from_id: "parent" } });
+  // Conductor stores pasted JSON as metadata under the sender's role.
+  for (const kind of ["message", "metadata"]) {
+    const reports = conversationTokenReports([{ kind, role: "user", text: marker }, count(1100, 100), count(1300, 200)]);
+    assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), 1300, kind);
+  }
 });

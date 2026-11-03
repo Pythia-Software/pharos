@@ -78,8 +78,9 @@ function conversationTokenReports(messages){
   const recordStreams=new Set(envelopes.filter(e=>e.raw.type==='token_usage_record'||e.type==='token_usage_record').map(e=>canonical(e.stream)));
   // A transcript that continues another thread's history (a Codex fork, forked
   // subagent or revert page) starts its counters at that thread's usage, which
-  // the other thread's transcript counts. inherited holds that start per stream.
-  const inherits=envelopes.some((e,i)=>messages[i].kind==='metadata'&&e.raw.type==='session_meta'&&continuesHistory(e.value)),inherited=new Map(),counters=new Map(),lasts=new Map(),recorded=new Set();
+  // the other thread's transcript counts. inherited holds that start per
+  // stream, from its first counter or record.
+  const inherits=envelopes.some((e,i)=>messages[i].kind==='metadata'&&messages[i].role==='system'&&e.raw.type==='session_meta'&&continuesHistory(e.value)),inherited=new Map();
   const sum=(start,stream=null)=>reports.slice(start).reduce((total,r)=>total+(r&&(!stream||r.stream===stream)?r.total||0:0),0);
   messages.forEach((message,index)=>{
     const envelope=envelopes[index],{raw,value,type}=envelope,stream=canonical(envelope.stream),hasRecords=recordStreams.has(stream),info=envelope.record&&!hasRecords?{total_token_usage:envelope.record.thread_token_usage,last_token_usage:envelope.record.usage}:value.info||{};
@@ -100,7 +101,6 @@ function conversationTokenReports(messages){
       usage=info.total_token_usage;scope='thread';label='Thread usage checkpoint';
       const last=tokenTotal(info.last_token_usage);
       if(!inherited.has(stream))inherited.set(stream,inherits&&last!==null?Math.max(0,running-last):0);
-      counters.set(stream,running);lasts.set(stream,last);
       if(!hasRecords){const previous=cumulative.get(stream)??inherited.get(stream);total=running>=previous?running-previous:tokenTotal(info.last_token_usage);cumulative.set(stream,running);if(running<previous)label+=' (counter reset; last request only)'}
     }else if(type==='token_count'&&info.last_token_usage){usage=info.last_token_usage;total=hasRecords?null:tokenTotal(usage);label='Last request usage'}
     else if(value.subtype==='task_progress'||value.subtype==='task_notification'){
@@ -119,14 +119,11 @@ function conversationTokenReports(messages){
     const context=value.context_token_count??value.estimated_tokens??value.compact_metadata?.pre_tokens;
     if(total===null&&!compact&&running===null&&typeof context!=='number')return;
     const report={total,compact,trigger,label,scope,stream,usage,context,contextEstimated:value.estimated_tokens!==undefined,breakdown:tokenBreakdown(usage),reportedTotal:tokenTotal(usage),checkpoint:tokenTotal(value.thread_token_usage)};
-    // The first record's thread usage beyond its own also starts at the other
-    // thread's, less what earlier counters here reported for other requests.
-    // The latest counter reports this request when it carries the same usage.
-    if(inherits&&type==='token_usage_record'&&report.checkpoint!==null&&!recorded.has(stream)){
-      recorded.add(stream);const start=inherited.get(stream)||0,last=lasts.get(stream);
-      const earlier=Math.max(0,Math.max(0,(counters.get(stream)||0)-start)-(last!==undefined&&last!==null&&last===total?last:0));
-      inherited.set(stream,Math.max(start,report.checkpoint-(total||0)-earlier));
-    }
+    // Codex writes each response's record before its counter, so a stream's
+    // first record reports where its thread usage started. After a counter, a
+    // record cannot tell inherited usage from earlier requests no record
+    // covers: the counter's start stands and checkpoints fill the rest.
+    if(inherits&&!inherited.has(stream)&&type==='token_usage_record'&&report.checkpoint!==null)inherited.set(stream,Math.max(0,report.checkpoint-(total||0)));
     if(requestID&&scope==='request'){
       const key=stream+':'+requestID,prior=seen.get(key);
       if(prior){report.usage={...prior.usage,...usage};report.breakdown=tokenBreakdown(report.usage);report.total=report.breakdown?.total??null;prior.total=null;prior.superseded=true}

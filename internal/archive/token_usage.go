@@ -141,14 +141,6 @@ func addTokenCounts(to, from tokenCounts) {
 		to[k] += v
 	}
 }
-func maxTokenCounts(a, b tokenCounts) tokenCounts {
-	out := tokenCounts{}
-	addTokenCounts(out, a)
-	for k, v := range b {
-		out[k] = math.Max(out[k], v)
-	}
-	return out
-}
 
 // continuesHistory reports whether a Codex session_meta payload says the
 // rollout continues another thread's history rather than starting its own.
@@ -245,16 +237,15 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 	// A transcript that continues another thread's history (a Codex fork,
 	// forked subagent or revert page) starts its counters at that thread's
 	// usage, which the other thread's transcript counts. inherited holds that
-	// starting point per stream; counters and lasts hold each stream's latest
-	// counter and the request it reported.
+	// starting point per stream, from its first counter or record.
 	inherits := false
-	inherited, counters, lasts, recorded := map[string]tokenCounts{}, map[string]tokenCounts{}, map[string]tokenCounts{}, map[string]bool{}
+	inherited := map[string]tokenCounts{}
 	// Each message is decoded once for both passes.
 	raws, values := make([]map[string]any, len(messages)), make([]map[string]any, len(messages))
 	for i, m := range messages {
 		raws[i], values[i] = tokenObject(m)
 		raw, v := raws[i], values[i]
-		if m.Kind == "metadata" && firstString(raw["type"]) == "session_meta" && continuesHistory(v) {
+		if m.Kind == "metadata" && m.Role == "system" && firstString(raw["type"]) == "session_meta" && continuesHistory(v) {
 			inherits = true
 		}
 		if firstString(raw["type"], v["type"]) == "token_usage_record" {
@@ -319,7 +310,6 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 					inherited[stream] = tokenRemainder(running, last)
 				}
 			}
-			counters[stream], lasts[stream] = running, last
 			if !hasRecords {
 				previous := cumulative[stream]
 				if previous == nil {
@@ -367,17 +357,13 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 		} else {
 			r.checkpoint = normalizeTokenCounts(mapValue(v["thread_token_usage"]))
 		}
-		if inherits && typ == "token_usage_record" && r.checkpoint != nil && !recorded[stream] {
-			// The first record's thread usage beyond its own also starts at the
-			// other thread's, less what earlier counters in this transcript
-			// reported for other requests. The latest counter reports this
-			// request when it carries the same usage.
-			recorded[stream] = true
-			earlier := tokenRemainder(counters[stream], inherited[stream])
-			if last := lasts[stream]; last != nil && last["total_tokens"] == r.counts["total_tokens"] {
-				earlier = tokenRemainder(earlier, last)
-			}
-			inherited[stream] = maxTokenCounts(inherited[stream], tokenRemainder(tokenRemainder(r.checkpoint, r.counts), earlier))
+		if _, started := inherited[stream]; inherits && !started && typ == "token_usage_record" && r.checkpoint != nil {
+			// Codex writes each response's record before its counter, so a
+			// stream's first record reports where its thread usage started.
+			// After a counter, a record cannot tell inherited usage from earlier
+			// requests no record covers: the counter's start stands and
+			// checkpoints fill the rest.
+			inherited[stream] = tokenRemainder(r.checkpoint, r.counts)
 		}
 		if id != "" && (r.scope == "request" || r.scope == "task") {
 			key := stream + ":" + id

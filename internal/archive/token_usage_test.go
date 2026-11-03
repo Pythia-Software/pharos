@@ -246,8 +246,11 @@ func TestQuotedContinuationMarkerKeepsCounterPrefix(t *testing.T) {
 	count := func(total, last int) MessageRecord {
 		return MessageRecord{Role: "system", Kind: "metadata", Text: fmt.Sprintf(`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":%d},"last_token_usage":{"total_tokens":%d}}}}`, total, last)}
 	}
-	quoted := MessageRecord{Role: "user", Kind: "message", Text: `{"type":"session_meta","payload":{"forked_from_id":"parent"}}`}
-	if got := conversationTokenCounts([]MessageRecord{quoted, count(1100, 100), count(1300, 200)}); got["total_tokens"] != 1300 {
-		t.Fatalf("got %v; want 1300", got)
+	marker := `{"type":"session_meta","payload":{"forked_from_id":"parent"}}`
+	// Conductor stores pasted JSON as metadata under the sender's role.
+	for _, quoted := range []MessageRecord{{Role: "user", Kind: "message", Text: marker}, {Role: "user", Kind: "metadata", Text: marker}} {
+		if got := conversationTokenCounts([]MessageRecord{quoted, count(1100, 100), count(1300, 200)}); got["total_tokens"] != 1300 {
+			t.Fatalf("%s %s: got %v; want 1300", quoted.Role, quoted.Kind, got)
+		}
 	}
 }
