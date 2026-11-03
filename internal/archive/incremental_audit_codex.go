@@ -287,6 +287,12 @@ func freezeCodexAuditRecord(ctx context.Context, unit syncUnit, dir string, budg
 				return nil, nil, used, errAuditUnstable
 			}
 		}
+		// A compressed rollout is frozen as it is, under its own name.
+		path = adapter.files().rolloutFile(path)
+		original := part.item
+		if compressedRollout(path) {
+			original += ".zst"
+		}
 		info, err := adapter.files().Stat(path)
 		if err != nil {
 			return nil, nil, used, err
@@ -295,7 +301,7 @@ func freezeCodexAuditRecord(ctx context.Context, unit syncUnit, dir string, budg
 		if err := auditEvidenceBudget(used, budget); err != nil {
 			return nil, nil, used, err
 		}
-		copied, ok := view.captured(part.item)
+		copied, ok := view.captured(original)
 		if !ok {
 			return nil, nil, used, errors.New("Codex audit evidence outside source")
 		}

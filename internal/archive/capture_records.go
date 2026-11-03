@@ -1345,3 +1345,4 @@ func (s *recordStore) conductorEntityIdentities(v sqliteRevision, sessionTable s
 }
 
 func isConductorSource(kind string) bool { return strings.EqualFold(kind, "conductor") }
+func isCodexSource(kind string) bool     { return strings.EqualFold(kind, "codex") }

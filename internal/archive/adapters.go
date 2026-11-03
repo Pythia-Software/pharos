@@ -494,11 +494,11 @@ type jsonlAdapter struct {
 	names         map[string]transcriptName
 }
 
-var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
+var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl(?:\.zst)?$`)
 
 func (a *jsonlAdapter) Fingerprint() (string, error) {
 	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
-		if strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") && a.accept(path) {
+		if a.transcriptName(entry.Name()) && a.accept(path) {
 			return true
 		}
 		if a.provider == "claude" {
@@ -515,6 +515,12 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
 const jsonlExtractor = "message-model-v17-origin-entrypoints"
+
+// transcriptName reports whether a file name is a transcript's: a .jsonl,
+// or for Codex also a compressed rollout.
+func (a *jsonlAdapter) transcriptName(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".jsonl") || a.provider == "codex" && compressedRollout(name)
+}
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -554,7 +560,7 @@ func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr er
 		}
 		return nil, walkErr
 	}
-	if entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".jsonl") || !a.accept(path) {
+	if entry.IsDir() || !a.transcriptName(path) || !a.accept(path) {
 		return nil, nil
 	}
 	// Through the capture view: an encoded transcript plans at its original
@@ -601,13 +607,17 @@ func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 	}
 	if a.provider == "claude" {
 		sort.Strings(roots)
+	} else {
+		roots = a.preferRollouts(roots, infos)
 	}
 	names, err := a.transcriptNames(roots)
 	if err != nil {
 		return nil, err
 	}
 	a.names = names
-	plan := &sourceWorkPlan{}
+	// A transcript that cannot be read fails its own group; the others are
+	// still indexed, and the error is reported after them.
+	plan := &sourceWorkPlan{continueOnError: true}
 	for _, root := range roots {
 		paths := groups[root]
 		sort.Slice(paths, func(i, j int) bool {
@@ -618,8 +628,8 @@ func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 		})
 		parts := make([]sourcePart, 0, len(paths))
 		for _, path := range paths {
-			info := infos[path]
-			part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
+			info := a.files().contentInfo(path, infos[path])
+			part := sourcePart{item: a.original(plainRollout(path)), size: info.Size(), version: info.ModTime().UnixNano()}
 			if name, ok := a.names[path]; ok {
 				part.signal = name.signal()
 			}
@@ -667,6 +677,30 @@ func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []
 	return combined, read, nil
 }
 
+// preferRollouts keeps one form of each rollout listed both plain and
+// compressed (preferRollout), in listing order.
+func (a *jsonlAdapter) preferRollouts(paths []string, infos map[string]fs.FileInfo) []string {
+	byPlain := map[string][]string{}
+	for _, path := range paths {
+		byPlain[plainRollout(path)] = append(byPlain[plainRollout(path)], path)
+	}
+	kept := paths[:0:0]
+	for _, path := range paths {
+		forms := byPlain[plainRollout(path)]
+		if len(forms) == 2 {
+			plain, compressed := forms[0], forms[1]
+			if compressedRollout(plain) {
+				plain, compressed = compressed, plain
+			}
+			if a.files().preferRollout(plain, compressed, infos[plain], infos[compressed]) != path {
+				continue
+			}
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
 func claudeRootPath(path string) string {
 	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 		if filepath.Base(dir) == "subagents" {
@@ -688,8 +722,11 @@ func (a *jsonlAdapter) parse(path string) (WorkspaceRecord, bool, error) {
 // present when it was opened, so a log appended meanwhile, or a capture
 // replaced meanwhile, is parsed again next time rather than taken as current.
 func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool, error) {
-	file, err := a.files().Open(path)
+	file, err := a.files().OpenContent(path)
 	if err != nil {
+		if compressedRollout(path) && !errors.Is(err, os.ErrNotExist) {
+			return WorkspaceRecord{}, sourcePart{}, false, fmt.Errorf("decode %s: %w", path, err)
+		}
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}
 	defer file.Close()
@@ -697,11 +734,11 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 	if err != nil {
 		return WorkspaceRecord{}, sourcePart{}, false, nil
 	}
-	part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
+	part := sourcePart{item: a.original(plainRollout(path)), size: info.Size(), version: info.ModTime().UnixNano()}
 	if parseHook != nil {
 		parseHook(path)
 	}
-	events, err := readJSONLines(file, part.size)
+	events, err := readJSONLines(file, file.readLimit())
 	if err != nil {
 		return WorkspaceRecord{}, part, false, fmt.Errorf("read %s %w", path, err)
 	}
@@ -733,7 +770,7 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 }
 
 func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRecord, bool, error) {
-	origin := a.original(path)
+	origin := a.original(plainRollout(path))
 	meta := map[string]any{}
 	model, effort := "", a.initialEffort
 	harness, versionFirst, versionLast := "codex", "", ""
@@ -926,7 +963,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			messages[index].Text = jsonText(map[string]any{"tool": toolNames[callID], "content": resultContent[callID], "details": extra})
 		}
 	}
-	nativeID := defaultString(meta["id"], strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	nativeID := defaultString(meta["id"], rolloutStem(path))
 	spawn := mapValue(mapValue(mapValue(meta["source"])["subagent"])["thread_spawn"])
 	parentNativeID := firstString(meta["parent_thread_id"], spawn["parent_thread_id"])
 	agentDepth := int(integer(spawn["depth"]))

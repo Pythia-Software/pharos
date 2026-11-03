@@ -23,7 +23,7 @@ func (n transcriptName) signal() string {
 	return hashBytes([]byte(jsonText([]any{n.id, n.title, n.custom})))[:16]
 }
 
-var codexSessionFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
+var codexSessionFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl(?:\.zst)?$`)
 
 func codexStateName(name string) bool {
 	if name == "state.sqlite" {
@@ -169,7 +169,8 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 		ambiguous := map[string]bool{}
 		for _, name := range names {
 			if name.rollout != "" {
-				path := filepath.Clean(name.rollout)
+				// Compression renames a rollout; Codex may record either name.
+				path := plainRollout(filepath.Clean(name.rollout))
 				if previous, exists := paths[path]; exists && previous.id != name.id {
 					ambiguous[path] = true
 					delete(paths, path)
@@ -183,7 +184,7 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 		// reads. Only index candidates need a small session_meta read. Its ID
 		// is verified again by the body parser before applying the title.
 		for _, path := range roots {
-			if name, exists := paths[filepath.Clean(a.original(path))]; exists {
+			if name, exists := paths[plainRollout(filepath.Clean(a.original(path)))]; exists {
 				result[path] = name
 				continue
 			}
@@ -247,8 +248,8 @@ func (s sourceFiles) codexRolloutIdentity(path string) (string, error) {
 }
 
 func (s sourceFiles) readCodexRolloutIdentity(path string) (string, error) {
-	fallback := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	file, err := s.Open(path)
+	fallback := rolloutStem(path)
+	file, err := s.OpenContent(path)
 	if os.IsNotExist(err) {
 		return fallback, nil
 	}

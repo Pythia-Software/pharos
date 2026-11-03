@@ -27,6 +27,24 @@ type capturePlan struct {
 	pathMap       []capturePathMapping
 }
 
+// preferPlainRollouts drops a compressed rollout listed beside its plain
+// form, which the adapter reads instead (preferRollout).
+func preferPlainRollouts(items []captureItem) []captureItem {
+	plain := map[string]bool{}
+	for _, item := range items {
+		if !compressedRollout(item.path) {
+			plain[item.path] = true
+		}
+	}
+	kept := items[:0:0]
+	for _, item := range items {
+		if !compressedRollout(item.path) || !plain[plainRollout(item.path)] {
+			kept = append(kept, item)
+		}
+	}
+	return kept
+}
+
 // planCapture lists exactly what the source's adapter would read.
 func planCapture(source SourceConfig) (capturePlan, error) {
 	plan := capturePlan{complete: true}
@@ -57,8 +75,9 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 	case "codex":
 		adapter := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
-			return jsonl(file) && adapter.accept(file) || info.IsDir() && file == filepath.Join(source.Path, "session_index.jsonl")
+			return adapter.transcriptName(file) && adapter.accept(file) || info.IsDir() && file == filepath.Join(source.Path, "session_index.jsonl")
 		})
+		plan.files = preferPlainRollouts(plan.files)
 		if info.IsDir() {
 			databases, err := codexNamingDatabases(source.Path)
 			if err != nil {
