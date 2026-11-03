@@ -150,13 +150,13 @@ type Op struct {
 	userStop                       bool
 	duringRelease                  bool
 	outcome                        *opOutcome
+	children                       []*Op
+	forecast                       *operationForecast
+	version                        uint64 // bumped on every change, for the journal
+	written                        uint64 // version last written to the journal
+	writtenEver                    bool
 	// stopper is how a kind whose Stop is "work" stops (setStopper).
-	stopper     func()
-	children    []*Op
-	forecast    *operationForecast
-	version     uint64 // bumped on every change, for the journal
-	written     uint64 // version last written to the journal
-	writtenEver bool
+	stopper func()
 	// tentative is set while a daemon pass's operation is unpublished.
 	tentative bool
 	// locks are the capture and index locks the operation has taken: a hold
