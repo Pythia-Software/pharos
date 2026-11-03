@@ -1609,11 +1609,12 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   assert.ok(await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).evaluate(fits),'Close stays reachable after shrinking the window');
 });
 
-// Opens Analyze with Ask enabled; the send stub waits for `finish`.
+// Opens Analyze with Ask enabled; the send stub resolves `received`, then waits for `finish`.
 async function openAskOverlay(t, width) {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const state={sent:null};
   const response=new Promise(resolve=>{state.finish=resolve;});
+  state.received=new Promise(resolve=>{state.receive=resolve;});
   t.after(()=>state.finish());
   const app=await open(t,{url:'/analyze?analyze_topic=tokens',viewport:{width,height:650},ready:'body>header',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -1621,7 +1622,7 @@ async function openAskOverlay(t, width) {
     'GET /api/ask/sessions':{sessions:[]},
     'POST /api/ask/session':({body})=>body,
     'POST /api/ask/send':async({body})=>{
-      state.sent=body;await response;
+      state.sent=body;state.receive();await response;
       return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Ready to explore.',cards:[{id:'library',title:'Search',kind:'Page',description:'Your past work',href:'/library'}]}]};
     },
   }});
@@ -1665,6 +1666,103 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   await modal.waitFor({state:'hidden'});
   const brand=page.locator('body>header .brand');await brand.focus();
   assert.ok(await brand.evaluate(element=>element===document.activeElement),'ordinary search results must allow background interaction');
+});
+
+test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {
+  const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await modal.waitFor({state:'hidden'});
+  assert.ok(await editor.evaluate(element=>!!element.closest('#askPage')&&element===document.activeElement),'full screen keeps the composer focused on its page');
+  // Suggestions sit inside the composer until the user types.
+  const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
+  await suggestions.waitFor();
+  assert.ok(await suggestions.evaluate(element=>!!element.closest('.pharos-ai')));
+  await shot('ask-full-screen-empty');
+  await editor.pressSequentially('Which tools fail most?');
+  await suggestions.waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  await state.received;
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),state.sent?.id,'the page names the chat it is showing');
+  assert.ok(state.sent.currentURI.startsWith('/analyze?'),'the question keeps the page it was asked about');
+  // The transcript fills the page, keeping the composer at the bottom.
+  await page.waitForFunction(()=>{const box=document.querySelector('.pharos-send').getBoundingClientRect();return box.bottom<=innerHeight&&box.bottom>innerHeight-120;});
+  await shot('ask-full-screen');
+  await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/analyze');
+  await modal.waitFor();
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'leaving full screen reopens the dialog it came from');
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await page.goBack();
+  await page.waitForURL(url=>url.pathname==='/analyze');
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
+  await panel.waitFor();
+  assert.ok(await modal.isHidden(),'Back leaves full screen, floating a pending question');
+  // Header tabs switch views without a route event; they still leave full screen.
+  await panel.locator('.pharos-floating-open').click();await modal.waitFor();
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await activateHeaderTool(page,'settingsToggle');
+  await page.waitForURL(url=>url.pathname==='/settings');
+  await panel.waitFor();
+  await activateHeaderTool(page,'askPharosToggle');
+  await modal.waitFor();
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'Ask reopens after a header tab leaves full screen');
+  // Picture in picture from full screen opened on Home floats there instead of returning inline.
+  await page.keyboard.press('Escape');await panel.waitFor();
+  await page.locator('body>header .brand').click();
+  await page.waitForURL(url=>url.pathname==='/');
+  await page.locator('#homeAskSearch').getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/');
+  await panel.waitFor();
+  assert.equal(await page.locator('#homeAskSearch .pharos-ai').count(),0,'the chat floats rather than returning inline');
+  assert.ok(await panel.locator('.pharos-floating-open').evaluate(element=>element===document.activeElement),'focus moves to the floating panel');
+});
+
+test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const chat=(id,prompt)=>({id,createdAt:1,updatedAt:id==='slow'?2:1,selection,draft:'',conversation:[{id:id+'-turn',prompt,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Done.',cards:[]}]});
+  const chats={slow:chat('slow','Slow question'),other:chat('other','Other question')};
+  const gates={};const release=id=>gates[id]?.();
+  const held=id=>new Promise(resolve=>{gates[id]=resolve;});
+  let waiting={};
+  t.after(()=>Object.values(gates).forEach(open=>open()));
+  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':()=>({sessions:Object.values(chats)}),
+    'GET /api/ask/session':async({query})=>{const id=query.get('id');await waiting[id];return chats[id];},
+    'POST /api/ask/session':({body})=>({...chats[body.id],...body}),
+  }});
+  const prompts=()=>page.locator('.pharos-user-question').allTextContents();
+  // Entering full screen while a chat from History loads opens that chat.
+  waiting={slow:held('slow')};
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.getByRole('link',{name:'Open chat: Slow question',exact:true}).click();
+  await page.locator('#homeAskSearch').getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask'&&url.searchParams.get('ask_chat')==='slow');
+  release('slow');waiting={};
+  await page.locator('#askPage .pharos-user-question').filter({hasText:'Slow question'}).waitFor();
+  // Leaving full screen for the dialog while another chat loads keeps that chat.
+  await activateHeaderTool(page,'settingsToggle');await page.waitForURL(url=>url.pathname==='/settings');
+  await activateHeaderTool(page,'askPharosToggle');
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await page.locator('.pharos-ai').getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  waiting={other:held('other')};
+  await page.getByRole('link',{name:'Open chat: Other question',exact:true}).click();
+  await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/settings');
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});await modal.waitFor();
+  release('other');waiting={};
+  await modal.locator('.pharos-user-question').filter({hasText:'Other question'}).waitFor();
+  await settled();
+  assert.deepEqual(await prompts(),['Other question']);
 });
 
 // Placement of dragged and resized progress is unit tested in ask-pharos.test.mjs.

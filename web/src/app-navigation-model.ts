@@ -66,7 +66,7 @@ export function appLocation(path: string, params: URLSearchParams) {
     const state = readUsageWorkspace(new URL(canonicalAnalyzeURL(path, params), "http://localhost").searchParams);
     return { section: "analyze", current: `${state.mode}:${state.mode === "dashboards" ? state.topic : state.dataset}` };
   }
-  return { section: path === "/" || path === "/home" ? "home" : "library", current: "" };
+  return { section: path === "/" || path === "/home" || path === "/ask" ? "home" : "library", current: "" };
 }
 
 export function appLocationLabel(sections: readonly AppSection[], selected: ReturnType<typeof appLocation>) {
