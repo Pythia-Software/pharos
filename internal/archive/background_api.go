@@ -837,6 +837,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 			// Labels are off here (the broker asks every library after a
 			// download).
 		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
+		case item.requiresAsk && !s.askEnabled(r.Context()):
 		default:
 			run = append(run, id)
 		}

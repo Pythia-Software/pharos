@@ -11,6 +11,7 @@ import { findingDetailURL } from "./findings-route";
 import { conversationRowURL } from "./usage-row-model";
 import { delegationRouteValues } from "./delegation-route";
 export { buildSiteMap, formatJSON, settingsPages, viewTitles } from "./site-map";
+export { buildAskSuggestions } from "./ask-suggestions";
 
 // The cross-language cases for the site map (testdata/site-map-cases.json):
 // a deterministic sample of Analyze dashboard charts with the page's verdict

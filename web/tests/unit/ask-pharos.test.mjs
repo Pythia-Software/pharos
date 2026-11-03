@@ -153,28 +153,23 @@ test('shared Ask glow respects reduced motion from startup, including while work
   motion.destroy();
 });
 
-test('prompt suggestions mix broad questions with real repository scopes only in multi-repository libraries', () => {
-  const suggestions=options=>plain(model.askPromptSuggestions(options));
-  const broad=suggestions();
-  for(const repositories of [[],['pharos'],['pharos','pharos',null,'','  ']]){
-    assert.deepEqual(suggestions({repositories}),broad);
-  }
-  const repositories=['pharos','query-table'];
-  const mixed=suggestions({repositories});
-  assert.equal(mixed.length,broad.length);
-  assert.equal(new Set(mixed).size,mixed.length);
-  assert.ok(mixed.some((text,index)=>text===broad[index]),'keep library-wide questions');
-  for(const name of repositories)assert.ok(mixed.some(text=>text.includes('“'+name+'” repository')));
-  assert.ok(mixed.every(text=>!text.includes('{scope}')),'never offer a template placeholder');
-  const varied=suggestions({repositories,variation:1});
-  assert.notDeepEqual(varied,mixed,'refresh can introduce another repository for the same question');
-  assert.equal(varied.find(text=>text==='Which repositories use the most tokens?'),'Which repositories use the most tokens?');
+test('suggestions keep only well-formed, distinct questions from the library', () => {
+  const items=plain(model.askSuggestionItems([
+    {id:'spend-where',text:' Where do my tokens go? '},
+    {id:'spend-where',text:'Where do my tokens go?'},
+    {id:'risk-review'},{text:'No id'},null,{id:'blank',text:'  '},
+    {id:'recall-similar',text:'Find earlier work I could build on in the 研究/<test> & tools repository.'},
+  ]));
+  assert.deepEqual(items,[{id:'spend-where',text:'Where do my tokens go?'},{id:'recall-similar',text:'Find earlier work I could build on in the 研究/<test> & tools repository.'}]);
+  assert.deepEqual(plain(model.askSuggestionItems(undefined)),[],'a missing list offers nothing rather than canned questions');
+  assert.equal(model.askSuggestionItems(Array.from({length:20},(_,i)=>({id:'f'+i,text:'Question '+i+'?'}))).length,12);
 });
 
-test('suggestion scopes preserve repository names as data, including punctuation and Unicode', () => {
-  const repositories=['研究/<test> & tools','owner/repo.with-dots'];
-  const suggestions=plain(model.askPromptSuggestions({repositories}));
-  for(const repository of repositories)assert.ok(suggestions.some(text=>text.includes('“'+repository+'” repository')));
+test('Ask keeps asking for suggestions while they are being chosen, backing off', () => {
+  const delays=Array.from({length:8},(_,attempt)=>model.askSuggestionRetryDelay(attempt));
+  assert.equal(delays[0],20000);
+  assert.ok(delays.every((delay,i)=>i===0||delay>=delays[i-1]),'never sooner than the last try');
+  assert.equal(delays.at(-1),300000,'a slow first run still gets picked up, every five minutes at most');
 });
 
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
