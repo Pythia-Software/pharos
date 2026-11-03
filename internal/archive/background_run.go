@@ -33,6 +33,11 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		return err
 	case "backup":
 		return s.backgroundBackup(ctx, op)
+	case "suggestions":
+		ctx, child := op.Child(OperationSpec{Kind: "ask.suggestions", Trigger: triggerChained})
+		err := s.refreshAskSuggestions(ctx)
+		child.Finish(err)
+		return err
 	}
 	return fmt.Errorf("unknown background item %q", id)
 }

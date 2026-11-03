@@ -272,14 +272,15 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 // item, and leaves the rest; Run now runs an item outside its cadence.
 // Settings and the status panel list items in backgroundItems order, so it
 // is the order a pass runs them: standalone items, then the chain's in
-// chain order.
+// chain order, then those that read the chain's results.
 func TestBackgroundItemsAreListedInRunOrder(t *testing.T) {
-	chained, last := false, -1
+	chained, after, last := false, false, -1
 	for _, item := range backgroundItems {
 		chain := len(item.Stages) > 0 || item.ID == "review"
-		if chained && !chain {
+		if chained && !chain && !item.afterChain || after && !item.afterChain {
 			t.Fatalf("%s runs before the chain but is listed after it", item.ID)
 		}
+		after = after || item.afterChain
 		chained = chained || chain
 		for _, stage := range item.Stages {
 			index := slices.Index(stageOrder, stage)
