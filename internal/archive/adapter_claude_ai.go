@@ -165,6 +165,13 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 			switch blockType := firstString(block["type"]); blockType {
 			case "text":
 				if text := firstString(block["text"]); strings.TrimSpace(text) != "" {
+					// The first text is the message's own, by its ID alone,
+					// wherever an export puts it among the blocks.
+					if texts == 0 {
+						raw, created := item.RawText, item.CreatedAt
+						item = base("")
+						item.RawText, item.CreatedAt = raw, created
+					}
 					item.Kind, item.Text = "message", text
 					messages = append(messages, item)
 					texts++
@@ -212,14 +219,11 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 				messages = append(messages, item)
 			}
 		}
-		// A message without text blocks keeps its flattened text. Exports
-		// from before content blocks hold only that text, which is the one
-		// text block a later export holds, under the same ID.
+		// A message without text blocks keeps its flattened text, as the
+		// message's own text. Exports from before content blocks hold only
+		// that, which a later export holds as its first text block.
 		if text := firstString(message["text"]); texts == 0 && strings.TrimSpace(text) != "" {
 			item := base("")
-			if len(blocks) == 0 {
-				item = base(":block:0")
-			}
 			item.Kind, item.Text, item.RawText = "message", text, jsonText(map[string]any{"text": text})
 			messages = append(messages, item)
 		}

@@ -92,16 +92,16 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 		byID[message.NativeID] = message
 	}
 	want := map[string]struct{ role, kind string }{
-		"m1:block:0": {"system", "context"}, "m1:block:1": {"user", "message"}, "m1:attachment:0": {"user", "attachment"}, "m1:files": {"user", "attachment"},
-		"m2:block:0": {"assistant", "reasoning"}, "m2:block:1": {"assistant", "tool_call"}, "m2:block:2": {"tool", "tool_result"}, "m2:block:3": {"assistant", "message"},
-		"m3:block:0": {"user", "message"}, "m3b:block:0": {"user", "message"}, "m4:block:0": {"assistant", "metadata"}, "m4:block:1": {"assistant", "message"},
+		"m1:block:0": {"system", "context"}, "m1": {"user", "message"}, "m1:attachment:0": {"user", "attachment"}, "m1:files": {"user", "attachment"},
+		"m2:block:0": {"assistant", "reasoning"}, "m2:block:1": {"assistant", "tool_call"}, "m2:block:2": {"tool", "tool_result"}, "m2": {"assistant", "message"},
+		"m3": {"user", "message"}, "m3b": {"user", "message"}, "m4:block:0": {"assistant", "metadata"}, "m4": {"assistant", "message"},
 	}
 	if len(byID) != len(want) {
 		t.Fatalf("messages = %v", byID)
 	}
 	for id, expected := range want {
-		if got := byID[id]; got.Role != expected.role || got.Kind != expected.kind || got.Selected != (id != "m3:block:0") {
-			t.Fatalf("%s = %+v, want %v selected %v", id, got, expected, id != "m3:block:0")
+		if got := byID[id]; got.Role != expected.role || got.Kind != expected.kind || got.Selected != (id != "m3") {
+			t.Fatalf("%s = %+v, want %v selected %v", id, got, expected, id != "m3")
 		}
 	}
 	if reasoning := byID["m2:block:0"]; reasoning.Text != "Weighing destinations" || reasoning.ReasoningFormat != "summary" {
@@ -110,7 +110,7 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 	if call, result := byID["m2:block:1"], byID["m2:block:2"]; call.CallID != "tu1" || result.CallID != "tu1" || result.Text != `{"content":[{"text":"Results","type":"text"}],"is_error":false,"tool":"WebSearch"}` {
 		t.Fatalf("call %+v result %+v", call, result)
 	}
-	if byID["m3b:block:0"].PreviousNativeID != "m2" || byID["m1:block:1"].PreviousNativeID != "" {
+	if byID["m3b"].PreviousNativeID != "m2" || byID["m1"].PreviousNativeID != "" {
 		t.Fatal("parents are not kept")
 	}
 	// An explicit current leaf wins over the newest one.
@@ -258,13 +258,37 @@ func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 			ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: writeSourceFileAt(t, export), Account: "me", Enabled: true})
 			ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: writeSourceFileAt(t, claudeAIExport), Account: "me", Enabled: true})
 			var unselected int
-			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE native_id='m3:block:0' AND selected=0`).Scan(&unselected); err != nil || unselected != 1 {
+			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE native_id='m3' AND selected=0`).Scan(&unselected); err != nil || unselected != 1 {
 				t.Fatalf("the newer branch is not selected: %d %v", unselected, err)
 			}
 			if all, selected := count(c); all != 12 || selected != 11 {
 				t.Fatalf("after the newer export: %d messages, %d selected", all, selected)
 			}
 		})
+	}
+}
+
+func TestClaudeAIExportsOfBothShapesFromTwoMacsKeepEachBlockOnce(t *testing.T) {
+	var export []map[string]any
+	if err := json.Unmarshal([]byte(claudeAIExport), &export); err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range export[0]["chat_messages"].([]any) {
+		delete(message.(map[string]any), "content")
+	}
+	// The text-only export on one Mac, then the full one on another: the
+	// full one cannot replace the first Mac's copy, so it only adds.
+	useHost(t, "host-a")
+	c, _ := testCatalog(t)
+	ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: writeSourceFileAt(t, jsonText(export)), Account: "me", Enabled: true})
+	useHost(t, "host-b")
+	ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: writeSourceFileAt(t, claudeAIExport), Account: "me", Enabled: true})
+	var replies, reasoning int
+	if err := c.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM messages WHERE text='Here is a plan'), (SELECT COUNT(*) FROM messages WHERE native_id='m2:block:0' AND kind='reasoning')`).Scan(&replies, &reasoning); err != nil {
+		t.Fatal(err)
+	}
+	if replies != 1 || reasoning != 1 {
+		t.Fatalf("the reply is held %d times and its thinking %d", replies, reasoning)
 	}
 }
 
