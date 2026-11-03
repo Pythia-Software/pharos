@@ -339,6 +339,8 @@ func TestProbeOffersAntigravityToMacsAlreadySetUp(t *testing.T) {
 	}
 	// Not an Antigravity app directory: no brain folder.
 	probePut(t, filepath.Join(home, ".gemini", "antigravity-updater", "state"), "")
+	// A copy of the app's conversations, which would be read twice.
+	antigravityTranscript(t, filepath.Join(home, ".gemini", "antigravity-backup"), probeID2, "transcript_full.jsonl", "{}\n")
 	report := probeSources(home, Config{}, nil)
 	for _, name := range []string{"antigravity", "antigravity-cli"} {
 		candidate := candidateNamed(t, report, name)
@@ -347,7 +349,7 @@ func TestProbeOffersAntigravityToMacsAlreadySetUp(t *testing.T) {
 		}
 	}
 	for _, candidate := range report.Candidates {
-		if strings.Contains(candidate.Path, "updater") {
+		if strings.Contains(candidate.Path, "updater") || strings.Contains(candidate.Path, "backup") {
 			t.Fatalf("probe offered %+v", candidate)
 		}
 	}

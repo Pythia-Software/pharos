@@ -211,7 +211,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		entries, _ := dir.ReadDir(512)
 		dir.Close()
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), root.prefix) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
+			if strings.HasPrefix(entry.Name(), root.prefix) && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
 				check(root.kind, filepath.Join(root.dir, entry.Name()), "profile folder")
 			}
 		}
@@ -560,9 +560,16 @@ func (r *probeRun) codex(dir, foundBy string) {
 	r.keep(candidate)
 }
 
+// antigravityBackup reports whether a ~/.gemini folder is Antigravity's
+// backup copy of an app's data, whose conversations the app's folder holds.
+func antigravityBackup(name string) bool {
+	return strings.HasPrefix(name, "antigravity-backup")
+}
+
 // antigravityDirs lists Google Antigravity's app data directories: those in
 // ~/.gemini named antigravity (the app), antigravity-cli (agy), or
-// antigravity-ide, or any other antigravity* folder holding conversations.
+// antigravity-ide, or any other antigravity* folder holding conversations
+// except the backup copy.
 func antigravityDirs(home string) []string {
 	root := filepath.Join(home, ".gemini")
 	entries, err := os.ReadDir(root)
@@ -571,7 +578,7 @@ func antigravityDirs(home string) []string {
 	}
 	dirs := []string{}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "antigravity") && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) && antigravityDataDir(filepath.Join(root, entry.Name())) {
+		if strings.HasPrefix(entry.Name(), "antigravity") && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) && antigravityDataDir(filepath.Join(root, entry.Name())) {
 			dirs = append(dirs, filepath.Join(root, entry.Name()))
 		}
 	}
