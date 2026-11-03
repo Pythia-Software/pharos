@@ -64,6 +64,7 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
 }
 
 export function cardKind(recipe: QueryRecipe): string {
+  if (recipe.habits) return recipe.habits.kind;
   if (recipe.weekday && (!recipe.cover?.kind || recipe.cover.kind === "auto")) return "Distribution";
   if (recipe.humanStudy) return recipe.humanStudy === "conversation-lengths" ? "Distribution" : ["contribution-patterns", "examples"].includes(recipe.humanStudy) ? "Composition" : recipe.humanStudy === "specific-feedback" ? "Rate" : "Timeline";
   const metric = recipe.exploration?.coverMetric ?? recipe.measures[0];

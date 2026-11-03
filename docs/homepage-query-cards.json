@@ -21397,6 +21397,230 @@
         "dataset": "parallelism",
         "detailAction": "Inspect daily totals"
       }
+    },
+    {
+      "id": "habits-streak",
+      "title": "Your streak",
+      "description": "Days in a row with a message you typed; your longest run; and your engaged time yesterday and over the last seven days.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-streaks",
+        "view": {},
+        "window": "Today",
+        "kind": "Summary",
+        "loading": {
+          "kind": "list",
+          "count": 4,
+          "height": 121
+        }
+      }
+    },
+    {
+      "id": "habits-weekday-streak",
+      "title": "Your weekday streak",
+      "description": "Days in a row with a message you typed, counting weekdays only; your longest run; and your engaged time yesterday and over the last seven days.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-streaks",
+        "view": {
+          "habits_streak": "weekdays"
+        },
+        "window": "Today",
+        "kind": "Summary",
+        "loading": {
+          "kind": "list",
+          "count": 4,
+          "height": 121
+        }
+      }
+    },
+    {
+      "id": "habits-calendar-you",
+      "title": "Your active days",
+      "description": "Each square is a day of you; darker is more time.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-calendar",
+        "view": {},
+        "window": "Past 17 weeks",
+        "kind": "Calendar",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 130
+        }
+      }
+    },
+    {
+      "id": "habits-calendar-agents",
+      "title": "Days with agents you started",
+      "description": "Each square is a day of agents you started; darker is more time.",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-calendar",
+        "view": {
+          "habits_calendar": "agents"
+        },
+        "window": "Past 17 weeks",
+        "kind": "Calendar",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 130
+        }
+      }
+    },
+    {
+      "id": "habits-punchcard-you",
+      "title": "When you work",
+      "description": "Minutes per week of you in each weekday hour, coloured by time of day.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-punchcard",
+        "view": {},
+        "window": "Past 90 days",
+        "kind": "Distribution",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 115
+        }
+      }
+    },
+    {
+      "id": "habits-punchcard-away",
+      "title": "When agents work while you're away",
+      "description": "Minutes per week of agents you started, while you're away in each weekday hour, coloured by time of day.",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-punchcard",
+        "view": {
+          "habits_punchcard": "unattended"
+        },
+        "window": "Past 90 days",
+        "kind": "Distribution",
+        "loading": {
+          "kind": "columns",
+          "count": 24,
+          "height": 115
+        }
+      }
+    },
+    {
+      "id": "habits-days",
+      "title": "Your days",
+      "description": "Each of the last 28 days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-days",
+        "view": {},
+        "window": "Past 28 days",
+        "kind": "Timeline",
+        "loading": {
+          "kind": "columns",
+          "count": 28,
+          "height": 160
+        }
+      }
+    },
+    {
+      "id": "habits-pace",
+      "title": "Your pace",
+      "description": "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.",
+      "category": "human",
+      "idea": "rhythm-01",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-pace",
+        "view": {},
+        "window": "Past 28 days",
+        "kind": "Summary",
+        "loading": {
+          "kind": "list",
+          "count": 4,
+          "height": 121
+        }
+      }
+    },
+    {
+      "id": "habits-automations",
+      "title": "Automatic agent runs",
+      "description": "What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "rhythm",
+      "field": "started_at",
+      "unit": "hours",
+      "measures": [],
+      "period": "current",
+      "action": "Explore Habits",
+      "habits": {
+        "target": "habits-automations",
+        "view": {
+          "habits_punchcard_days": "30"
+        },
+        "window": "Past 30 days",
+        "kind": "Ranking",
+        "loading": {
+          "kind": "list",
+          "count": 6,
+          "height": 161
+        }
+      }
     }
   ],
   "query_table_requests": [

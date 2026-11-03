@@ -5,11 +5,14 @@ import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL } from "./usage-workspace-model";
-import { cardLabels, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
+import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
+import { defaultCardCover } from "./card-cover";
+import type { QuerySuggestion } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
 import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
 import { ribbonCardTitle, ribbonCardWindow } from "./parallelism-ribbon-card";
+import { habitsCardDescription, habitsCardPresentation, habitsCardTargets, habitsCardTitle, habitsCardWindow, isHabitsCardTarget, readHabitsCardView, type HabitsCardTarget } from "./habits-card";
 
 // The dashboard URL is the card definition. Keep requested filters relative;
 // execution (including Today) resolves them anew whenever the card refreshes.
@@ -19,18 +22,22 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
   url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
   if (catalog.request?.params?.carbon_settings) url.searchParams.set("analyze_carbon", catalog.request.params.carbon_settings);
   if (topic === "parallelism" && !url.searchParams.has("analyze_parallelism")) url.searchParams.set("analyze_parallelism", JSON.stringify(readConcurrencySettings()));
-  for (const key of [...url.searchParams.keys()]) if (key.startsWith("card_") || ["overlay", "history_search", "history_collapsed", "highlight", "reveal", "find", "find_case", "find_regex", "chart_pins"].includes(key)) url.searchParams.delete(key);
+  for (const key of [...url.searchParams.keys()]) if (key.startsWith("card_") || ["overlay", "history_search", "history_collapsed", "highlight", "reveal", "find", "find_case", "find_regex", "chart_pins", "habits_day"].includes(key)) url.searchParams.delete(key);
   return usageWorkspaceURL({ mode: "dashboards", topic, dataset: usageTopicDatasets[topic] }, url.searchParams);
 }
 
 // One dashboard URL can hold several charts: Parallelism draws its ribbon
-// above the catalog chart. A card names the one it shows; "chart", the
-// catalog chart, is the default and is never stored.
-export type DashboardCardTarget = "chart" | "ribbon";
+// above the catalog chart, and Habits its sections. A card names the one it
+// shows; "chart", the catalog chart, is the default and is never stored.
+export type DashboardCardTarget = "chart" | "ribbon" | HabitsCardTarget;
 export function dashboardCardTargets(address: string): Array<{ id: DashboardCardTarget; label: string; title: string }> {
   // Each is labelled with the heading it has on the page.
   const { topic, state } = readDashboardCard(address), catalog = analysisCatalogs[topic]!, title = dashboardCardTitle(catalog, state);
   const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: state.view === "trend" ? trendTitle(catalog, state) : title, title }];
+  if (topic === "habits") {
+    const view = readHabitsCardView(new URL(address, location.origin).searchParams);
+    return [...habitsCardTargets.map(id => ({ id, label: habitsCardTitle(id, view), title: habitsCardTitle(id, view) })), ...charts];
+  }
   if (topic !== "parallelism") return charts;
   const ribbon = ribbonCardTitle(dashboardCardRibbon(address));
   return [{ id: "ribbon", label: ribbon, title: ribbon }, ...charts];
@@ -58,11 +65,11 @@ export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisStat
   return `${measure}${view.view === "trend" ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
 }
 
-export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}): Bookmark {
+export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}, templateId?: string): Bookmark {
   if (!dashboardCardTargets(url).some(item => item.id === target)) throw new Error("This chart cannot be a card.");
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks();
-  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...dashboardCardLabels(url, target, labels), savedAt: Date.now() };
+  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...templateId ? { templateId } : {}, ...dashboardCardLabels(url, target, labels), savedAt: Date.now() };
   writeBookmarks([...items, item]);
   return item;
 }
@@ -79,17 +86,27 @@ export function dashboardCardLabels(url: string, target: DashboardCardTarget = "
   return chosen;
 }
 
+// A template becomes a saved query, or for a Habits section the dashboard
+// card its page saves, either way remembering the template it came from.
+export async function collectCardTemplate(item: QuerySuggestion): Promise<Bookmark> {
+  if (item.habits) return collectDashboardCard(item.url, item.title, item.description, item.habits.target, { action: item.action }, item.instanceId);
+  return collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
+}
+
 // Ask offers a chart's own address as a card; the same address is collected once.
 export function dashboardCardCollected(url: string, target: DashboardCardTarget = "chart"): boolean {
   return readBookmarks().some(item => item.dashboard && item.url === url && (item.dashboardTarget ?? "chart") === target);
 }
 
-export function dashboardCardDescription(address: string): string {
-  return usageTopics[readDashboardCard(address).topic].description;
+export function dashboardCardDescription(address: string, target: DashboardCardTarget = "chart"): string {
+  const { topic, params } = readDashboardCard(address);
+  if (isHabitsCardTarget(target)) return habitsCardDescription(target, readHabitsCardView(params));
+  return usageTopics[topic].description;
 }
 
 export function dashboardCardWindow(address: string, target: DashboardCardTarget = "chart"): string {
   if (target === "ribbon") return ribbonCardWindow(dashboardCardRibbon(address));
+  if (isHabitsCardTarget(target)) return habitsCardWindow(target, readHabitsCardView(readDashboardCard(address).params));
   const { params, where, topic } = readDashboardCard(address), time = analysisCatalogs[topic]!.time;
   if (params.get("analyze_window") === "today") return "Today";
   const dates = where.filter(term => "field" in term && [time.first, time.last].includes(term.field));
@@ -99,10 +116,11 @@ export function dashboardCardWindow(address: string, target: DashboardCardTarget
 
 export function dashboardCardPresentation(address: string, target: DashboardCardTarget = "chart"): { category: QueryCategory; loading: CardLoadingSpec } {
   if (target === "ribbon") return { category: "machines", loading: { kind: "columns", count: 24, height: fittedCoverHeight("columns", 24) } };
+  if (isHabitsCardTarget(target)) return habitsCardPresentation(target, readHabitsCardView(readDashboardCard(address).params));
   const { topic, state } = readDashboardCard(address);
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
-    : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" ? "machines" : "tools";
+    : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" || topic === "habits" ? "machines" : "tools";
   const kind = state.view === "trend" ? state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
   const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : 4;
   return { category, loading: { kind, count, height: fittedCoverHeight(kind, count) } };

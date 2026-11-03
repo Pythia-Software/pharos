@@ -18,6 +18,7 @@ export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
   mcp_calls: [{ kind: "requested", label: "Requested target", dependencies: ["arguments_json"] }],
   skill_usages: [source([...conversation, "evidence_message_id", "created_at"]), { kind: "body", label: "Skill body", dependencies: [...conversation, "evidence_message_id", "body_message_id"] }, { kind: "tool", label: "Tool call", dependencies: ["tool_call_id"] }],
   parallelism: [source(["conversation_id", "location", "started_at"])],
+  rhythm: [source(["conversation_id", "started_at"])],
   agent_events: [source([...conversation, "message_id"])],
   agent_event_messages: [source([...conversation, "message_id"])],
 };

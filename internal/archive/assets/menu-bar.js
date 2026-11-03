@@ -9,6 +9,8 @@ const MENU_BAR_TOOLS = [
   {id: 'tokens', label: 'Tokens used', on: true, group: 'usage', description: 'Combined token usage · last 24 hours.'},
   {id: 'cost', label: 'Estimated API cost', group: 'usage', description: 'API-equivalent cost at list prices · last 24 hours.'},
   {id: 'carbon', label: 'Estimated CO₂e', on: true, group: 'usage', description: 'Carbon impact using your settings · last 24 hours.'},
+  {id: 'streak', label: 'Your streak', group: 'habits', description: 'Days in a row with a message you typed, and whether today counts yet.'},
+  {id: 'agent_streak', label: 'Agent streak', group: 'habits', description: 'Days in a row your agents worked, with you or unattended, and whether today counts yet.'},
   {id: 'backup', label: 'Last backup', group: 'library', description: 'When the library was last fully backed up.'},
   {id: 'space', label: 'Library size', group: 'library', description: 'Archive size and free space on its drive.'},
   {id: 'search', label: 'Search conversations…', group: 'navigation', description: 'Find a conversation or search the archive.'},
@@ -115,6 +117,8 @@ function editMenuBarSettings(saved, id, destination) {
       case 'tokens': return metric('Tokens used', usage && new Intl.NumberFormat(undefined, {notation: 'compact', maximumFractionDigits: 1}).format(usage.tokens));
       case 'cost': return metric('Estimated API cost', usage && new Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD'}).format(usage.cost_usd));
       case 'carbon': return metric('Estimated CO₂e', usage && `${new Intl.NumberFormat(undefined, {maximumSignificantDigits: 3}).format(usage.co2e_g >= 1000 ? usage.co2e_g / 1000 : usage.co2e_g)} ${usage.co2e_g >= 1000 ? 'kg' : 'g'}`);
+      case 'streak': return metric('Your streak', usage?.streaks?.you);
+      case 'agent_streak': return metric('Agent streak', usage?.streaks?.agents);
       case 'backup': return metric('Last backup', snapshot && (ago(snapshot.backup_at) ?? 'Never'));
       case 'space': return metric('Library size', bytes(storage?.sizes?.library_bytes));
       case 'eject': return [`Eject ${drive?.name ?? 'library'}…`];
@@ -142,7 +146,7 @@ function editMenuBarSettings(saved, id, destination) {
       const response = await fetch('/api/menu-bar/status');
       if (!response.ok) throw new Error('Preview unavailable');
       snapshot = await response.json(); previewError = false;
-      if (settings.order.some(id => definition(id).group === 'usage') && Date.now() - lastUsage >= 60000) {
+      if (settings.order.some(id => ['usage', 'habits'].includes(definition(id).group)) && Date.now() - lastUsage >= 60000) {
         lastUsage = Date.now();
         try {
           const response = await fetch('/api/menu-bar/usage?period='+period);

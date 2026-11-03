@@ -27,7 +27,7 @@ export const askAreas: AskArea[] = [
   { id: "caching", label: "Cache reuse", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["spend.cache"] },
   { id: "delegation", label: "Subagents and delegation", pages: ["work", "analyze/tokens"], signals: ["delegation.agents"] },
   { id: "parallelism", label: "Agents side by side", pages: ["analyze/parallelism", "analyze/query/parallelism"], signals: ["activity.parallel"] },
-  { id: "rhythm", label: "Working patterns", pages: ["analyze/activity", "analyze/query/conversation_activity"], signals: ["activity.days"] },
+  { id: "rhythm", label: "Working patterns", pages: ["analyze/activity", "analyze/query/conversation_activity", "analyze/habits", "analyze/query/rhythm"], signals: ["activity.days"] },
   { id: "repositories", label: "Repositories and activity", pages: ["home", "library", "analyze/activity"], signals: ["activity.repos"] },
   { id: "writing", label: "My writing and steering", pages: ["analyze/human", "analyze/query/writing", "analyze/query/writing_messages"], signals: ["writing.volume", "writing.back_and_forth"] },
   { id: "supplied-context", label: "Context I supply", pages: ["analyze/human", "analyze/query/writing_messages"], signals: ["writing.supplied"] },

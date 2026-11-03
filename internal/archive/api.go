@@ -568,6 +568,20 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/habits":
+		mode, days := r.URL.Query().Get("mode"), 0
+		if n, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil {
+			days = n
+		} else {
+			days = 365
+		}
+		ctx, err := withHabitsPreferences(r.Context(), r.URL.Query().Get("habits_settings"))
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		value, err := s.Catalog.Habits(ctx, mode, days)
+		writeResult(w, value, err)
 	case path == "/api/usage/parallelism":
 		value, err := s.Catalog.parallelismData(r.Context())
 		writeResult(w, value, err)
