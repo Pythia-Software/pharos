@@ -653,6 +653,15 @@ test('Optimize pages move keyboard focus to their content at 1440px', { skip }, 
   await choose('Settings', '.findings-settings .findings-panel');
   await choose('Table', '.findings-table .qt-row');
   assert.ok(await table.evaluate(element => element.isConnected), 'Findings Settings keeps the findings table mounted');
+  // Pressing non-focusable content focuses its nearest focusable ancestor
+  // (every press on a button, in WebKit). Once focus has left the content
+  // landmark, a press inside a popover must not move focus out and close it.
+  await press(page.getByRole('button', { name: 'Add group by', exact: true }));
+  const picker = page.getByRole('dialog', { name: 'Group rows by', exact: true });
+  await picker.locator('.qt-picker-heading').click();
+  assert.ok(await picker.isVisible(), 'A press inside the picker keeps it open after navigation focused the content');
+  await page.getByRole('heading', { level: 1 }).click();
+  await picker.waitFor({ state: 'hidden' });
   await choose('Dashboard', '.findings-card');
   await settled();
   await shot('optimize-findings');
