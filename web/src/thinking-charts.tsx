@@ -43,10 +43,12 @@ export function ThinkingFigure({
   title,
   children,
   note,
+  action,
 }: {
   title: string;
   children: (width: number) => React.ReactNode;
   note?: React.ReactNode;
+  action?: React.ReactNode;
 }) {
   const { ref, width } = useWidth(),
     [visible, setVisible] = useState(false);
@@ -60,7 +62,10 @@ export function ThinkingFigure({
   }, []);
   return (
     <figure className="thinking-figure" ref={ref}>
-      <figcaption>{title}</figcaption>
+      <figcaption>
+        {title}
+        {action}
+      </figcaption>
       {visible ? (
         children(width)
       ) : (
@@ -736,10 +741,17 @@ export function ThinkingHourly({
     </div>
   );
 }
-export function ThinkingCDF({ groups }: { groups: ThinkingGroup[] }) {
+export function ThinkingCDF({
+  groups,
+  action,
+}: {
+  groups: ThinkingGroup[];
+  action?: React.ReactNode;
+}) {
   return (
     <ThinkingFigure
       title="How long are the waits?"
+      action={action}
       note="Curves require 100 usable gaps from five conversations. Each curve is an individual-request quantile function at 1% steps."
     >
       {(width) => {
