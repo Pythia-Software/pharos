@@ -92,10 +92,13 @@ Run `npm --prefix web run generate-site-map` after changing any of these:
 - an analysis catalog or dashboard defaults;
 - a schema;
 - card recipes or their destinations;
-- a page's parameters.
+- a page's parameters;
+- the Ask suggestion catalog (`web/src/ask-suggestions.ts`).
 
-It rewrites `internal/archive/assets/site-map.json` and
-`testdata/site-map-cases.json`. The generator runs in UTC, so cards that group
+It rewrites `internal/archive/assets/site-map.json`,
+`testdata/site-map-cases.json` and `internal/archive/assets/ask-suggestions.json`.
+A new page fails generation until an Ask suggestion area covers it or the
+catalog excludes it with a reason ([Ask suggestions](ask-suggestions.md)). The generator runs in UTC, so cards that group
 by the local calendar carry the UTC time zone.
 
 The generator checks itself, and fails rather than writing a map that

@@ -736,7 +736,6 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     ...askAPI,
     'POST /api/ask/session':({body,state})=>state.suggestionDraft={...askSession,...body,conversation:[]},
     'GET /api/ask/session':({query,state})=>state.suggestionDraft||{...askSession,id:query.get('id'),conversation:[]},
-    'GET /api/query/library/distinct':({query})=>query.get('field')==='repository_name'?{values:['pharos','query-table'],hasMore:false}:undefined,
   }});
   const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
   const viewport=page.getByRole('region',{name:'Browse prompt suggestions',exact:true});
@@ -760,6 +759,8 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     await readable();
   }
   await suggestions.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.pharos-idea-announcement')?.textContent==='Prompt suggestions refreshed.');
+  assert.ok(calls.some(call=>call.path==='/api/ask/suggestions'&&call.query.get('seed')==='1'),'Refresh asks the library for another slate');
   await readable();
   const card=viewport.locator('[data-reading]').filter({hasText:'repository'}).first();
   const prompt=await card.locator('.pharos-idea-text').textContent();

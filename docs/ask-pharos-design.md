@@ -165,14 +165,14 @@ Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestio
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.
 
-The suggestion catalog in `assets/ask-model.js` interleaves questions about
-instructions, failures, tools, context, usage, models, delegation, prior work,
-findings and activity. Optional repository phrases use names from the Library's
-distinct repository values, and appear on only some eligible questions when
-at least two named repositories exist. Comparisons across repositories remain
-unqualified. Refresh changes both the page of ideas and the repository examples;
-missing metadata leaves the broad questions available. These are invitations to
-investigate, not claims that a pattern or a finding exists in the library.
+Suggestions are generic questions Pharos expects this library to answer
+well, chosen from what it noticed in the user's work; see
+[Ask suggestions](ask-suggestions.md). They never name what was noticed and
+carry no evidence line, so they read as invitations to a conversation rather
+than another set of cards. They appear only once Ask Pharos is enabled.
+Without enough data there are fewer suggestions, or none, never padding.
+Refresh asks for another seeded slate; opening the modal over a page leans
+the slate toward that page.
 
 Hide/Show suggestions remains above the cards. Its collapsed state is stored in
 the library's UI preferences (`pharos-ask-suggestions-hidden`), survives reloads

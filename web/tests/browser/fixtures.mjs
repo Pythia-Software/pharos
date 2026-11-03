@@ -496,6 +496,20 @@ export function thinkingFixture(query) {
   return response;
 }
 
+const askSuggestionTexts = [
+  ["verification-latency", "Find the causes of testing latency in the pharos repository."],
+  ["context-crowding", "What's crowding my agents' context?"],
+  ["spend-change", "How has my token use changed this week?"],
+  ["writing-improve", "How could I steer my agents with less back-and-forth in the query-table repository?"],
+  ["risk-review", "Is there anything risky in what my agents have been doing lately?"],
+  ["recall-similar", "Help me find a past conversation where we solved something similar."],
+  ["models-fit", "Am I using the right models for the right work?"],
+  ["findings-best", "What's the single best change I could make to how I work with agents?"],
+  ["parallel-pattern", "What happens when I run several agents at the same time?"],
+];
+// A seeded rotation, as the service varies its slate for Refresh.
+const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
+
 export const defaultApi = {
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
@@ -506,6 +520,8 @@ export const defaultApi = {
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
+  // Suggestions the library chose; Refresh asks for the next seed.
+  "GET /api/ask/suggestions": ({ query }) => ({ suggestions: askSuggestionFixture(Number(query.get("seed") || 0)) }),
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},
   "POST /api/ask/remove-visit": {ok:true},
