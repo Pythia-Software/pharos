@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -417,6 +418,65 @@ func (m *applicationManager) stopChildLocked(id string) {
 	m.publishLocked()
 }
 
+// updateRefusal is why stopping every library for an update would
+// interrupt work that cannot stop in time, or "". It reads only what the
+// broker published (a service start holds m.mu for minutes): the broker's
+// own running operations, and each running service's own check.
+func (m *applicationManager) updateRefusal(ctx context.Context) string {
+	ops := slices.DeleteFunc(m.operations.reg.views(), func(view opView) bool { return opTerminal(view.State) })
+	if reason := updateRefusal(computeEjectVerdict(verdictInput{ops: ops})); reason != "" {
+		return reason
+	}
+	m.operations.mu.Lock()
+	libraries := slices.Clone(m.operations.libraries)
+	m.operations.mu.Unlock()
+	client := &http.Client{Timeout: brokerFreshTimeout, Transport: m.client.Transport}
+	reasons := make([]string, len(libraries))
+	var wait sync.WaitGroup
+	for index, library := range libraries {
+		if library.Child == nil {
+			continue
+		}
+		wait.Go(func() { reasons[index] = libraryUpdateRefusal(ctx, client, library) })
+	}
+	wait.Wait()
+	for _, reason := range reasons {
+		if reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// libraryUpdateRefusal asks one library's service whether an update may stop
+// it (GET /api/release?for=update). A service that cannot say refuses.
+func libraryUpdateRefusal(ctx context.Context, client *http.Client, library brokerLibrary) string {
+	unanswered := func(err error) string {
+		return fmt.Sprintf("The update waits for %s, whose service did not say whether it can stop (%v).", library.Name, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, library.Child.URL+"/api/release?for=update", nil)
+	if err != nil {
+		return unanswered(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+library.Child.Token)
+	response, err := client.Do(request)
+	if err != nil {
+		return unanswered(err)
+	}
+	defer response.Body.Close()
+	var answer struct {
+		Releasable *bool  `json:"releasable"`
+		Error      string `json:"error"`
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&answer) != nil || answer.Releasable == nil {
+		return unanswered(fmt.Errorf("it answered %s", response.Status))
+	}
+	if !*answer.Releasable {
+		return answer.Error
+	}
+	return ""
+}
+
 func (m *applicationManager) authorized(r *http.Request) bool {
 	if secureEqual(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), m.token) {
 		return true
@@ -467,6 +527,15 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/api/release" && r.Method == "POST" {
+		// For an update (?for=update), refuse before stopping anything
+		// while the broker's or a library's work cannot stop in time.
+		update := r.URL.Query().Get("for") == "update"
+		if update {
+			if reason := m.updateRefusal(r.Context()); reason != "" {
+				writeError(w, errors.New(reason), 503)
+				return
+			}
+		}
 		if !m.operationMu.TryLock() {
 			writeError(w, fmt.Errorf("a library operation is still running"), 503)
 			return
@@ -481,6 +550,11 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			m.stopChildLocked(id)
 		}
 		remaining := len(m.children)
+		if remaining > 0 && update {
+			// The app stays open after a refused update: let each library
+			// reopen once its service has finished closing.
+			m.released = false
+		}
 		m.mu.Unlock()
 		if remaining > 0 {
 			writeError(w, fmt.Errorf("libraries are still closing"), 503)

@@ -133,13 +133,28 @@ enum ServiceClient {
         case failed(String)
     }
 
+    /// Before an explicit update: the service (or the broker, for every
+    /// library) first refuses, stopping nothing, while work cannot stop in
+    /// time. The broker asks each library before it closes any, so this may
+    /// take longer than an eject's release.
+    static func releaseForUpdate(_ service: URL, token: String) -> Release {
+        release(service, token: token, timeout: 30, query: "for=update")
+    }
+
+    /// The reason in a refused release's JSON answer, if it gave one.
+    static func reason(_ body: String) -> String? {
+        let answer = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
+        guard let reason = answer?["error"] as? String, !reason.isEmpty else { return nil }
+        return reason
+    }
+
     /// Blocks until the service answers. The service gives up after 7 s,
     /// inside DiskArbitration's ~10 s wait for an eject approval.
     static func release(_ service: URL, token: String, timeout: TimeInterval = 8.5,
-                        path: String = "/api/release", body: Data? = nil) -> Release {
+                        path: String = "/api/release", query: String? = nil, body: Data? = nil) -> Release {
         var components = URLComponents(url: service, resolvingAgainstBaseURL: false)
         components?.path = path
-        components?.query = nil
+        components?.query = query
         guard let url = components?.url else { return .failed("invalid service URL \(service)") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"

@@ -425,6 +425,14 @@ writes, stops its MCP connections, and takes an exclusive lease only after old
 processes exit. Another CLI command or another app instance defers installation;
 it is never force-killed for an update. Before an explicit Install and Relaunch,
 Pharos performs this preparation through Sparkle's public user-driver callbacks.
+An explicit install first asks the broker (or a portable service) to release
+its libraries with `POST /api/release?for=update`, as an eject does: work that
+stops at its next safe point within 7 s is stopped there, and work that cannot
+(a library copy, move, restore, compaction or delivery, catalog preparation,
+a service still opening, or work Pharos cannot identify) refuses the install
+before anything is stopped. Pharos then says what it is waiting for, and the
+user installs with Check for Updates once it finishes. Another process's work
+on the library does not hold an update, which leaves the drive mounted.
 If an install-on-quit handoff is unsafe, Pharos resumes the staged installer and
 cancels it through the public Skip reply before allowing ordinary Quit. Ordinary
 Quit sends SIGTERM to its owned service, which can finish closing independently;

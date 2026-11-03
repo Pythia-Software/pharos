@@ -211,6 +211,33 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 	return result
 }
 
+// updateInputs keeps what stopping this process for an app update
+// interrupts: its own operations and writers no operation accounts for.
+// Unlike an eject, an update leaves the drive mounted, so another process's
+// work (its leases, its operations and the capture locks it takes) carries
+// on after this one exits. The app refuses an update while a command runs
+// from its own bundle.
+func updateInputs(in verdictInput) verdictInput {
+	return verdictInput{ops: slices.DeleteFunc(slices.Clone(in.ops), func(view opView) bool { return view.Foreign }),
+		unregistered: in.unregistered, unreachable: in.unreachable, fresh: in.fresh}
+}
+
+// updateRefusal is why an update must not stop work now, as one sentence,
+// or "" when every holder stops at its next safe point within the release's
+// budget (safe or safe-in), as it does for an eject.
+func updateRefusal(v ejectVerdict) string {
+	if v.Verdict != verdictBusy && v.Verdict != verdictUnsafe {
+		return ""
+	}
+	labels := []string{}
+	for _, blocker := range v.Blockers {
+		if (blocker.Verdict == verdictBusy || blocker.Verdict == verdictUnsafe) && !slices.Contains(labels, blocker.Label) {
+			labels = append(labels, blocker.Label)
+		}
+	}
+	return "The update waits for " + lowerFirst(joinLabels(labels)) + ", which cannot stop in time."
+}
+
 // leaseLabel names a lease's work for people: "Capture (Terminal), in
 // another process (pharos capture)".
 func leaseLabel(info leaseInfo) string {

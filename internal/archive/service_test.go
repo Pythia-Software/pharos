@@ -63,6 +63,44 @@ func TestReleaseStopsWorkClosesCatalogAndRefusesRequests(t *testing.T) {
 	}
 }
 
+// A release for an update first refuses, stopping nothing, while the
+// service's own work cannot stop in time; GET reports the same check.
+func TestUpdateReleaseWaitsForWorkThatCannotStopInTime(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	_, preparing := server.begin(context.Background(), OperationSpec{Kind: "catalog.initialize", Trigger: triggerStartup})
+	check := func() map[string]any {
+		t.Helper()
+		response := serveTest(server, http.MethodGet, "/api/release?for=update")
+		var answer map[string]any
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &answer) != nil {
+			t.Fatalf("check: %d %s", response.Code, response.Body.String())
+		}
+		return answer
+	}
+	if answer := check(); answer["releasable"] != false || !strings.Contains(fmt.Sprint(answer["error"]), "prepare the catalog") {
+		t.Fatalf("check while preparing the catalog: %v", answer)
+	}
+	response := serveTest(server, http.MethodPost, "/api/release?for=update")
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "cannot stop in time") {
+		t.Fatalf("update release while preparing the catalog: %d %s", response.Code, response.Body.String())
+	}
+	if err := catalog.DB.Ping(); err != nil || !server.admit() {
+		t.Fatalf("a refused update release stopped the service: %v", err)
+	}
+	server.life.requests.Done()
+	preparing.Finish(nil)
+	if answer := check(); answer["releasable"] != true {
+		t.Fatalf("check once the work ended: %v", answer)
+	}
+	if response := serveTest(server, http.MethodPost, "/api/release?for=update"); response.Code != http.StatusOK {
+		t.Fatalf("update release once the work ended: %d %s", response.Code, response.Body.String())
+	}
+	if err := catalog.DB.Ping(); err == nil {
+		t.Fatal("catalog is still open after the update release")
+	}
+}
+
 func TestStopWaitsForInFlightRequests(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
