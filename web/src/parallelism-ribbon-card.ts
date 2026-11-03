@@ -26,13 +26,13 @@ export function ribbonCover(data: ConcurrencyData, settings: ConcurrencySettings
   const range = resolveConcurrencyRange(data, settings, now).bounds;
   const bounds: Interval = settings.zoom && settings.zoom[0] >= range[0] && settings.zoom[1] <= range[1] ? settings.zoom : range;
   const period = periods.find(size => (bounds[1] - bounds[0]) / size <= maxColumns) ?? periods.at(-1)!;
-  const repositories = [...new Set(data.threads.map(thread => thread.repository))].sort();
-  const threads = data.threads.filter(thread => !settings.repository || thread.repository === settings.repository);
+  const repositories = [...new Set(data.threads.map(thread => thread.project))].sort();
+  const threads = data.threads.filter(thread => !settings.repository || thread.project === settings.repository);
   // A unit takes its top-level thread's repository, as its ribbon does.
   const owner = new Map<string, string>();
   for (const thread of threads.slice().sort((a, b) => a.agent_depth - b.agent_depth)) {
     const unit = concurrencyUnit(thread, settings.counting);
-    if (!owner.has(unit)) owner.set(unit, thread.repository);
+    if (!owner.has(unit)) owner.set(unit, thread.project);
   }
   const spans = [...concurrencySpans(threads, settings.mode, settings.gap, settings.counting)].map(([unit, intervals]) => ({ repository: owner.get(unit)!, intervals: clipIntervals(intervals, bounds) })).filter(unit => unit.intervals.length);
   const buckets: ChartBucket[] = [];

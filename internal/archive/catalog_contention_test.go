@@ -497,6 +497,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"trace_worktree", map[string]any{"query": "parser"}},
 		{"query_statistics", map[string]any{"entity": "conversation", "select": []string{"total_tokens", "user_turn_count"}}},
 		{"list_repositories", map[string]any{}},
+		{"list_projects", map[string]any{}},
 		{"get_archive_status", map[string]any{}},
 	}
 	for id, tool := range tools {

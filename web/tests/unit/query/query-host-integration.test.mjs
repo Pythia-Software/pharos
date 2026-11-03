@@ -190,8 +190,8 @@ test('changing a saved range preserves query structure, indexed search context, 
  const query={...EMPTY_QUERY,offset:100,where:[
   {field:'activity_at',op:'>',value:'2025-01-01T00:00:00Z'},
   {field:'activity_at',op:'<=',value:'2025-12-31T00:00:00Z'},
-  {any:[{field:'repository_name',op:'=',value:'pharos'},{field:'repository_name',op:'=',value:'query-table'}]},
- ],aggregations:[{id:'cost',op:'sum',field:'cost_usd',groupBy:['repository_name']}]};
+  {any:[{field:'project_name',op:'=',value:'pharos'},{field:'project_name',op:'=',value:'query-table'}]},
+ ],aggregations:[{id:'cost',op:'sum',field:'cost_usd',groupBy:['project_name']}]};
  const original=`${m.queryURL('library',query)}&search=indexing&case=1&fuzzy=0&heat_grain=week#library`;
  const result=m.updateQueryWindowURL(original,30),spec=m.queryFromURL(result),url=new URL(result,location.origin);
  assert.deepEqual(spec.window,{days:30,field:'activity_at',mode:'relative'});

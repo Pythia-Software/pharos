@@ -87,9 +87,9 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 	if err != nil {
 		return writingTable{}, err
 	}
-	works, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,
+	works, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,`+projectNameSQL("w")+` project_name,
 			(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id) providers
-		FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id`)
+		FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w"))
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -201,7 +201,7 @@ func (c *Catalog) writingPeriods(ctx context.Context, parents map[string]string,
 
 func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTotal, subagents, launched int) map[string]any {
 	row := map[string]any{
-		"id": work["id"], "workspace_id": work["id"], "title": work["title"], "repository_name": work["repository_name"],
+		"id": work["id"], "workspace_id": work["id"], "title": work["title"], "repository_name": work["repository_name"], "project_name": work["project_name"],
 		"source_kind": work["source_kind"], "providers": work["providers"],
 		"first_message_at": nilIfEmpty(total.firstSent), "last_message_at": nilIfEmpty(total.lastSent),
 		"user_turns": total.messages, "typed_turns": total.typedMessages, "longest_typed_words": total.longestTyped,
@@ -290,7 +290,7 @@ func rootWorkspace(id string, parents map[string]string) string {
 }
 
 // writingSplits are the row fields the writing chart can split its words by.
-var writingSplits = map[string]bool{"repository_name": true, "source_kind": true, "providers": true, "channel": true, "machine_id": true, "execution_machine_id": true, "channels": true, "machines": true, "execution_machines": true}
+var writingSplits = map[string]bool{"repository_name": true, "project_name": true, "source_kind": true, "providers": true, "channel": true, "machine_id": true, "execution_machine_id": true, "channels": true, "machines": true, "execution_machines": true}
 
 // writingSeries sums, per day, the classified text of the writing rows that
 // match the request's filters, and totals it, so the page's chart and

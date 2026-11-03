@@ -589,7 +589,7 @@ export const defaultApi = {
     threads: [0, 1].map(index => ({
       id: `timing-${index}`, conversation_id: rootConversation, work_id: workID,
       workspace_id: `${workID}-${index}`, workspace_name: `Workspace ${index + 1}`,
-      repository: "pharos", title: longTitle, provider: "codex", model: "gpt-5.3-codex", agent_depth: 0,
+      repository: "pharos", project: "pharos", title: longTitle, provider: "codex", model: "gpt-5.3-codex", agent_depth: 0,
       turns: [[now - 2 * 3600000 + index * 600000, now - 3600000]],
       model_spans: [[now - 2 * 3600000 + index * 600000, now - 5400000]],
     })),
@@ -629,7 +629,7 @@ export const defaultApi = {
       .map(([key, label, bytes]) => ({ key, label, bytes })),
     machines: [{ id: "test-mac", label: "A Mac Studio with a rather long name (this Mac)", originals_bytes: 52e9, catalog_bytes: 90e9 }, { id: "air", label: "MacBook Air", originals_bytes: 9e9, catalog_bytes: 17e9 }],
     sources: [{ id: "conductor", label: "conductor", originals_bytes: 30e9, catalog_bytes: 50e9 }, { id: "codex", label: "codex", originals_bytes: 16e9, catalog_bytes: 30e9 }],
-    repositories: [{ id: "repo", label: "a-repository-name-without-any-spaces-to-wrap", originals_bytes: 20e9, catalog_bytes: 40e9 }, { id: "", label: "No repository", originals_bytes: 30e9, catalog_bytes: 20e9 }],
+    projects: [{ id: "repository:repo", label: "a-repository-name-without-any-spaces-to-wrap", originals_bytes: 20e9, catalog_bytes: 40e9 }, { id: "folder:~/notes", label: "~/notes", originals_bytes: 5e9, catalog_bytes: 1e9 }, { id: "", label: "No project", originals_bytes: 30e9, catalog_bytes: 20e9 }],
   },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },

@@ -90,6 +90,10 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 		clauses = append(clauses, repositoryNamePredicate("r"))
 		values = append(values, repository, repository)
 	}
+	if project := firstString(args["project"]); project != "" {
+		clauses = append(clauses, projectPredicate("w"))
+		values = append(values, projectArgs(project)...)
+	}
 	if source := firstString(args["source"]); source != "" {
 		clauses = append(clauses, "w.source_kind=?")
 		values = append(values, source)

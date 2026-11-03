@@ -6,7 +6,7 @@ import { toggleCategory } from '../../../src/authored';
 
 test('legend categories collect in one ALL set filter the query builder can edit', () => {
   const schema = loadSchema(writingMessages);
-  const repository = { field: 'repository_name', op: '=', value: 'example/repo' };
+  const repository = { field: 'project_name', op: '=', value: 'example/repo' };
   const typed = toggleCategory([repository], 'typed');
   assert.deepEqual(typed[0], repository);
   const both = toggleCategory(typed, 'pasted');

@@ -7,7 +7,7 @@ import { linkTargets } from "../../../src/query-link-targets";
 
 const rows = (schema) => Array.from({ length: 4 }, (_, index) => ({
   ...Object.fromEntries(schema.fields.map(field => [field.name, field.type === "number" ? 2 + index : field.type === "bool" ? false : field.type === "datetime" ? `2026-10-${10 + index}T12:00:00Z` : field.type === "textarray" ? [] : "alpha"])),
-  id: schema.fields.find(field => field.name === "id")?.type === "number" ? index + 1 : `record ${index} / &`, repository_name: index === 2 ? null : index === 3 ? "other" : "répo & one", conversation_id: index === 1 ? "conversation two" : "conversation / one", workspace_id: "work one", work_id: "work one",
+  id: schema.fields.find(field => field.name === "id")?.type === "number" ? index + 1 : `record ${index} / &`, project_name: index === 2 ? null : index === 3 ? "other" : "répo & one", conversation_id: index === 1 ? "conversation two" : "conversation / one", workspace_id: "work one", work_id: "work one",
   duration_ms: index === 0 ? null : index === 1 ? 0 : 600, duration_source: index === 0 ? null : "timestamps", error_count: index === 0 ? 1 : 0,
   typed_words: index === 0 ? 0 : index * 10, typed_turns: index, typed_message: index > 0,
   user_words: 100, words: 100, cost_usd: index === 2 ? null : 2, cost_today_usd: index === 2 ? null : 3,
@@ -17,7 +17,7 @@ const rows = (schema) => Array.from({ length: 4 }, (_, index) => ({
 
 for (const [dataset, ideas] of Object.entries(usageQueryIdeas)) test(`${dataset}: every suggested grouping validates, round-trips and drills into its exact source population`, () => {
   const schema = schemas[dataset], data = rows(schema);
-  const filterField = schema.fields.some(field => field.name === "repository_name") ? "repository_name" : "tool_name";
+  const filterField = schema.fields.some(field => field.name === "project_name") ? "project_name" : "tool_name";
   const source = { ...EMPTY_QUERY, fitToScreen: false, where: [{ field: filterField, op: "!=", value: "other" }], limit: 1, offset: 100 };
   for (const idea of ideas) {
     const query = applyQueryIdea(source, idea);
@@ -78,7 +78,7 @@ test("means and rates use the whole denominator including zero durations and abs
 });
 
 test("message-date writing averages exclude messages without typed words from the denominator", () => {
-  const data = rows(schemas.writing_messages).slice(0, 2).map(row => ({ ...row, repository_name: "same" }));
+  const data = rows(schemas.writing_messages).slice(0, 2).map(row => ({ ...row, project_name: "same" }));
   const result = applyQuery(data, applyQueryIdea(EMPTY_QUERY, usageQueryIdeas.writing_messages[0]), schemas.writing_messages).rows[0];
   assert.equal(result.idea_written_messages, 1);
   assert.equal(result.idea_words_per_message, 10);

@@ -58,7 +58,7 @@ test("the three catalogs are well formed and read their older links", () => {
   const defaults = { metric: "typed", split: "none", period: "day" };
   assert.deepEqual([read({ ...defaults, scope: "all", split: "kind" }).metric, read({ ...defaults, scope: "all", split: "kind" }).split], ["words", "kind"]);
   assert.deepEqual([read({ ...defaults, scope: "typed", split: "kind" }).metric, read({ ...defaults, scope: "typed", split: "kind" }).split], ["typed", "none"]);
-  assert.ok(validAnalysisState(human, { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, scope: "typed", split: "repository_name", hours: 6, days: 3 }));
+  assert.ok(validAnalysisState(human, { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, scope: "typed", split: "project_name", hours: 6, days: 3 }));
   // An older link's work filters read as message filters, and its legend
   // filter on the breakdown's field becomes the selection.
   const where = [{ field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }, { field: "providers", op: "=", value: "codex" }];
@@ -98,10 +98,10 @@ const sameGroups = ({ recipe, card, dashboard, scale }) => {
 
 test("explaining-repos and human-word-mix: shares of typed words, and typed shares, by repository", () => {
   const shares = pair("explaining-repos");
-  assert.deepEqual([shares.state.view, shares.state.compareAs, shares.state.metric, shares.state.split], ["compare", "share", "typed", "repository_name"]);
+  assert.deepEqual([shares.state.view, shares.state.compareAs, shares.state.metric, shares.state.split], ["compare", "share", "typed", "project_name"]);
   sameGroups(shares);
   const mix = pair("human-word-mix");
-  assert.deepEqual([mix.state.metric, mix.state.split], ["typed_share", "repository_name"]);
+  assert.deepEqual([mix.state.metric, mix.state.split], ["typed_share", "project_name"]);
   sameGroups(mix);
   assert.ok(mix.dashboard.buckets.every(bucket => bucket.value > 0 && bucket.value < 1));
 });
@@ -274,7 +274,7 @@ test("writing-hours: typed words by local hour", () => {
 // ----- Carbon: usage under the user's assumptions ----------------------------
 
 test("carbon-tiers, carbon-repositories, carbon-models, carbon-providers and carbon-effort: estimated CO₂e by group", () => {
-  for (const [id, split, share] of [["carbon-tiers", "carbon_tier", true], ["carbon-repositories", "repository_name", false], ["carbon-models", "model_family", false], ["carbon-providers", "provider", true], ["carbon-effort", "effort", true]]) {
+  for (const [id, split, share] of [["carbon-tiers", "carbon_tier", true], ["carbon-repositories", "project_name", false], ["carbon-models", "model_family", false], ["carbon-providers", "provider", true], ["carbon-effort", "effort", true]]) {
     const compared = pair(id);
     assert.deepEqual([compared.state.view, compared.state.metric, compared.state.split, compared.state.compareAs], ["compare", "co2", split, share ? "share" : "bars"], id);
     sameGroups(compared);
@@ -377,15 +377,15 @@ test("Back to dashboard from a Parallelism query leaves counting and gap out of 
   const opened = new URLSearchParams(dashboard);
   opened.set("analyze_mode", "query");
   opened.set("analyze_opened", core.encodeQuery({ ...core.EMPTY_QUERY, where }));
-  const edited = [...where, { field: "counting", op: "=", value: "agent" }, { field: "gap_minutes", op: "=", value: "15" }, { field: "repository_name", op: "=", value: "pharos" }];
+  const edited = [...where, { field: "counting", op: "=", value: "agent" }, { field: "gap_minutes", op: "=", value: "15" }, { field: "project_name", op: "=", value: "pharos" }];
   opened.set("q_parallelism", core.encodeQuery({ ...core.EMPTY_QUERY, where: edited }));
   const back = core.decodeQueryStrict(new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams.get("analyze_filters")).where;
-  assert.deepEqual(back, [...where, { field: "repository_name", op: "=", value: "pharos" }]);
+  assert.deepEqual(back, [...where, { field: "project_name", op: "=", value: "pharos" }]);
 });
 
 test("old Human Words links: filters that cannot keep their meaning for messages are left out and listed, never rewritten", () => {
   const time = [{ field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }];
-  const kept = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "providers", op: "=", value: "codex" }, { field: "id", op: "=", value: "work-3" }];
+  const kept = [{ field: "project_name", op: "=", value: "pharos" }, { field: "providers", op: "=", value: "codex" }, { field: "id", op: "=", value: "work-3" }];
   const dropped = [
     { field: "user_words", op: ">", value: "100" }, // a work total messages lack
     { field: "typed_words", op: ">", value: "100" }, // a work's total, not a message's
@@ -434,7 +434,7 @@ test("Human Words queries keep a relative range relative, so a repeated request 
   }
   // A smoothing window resolves the start against the clock; the end stays
   // relative, and a later day's query starts a day later.
-  const smoothed = { metric: "typed", split: "repository_name", rollingPeriods: 7 };
+  const smoothed = { metric: "typed", split: "project_name", rollingPeriods: 7 };
   const start = at => Date.parse(trendQuery(human, smoothed, where, { now: at, zone }).query.where.find(term => term.op === ">=").value);
   assert.ok(trendQuery(human, smoothed, where, { now, zone }).query.where.some(term => term.op === "<" && term.value === "+0s"));
   assert.equal(start(now + 86400000) - start(now), 86400000);

@@ -4276,15 +4276,6 @@
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "00b8ca7063fb7202:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyPanel",
-      "tag": "DashboardSelect",
-      "control": "aria-label=\"Repository\" value={repository} onChange={event => update({ repository: event.target.value, workspace: \"\", agent: \"\", zoom: null })}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
       "key": "1ba826d922a107fb:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyPanel",
@@ -4389,6 +4380,15 @@
       "owner": "ConcurrencyPanel",
       "tag": "DashboardSelect",
       "control": "aria-label=\"Turn gap\" value={gap} onChange={event => update({ gap: Number(event.target.value) })}",
+      "contract": "view.parallelism",
+      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
+    },
+    {
+      "key": "fa07d15fa5e24835:0",
+      "file": "web/src/concurrency.tsx",
+      "owner": "ConcurrencyPanel",
+      "tag": "DashboardSelect",
+      "control": "aria-label=\"Project\" value={repository} onChange={event => update({ repository: event.target.value, workspace: \"\", agent: \"\", zoom: null })}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },

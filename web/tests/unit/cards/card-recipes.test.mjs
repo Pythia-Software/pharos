@@ -237,8 +237,8 @@ test("dashboard context projects shared cohorts without treating per-record evid
     { field: "started_at", op: ">=", value: "-7d" }, { field: "started_at", op: "<", value: "+0s" },
     { any: [{ field: "tool_name", op: "=", value: "Read" }, { field: "repo_path", op: "=", value: "another.go" }] }];
   assert.deepEqual(cardDashboardWhere("tool_calls", "tools", where), [where[0], { field: "day", op: ">=", value: "-7d" }, { field: "day", op: "<", value: "+0s" }]);
-  assert.deepEqual(cardDashboardWhere("writing_messages", "writing", [{ field: "repository_name", op: "=", value: "repo" }, { field: "text", op: "contains", value: "try again" }, { field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }]),
-    [{ field: "repository_name", op: "=", value: "repo" }, { field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }]);
+  assert.deepEqual(cardDashboardWhere("writing_messages", "writing", [{ field: "project_name", op: "=", value: "repo" }, { field: "text", op: "contains", value: "try again" }, { field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }]),
+    [{ field: "project_name", op: "=", value: "repo" }, { field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }]);
 });
 
 test("card detail links retain durable source tokens across dashboard datasets and navigation", t => {
@@ -251,7 +251,7 @@ test("card detail links retain durable source tokens across dashboard datasets a
   assert.equal(details.searchParams.get("analyze_data"), "tool_calls");
   assert.equal(details.searchParams.get("q_tool_calls"), "@immutable-card-query");
   const tokenCard = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "task-token-ranges"), 7);
-  const records = { ...core.EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "chosen-repo" }] };
+  const records = { ...core.EMPTY_QUERY, where: [{ field: "project_name", op: "=", value: "chosen-repo" }] };
   const drilled = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: records }, new URL(tokenCard.url, location.origin).searchParams), location.origin);
   assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState({ ...records, fitToScreen: true }), "dashboard drilldowns use the newly selected records and fit their viewport");
   assert.equal(drilled.searchParams.has("card_id"), false, "new analysis is distinct from the original card details");
@@ -300,20 +300,20 @@ test("failure-rate cover and destination agree, include successful calls and exp
 
 test("repeated-path HAVING excludes singleton reads and keeps repositories separate", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const rows = ["one", "one", "two"].map((repository_name, i) => ({ id: String(i), repository_name, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
+  const rows = ["one", "one", "two"].map((project_name, i) => ({ id: String(i), project_name, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
   const result = core.applyQuery(rows, query, schemas.tool_calls, { now: clock.getTime() });
   assert.equal(result.total, 1);
-  assert.equal(result.rows[0].repository_name, "one");
+  assert.equal(result.rows[0].project_name, "one");
   assert.equal(result.rows[0].cc_calls, 2);
 });
 
 test("group drilldown preserves source predicates and metrics, handles null keys and drops HAVING", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const records = core.groupSourceQuery(query, { repository_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
+  const records = core.groupSourceQuery(query, { project_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
   assert.equal(records.grouping, undefined);
   assert.equal(records.offset, 0);
   assert.deepEqual(records.aggregations, recipe.measures);
-  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "repository_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
+  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "project_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
   // Keys that cannot be matched exactly (unknown fields) have no record query.
   assert.equal(core.groupSourceQuery({ ...query, grouping: { ...query.grouping, keys: ["unknown"] } }, { unknown: "x" }, schemas.tool_calls), null);
 });
@@ -333,7 +333,7 @@ test("cache efficiency is weighted by input tokens and preserves provider cohort
 
 test("work comparisons preserve workspace identity and take titles from the latest usage row", () => {
   const { query } = instantiateRecipe(queryRecipes.find(r => r.id === "usage-work"), 7, clock);
-  const row = { first_usage_at: clock.getTime() - 1000, cost_usd: 1, total_tokens: 100, workspace_id: "one", root_repository_name: "repo", root_conversation_id: "one", root_title: "Current title", agent_session_id: "agent" };
+  const row = { first_usage_at: clock.getTime() - 1000, cost_usd: 1, total_tokens: 100, workspace_id: "one", root_project_name: "repo", root_conversation_id: "one", root_title: "Current title", agent_session_id: "agent" };
   const result = core.applyQuery([
     { ...row, id: "old", title: "Old title", last_usage_at: new Date(clock.getTime() - 100).toISOString() },
     { ...row, id: "new", title: "Current title", last_usage_at: clock.toISOString() },
@@ -499,7 +499,7 @@ test("editing a collected cover changes destination dimensions with it", t => {
   assert.deepEqual(spec.query.grouping.source.where, item.query.grouping.source.where);
 });
 
-const recentMessage = { sent_at: clock.getTime() - 1000, repository_name: "one", title: "Work", other_words: 0, typed_words: 5 };
+const recentMessage = { sent_at: clock.getTime() - 1000, project_name: "one", title: "Work", other_words: 0, typed_words: 5 };
 
 test("writing hours capture the device timezone in durable URLs and retain DST offsets", () => {
   const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours");

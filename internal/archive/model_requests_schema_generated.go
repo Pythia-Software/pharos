@@ -19,6 +19,7 @@ func PharosModelRequestsSchema() querytable.Schema {
 			"harness":                 {Name: "harness", Kind: querytable.FieldText, Expr: "r.\"harness\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"harness\""},
 			"source_kind":             {Name: "source_kind", Kind: querytable.FieldText, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},
 			"repository_name":         {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":            {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"machine":                 {Name: "machine", Kind: querytable.FieldText, Expr: "r.\"machine\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"machine\""},
 			"preceding_tool":          {Name: "preceding_tool", Kind: querytable.FieldText, Expr: "r.\"preceding_tool\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"preceding_tool\""},
 			"timing_quality":          {Name: "timing_quality", Kind: querytable.FieldText, Expr: "r.\"timing_quality\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"timing_quality\""},

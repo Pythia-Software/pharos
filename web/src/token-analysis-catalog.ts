@@ -1,6 +1,7 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { tokenTypes } from "./token-chart-request";
+import { projectBreakdown, projectLegacy } from "./project-analysis";
 
 // Tokens and Cost over the usage ledger. One record is one agent session's
 // usage of one model and effort on one recorded day.
@@ -31,20 +32,20 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   // several providers.
   provider_model: { label: "Provider + model", fields: ["provider", "model_family"] },
   ...Object.fromEntries(([
-    ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root agent/subagent"], ["price_status", "Price status"], ["session_role", "Session role"], ["run_role", "Run role"], ["delegated_run_depth", "Delegation depth"], ["model", "Recorded model"],
+    ["model_effort", "Model + effort"], ["effort", "Effort"], ["session_kind", "Root agent/subagent"], ["price_status", "Price status"], ["session_role", "Session role"], ["run_role", "Run role"], ["delegated_run_depth", "Delegation depth"], ["model", "Recorded model"],
   ] as const).map(([name, label]) => [name, { label, fields: [name] }])),
 };
-breakdowns.root_repository_name = { label: "Top-level repository", fields: ["root_repository_name"] };
-breakdowns.repository_provider_model = { label: "Repository + provider + model", fields: ["repository_name", "provider", "model_family"] };
+breakdowns.project_name = projectBreakdown();
+breakdowns.root_project_name = { label: "Top-level project", fields: ["root_project_name"], empty: "No project" };
+breakdowns.project_provider_model = { label: "Project + provider + model", fields: ["project_name", "provider", "model_family"] };
 breakdowns.provider_model_role = { label: "Provider + model + role", fields: ["provider", "model_family", "session_role"] };
 breakdowns.provider_model_effort = { label: "Provider + model + effort", fields: ["provider", "model_family", "effort"] };
 // Providers and agent kinds keep one color and place whatever the filters.
 breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
 breakdowns.session_kind.order = ["root", "subagent"];
 breakdowns.session_kind.values = { root: "Root agent", subagent: "Sub-agent" };
-breakdowns.repository_name.empty = "No repository";
 
-const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], provider_model_effort: ["root_provider", "root_model_family", "root_effort"], repository_name: ["root_repository_name"], channel: ["channel"], machine_id: ["machine_id"] };
+const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], provider_model_effort: ["root_provider", "root_model_family", "root_effort"], project_name: ["root_project_name"], channel: ["channel"], machine_id: ["machine_id"] };
 const present = (name: string): WhereTerm[] => [{ field: name, op: "is_not_null", value: "" }, { field: name, op: "!=", value: "" }];
 
 export const tokenAnalysisCatalog: AnalysisCatalog = {
@@ -52,15 +53,15 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Usage record", plural: "Usage records", note: "A usage record is one agent session’s usage of one model and effort on one recorded day, so record sizes depend on how long sessions ran." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "root_conversation_id", where: present("root_conversation_id"), breakdowns: root,
-      note: "A conversation is one top-level conversation including its delegated runs, linked launches and continuations, grouped by its top-level provider, model, effort and repository even where delegated runs used others. Usage with unresolved lineage is left out." },
+      note: "A conversation is one top-level conversation including its delegated runs, linked launches and continuations, grouped by its top-level provider, model, effort and project even where delegated runs used others. Usage with unresolved lineage is left out." },
     agent_session: { label: "Agent session", plural: "Agent sessions", key: "agent_session_id", where: present("agent_session_id"),
-      breakdowns: { provider: ["provider"], repository_name: ["repository_name"], session_kind: ["session_kind"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
+      breakdowns: { provider: ["provider"], project_name: ["project_name"], session_kind: ["session_kind"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
       note: "An agent session is one recorded root agent or subagent session. Model and effort can change within a session, so sessions are not split by them." },
-    repository: { label: "Top-level repository", plural: "Top-level repositories", key: "root_repository_name", where: present("root_conversation_id"), breakdowns: { root_repository_name: ["root_repository_name"] }, note: "One repository groups its top-level conversations and their delegated usage in the selected range." },
+    project: { label: "Top-level project", plural: "Top-level projects", key: "root_project_name", where: present("root_conversation_id"), breakdowns: { root_project_name: ["root_project_name"] }, note: "One project (a repository or a folder) groups its top-level conversations and their delegated usage in the selected range." },
     run_effort: { label: "Run at one effort", plural: "Runs by effort", key: ["effort", "run_role", "root_conversation_id", "delegated_session_id"], where: present("root_conversation_id"),
       breakdowns: { effort: ["effort"], run_role: ["run_role"] }, note: "One root run or delegated execution at one effort, with usage in the selected range pooled. A run that changes effort contributes once to each effort used." },
     delegated_run: { label: "Delegated run", plural: "Delegated runs", key: "delegated_session_id", where: [...present("delegated_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
-      note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and repository." },
+      note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and project." },
   },
   // Token type splits a token total into its parts. Cost is priced per
   // request, not per token type, so cost by type shows providers, as the
@@ -76,6 +77,6 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   samples: { unit: "conversations", label: "Conversations", distinct: "root_conversation_id" },
   // The Usage chart's percentage metrics are a measure shown as shares.
   legacySlices: true,
-  legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,
+  legacy: projectLegacy(state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state),
   scatter: ["tokens", "cost"],
 };

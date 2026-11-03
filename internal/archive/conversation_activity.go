@@ -20,9 +20,9 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		if err != nil {
 			return nil, err
 		}
-		messages, err := queryMapsContext(ctx, c.reader(), `SELECT ma.message_id,ma.conversation_id,ma.sent_at,c.workspace_id,w.title,r.display_name repository_name
+		messages, err := queryMapsContext(ctx, c.reader(), `SELECT ma.message_id,ma.conversation_id,ma.sent_at,c.workspace_id,w.title,r.display_name repository_name,`+projectNameSQL("w")+` project_name
             FROM message_authorship ma JOIN conversations c ON c.id=ma.conversation_id
-            JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+            JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w")+`
             WHERE ma.total_chars>ma.harness_chars+ma.automated_chars ORDER BY ma.sent_at,ma.message_id`)
 		if err != nil {
 			return nil, err
@@ -41,7 +41,7 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 			}
 			event := base("usage:"+firstString(row["id"]), root, row["first_usage_at"], "usage")
 			event["output_tokens"] = row["output_tokens"]
-			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name"} {
+			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name", "project_name"} {
 				event[field] = row[field]
 			}
 			rows = append(rows, event)
@@ -55,7 +55,7 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 			// spans; it counts once, at the time it was sent.
 			event := base("human:"+firstString(message["message_id"]), root, message["sent_at"], "human")
 			event["human_messages"] = int64(1)
-			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name", "message_id"} {
+			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name", "project_name", "message_id"} {
 				event[field] = message[field]
 			}
 			rows = append(rows, event)

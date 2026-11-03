@@ -34,7 +34,7 @@ export function toolMetricPresentation(metric: MetricResult | undefined, groupBy
   return { metric: { ...metric, buckets }, sourceBucket: (bucket: MetricResult["buckets"][number]) => source.get(JSON.stringify(bucket.keys)) ?? bucket };
 }
 
-export const toolSummaryDimensions = ["day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "channel", "machine_id", "execution_machine_id", "provider", "model", "effort", "repository_name", "session_kind", "source_kind"];
+export const toolSummaryDimensions = ["day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "channel", "machine_id", "execution_machine_id", "provider", "model", "effort", "project_name", "session_kind", "source_kind"];
 export function toolSummaryCallFilters(row: Record<string, unknown>): WhereTerm[] {
   return toolSummaryDimensions.map(field => {
     const value = row[field];

@@ -9,13 +9,13 @@ import (
 
 // requestTimingVersion names the derivation stored in model_request_timings.
 // Changing it marks every conversation for recomputation.
-const requestTimingVersion = "timings-v1"
+const requestTimingVersion = "timings-v2-projects"
 
 // requestTimingColumns are model_request_timings' columns, in the order
 // thinkingSource returns them.
 const requestTimingColumns = `id,conversation_id,agent_session_id,workspace_id,native_id,previous_request_id,sequence,requested_at,observed_millis,
  model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
- source_kind,repository_name,machine,preceding_tool,timing_quality,gap_seconds,tool_result_at`
+ source_kind,repository_name,machine,preceding_tool,timing_quality,gap_seconds,tool_result_at,project_name`
 
 // requestTimingSQL derives each request's timing evidence within the
 // conversations {conversations} selects: the previous request in its stream
@@ -25,7 +25,7 @@ const requestTimingColumns = `id,conversation_id,agent_session_id,workspace_id,n
 // The timing deliberately uses the first retained usage-bearing response
 // event, not an unverified request-send clock. Previous response and
 // incoming-tool evidence are computed before any dashboard filter.
-const requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch(ended_at,'subsec')) anchor,
+var requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch(ended_at,'subsec')) anchor,
  SUM(CASE WHEN unixepoch(ended_at,'subsec') IS NULL THEN 1 ELSE 0 END) missing,
  COUNT(DISTINCT COALESCE(agent_session_id,'')) streams,MIN(COALESCE(agent_session_id,'')) stream,
  CASE WHEN COUNT(DISTINCT tool_category)=1 THEN MIN(tool_category) ELSE 'mixed' END preceding_tool
@@ -37,9 +37,9 @@ const requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch
  WINDOW stream AS (PARTITION BY conversation_id,COALESCE(agent_session_id,'') ORDER BY mr.sequence,mr.id)),
  evidence AS (SELECT p.*,unixepoch(p.requested_at,'subsec') observed_at,i.anchor,i.missing,i.streams,i.stream,
  COALESCE(i.preceding_tool,'none') preceding_tool,c.workspace_id,c.provider,c.harness,c.agent_depth,
- w.source_kind,r.display_name repository_name,COALESCE(o.execution_machine,o.machine,'Unknown') machine
+ w.source_kind,r.display_name repository_name,` + projectNameSQL("w") + ` project_name,COALESCE(o.execution_machine,o.machine,'Unknown') machine
  FROM ordered p CROSS JOIN conversations c ON c.id=p.conversation_id JOIN workspaces w ON w.id=c.workspace_id
- LEFT JOIN repositories r ON r.id=w.repository_id LEFT JOIN incoming i ON i.next_request_id=p.id
+ LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + ` LEFT JOIN incoming i ON i.next_request_id=p.id
  LEFT JOIN conversation_origins o ON o.conversation_id=c.id),
  durations AS (SELECT *,ROUND((observed_at-anchor)*1000)/1000.0 observed_gap FROM evidence),
  qualified AS (SELECT *,CASE
@@ -57,7 +57,7 @@ const requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch
  input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
  source_kind,repository_name,machine,preceding_tool,timing_quality,
  CASE WHEN timing_quality='Usable timing' THEN observed_gap END gap_seconds,
- strftime('%Y-%m-%dT%H:%M:%fZ',anchor,'unixepoch') tool_result_at FROM qualified`
+ strftime('%Y-%m-%dT%H:%M:%fZ',anchor,'unixepoch') tool_result_at,project_name FROM qualified`
 
 func requestTimings(conversations string) string {
 	return strings.ReplaceAll(requestTimingSQL, "{conversations}", conversations)
@@ -94,7 +94,7 @@ var thinkingSource = `SELECT * FROM (SELECT ` + requestTimingColumns + ` FROM mo
 
 var thinkingRequestDataset = func() sqlDataset {
 	columns := map[string]string{}
-	for _, name := range []string{"id", "conversation_id", "agent_session_id", "workspace_id", "native_id", "sequence", "requested_at", "model", "effort", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "provider", "harness", "agent_depth", "source_kind", "repository_name", "machine", "preceding_tool", "timing_quality", "gap_seconds", "tool_result_at"} {
+	for _, name := range []string{"id", "conversation_id", "agent_session_id", "workspace_id", "native_id", "sequence", "requested_at", "model", "effort", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "provider", "harness", "agent_depth", "source_kind", "repository_name", "project_name", "machine", "preceding_tool", "timing_quality", "gap_seconds", "tool_result_at"} {
 		columns[name] = "d." + name
 	}
 	columns["model_effort"] = "model_effort(d.model,d.effort)"
@@ -116,9 +116,21 @@ func (c *Catalog) ensureRequestTimings() error {
  agent_session_id TEXT, workspace_id TEXT, native_id TEXT, previous_request_id TEXT, sequence INTEGER, requested_at TEXT, observed_millis INTEGER,
  model TEXT NOT NULL, effort TEXT NOT NULL, input_tokens INTEGER, cache_read_input_tokens INTEGER, output_tokens INTEGER, reasoning_output_tokens INTEGER,
  compacted_before INTEGER, provider TEXT, harness TEXT, agent_depth INTEGER, source_kind TEXT, repository_name TEXT, machine TEXT,
- preceding_tool TEXT NOT NULL, timing_quality TEXT NOT NULL, gap_seconds REAL, tool_result_at TEXT,
- PRIMARY KEY(conversation_id,id)) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS model_request_timings_requested_idx ON model_request_timings(requested_at,` + requestTimingColumns + `);
+ preceding_tool TEXT NOT NULL, timing_quality TEXT NOT NULL, gap_seconds REAL, tool_result_at TEXT, project_name TEXT,
+ PRIMARY KEY(conversation_id,id)) WITHOUT ROWID;`); err != nil {
+		return err
+	}
+	// The covering index lists every column, so one from before a column
+	// was added is rebuilt with it.
+	if has, err := c.hasColumn("model_request_timings", "project_name"); err != nil {
+		return err
+	} else if !has {
+		if _, err := c.DB.Exec(`ALTER TABLE model_request_timings ADD COLUMN project_name TEXT;
+DROP INDEX IF EXISTS model_request_timings_requested_idx`); err != nil {
+			return err
+		}
+	}
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS model_request_timings_requested_idx ON model_request_timings(requested_at,` + requestTimingColumns + `);
 CREATE TABLE IF NOT EXISTS model_request_timing_dirty(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS model_request_exclusions(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;`); err != nil {
 		return err
@@ -136,7 +148,7 @@ CREATE TABLE IF NOT EXISTS model_request_exclusions(conversation_id TEXT PRIMARY
 		return markAll("SELECT id FROM conversations WHERE workspace_id=" + ref + ".id")
 	}
 	inRepository := func(ref string) string {
-		return markAll("SELECT c.id FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE w.repository_id=" + ref + ".id")
+		return markAll("SELECT c.id FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE w.repository_id=" + ref + ".id OR w.folder_repository_id=" + ref + ".id")
 	}
 	// Upserts name every column, so UPDATE OF alone fires for unchanged rows.
 	changed := func(columns ...string) string {
@@ -150,6 +162,12 @@ CREATE TABLE IF NOT EXISTS model_request_exclusions(conversation_id TEXT PRIMARY
 	aliased := func(conversation string) string {
 		return "EXISTS(SELECT 1 FROM conversation_identity_links WHERE relationship='native-alias' AND (left_id=" + conversation + " OR right_id=" + conversation + "))"
 	}
+	// Triggers whose definitions changed are replaced; the rest are kept.
+	for _, name := range []string{"workspaces_update", "repositories_insert", "repositories_update", "repositories_delete"} {
+		if _, err := c.DB.Exec("DROP TRIGGER IF EXISTS request_timings_" + name); err != nil {
+			return err
+		}
+	}
 	for _, trigger := range []string{
 		"model_requests_insert AFTER INSERT ON model_requests BEGIN " + mark("NEW.conversation_id") + " END",
 		"model_requests_update AFTER UPDATE ON model_requests BEGIN " + mark("OLD.conversation_id") + mark("NEW.conversation_id") + " END",
@@ -161,7 +179,7 @@ CREATE TABLE IF NOT EXISTS model_request_exclusions(conversation_id TEXT PRIMARY
 		"conversations_update AFTER UPDATE OF workspace_id,provider,harness,agent_depth ON conversations WHEN " + changed("workspace_id", "provider", "harness", "agent_depth") + " BEGIN " + mark("OLD.id") + mark("NEW.id") + " END",
 		"conversations_delete AFTER DELETE ON conversations BEGIN " + mark("OLD.id") + " END",
 		"workspaces_insert AFTER INSERT ON workspaces BEGIN " + inWorkspace("NEW") + " END",
-		"workspaces_update AFTER UPDATE OF source_kind,repository_id ON workspaces WHEN " + changed("source_kind", "repository_id") + " BEGIN " + inWorkspace("NEW") + " END",
+		"workspaces_update AFTER UPDATE OF source_kind,repository_id,project_folder,folder_repository_id ON workspaces WHEN " + changed("source_kind", "repository_id", "project_folder", "folder_repository_id") + " BEGIN " + inWorkspace("NEW") + " END",
 		"workspaces_delete AFTER DELETE ON workspaces BEGIN " + inWorkspace("OLD") + " END",
 		"repositories_insert AFTER INSERT ON repositories BEGIN " + inRepository("NEW") + " END",
 		"repositories_update AFTER UPDATE OF display_name ON repositories WHEN " + changed("display_name") + " BEGIN " + inRepository("NEW") + " END",

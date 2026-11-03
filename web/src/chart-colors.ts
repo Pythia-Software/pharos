@@ -120,6 +120,6 @@ export function colorFields(clause: { groupBy: string[]; dateGrouping?: { interv
 // Compound metric groups retain their model palette even when their first key
 // is provider, repository, or a display label flattened for the native renderer.
 export function metricSeriesColor(fields: string[], keys: unknown[]): string {
-  const field = ["root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "repository_name"].find(field => fields.includes(field)) ?? fields[0];
+  const field = ["root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "project_name", "root_project_name", "repository_name"].find(field => fields.includes(field)) ?? fields[0];
   return chartSeriesStyle(field ?? "generic", String(keys[fields.indexOf(field)] ?? "Unspecified")).color;
 }

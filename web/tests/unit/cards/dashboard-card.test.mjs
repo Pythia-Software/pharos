@@ -31,7 +31,7 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.equal(dashboardCardCollected(url),false);
   const card = collectDashboardCard(url,' My tokens ',' My description ');
   assert.equal(dashboardCardCollected(url),true,'Ask offers each chart address once');
-  const second = collectDashboardCard(makeURL({...state,split:'repository_name'}),'Repositories','');
+  const second = collectDashboardCard(makeURL({...state,split:'project_name'}),'Repositories','');
   assert.equal(readBookmarks().length,2);
   assert.equal(card.title,'My tokens');
   const edited = updateBookmark(card.id,'Renamed','Edited description');
@@ -254,7 +254,7 @@ test('a Parallelism URL offers its ribbon and its chart as cards, each collected
   assert.equal(dashboardCardWindow(url,'ribbon'),'Saved range');
   assert.equal(dashboardCardPresentation(url,'ribbon').category,'machines');
   // Two workspaces in two repositories; one busy for two hours, one for half an hour.
-  const thread = (id,repository,turns) => ({id,conversation_id:id,work_id:id,workspace_id:id,workspace_name:id,repository,title:id,provider:'claude',model:'m',agent_depth:0,turns,model_spans:[]});
+  const thread = (id,project,turns) => ({id,conversation_id:id,work_id:id,workspace_id:id,workspace_name:id,repository:project,project,title:id,provider:'claude',model:'m',agent_depth:0,turns,model_spans:[]});
   const timing = {generated_at:'',timezone:'UTC',period_start:'2026-10-01',period_end:'2026-10-01',days:['2026-10-01'],coverage:{},
     threads:[thread('a','alpha',[[start,start+2*hour]]),thread('b','beta',[[start+hour,start+1.5*hour]])]};
   const preview = await loadDashboardCardPreview(url,schemas.parallelism,undefined,undefined,start,'ribbon',timing);
