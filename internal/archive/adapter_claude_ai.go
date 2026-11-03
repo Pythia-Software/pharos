@@ -61,7 +61,7 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 	}
 	defer source.Close()
 	info, _ := source.Stat()
-	modified := info.ModTime().UnixNano()
+	version := info.ModTime().UnixNano()
 	var content io.Reader = source
 	if strings.EqualFold(filepath.Ext(file), ".zip") {
 		if content, err = claudeAIZipConversations(source, info.Size()); err != nil {
@@ -87,7 +87,7 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		if conversation.Messages == nil {
 			return fmt.Errorf("Claude.ai export %s conversation %s has no messages list", file, conversation.UUID)
 		}
-		if err := emit(a.record(conversation, a.original(file), claudeAIVersion(conversation, modified))); err != nil {
+		if err := emit(a.record(conversation, a.original(file), version)); err != nil {
 			return err
 		}
 	}
@@ -100,25 +100,6 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		return fmt.Errorf("Claude.ai export %s: %w", file, err)
 	}
 	return nil
-}
-
-// claudeAIVersion is the version of a conversation in an export: when it last
-// changed, so a copy of an older export, whatever its file's time, is older.
-// Without that, the newest message's time; without that, the file's.
-func claudeAIVersion(conversation claudeAIConversation, modified int64) int64 {
-	if at, ok := parseTime(conversation.UpdatedAt); ok {
-		return at.UnixNano()
-	}
-	version := int64(0)
-	for _, message := range conversation.Messages {
-		if at, ok := parseTime(firstString(message["created_at"])); ok {
-			version = max(version, at.UnixNano())
-		}
-	}
-	if version == 0 {
-		return modified
-	}
-	return version
 }
 
 // claudeAIZipConversations opens conversations.json inside the export's ZIP.

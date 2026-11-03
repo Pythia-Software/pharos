@@ -45,7 +45,7 @@ func (c *Catalog) acceptUnchangedEvidence(ctx context.Context, adapter Adapter, 
 	if err != nil {
 		return false, err
 	}
-	if err = guardCapture(tx, record, workspace, host, &authority, false); err != nil {
+	if err = guardCapture(tx, record, workspace, host, &authority); err != nil {
 		return false, err
 	}
 	if authority.older {

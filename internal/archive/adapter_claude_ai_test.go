@@ -201,39 +201,59 @@ func writeSourceFileAt(t *testing.T, content string) string {
 }
 
 func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
-	// The older export predates the edited prompt and the reply to it.
-	var export []map[string]any
-	if err := json.Unmarshal([]byte(claudeAIExport), &export); err != nil {
-		t.Fatal(err)
+	older := func(change func(conversation map[string]any)) string {
+		var export []map[string]any
+		if err := json.Unmarshal([]byte(claudeAIExport), &export); err != nil {
+			t.Fatal(err)
+		}
+		change(export[0])
+		return jsonText(export)
 	}
-	export[0]["chat_messages"] = export[0]["chat_messages"].([]any)[:3]
-	export[0]["updated_at"] = "2026-10-01T10:03:00Z"
-	for name, olderFile := range map[string]time.Duration{"older file": -48 * time.Hour, "copied again since": 48 * time.Hour} {
-		t.Run(name, func(t *testing.T) {
-			c, _ := testCatalog(t)
-			newer, older := writeSourceFileAt(t, claudeAIExport), writeSourceFileAt(t, jsonText(export))
-			info, err := os.Stat(newer)
-			if err != nil {
-				t.Fatal(err)
-			}
-			at := info.ModTime().Add(olderFile)
-			if err := os.Chtimes(older, at, at); err != nil {
-				t.Fatal(err)
-			}
-			count := func() (int, int) {
-				var all, selected int
-				if err := c.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(m.selected),0) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='conv-1'`).Scan(&all, &selected); err != nil {
+	// Before the edited prompt and its reply, whether or not the export
+	// records that the conversation changed since; and before anything.
+	prefix := older(func(c map[string]any) { c["chat_messages"] = c["chat_messages"].([]any)[:3] })
+	dated := older(func(c map[string]any) {
+		c["chat_messages"], c["updated_at"] = c["chat_messages"].([]any)[:3], "2026-10-01T10:03:00Z"
+	})
+	empty := older(func(c map[string]any) { c["chat_messages"] = []any{}; delete(c, "updated_at") })
+	count := func(c *Catalog) (int, int) {
+		var all, selected int
+		if err := c.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(m.selected),0) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='conv-1'`).Scan(&all, &selected); err != nil {
+			t.Fatal(err)
+		}
+		return all, selected
+	}
+	for name, export := range map[string]string{"prefix": prefix, "dated prefix": dated, "empty": empty} {
+		for when, offset := range map[string]time.Duration{"older file": -48 * time.Hour, "copied since": 48 * time.Hour} {
+			t.Run(name+", "+when, func(t *testing.T) {
+				c, _ := testCatalog(t)
+				newer, old := writeSourceFileAt(t, claudeAIExport), writeSourceFileAt(t, export)
+				info, err := os.Stat(newer)
+				if err != nil {
 					t.Fatal(err)
 				}
-				return all, selected
-			}
-			ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: newer, Account: "me", Enabled: true})
-			all, selected := count()
-			ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: older, Account: "me", Enabled: true})
-			if gotAll, gotSelected := count(); gotAll != all || gotSelected != selected || all != 12 {
-				t.Fatalf("after the older export: %d messages, %d selected; before %d, %d", gotAll, gotSelected, all, selected)
-			}
-		})
+				at := info.ModTime().Add(offset)
+				if err := os.Chtimes(old, at, at); err != nil {
+					t.Fatal(err)
+				}
+				ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: newer, Account: "me", Enabled: true})
+				ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: old, Account: "me", Enabled: true})
+				if all, selected := count(c); all != 12 || selected != 11 {
+					t.Fatalf("after the older export: %d messages, %d selected", all, selected)
+				}
+			})
+		}
+	}
+	// A newer export read after an older one replaces it, branch included.
+	c, _ := testCatalog(t)
+	ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: writeSourceFileAt(t, prefix), Account: "me", Enabled: true})
+	ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: writeSourceFileAt(t, claudeAIExport), Account: "me", Enabled: true})
+	var unselected int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE native_id='m3:block:0' AND selected=0`).Scan(&unselected); err != nil || unselected != 1 {
+		t.Fatalf("the newer branch is not selected: %d %v", unselected, err)
+	}
+	if all, selected := count(c); all != 12 || selected != 11 {
+		t.Fatalf("after the newer export: %d messages, %d selected", all, selected)
 	}
 }
 
