@@ -1438,6 +1438,20 @@ BEGIN
  INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
+-- Spans are published after their message_authorship rows, in their own
+-- transactions; corrections read them, so they mark the session too.
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_insert AFTER INSERT ON message_authorship_spans
+BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=new.message_id ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_delete AFTER DELETE ON message_authorship_spans
+BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=old.message_id ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_update AFTER UPDATE OF message_id,category,start_byte,end_byte ON message_authorship_spans
+WHEN (old.message_id,old.category,old.start_byte,old.end_byte) IS NOT (new.message_id,new.category,new.start_byte,new.end_byte) BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id IN (old.message_id,new.message_id) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
 CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_insert AFTER INSERT ON tool_calls
 BEGIN
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;

@@ -106,7 +106,7 @@ Each signal is a count, with the messages that triggered it as evidence
 | `edit_turns`, `one_shot_edit_turns` | Turns with an edit, and those with no thrash retry. The one-shot rate pools the two. |
 | `churned_files` | Files with 3 or more edits whose message positions fall within a span of fewer than 10. The cluster then extends over following edits while the span stays under 10 (AgentsView `churnCluster`). One per file. Evidence: the first cluster's edits. |
 | `mid_task_compactions` | Compactions where at least 2 distinct tool names appear both among the 10 tool calls before the marker and among the 5 after it. Evidence: the compaction marker. |
-| `context_peak_tokens`, `context_window`, `context_peak_ratio` | The largest request input of the session's own stream (input including cache reads and writes: the occupancy the reader's context rail plots), the window, and their ratio. The window is the one the rail uses (`contextWindow` in `reader-model.js`). That is the reported `model_context_window` (Codex). Failing that, a Claude-family model (by name: claude, opus, sonnet, haiku, fable) gets 200K, or 1M when the model says `[1m]` or context grew past 200K. Otherwise the window is unknown and the ratio is null, never zero. |
+| `context_peak_tokens`, `context_window`, `context_peak_ratio` | The largest request input of the session's own stream (input including cache reads and writes: the occupancy the reader's context rail plots), the window, and their ratio. A Codex `token_count` checkpoint's sample is its `last_token_usage`, as on the rail; its request row holds a delta of cumulative usage, which can span earlier requests, so those ID-less rows are not samples when checkpoints exist. The window is the one the rail uses (`contextWindow` in `reader-model.js`). That is the reported `model_context_window` (Codex). Failing that, a Claude-family model (by name: claude, opus, sonnet, haiku, fable) gets 200K, or 1M when the model says `[1m]` or context grew past 200K. Otherwise the window is unknown and the ratio is null, never zero. |
 | `context_pressure` | 1 when `context_peak_ratio` exceeds 0.9 (AgentsView's `HighContextPressure`), else 0; null with an unknown window. Evidence: the first assistant message at or after the peak request. |
 | `corrections` | Typed human messages with a Human Words `correction_cue`: a correction phrase inside a typed span. A cue in pasted or quoted text does not count. Steering load pools `corrections / typed_human_messages`. |
 | `verified_handbacks`, `edit_handbacks` | A handback is the last assistant message of a turn: its last prose message, or its last assistant message of any kind when it has no prose. Edit handbacks end turns with an edit. A verified handback had a verification after the turn's last edit. Verification discipline pools the two. Evidence for `unverified_handbacks`: the handback message. |
@@ -121,7 +121,7 @@ Each row records which evidence it had:
 | Flag | True when | Signals null without it |
 |---|---|---|
 | `has_timestamps` | at least one of the session's messages has a timestamp | wall, active and idle time, turn cycles, first response |
-| `has_authorship` | Human Words classified the session's user prose messages, or it has none | typed messages, corrections, archetype, autonomy, turns (and so thrash, edit turns, handbacks, long runs, ended on a failed call) |
+| `has_authorship` | Human Words classified every user prose message it classifies (those with a timestamp and non-blank text), or there are none. A prompt still waiting for the classifier leaves it false, since it may start a turn | typed messages, corrections, archetype, autonomy, turns (and so thrash, edit turns, handbacks, long runs, ended on a failed call) |
 | `has_tool_data` | the ledger holds the session's calls, or it has no tool-call messages | every tool signal |
 | `has_context_window` | a peak context and a window are both known | context share and pressure |
 
@@ -181,7 +181,8 @@ The derivation follows Parallelism's precedent
   when any input changes:
   - its messages: inserted, deleted, or changed in conversation, role, kind,
     time or content;
-  - its authorship rows, tool calls or model requests;
+  - its authorship rows or spans (spans are published after their rows,
+    separately), tool calls or model requests;
   - its model;
   - which of its messages an embedded sub-agent owns.
 - The maintenance loop stores dirty conversations' facts after Parallelism's

@@ -114,7 +114,11 @@ func TestSessionShapeSignals(t *testing.T) {
 			func(f sessionShapeFacts, e sessionShapeEvidence) any {
 				return []any{shapeValue(f.Corrections), e["corrections"]}
 			}, []any{int64(1), []string{"m2"}}},
-		{"user messages without authorship leave typed counts empty", &shapeScript{in: sessionShapeInput{messages: []shapeMessage{{id: "u", role: "user", kind: "message"}}}},
+		{"a prompt awaiting authorship leaves typed counts empty", func() *shapeScript {
+			s := new(shapeScript).typed(0).reply(5)
+			s.message("user", "message", 60)
+			return s.reply(65)
+		}(),
 			func(f sessionShapeFacts, _ sessionShapeEvidence) any {
 				return []any{f.HasAuthorship, shapeValue(f.TypedHumanMessages), shapeValue(f.Corrections)}
 			}, []any{false, nil, nil}},
@@ -326,7 +330,7 @@ func shapeRows(t *testing.T, c *Catalog) map[string]map[string]any {
 // and calls are their own.
 func TestSessionShapeCatalogInputs(t *testing.T) {
 	c, _ := testCatalog(t)
-	shapeWorkspaces(t, c, "ws-1 claude /code/one")
+	shapeWorkspaces(t, c, "ws-1 claude /code/one", "ws-2 codex /code/two")
 	ids := seedShapeConversation(t, c, "cv-1", "ws-1", "claude", "claude-sonnet-4-5",
 		"user message 0 you misunderstood, fix the parser", "assistant message 5 ok",
 		"assistant tool_call 6 {\"tool\":\"Read\",\"input\":{\"path\":\"a\"}}", "tool tool_result 7 {}",
@@ -365,6 +369,27 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	row := shapeRows(t, c)["cv-1"]
 	if row["subagents"] != int64(1) || row["repository_name"] != "pharos" || row["model_family"] == nil || row["day"] != "2026-10-20" || row["agent_kind"] != "root" {
 		t.Fatal(row)
+	}
+
+	// A legacy Codex checkpoint's request row holds a delta of cumulative
+	// usage; its last_token_usage is the context. A prompt Human Words has not
+	// classified yet leaves authorship unknown.
+	ids = seedShapeConversation(t, c, "cv-2", "ws-2", "codex", "gpt-5",
+		"user message 0 fix the parser", "assistant message 5 ok",
+		`metadata metadata 6 {"payload":{"info":{"last_token_usage":{"cached_input_tokens":0,"input_tokens":100000,"total_tokens":100100},"model_context_window":272000,"total_token_usage":{"input_tokens":500000,"total_tokens":500500}},"type":"token_count"},"type":"event_msg"}`,
+		"user message 60 now the lexer", "assistant message 65 done")
+	authored(t, c, ids[0], "cv-2", "ws-2", "typed", 3)
+	execTx(t, c.DB, `INSERT INTO model_requests(id,conversation_id,sequence,requested_at,input_tokens) VALUES('r2','cv-2',0,'2026-10-20T10:00:06.000Z',500000)`)
+	facts, _, err = c.sessionShapeOf(t.Context(), "cv-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []any{shapeValue(facts.ContextPeakTokens), shapeValue(facts.ContextPressure), facts.HasAuthorship, shapeValue(facts.TypedHumanMessages)}; !reflect.DeepEqual(got, []any{int64(100000), int64(0), false, nil}) {
+		t.Fatalf("got %#v", got)
+	}
+	authored(t, c, ids[3], "cv-2", "ws-2", "typed", 3)
+	if facts, _, err = c.sessionShapeOf(t.Context(), "cv-2"); err != nil || !facts.HasAuthorship || shapeValue(facts.TypedHumanMessages) != int64(2) {
+		t.Fatal("classified prompts were not counted", err)
 	}
 }
 
@@ -425,10 +450,12 @@ func TestSessionShapeIncremental(t *testing.T) {
 		`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json) VALUES('cv-a3-0','cv-a3','ws-a3','2026-10-30T15:20:00.000Z','2026-10-30',1,'[]')`,
 		`INSERT INTO model_requests(id,conversation_id,sequence,input_tokens) VALUES('r','cv-b1',0,10)`,
 		`DELETE FROM agent_session_messages WHERE message_id='cv-b1-2'`,
+		// Spans are published after their authorship rows, separately.
+		`INSERT INTO message_authorship_spans(message_id,position,category,rule,start_byte,end_byte,chars,words) VALUES('cv-launch-0',0,'typed','test',0,0,0,0)`,
 	} {
 		execTx(t, c.DB, statement)
 	}
-	if countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty WHERE conversation_id IN ('cv-n1','cv-a2','cv-a3','cv-b1')") != 4 {
+	if countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty WHERE conversation_id IN ('cv-n1','cv-a2','cv-a3','cv-b1','cv-launch')") != 5 {
 		t.Fatal("inputs did not mark their conversations")
 	}
 	if _, err := c.refreshSessionShape(t.Context(), 100, true); err != nil {

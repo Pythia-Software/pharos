@@ -29,7 +29,7 @@ import (
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
 	// Changing it marks every conversation for recomputation.
-	sessionShapeVersion = "1"
+	sessionShapeVersion = "2"
 	sessionShapeBatch   = 200
 	// A gap between consecutive messages longer than this is idle time.
 	sessionShapeActiveGap = 300.0
@@ -59,6 +59,7 @@ type shapeMessage struct {
 	id, role, kind string
 	at             int64 // Unix ms; valid only when timed
 	timed          bool
+	blank          bool // user prose with no text, which Human Words skips
 	// User prose with authorship: whether it holds typed text, and whether
 	// that typed text has a correction cue.
 	authored, typed, correction bool
@@ -206,7 +207,8 @@ func deriveSessionShape(in sessionShapeInput) (sessionShapeFacts, sessionShapeEv
 		if message.timed {
 			timed = append(timed, message)
 		}
-		if message.role == "user" && message.kind == "message" {
+		// Human Words classifies the user prose it can place in time.
+		if message.role == "user" && message.kind == "message" && message.timed && !message.blank {
 			users++
 			if message.authored {
 				authored++
@@ -227,7 +229,10 @@ func deriveSessionShape(in sessionShapeInput) (sessionShapeFacts, sessionShapeEv
 
 	// Authorship. Turns start at each typed human message; pasted, quoted,
 	// re-sent, template, harness and automated text does not start one.
-	facts.HasAuthorship = users == 0 || authored > 0
+	// Until every such message is classified (a new one waits for Human
+	// Words), an unclassified prompt would hide a turn, so nothing that
+	// depends on authorship is known.
+	facts.HasAuthorship = authored == users
 	turnAt := make([]int, len(in.messages)) // each message's turn
 	typedAt := []int{}                      // positions of typed human messages
 	for i, message := range in.messages {
@@ -531,6 +536,7 @@ func deriveSessionShape(in sessionShapeInput) (sessionShapeFacts, sessionShapeEv
 var (
 	claudeModelPattern  = regexp.MustCompile(`(?i)claude|opus|sonnet|haiku|fable`)
 	contextWindowFigure = regexp.MustCompile(`"model_context_window":\s*(\d+)`)
+	lastUsageInput      = regexp.MustCompile(`^"last_token_usage":\s*\{[^}]*"input_tokens":\s*(\d+)`)
 )
 
 // readSessionShapeInput reads one conversation's inputs in q's snapshot. Like
@@ -555,15 +561,21 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 		owned[firstString(row["message_id"])] = true
 	}
 	// Compaction markers are the Library's (compaction_count); a reported
-	// context window is Codex's model_context_window.
+	// context window is Codex's model_context_window. A Codex token_count
+	// checkpoint's last_token_usage is the context its request occupied, as on
+	// the reader's context rail; its model_requests row holds a delta of
+	// cumulative usage instead, which can span earlier requests.
 	rows, err = queryMapsContext(ctx, q, `SELECT m.id,m.role,m.kind,m.created_at,
+ m.role='user' AND m.kind='message' AND trim(m.text,' '||char(9,10,13))='' blank,
  m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%') compaction,
- CASE WHEN m.kind='metadata' AND instr(m.text,'"model_context_window"')>0 THEN substr(m.text,instr(m.text,'"model_context_window"'),40) END window
+ CASE WHEN m.kind='metadata' AND instr(m.text,'"model_context_window"')>0 THEN substr(m.text,instr(m.text,'"model_context_window"'),40) END window,
+ CASE WHEN m.kind='metadata' AND instr(m.text,'"last_token_usage"')>0 THEN substr(m.text,instr(m.text,'"last_token_usage"'),400) END last_usage
  FROM messages m INDEXED BY messages_conversation_idx WHERE m.conversation_id=? ORDER BY m.created_at IS NULL,m.created_at,m.rowid`, id)
 	if err != nil {
 		return in, false, err
 	}
 	positions := map[string]int{}
+	checkpoints := []shapeRequest{}
 	for _, row := range rows {
 		messageID := firstString(row["id"])
 		if owned[messageID] {
@@ -574,6 +586,15 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 				in.window = max(in.window, window)
 			}
 		}
+		if match := lastUsageInput.FindStringSubmatch(firstString(row["last_usage"])); match != nil {
+			if input, err := strconv.ParseInt(match[1], 10, 64); err == nil && input > 0 {
+				checkpoint := shapeRequest{input: input}
+				if at, ok := parseTime(firstString(row["created_at"])); ok {
+					checkpoint.at = at.UnixMilli()
+				}
+				checkpoints = append(checkpoints, checkpoint)
+			}
+		}
 		kind := firstString(row["kind"])
 		if kind == "metadata" {
 			if integer(row["compaction"]) != 0 {
@@ -581,7 +602,7 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 			}
 			continue
 		}
-		message := shapeMessage{id: messageID, role: firstString(row["role"]), kind: kind}
+		message := shapeMessage{id: messageID, role: firstString(row["role"]), kind: kind, blank: integer(row["blank"]) != 0}
 		if at, ok := parseTime(firstString(row["created_at"])); ok {
 			message.at, message.timed = at.UnixMilli(), true
 		}
@@ -621,19 +642,25 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 	}
 	// The ledger orders calls as their messages appear; timestamps can disagree.
 	slices.SortStableFunc(in.calls, func(a, b shapeCall) int { return cmp.Compare(a.position, b.position) })
-	rows, err = queryMapsContext(ctx, q, `SELECT mr.requested_at,mr.input_tokens,COALESCE(mr.model,'') model FROM model_requests mr
+	rows, err = queryMapsContext(ctx, q, `SELECT mr.requested_at,mr.input_tokens,COALESCE(mr.model,'') model,mr.native_id IS NULL anonymous FROM model_requests mr
  WHERE mr.conversation_id=? AND COALESCE(mr.agent_session_id,'') NOT IN (SELECT id FROM agent_sessions WHERE conversation_id=? AND native_id<>'main')
  ORDER BY mr.sequence`, id, id)
 	if err != nil {
 		return in, false, err
 	}
+	in.requests = checkpoints
 	for _, row := range rows {
+		if len(checkpoints) > 0 && integer(row["anonymous"]) != 0 {
+			// A checkpoint's usage delta; its checkpoint is the sample.
+			continue
+		}
 		request := shapeRequest{input: integer(row["input_tokens"]), model: firstString(row["model"])}
 		if at, ok := parseTime(firstString(row["requested_at"])); ok {
 			request.at = at.UnixMilli()
 		}
 		in.requests = append(in.requests, request)
 	}
+	slices.SortStableFunc(in.requests, func(a, b shapeRequest) int { return cmp.Compare(a.at, b.at) })
 	return in, true, nil
 }
 
