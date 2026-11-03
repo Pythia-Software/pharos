@@ -1,0 +1,151 @@
+package archive
+
+import (
+	"archive/zip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// claudeAIExport is a Claude.ai export in the shape claude.ai writes: the
+// first conversation's second prompt was edited, so the newest branch is the
+// active one; the second names its current leaf, an older branch.
+const claudeAIExport = `[
+{"uuid":"conv-1","name":"Trip","summary":"Planning","created_at":"2026-10-01T10:00:00Z","updated_at":"2026-10-01T10:09:00Z","account":{"uuid":"acct"},"chat_messages":[
+ {"uuid":"m1","text":"Plan a trip","sender":"human","created_at":"2026-10-01T10:00:00Z","parent_message_uuid":"00000000-0000-4000-8000-000000000000","files":[{"file_uuid":"f1","file_name":"notes.pdf"}],
+  "attachments":[{"file_name":"dates.txt","file_size":12,"file_type":"text/plain","extracted_content":"June 3 to 9"}],
+  "content":[{"type":"injected_prompt_block","injection_source":"date_note","prompt":"Today is October 1."},{"type":"text","text":"Plan a trip"}]},
+ {"uuid":"m2","text":"Here is a plan","sender":"assistant","created_at":"2026-10-01T10:01:00Z","parent_message_uuid":"m1","attachments":[],"files":[],
+  "content":[{"type":"thinking","thinking":"","summaries":[{"summary":"Weighing destinations"}]},
+   {"type":"tool_use","id":"tu1","name":"WebSearch","input":{"query":"quiet beaches"}},
+   {"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"Results"}],"is_error":false},
+   {"type":"text","text":"Here is a plan"}]},
+ {"uuid":"m3","text":"Make it cheaper","sender":"human","created_at":"2026-10-01T10:02:00Z","parent_message_uuid":"m2","attachments":[],"files":[],"content":[{"type":"text","text":"Make it cheaper"}]},
+ {"uuid":"m3b","text":"Make it shorter","sender":"human","created_at":"2026-10-01T10:05:00Z","parent_message_uuid":"m2","attachments":[],"files":[],"content":[{"type":"text","text":"Make it shorter"}]},
+ {"uuid":"m4","text":"A shorter plan","sender":"assistant","created_at":"2026-10-01T10:06:00Z","parent_message_uuid":"m3b","attachments":[],"files":[],"content":[{"type":"thinking","thinking":"","summaries":[]},{"type":"text","text":"A shorter plan"}]}]},
+{"uuid":"conv-2","name":"","created_at":"2026-10-02T10:00:00Z","updated_at":"2026-10-02T10:03:00Z","current_leaf_message_uuid":"n2","account":{"uuid":"acct"},"chat_messages":[
+ {"uuid":"n1","text":"Hello","sender":"human","created_at":"2026-10-02T10:00:00Z","parent_message_uuid":"00000000-0000-4000-8000-000000000000","attachments":[],"files":[],"content":[{"type":"text","text":"Hello"}]},
+ {"uuid":"n2","text":"Hi","sender":"assistant","created_at":"2026-10-02T10:01:00Z","parent_message_uuid":"n1","attachments":[],"files":[],"content":[{"type":"text","text":"Hi"}]},
+ {"uuid":"n2b","text":"Hi again","sender":"assistant","created_at":"2026-10-02T10:02:00Z","parent_message_uuid":"n1","attachments":[],"files":[],"content":[{"type":"text","text":"Hi again"}]}]}
+]`
+
+func discoverClaudeAI(t *testing.T, path string) []WorkspaceRecord {
+	t.Helper()
+	adapter, err := MakeAdapter(SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: path, Account: "me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := []WorkspaceRecord{}
+	if err := adapter.Discover(func(record WorkspaceRecord) error {
+		records = append(records, record)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+func writeClaudeAIZip(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := zip.NewWriter(file)
+	entry, err := archive.Create("conversations.json")
+	if err == nil {
+		_, err = entry.Write([]byte(claudeAIExport))
+	}
+	if err == nil {
+		err = archive.Close()
+	}
+	if err == nil {
+		err = file.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
+	dir := t.TempDir()
+	writeSourceFile(t, filepath.Join(dir, "conversations.json"), claudeAIExport)
+	records := discoverClaudeAI(t, dir)
+	if len(records) != 2 {
+		t.Fatalf("records = %d", len(records))
+	}
+	trip := records[0]
+	conversation := trip.Conversations[0]
+	if trip.SourceKind != "claude-ai" || trip.SourceID != "conv-1" || trip.Title != "Trip" || conversation.Provider != "claude" || conversation.Harness != "claude-ai-export" || conversation.Origin != "user-export" {
+		t.Fatalf("record = %+v / %+v", trip, conversation)
+	}
+	// The person's words, not the injected date note, and the active branch's reply.
+	if trip.Purpose != "Plan a trip" || trip.Outcome != "A shorter plan" {
+		t.Fatalf("purpose %q outcome %q", trip.Purpose, trip.Outcome)
+	}
+	byID := map[string]MessageRecord{}
+	for _, message := range conversation.Messages {
+		byID[message.NativeID] = message
+	}
+	want := map[string]struct{ role, kind string }{
+		"m1:block:0": {"system", "context"}, "m1:block:1": {"user", "message"}, "m1:attachment:0": {"user", "attachment"}, "m1:files": {"user", "attachment"},
+		"m2:block:0": {"assistant", "reasoning"}, "m2:block:1": {"assistant", "tool_call"}, "m2:block:2": {"tool", "tool_result"}, "m2:block:3": {"assistant", "message"},
+		"m3:block:0": {"user", "message"}, "m3b:block:0": {"user", "message"}, "m4:block:0": {"assistant", "metadata"}, "m4:block:1": {"assistant", "message"},
+	}
+	if len(byID) != len(want) {
+		t.Fatalf("messages = %v", byID)
+	}
+	for id, expected := range want {
+		if got := byID[id]; got.Role != expected.role || got.Kind != expected.kind || got.Selected != (id != "m3:block:0") {
+			t.Fatalf("%s = %+v, want %v selected %v", id, got, expected, id != "m3:block:0")
+		}
+	}
+	if reasoning := byID["m2:block:0"]; reasoning.Text != "Weighing destinations" || reasoning.ReasoningFormat != "summary" {
+		t.Fatalf("reasoning = %+v", reasoning)
+	}
+	if call, result := byID["m2:block:1"], byID["m2:block:2"]; call.CallID != "tu1" || result.CallID != "tu1" || result.Text != `{"content":[{"text":"Results","type":"text"}],"is_error":false,"tool":"WebSearch"}` {
+		t.Fatalf("call %+v result %+v", call, result)
+	}
+	if byID["m3b:block:0"].PreviousNativeID != "m2" || byID["m1:block:1"].PreviousNativeID != "" {
+		t.Fatal("parents are not kept")
+	}
+	// An explicit current leaf wins over the newest one.
+	second := records[1].Conversations[0].Messages
+	if len(second) != 3 || !second[1].Selected || second[2].Selected || records[1].Title != "Claude.ai conv-2" {
+		t.Fatalf("second = %+v", records[1])
+	}
+
+	// The ZIP the export arrives in reads the same, apart from where.
+	zipped := filepath.Join(t.TempDir(), "conversations-000.zip")
+	writeClaudeAIZip(t, zipped)
+	located := func(records []WorkspaceRecord, file string) string {
+		return strings.ReplaceAll(jsonText(records), file, "EXPORT")
+	}
+	if got := discoverClaudeAI(t, zipped); located(got, zipped) != located(records, filepath.Join(dir, "conversations.json")) {
+		t.Fatal("the ZIP read differently")
+	}
+}
+
+func TestClaudeAIExportZipIsCapturedAndIndexedElsewhere(t *testing.T) {
+	useHost(t, "host-a")
+	c, config := testCatalog(t)
+	zipped := filepath.Join(t.TempDir(), "conversations-000.zip")
+	writeClaudeAIZip(t, zipped)
+	source := SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: zipped, Account: "me", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	ingestSource(t, c, source)
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	useHost(t, "host-b")
+	other, _ := testCatalog(t)
+	indexCaptures(t, other, config.CaptureRoot, "host-a")
+	var conversations, messages int
+	if err := other.DB.QueryRow(`SELECT COUNT(DISTINCT c.id), COUNT(m.id) FROM conversations c JOIN messages m ON m.conversation_id=c.id WHERE c.provider='claude'`).Scan(&conversations, &messages); err != nil {
+		t.Fatal(err)
+	}
+	if conversations != 2 || messages != 15 {
+		t.Fatalf("captured export: %d conversations, %d messages", conversations, messages)
+	}
+}

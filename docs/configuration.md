@@ -423,6 +423,7 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | Conductor | `~/Library/Application Support/com.conductor.app`, when a database at its top level has session and message tables (only table names are read) |
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
 | ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
+| Claude.ai | nothing on disk: export your data from Claude.ai and add a `claude-ai` source for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
 The app and its service do not inherit the shell's environment, so Pharos also
 reads `CLAUDE_CONFIG_DIR` and `CODEX_HOME` from the login shell (`$SHELL -l -i -c`,
@@ -790,6 +791,7 @@ upload permissions keep their existing behavior.
 | `conductor` | a snapshot of each SQLite database that has session and message tables (not, for example, `cache.db`) |
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |
 | `canonical`, `tl1-export`, `chatgpt-export` | the export file, or the directory's `*.json` (`conversations.json` for ChatGPT) |
+| `claude-ai` | the export's ZIP or `conversations.json`, whole |
 
 **Incremental and interruption-safe.** A file whose size and mtime match the
 manifest, and whose captured copy is still intact, is skipped. Anything else is
@@ -924,7 +926,7 @@ conversations (a session with its subagents) that changed since they were last
 indexed; `total_conversations` is that count and `done_conversations` how many
 the run has handled. `progress` (0 to 1, `null` while counting or with nothing
 to measure) is what the progress bar shows: conversations handled, with each
-source that cannot be counted (a whole-file kind such as TL1, ChatGPT or a
+source that cannot be counted (a whole-file kind such as TL1, ChatGPT, Claude.ai or a
 canonical export, or a capture that will not open) as one step of its own, so
 it does not take the count from the others. `hosts` follows: each
 captured host's `id`, `label`, `user`, `current` (this Mac), and `sources[]` with
@@ -1016,7 +1018,7 @@ a freshly captured 8.7 GB database with 1.7 million messages, against 7 minutes
 to parse every session (15 with the Git lookups a live sync makes). The
 per-record digest still decides whether anything is written, and a capture
 older than what that Mac already indexed is not even parsed where its part state
-says so. Canonical, ChatGPT and TL1 sources are still parsed whole when their
+says so. Canonical, ChatGPT, Claude.ai and TL1 sources are still parsed whole when their
 fingerprint changes. Part and copy versions raised the catalog schema version to
 6: a build without them would sync around that state, so older builds refuse
 the catalog. The tool ledger, message senders, human authorship, the TL1
