@@ -433,7 +433,7 @@ const statusOperation = (id, changes) => ({
 });
 export const busyStatus = {
   ...idleStatus, revision: 2,
-  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject in a moment", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
     blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
   operations: [
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },

@@ -1230,7 +1230,7 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   `journal.dropped`. (It also carried `features.unified_activity`, the
   flag, until the flag was removed; §9.)
 - `eject.headline` (both documents, phase 2 round 1): the verdict as one
-  short clause ("Safe to eject in ~2 s: stops back up first"); `summary`
+  short clause ("Safe to eject in ~2 s"); `summary`
   stays the full sentence, including the release's 7 s limit, for
   tooltips.
 - Phase 1 also returns, per operation, `variant`, `subject`, `detail` (the
