@@ -12,7 +12,7 @@ import type { ConcurrencyData } from "./concurrency-data";
 import { ribbonCardTitle, ribbonCover } from "./parallelism-ribbon-card";
 import { habitsCardPreview, isHabitsCardTarget, loadHabitsSummary, readHabitsCardView } from "./habits-card";
 import type { HabitsSummary } from "./habits-model";
-import { thinkingRequest, type ThinkingResponse } from "./thinking-model";
+import { orderThinkingGroups, thinkingRequest, type ThinkingResponse } from "./thinking-model";
 import { gridCoverHeight } from "./grid-cover";
 import { isOriginDimension, loadOriginMetadata, originLabel } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
@@ -21,7 +21,7 @@ import { fittedPreview } from "./card-presentation";
 import { defaultCardCover } from "./card-cover";
 import type { CarbonFactors } from "./carbon-analysis-catalog";
 import { loadQueryPreviews, type QueryPreview } from "./query-previews";
-import { compactionColumns, isThinkingCardTarget, readThinkingCard, thinkingCardRecipe, thinkingCardTitle, thinkingGrid, thinkingGridView, type ThinkingCardTarget } from "./thinking-card";
+import { compactionColumns, isThinkingCardTarget, orderedBoxes, readThinkingCard, thinkingCardRecipe, thinkingCardTitle, thinkingGrid, thinkingGridView, thinkingPageOrder, type ThinkingCardTarget } from "./thinking-card";
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
 // A dashboard address carries no authored cover, so its card fits the chart.
@@ -53,6 +53,10 @@ async function thinkingPreview(address: string, schema: FieldSchema, target: Thi
   await loadQueryPreviews([{ id: target, dataset: "model_requests", query, schema, options: { recipe, cover: defaultCardCover(recipe) } }], (_, preview, error) => { drawn = preview; failure = error; }, signal);
   if (!drawn) throw failure instanceof Error ? failure : new Error(String(failure ?? "The dashboard returned no chart result."));
   const result = drawn.metrics?.[0]?.result;
+  if (result && thinkingPageOrder(target, state)) {
+    const groups = orderThinkingGroups((thinking ?? await loadThinkingResponse(thinkingRequest(state, false, false, filters), signal)).groups, state);
+    drawn = { ...drawn, metrics: drawn.metrics!.map((metric, i) => i ? metric : { ...metric, result: orderedBoxes(result, groups) }) };
+  }
   if (target !== "thinking-compactions" || !result) return fittedPreview({ ...drawn, action: DASHBOARD_CARD_ACTION, preserveScale: true });
   const { buckets, series } = compactionColumns(result);
   return fittedPreview({ state: buckets.length ? "ready" : "empty", total: buckets.length, summary: "Compactions by day", note: drawn.note, action: DASHBOARD_CARD_ACTION,

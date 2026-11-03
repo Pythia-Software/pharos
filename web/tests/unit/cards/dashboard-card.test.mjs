@@ -11,7 +11,8 @@ import { normalizeAnalysis, analysisQuery, selectGroups, cycleResult } from '../
 import { trendQuery, trendSeries } from '../../../src/dashboard-trend-model';
 import { optionLabels } from '../../../src/option-labels';
 import { runAnalysisQuery } from '../../../src/analysis-request';
-import { compactionColumns } from '../../../src/thinking-card';
+import { compactionColumns, orderedBoxes, thinkingCardRecipe } from '../../../src/thinking-card';
+import { initialThinking } from '../../../src/thinking-model';
 import { schemas } from '../helpers/recipes.mjs';
 import { fixture } from '../helpers/parity.mjs';
 import { now, usageLedger } from '../helpers/usage-ledger.mjs';
@@ -373,28 +374,11 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
   const drawn = compactionColumns({ buckets: [['2026-10-01', 'a', 2], ['2026-10-03', 'b', 1], ['2026-10-03', 'a', 1]].map(([day, model, value]) => ({ keys: [day, model], value, count: value })) });
   assert.deepEqual(drawn.buckets.map(bucket => [bucket.key, bucket.values]), [['2026-10-01', { 's:a': 2 }], ['2026-10-02', {}], ['2026-10-03', { 's:a': 1, 's:b': 1 }]]);
   assert.deepEqual(drawn.series.map(item => item.label), ['a', 'b']);
+  // A compaction without a recorded day is left off rather than emptying the card.
+  const undated = compactionColumns({ buckets: [['2026-10-01', 'a', 2], [null, 'a', 1]].map(([day, model, value]) => ({ keys: [day, model], value, count: value })) });
+  assert.deepEqual(undated.buckets.map(bucket => bucket.key), ['2026-10-01']);
 
-  // Thinking's comparison follows its view and breakdown.
-  const detail = (thinking) => pageCardURL(page('thinking-detail', thinking));
-  const harness = detail({ view: 'wait-box', groupBy: 'harness', range: 'all' });
-  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness']]);
-  assert.equal(dashboardCardWindow(harness, 'thinking-distributions'), 'All time');
-  assert.deepEqual((await loadDashboardCardPreview(harness, schemas.model_requests, undefined, undefined, now, 'thinking-distributions')).metrics[0].clause.groupBy, ['harness']);
-  const reasoning = detail({ view: 'reasoning', groupBy: 'repository' });
-  assert.equal(dashboardCardTargets(reasoning)[0].title, 'Reported reasoning by repository');
-  assert.deepEqual((await loadDashboardCardPreview(reasoning, schemas.model_requests, undefined, undefined, now, 'thinking-distributions')).metrics[0].clause.groupBy, ['repository_name']);
-  assert.equal(dashboardCardTargets(detail({ view: 'histogram', groupBy: 'none' }))[0].title, 'Model wait distribution');
-  // A whole library's exact quantiles exceed the service's budget; without a breakdown the card draws a box per model.
-  assert.deepEqual((await loadDashboardCardPreview(detail({ view: 'histogram', groupBy: 'none' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions')).metrics[0].clause.groupBy, ['model']);
-
-  // Every breakdown the page offers draws on a card, numeric ones included.
-  const { thinkingBreakdowns } = await import('../../../src/thinking-model');
-  for (const [groupBy] of thinkingBreakdowns) for (const view of ['wait-box', 'reasoning']) {
-    const drawn = await loadDashboardCardPreview(detail({ view, groupBy, range: '30d' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions');
-    assert.equal(drawn.metrics[0].result.error, undefined, `${view} by ${groupBy}`);
-  }
-
-  // Thinking's grids draw as grids, from the response the page draws.
+  // The page's own response: its groups, their order and their grids.
   const edges = [0.1, 0.2, 1, 5, 10, 100], counts = [1, 2, 3, 4, 0];
   const group = (label, scale) => ({ key: label, label, model: label, effort: '', Retained: 20, Timed: 10, Adjusted: 8, Conversations: 4, RetainedConversations: 5,
     stats: { n: 10, median: 2 * scale, p75: null, p90: null, p95: null, q1: null, q3: null, low: null, high: null }, counts,
@@ -403,6 +387,36 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
     bands: [], comparison: { days: 0, Ratio: null, Low: null, High: null } });
   const response = { periodBounds: {}, calendarBounds: {}, Retained: 40, Timed: 20, Adjusted: 16, Conversations: 8, Hidden: 0, Models: [], Efforts: [], edges,
     groups: [group('a', 1), group('b', 2)], summary: {}, periods: ['2026-10-01'], calendarPeriods: ['2026-10-01', '2026-10-02'], From: '', To: '', timezone: 'UTC' };
+  // Thinking's comparison follows its view and breakdown.
+  const detail = (thinking) => pageCardURL(page('thinking-detail', thinking));
+  const harness = detail({ view: 'wait-box', groupBy: 'harness', range: 'all' });
+  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness']]);
+  assert.equal(dashboardCardWindow(harness, 'thinking-distributions'), 'All time');
+  assert.deepEqual((await loadDashboardCardPreview(harness, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['harness']);
+  const reasoning = detail({ view: 'reasoning', groupBy: 'repository' });
+  assert.equal(dashboardCardTargets(reasoning)[0].title, 'Reported reasoning by repository');
+  assert.deepEqual((await loadDashboardCardPreview(reasoning, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['repository_name']);
+  assert.equal(dashboardCardTargets(detail({ view: 'histogram', groupBy: 'none' }))[0].title, 'Model wait distribution');
+  // A whole library's exact quantiles exceed the service's budget; without a breakdown the card draws a box per model.
+  assert.deepEqual((await loadDashboardCardPreview(detail({ view: 'histogram', groupBy: 'none' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions')).metrics[0].clause.groupBy, ['model']);
+
+  // A card keeps the page's sort: its first boxes are the page's first groups.
+  const boxes = { id: 'w', buckets: ['claude-code', 'other', 'codex'].map(harness => ({ keys: [harness], value: 1, count: 1 })) };
+  const order = groups => orderedBoxes(boxes, groups.map(label => group(label, 1))).buckets.map(bucket => bucket.keys[0]);
+  assert.deepEqual([order(['codex', 'claude-code']), order(['claude-code', 'codex'])], [['codex', 'claude-code', 'other'], ['claude-code', 'codex', 'other']]);
+  assert.deepEqual(thinkingCardRecipe('thinking-distributions', initialThinking(new URLSearchParams({ thinking: JSON.stringify({ view: 'wait-box', groupBy: 'harness', sortBy: 'median' }) }))).measures[0].sort, undefined);
+  // Volume is each box's timed waits, which the query sorts on itself.
+  const volume = await loadDashboardCardPreview(detail({ view: 'wait-box', groupBy: 'harness', sortBy: 'volume', sortDirection: 'asc' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions');
+  assert.deepEqual(volume.metrics[0].clause.sort, [{ key: 'samples', dir: 'asc' }]);
+
+  // Every breakdown the page offers draws on a card, numeric ones included.
+  const { thinkingBreakdowns } = await import('../../../src/thinking-model');
+  for (const [groupBy] of thinkingBreakdowns) for (const view of ['wait-box', 'reasoning']) {
+    const drawn = await loadDashboardCardPreview(detail({ view, groupBy, range: '30d' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response);
+    assert.equal(drawn.metrics[0].result.error, undefined, `${view} by ${groupBy}`);
+  }
+
+  // Thinking's grids draw as grids, from the response the page draws.
   const grid = async thinking => { const url = detail({ groupBy: 'model', range: '30d', ...thinking }); return [dashboardCardTargets(url)[0].title, await loadDashboardCardPreview(url, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)]; };
   const [dayTitle, days] = await grid({ view: 'calendar' });
   assert.equal(dayTitle, 'Wait by time of day');

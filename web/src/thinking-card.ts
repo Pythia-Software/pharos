@@ -4,7 +4,7 @@ import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
 import type { QueryRecipe } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
-import { initialThinking, isThinkingTopic, orderThinkingGroups, thinkingBreakdowns, thinkingCount, thinkingDuration, thinkingWhere, type ThinkingResponse, type ThinkingState } from "./thinking-model";
+import { initialThinking, isThinkingTopic, orderThinkingGroups, thinkingFixedOrder, type ThinkingGroup, thinkingBreakdowns, thinkingCount, thinkingDuration, thinkingWhere, type ThinkingResponse, type ThinkingState } from "./thinking-model";
 import { gridTicks, type GridCover } from "./grid-cover";
 
 // Waiting and Compaction's and Thinking's charts as Home cards. The page's
@@ -62,10 +62,24 @@ function thinkingCardMeasures(target: ThinkingCardTarget, state: ThinkingState):
     const base = recipe("thinking-reasoning-effort");
     return { ...base, cover: { mode: "source", metricId: "reasoning_efforts", kind: "box", maxGroups: 8, density: "compact" }, measures: base.measures.map(measure => ({ ...measure, groupBy: [field], groupLimit: 10000 })) };
   }
-  if (field === "preceding_tool") return recipe("thinking-preceding-tool");
+  if (field === "preceding_tool") return bySamples(recipe("thinking-preceding-tool"), state);
   // A histogram of every wait puts nearly all of them in its first bin; a box
   // on a log axis shows the typical wait and the slow tail.
-  return waitBoxes([field], `Wait by ${state.groupBy === "none" ? "model" : breakdownLabel(state)}`);
+  return bySamples(waitBoxes([field], `Wait by ${state.groupBy === "none" ? "model" : breakdownLabel(state)}`), state);
+}
+
+// A card shows the page's first groups in the page's order. Volume is each
+// box's timed waits; any other order comes from the page's own response.
+const bySamples = (card: QueryRecipe, state: ThinkingState): QueryRecipe => thinkingPageOrder("thinking-distributions", state) || state.groupBy === "none" ? card
+  : { ...card, measures: card.measures.map(measure => ({ ...measure, sort: [{ key: "samples", dir: state.sortDirection }] })) };
+export const thinkingPageOrder = (target: ThinkingCardTarget, state: ThinkingState) => target === "thinking-distributions" && !thinkingGridView(target, state) && state.groupBy !== "none"
+  && (thinkingFixedOrder(state) || state.view === "reasoning" || state.sortBy !== "volume");
+
+// Boxes in the order of the page's groups; any the page does not list follow.
+export function orderedBoxes(result: AggregationResultEntry, groups: ThinkingGroup[]): AggregationResultEntry {
+  const rank = new Map(groups.flatMap((group, i) => [[group.label, i], [group.key, i]] as [string, number][]));
+  const at = (keys: unknown[]) => rank.get(String(keys[0] ?? "")) ?? groups.length;
+  return { ...result, buckets: result.buckets.map((bucket, i) => ({ bucket, i })).sort((a, b) => at(a.bucket.keys) - at(b.bucket.keys) || a.i - b.i).map(({ bucket }) => bucket) };
 }
 
 function waitBoxes(groupBy: string[], label: string): QueryRecipe {
@@ -77,7 +91,8 @@ function waitBoxes(groupBy: string[], label: string): QueryRecipe {
 // Compactions draw as the page's compaction days do: a column per day,
 // stacked by model, every day from the first to the last.
 export function compactionColumns(result: AggregationResultEntry, limit = 6): { buckets: ChartBucket[]; series: ChartSeries[] } {
-  const rows = result.buckets.filter(bucket => typeof bucket.value === "number" && bucket.value > 0).map(bucket => [String(bucket.keys[0]), String(bucket.keys[1] ?? "Unspecified"), bucket.value as number] as [string, string, number]);
+  // A compaction without a recorded day has no column to stand in.
+  const rows = result.buckets.filter(bucket => typeof bucket.value === "number" && bucket.value > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(bucket.keys[0]))).map(bucket => [String(bucket.keys[0]), String(bucket.keys[1] ?? "Unspecified"), bucket.value as number] as [string, string, number]);
   const days = [...new Set(rows.map(([day]) => day))].sort(), buckets: ChartBucket[] = [];
   if (days.length) for (const date = new Date(`${days[0]}T12:00:00`), last = new Date(`${days.at(-1)}T12:00:00`); date <= last; date.setDate(date.getDate() + 1)) {
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
