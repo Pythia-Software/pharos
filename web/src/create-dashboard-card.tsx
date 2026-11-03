@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisState } from "./dashboard-analysis-model";
-import { DASHBOARD_CARD_ACTION, collectDashboardCard, dashboardCardDescription, dashboardCardGroups, dashboardCardPresentation, dashboardCardTargets, dashboardCardURL, dashboardCardWindow, type DashboardCardTarget } from "./dashboard-card-model";
+import { DASHBOARD_CARD_ACTION, collectDashboardCard, dashboardCardDescription, dashboardCardGroups, dashboardCardPresentation, dashboardCardTargets, dashboardCardURL, dashboardCardWindow, pageCardURL, type DashboardCardTarget } from "./dashboard-card-model";
 import { validCardGroups } from "./card-cover";
 import { CardGroupsField } from "./card-groups-field";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
@@ -12,8 +12,9 @@ import type { QueryCategory } from "./query-categories";
 import "./home.css";
 
 // The dashboard state a card is made from. A dashboard provides it to the
-// charts drawn around its catalog chart (Parallelism's ribbon).
-export type DashboardCardSource = { catalog: AnalysisCatalog; state: AnalysisState; where: WhereTerm[]; schema: FieldSchema };
+// charts drawn around its catalog chart (Parallelism's ribbon). A page
+// without a catalog chart (Thinking) is its own address.
+export type DashboardCardSource = { catalog: AnalysisCatalog; state: AnalysisState; where: WhereTerm[]; schema: FieldSchema } | { page: true; schema: FieldSchema };
 export const DashboardCardSourceContext = createContext<DashboardCardSource | null>(null);
 
 type Draft = { url: string; targets: ReturnType<typeof dashboardCardTargets>; target: DashboardCardTarget; title: string; description: string; action: string; category?: QueryCategory; renamed: boolean; groups: string; error: string };
@@ -33,7 +34,7 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
   useEffect(() => {
     if (!draft || !from) return;
     const controller = new AbortController();
-    loadDashboardCardPreview(draft.url, from.schema, controller.signal, undefined, Date.now(), draft.target, undefined, undefined, groups)
+    loadDashboardCardPreview(draft.url, from.schema, controller.signal, undefined, Date.now(), draft.target, undefined, undefined, undefined, groups)
       .then(result => { if (!controller.signal.aborted) setPreview({ key, preview: result }); })
       .catch(failure => { if (!controller.signal.aborted) setPreview({ key, error: failure instanceof Error ? failure.message : String(failure) }); });
     return () => controller.abort();
@@ -46,7 +47,7 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
   }, [opened]);
   if (!from) return null;
   const start = () => {
-    const url = dashboardCardURL(location.href, from.catalog, from.state, from.where), targets = dashboardCardTargets(url);
+    const url = "page" in from ? pageCardURL(location.href) : dashboardCardURL(location.href, from.catalog, from.state, from.where), targets = dashboardCardTargets(url);
     const chosen = targets.find(item => item.id === target) ?? targets[0];
     setDraft({ url, targets, target: chosen.id, title: chosen.title, description: dashboardCardDescription(url, chosen.id), action: DASHBOARD_CARD_ACTION, renamed: false, groups: "", error: "" });
     setSaved(false);

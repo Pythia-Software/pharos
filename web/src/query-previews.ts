@@ -18,6 +18,7 @@ import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
 import type { DashboardCardTarget } from "./dashboard-card-model";
 import type { HabitsCover } from "./habits-card";
+import type { GridCover } from "./grid-cover";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
@@ -39,6 +40,7 @@ export type QueryPreview = {
   preserveScale?: boolean;
   study?: HumanStudyPreview;
   habits?: HabitsCover;
+  grid?: GridCover;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
@@ -359,7 +361,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, job.options!.groups); if (!signal?.aborted) publish(job.id, preview); }
+        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups); if (!signal?.aborted) publish(job.id, preview); }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };

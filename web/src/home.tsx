@@ -15,14 +15,14 @@ import { cardTemplates } from "./card-library-model";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
-import { collectCardTemplate, DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardLabels, dashboardCardPresentation, dashboardCardWindow, readDashboardCard } from "./dashboard-card-model";
+import { collectCardTemplate, DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardLabels, dashboardCardPresentation, dashboardCardSource, dashboardCardWindow } from "./dashboard-card-model";
 import { cardGroupsFor, withCardGroups, type CardGroups } from "./card-cover";
 import { CardGroupsField } from "./card-groups-field";
 import { EMPTY_QUERY } from "@pythia-software/query-table-core";
 
 function collectionSpec(item: Bookmark) {
   if (!item.dashboard) return queryFromURL(item.url, item.query);
-  try { const { dataset, where } = readDashboardCard(item.url); return { dataset, query: { ...EMPTY_QUERY, where }, window: undefined }; }
+  try { const { dataset, where } = dashboardCardSource(item.url); return { dataset, query: { ...EMPTY_QUERY, where }, window: undefined }; }
   catch { return { dataset: "usage" as const, query: EMPTY_QUERY, window: undefined }; } // The preview reports the invalid definition.
 }
 

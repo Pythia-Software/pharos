@@ -4,7 +4,7 @@ import { barsShown, canonicalState, normalizeAnalysis, slicesShown, validAnalysi
 import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
-import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL } from "./usage-workspace-model";
+import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
 import { cardGroupsMax, defaultCardCover, pluralNoun, validCardGroups, type CardGroups } from "./card-cover";
 import type { QuerySuggestion } from "./curiosity-data";
@@ -13,6 +13,7 @@ import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
 import { ribbonCardTitle, ribbonCardWindow } from "./parallelism-ribbon-card";
 import { habitsCardDescription, habitsCardPresentation, habitsCardTargets, habitsCardTitle, habitsCardWindow, isHabitsCardTarget, readHabitsCardView, type HabitsCardTarget } from "./habits-card";
+import { isThinkingCardAddress, isThinkingCardTarget, readThinkingCard, thinkingCardDescription, thinkingCardPresentation, thinkingCardTitle, thinkingCardWindow, thinkingTopicTargets, type ThinkingCardTarget } from "./thinking-card";
 
 // The dashboard URL is the card definition. Keep requested filters relative;
 // execution (including Today) resolves them anew whenever the card refreshes.
@@ -22,6 +23,13 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
   url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
   if (catalog.request?.params?.carbon_settings) url.searchParams.set("analyze_carbon", catalog.request.params.carbon_settings);
   if (topic === "parallelism" && !url.searchParams.has("analyze_parallelism")) url.searchParams.set("analyze_parallelism", JSON.stringify(readConcurrencySettings()));
+  return pageCardURL(url.href);
+}
+
+// A page without a catalog chart (Waiting and Compaction, Thinking) is its
+// own definition: its address, less what only this visit chose.
+export function pageCardURL(address: string): string {
+  const url = new URL(address, location.origin), { topic } = readUsageWorkspace(url.searchParams);
   for (const key of [...url.searchParams.keys()]) if (key.startsWith("card_") || ["overlay", "history_search", "history_collapsed", "highlight", "reveal", "find", "find_case", "find_regex", "chart_pins", "habits_day"].includes(key)) url.searchParams.delete(key);
   return usageWorkspaceURL({ mode: "dashboards", topic, dataset: usageTopicDatasets[topic] }, url.searchParams);
 }
@@ -29,9 +37,13 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
 // One dashboard URL can hold several charts: Parallelism draws its ribbon
 // above the catalog chart, and Habits its sections. A card names the one it
 // shows; "chart", the catalog chart, is the default and is never stored.
-export type DashboardCardTarget = "chart" | "ribbon" | HabitsCardTarget;
+export type DashboardCardTarget = "chart" | "ribbon" | HabitsCardTarget | ThinkingCardTarget;
 export function dashboardCardTargets(address: string): Array<{ id: DashboardCardTarget; label: string; title: string }> {
   // Each is labelled with the heading it has on the page.
+  if (isThinkingCardAddress(address)) {
+    const { topic, state } = readThinkingCard(address);
+    return thinkingTopicTargets(topic).map(id => ({ id, label: thinkingCardTitle(id, state), title: thinkingCardTitle(id, state) }));
+  }
   const { topic, state } = readDashboardCard(address), catalog = analysisCatalogs[topic]!, title = dashboardCardTitle(catalog, state);
   const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: state.view === "trend" ? trendTitle(catalog, state) : title, title }];
   if (topic === "habits") {
@@ -49,6 +61,13 @@ export function dashboardCardRibbon(address: string) {
   const encoded = new URL(address, location.origin).searchParams.get("analyze_parallelism");
   if (encoded === null) return readConcurrencySettings();
   try { return normalizeConcurrencySettings(JSON.parse(encoded)); } catch { throw new Error("This dashboard card's ribbon settings are invalid."); }
+}
+
+// The records a dashboard card reads, for any dashboard page.
+export function dashboardCardSource(address: string): { dataset: UsageDataset; where: WhereTerm[] } {
+  if (isThinkingCardAddress(address)) return { dataset: "model_requests", where: readThinkingCard(address).where };
+  const { dataset, where } = readDashboardCard(address);
+  return { dataset, where };
 }
 
 export function readDashboardCard(address: string, now = new Date()) {
@@ -100,6 +119,7 @@ export function dashboardCardCollected(url: string, target: DashboardCardTarget 
 }
 
 export function dashboardCardDescription(address: string, target: DashboardCardTarget = "chart"): string {
+  if (isThinkingCardTarget(target)) return thinkingCardDescription(target, readThinkingCard(address).state);
   const { topic, params } = readDashboardCard(address);
   if (isHabitsCardTarget(target)) return habitsCardDescription(target, readHabitsCardView(params));
   return usageTopics[topic].description;
@@ -108,6 +128,7 @@ export function dashboardCardDescription(address: string, target: DashboardCardT
 export function dashboardCardWindow(address: string, target: DashboardCardTarget = "chart"): string {
   if (target === "ribbon") return ribbonCardWindow(dashboardCardRibbon(address));
   if (isHabitsCardTarget(target)) return habitsCardWindow(target, readHabitsCardView(readDashboardCard(address).params));
+  if (isThinkingCardTarget(target)) return thinkingCardWindow(readThinkingCard(address).state);
   const { params, where, topic } = readDashboardCard(address), time = analysisCatalogs[topic]!.time;
   if (params.get("analyze_window") === "today") return "Today";
   const dates = where.filter(term => "field" in term && [time.first, time.last].includes(term.field));
@@ -129,6 +150,7 @@ export function dashboardCardGroups(address: string, target: DashboardCardTarget
 export function dashboardCardPresentation(address: string, target: DashboardCardTarget = "chart", groups?: number): { category: QueryCategory; loading: CardLoadingSpec } {
   if (target === "ribbon") return { category: "machines", loading: { kind: "columns", count: 24, height: fittedCoverHeight("columns", 24) } };
   if (isHabitsCardTarget(target)) return habitsCardPresentation(target, readHabitsCardView(readDashboardCard(address).params));
+  if (isThinkingCardTarget(target)) return thinkingCardPresentation(target, readThinkingCard(address).state);
   const { topic, state } = readDashboardCard(address);
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
