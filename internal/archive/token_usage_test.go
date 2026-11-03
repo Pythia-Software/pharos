@@ -87,9 +87,11 @@ func TestTokenUsageFixtures(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
+			// Fixture events are protocol accounting envelopes, which sources
+			// store as metadata messages.
 			messages := []MessageRecord{}
 			for _, event := range c.Events {
-				messages = append(messages, MessageRecord{Text: string(event)})
+				messages = append(messages, MessageRecord{Role: "system", Kind: "metadata", Text: string(event)})
 			}
 			got := conversationTokenCounts(messages)
 			if got["total_tokens"] != c.Total {
@@ -209,7 +211,8 @@ func TestUsageBucketsWithMissingAndExplicitModelCoalesce(t *testing.T) {
 }
 
 // A forked subagent's counters start at its parent's usage, which the
-// parent's rollout already counts; only the subagent's own requests are its.
+// parent's rollout already counts; only the subagent's own requests are its,
+// at the effort they ran with.
 func TestCodexForkCountsOnlyItsOwnUsage(t *testing.T) {
 	c, _ := testCatalog(t)
 	root := t.TempDir()
@@ -220,7 +223,7 @@ func TestCodexForkCountsOnlyItsOwnUsage(t *testing.T) {
 		codexLines(probeID1, 1)+count(1000, 1000))
 	writeSourceFile(t, filepath.Join(root, "2026", "09", "01", "rollout-2026-09-01T00-05-00-"+probeID2+".jsonl"),
 		fmt.Sprintf(`{"type":"session_meta","timestamp":"2026-09-01T00:05:00Z","payload":{"id":%q,"forked_from_id":%q,"subagent_history_start_ordinal":3,"source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`+"\n", probeID2, probeID1, probeID1)+
-			count(1100, 100)+count(1300, 200))
+			`{"type":"turn_context","timestamp":"2026-09-01T00:05:00Z","payload":{"model":"gpt-test","effort":"high"}}`+"\n"+count(1100, 100)+count(1300, 200))
 	ingestSource(t, c, SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true})
 	var metric, sessions float64
 	if err := c.DB.QueryRow(`SELECT SUM(value) FROM metrics WHERE name='total_tokens' AND conversation_id IS NULL`).Scan(&metric); err != nil {
@@ -231,5 +234,20 @@ func TestCodexForkCountsOnlyItsOwnUsage(t *testing.T) {
 	}
 	if metric != 1300 || sessions != 1300 {
 		t.Fatalf("total tokens: metrics %v, sessions %v; want 1300", metric, sessions)
+	}
+	var effort string
+	if err := c.DB.QueryRow(`SELECT a.effort FROM agent_sessions a JOIN conversations c ON c.id=a.conversation_id WHERE c.native_id=?`, probeID2).Scan(&effort); err != nil || effort != "high" {
+		t.Fatalf("continuation effort = %q, %v", effort, err)
+	}
+}
+
+// Only protocol metadata marks a continuation: a message quoting one does not.
+func TestQuotedContinuationMarkerKeepsCounterPrefix(t *testing.T) {
+	count := func(total, last int) MessageRecord {
+		return MessageRecord{Role: "system", Kind: "metadata", Text: fmt.Sprintf(`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":%d},"last_token_usage":{"total_tokens":%d}}}}`, total, last)}
+	}
+	quoted := MessageRecord{Role: "user", Kind: "message", Text: `{"type":"session_meta","payload":{"forked_from_id":"parent"}}`}
+	if got := conversationTokenCounts([]MessageRecord{quoted, count(1100, 100), count(1300, 200)}); got["total_tokens"] != 1300 {
+		t.Fatalf("got %v; want 1300", got)
 	}
 }

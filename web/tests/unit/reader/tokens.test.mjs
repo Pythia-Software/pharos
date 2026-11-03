@@ -14,7 +14,8 @@ const samples = events => [...events].map(message => message.tokenReport?.contex
 test("all source accounting formats reconcile against shared fixtures", () => {
   assert.ok(tokenCases.length > 0);
   for (const item of tokenCases) {
-    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), text: JSON.stringify(value) })));
+    // Fixture events are protocol accounting envelopes, stored as metadata.
+    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), kind: "metadata", text: JSON.stringify(value) })));
     assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), item.total, item.name);
   }
 });
@@ -128,4 +129,11 @@ test("nested subagent checkpoints count once and remain nested sessions", () => 
   assert.deepEqual(plain(graph.turns[0].events.map(message => message.native_id)), ["outer-call", "result"]);
   assert.deepEqual(plain(graph.childrenByParent.get("outer").map(message => message.native_id)), ["outer-request", "inner-call", "outer-total"]);
   assert.deepEqual(plain(graph.childrenByParent.get("inner").map(message => message.native_id)), ["inner-request", "inner-total"]);
+});
+
+test("only protocol metadata marks a continuation", () => {
+  const count = (total, last) => ({ kind: "metadata", text: JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total }, last_token_usage: { total_tokens: last } } } }) });
+  const quoted = { kind: "message", role: "user", text: JSON.stringify({ type: "session_meta", payload: { forked_from_id: "parent" } }) };
+  const reports = conversationTokenReports([quoted, count(1100, 100), count(1300, 200)]);
+  assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), 1300);
 });

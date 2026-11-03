@@ -773,7 +773,7 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 
 func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRecord, bool, error) {
 	origin := plainRollout(a.original(path))
-	meta := map[string]any{}
+	meta, metaLine := map[string]any{}, int64(0)
 	model, effort := "", a.initialEffort
 	harness, versionFirst, versionLast := "codex", "", ""
 	messages := []MessageRecord{}
@@ -829,18 +829,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			}
 			if len(meta) == 0 {
 				meta = payload
-				if continuesHistory(payload) {
-					// Token accounting reads that this rollout's counters start
-					// at the thread it continues (conversationTokenReports).
-					continuation := map[string]any{"id": payload["id"]}
-					for _, key := range []string{"forked_from_id", "forked_from_ordinal_exclusive", "history_base", "subagent_history_start_ordinal"} {
-						if value, ok := payload[key]; ok {
-							continuation[key] = value
-						}
-					}
-					text := jsonText(map[string]any{"type": "session_meta", "timestamp": event["timestamp"], "payload": continuation})
-					messages = append(messages, MessageRecord{RawText: text, NativeID: fmt.Sprintf("line-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: text, CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
-				}
+				metaLine = integer(event["_line"])
 			}
 			model = defaultString(payload["model"], model)
 			effort = updatedEffort(effort, payload)
@@ -976,6 +965,23 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 		if index, ok := resultIndexes[callID]; ok && index < len(messages) && messages[index].CallID == callID {
 			messages[index].Text = jsonText(map[string]any{"tool": toolNames[callID], "content": resultContent[callID], "details": extra})
 		}
+	}
+	if continuesHistory(meta) {
+		// Token accounting reads that this rollout's counters start at the
+		// thread it continues (conversationTokenReports). The note follows the
+		// transcript, so the messages before it keep their positions.
+		continuation := map[string]any{"id": meta["id"]}
+		for _, key := range []string{"forked_from_id", "forked_from_ordinal_exclusive", "history_base", "subagent_history_start_ordinal"} {
+			if value, ok := meta[key]; ok {
+				continuation[key] = value
+			}
+		}
+		text := jsonText(map[string]any{"type": "session_meta", "payload": continuation})
+		at := ""
+		if len(events) > 0 {
+			at = iso(events[len(events)-1]["timestamp"])
+		}
+		messages = append(messages, MessageRecord{RawText: text, NativeID: fmt.Sprintf("line-%d", metaLine), Role: "system", Kind: "metadata", Text: text, Model: model, Effort: effort, CreatedAt: at, EvidenceLocator: fmt.Sprintf("%s:%d", origin, metaLine), Selected: true})
 	}
 	nativeID := defaultString(meta["id"], rolloutStem(path))
 	spawn := mapValue(mapValue(mapValue(meta["source"])["subagent"])["thread_spawn"])

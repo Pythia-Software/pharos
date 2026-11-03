@@ -245,15 +245,16 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 	// A transcript that continues another thread's history (a Codex fork,
 	// forked subagent or revert page) starts its counters at that thread's
 	// usage, which the other thread's transcript counts. inherited holds that
-	// starting point per stream; counters holds each stream's latest total.
+	// starting point per stream; counters and lasts hold each stream's latest
+	// counter and the request it reported.
 	inherits := false
-	inherited, counters, recorded := map[string]tokenCounts{}, map[string]tokenCounts{}, map[string]bool{}
+	inherited, counters, lasts, recorded := map[string]tokenCounts{}, map[string]tokenCounts{}, map[string]tokenCounts{}, map[string]bool{}
 	// Each message is decoded once for both passes.
 	raws, values := make([]map[string]any, len(messages)), make([]map[string]any, len(messages))
 	for i, m := range messages {
 		raws[i], values[i] = tokenObject(m)
 		raw, v := raws[i], values[i]
-		if firstString(raw["type"]) == "session_meta" && continuesHistory(v) {
+		if m.Kind == "metadata" && firstString(raw["type"]) == "session_meta" && continuesHistory(v) {
 			inherits = true
 		}
 		if firstString(raw["type"], v["type"]) == "token_usage_record" {
@@ -318,7 +319,7 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 					inherited[stream] = tokenRemainder(running, last)
 				}
 			}
-			counters[stream] = running
+			counters[stream], lasts[stream] = running, last
 			if !hasRecords {
 				previous := cumulative[stream]
 				if previous == nil {
@@ -369,9 +370,13 @@ func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCos
 		if inherits && typ == "token_usage_record" && r.checkpoint != nil && !recorded[stream] {
 			// The first record's thread usage beyond its own also starts at the
 			// other thread's, less what earlier counters in this transcript
-			// reported for its other requests.
+			// reported for other requests. The latest counter reports this
+			// request when it carries the same usage.
 			recorded[stream] = true
-			earlier := tokenRemainder(tokenRemainder(counters[stream], inherited[stream]), r.counts)
+			earlier := tokenRemainder(counters[stream], inherited[stream])
+			if last := lasts[stream]; last != nil && last["total_tokens"] == r.counts["total_tokens"] {
+				earlier = tokenRemainder(earlier, last)
+			}
 			inherited[stream] = maxTokenCounts(inherited[stream], tokenRemainder(tokenRemainder(r.checkpoint, r.counts), earlier))
 		}
 		if id != "" && (r.scope == "request" || r.scope == "task") {
