@@ -924,10 +924,12 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 	}
 	return result
 }
-func delegationCategory(name, cat, command string) string {
+
+// delegationCategory groups a call by its tool, or for a shell call by what
+// its primary command does, so "cat" and "rg" read and "git" is Git.
+func delegationCategory(name, cat, commandCategory string) string {
 	name = strings.ToLower(name)
 	cat = strings.ToLower(cat)
-	command = strings.ToLower(command)
 	switch {
 	case name == "wait_agent" || name == "wait" || name == "taskoutput":
 		return "wait"
@@ -935,13 +937,14 @@ func delegationCategory(name, cat, command string) string {
 		return "poll"
 	case cat == "agent" || strings.Contains(name, "delegate") || strings.Contains(name, "spawn") || name == "task":
 		return "delegate"
-	case cat == "read" || cat == "search" || strings.Contains(name, "read") || strings.Contains(name, "search") || strings.Contains(name, "glob"):
+	case cat == "read" || cat == "search" || commandCategory == "read" || commandCategory == "search" || commandCategory == "list" ||
+		strings.Contains(name, "read") || strings.Contains(name, "search") || strings.Contains(name, "glob"):
 		return "read"
-	case cat == "edit" || cat == "write" || strings.Contains(name, "patch") || strings.Contains(name, "write") || name == "edit":
+	case cat == "edit" || cat == "write" || commandCategory == "file-write" || strings.Contains(name, "patch") || strings.Contains(name, "write") || name == "edit":
 		return "write"
-	case strings.Contains(command, "git") || strings.Contains(name, "git"):
+	case commandCategory == "vcs" || strings.Contains(name, "git"):
 		return "git"
-	case cat == "network" || strings.Contains(name, "web") || strings.Contains(name, "fetch"):
+	case cat == "network" || commandCategory == "network" || strings.Contains(name, "web") || strings.Contains(name, "fetch"):
 		return "network"
 	case cat == "shell" || cat == "command" || strings.Contains(name, "exec") || name == "bash" || strings.Contains(name, "terminal"):
 		return "run"
