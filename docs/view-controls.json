@@ -253,6 +253,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_event_link"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_events"
     },
     {
@@ -2876,6 +2880,15 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
+      "key": "33a5f57b635ece71:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "add",
+      "tag": "button",
+      "control": "'button', `event-link-note is-${side} ${eventGroupClass(link.group)}`",
+      "contract": "reader",
+      "reason": "A linked agent event note reveals the other end of its pair and selects it; the selection is the reader_event_link field (bindEventLinks writes and restores it through window.pharosView). Reveal scrolls and highlights without moving keyboard focus."
+    },
+    {
       "key": "b870c6c6bfff5a5a:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "addExpandableRow",
@@ -5147,6 +5160,33 @@
       "control": "onClick={()=>{cancelDrag();change(full);}}",
       "contract": "delegation",
       "reason": "Reset cancels any transient drag and restores the whole canonical timeline range through the existing parent change callback."
+    },
+    {
+      "key": "5be3bc0bf7116573:0",
+      "file": "web/src/event-link-overlay.tsx",
+      "owner": "EventLinkCard",
+      "tag": "PageLink",
+      "control": "onClick={event=>{event.stopPropagation();close?.();}}",
+      "contract": "navigation",
+      "reason": "PageLink opens the conversation reader at the event with reader_events and reader_event_link set, through the shared app router."
+    },
+    {
+      "key": "0b2bb3e683a711b1:0",
+      "file": "web/src/event-link-overlay.tsx",
+      "owner": "EventLinkOverlay",
+      "tag": "rect",
+      "control": "onPointerEnter={event=>show(event.currentTarget,arc.events.map(id=>byID.get(id)!.event),event.clientX,arc.key,null)} onClick={event=>pin(event,arc.events.map(id=>byID.get(id)!.event))}",
+      "contract": "transient",
+      "reason": "Hovering an agent event marker or arc anchor emphasises its arc and shows a card; a click pins the card. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
+    },
+    {
+      "key": "1ebeb99b6e476cb8:0",
+      "file": "web/src/event-link-overlay.tsx",
+      "owner": "EventLinkOverlay",
+      "tag": "g",
+      "control": "onPointerEnter={event=>show(event.currentTarget,[e],event.clientX,m.arc,e.id)} onClick={event=>pin(event,[e])}",
+      "contract": "transient",
+      "reason": "Hovering an agent event marker or arc anchor emphasises its arc and shows a card; a click pins the card. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
     },
     {
       "key": "244adf80af72c046:0",

@@ -490,7 +490,7 @@ function messageEventView(message,text=eventText(message)){
   const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
   const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
   const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
-  const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
+  const view=events.filter(event=>fits(event.sentence)).map(event=>({id:event.id??null,target:event.target?.message_id?event.target:null,kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
     probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
     sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
   return view.length?view:null;
@@ -529,8 +529,55 @@ function eventsAtMark(events,mark){
 const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
 function markClass(flag){
   if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  const target=flag.charCodeAt(0)-EVENT_TARGET_BASE;if(target>=0&&target<EVENT_TARGET_SPANS*2)return `event-target event-target-at-${target>>1}`+(target&1?' human-written':'');
   const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
   const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
+}
+// Two-sided events (agent_event_links.go): an event whose sentence points
+// back at earlier text (a quote of the person's words, a prompt sentence it
+// shares specific words with) carries a target: the message, UTF-16 offsets
+// into its stored text, and those words. The reader pairs both ends: the
+// observation (the event's sentence) and its target, numbered in reading
+// order. eventLinks lists the pairs whose target is in this conversation.
+function eventLinks(messages){
+  const present=new Set(messages.map(message=>message.id).filter(Boolean)),links=[],seen=new Set();
+  for(const message of messages){
+    const view=messageEventView(message);if(!view)continue;
+    for(const event of view)if(event.id&&event.target&&present.has(event.target.message_id)&&!seen.has(event.id)){seen.add(event.id);
+      links.push({id:event.id,n:0,message:message.id,target:event.target,group:event.group,label:event.label,kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak:event.target.method==='overlap'||!event.target.strong})}
+  }
+  links.forEach((link,index)=>{link.n=index+1});
+  return links;
+}
+// The spans a message's targets cover in the text the reader shows, each
+// with the links pointing at it. Offsets apply when the shown text is the
+// stored text there; otherwise (a prompt shown without its harness wrapper)
+// the target's words are found in it. A target whose words are not shown is
+// left out.
+function eventTargetSpans(text,links){
+  const spans=new Map();
+  for(const link of links){
+    const t=link.target,words=String(t.text??'');if(!words)continue;
+    let start=Number.isInteger(t.start)&&text.slice(t.start,t.end)===words?t.start:text.indexOf(words);
+    if(start<0){const at=text.toLowerCase().indexOf(words.toLowerCase());if(at<0)continue;start=at}
+    const key=start+':'+(start+words.length),span=spans.get(key)??{range:[start,start+words.length],links:[]};span.links.push(link.id);spans.set(key,span);
+  }
+  return [...spans.values()].sort((a,b)=>a.range[0]-b.range[0]||a.range[1]-b.range[1]);
+}
+// eventTargetMask paints target spans over mask (see eventMask): one flag per
+// span, keeping whether the text under it was the person's writing, so a
+// target in a prompt stays marked as human-written too.
+const EVENT_TARGET_BASE=0xFA00,EVENT_TARGET_SPANS=400;
+function eventTargetMask(text,spans,mask=''){
+  if(!spans?.length)return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0');
+  spans.slice(0,EVENT_TARGET_SPANS).forEach((span,index)=>{for(let at=span.range[0];at<span.range[1]&&at<flags.length;at++)flags[at]=String.fromCharCode(EVENT_TARGET_BASE+index*2+(flags[at]==='1'?1:0))});
+  return flags.join('');
+}
+// The other end of a link: from an observation to its target, and back.
+function eventLinkEnd(links,id,from){
+  const link=links.find(item=>item.id===id);if(!link)return null;
+  return from==='target'?{side:'observation',message:link.message,link}:{side:'target',message:link.target.message_id,link};
 }
 // Highlights: the kinds of marks the reader can show, each switched on or
 // off on its own. Each is a boolean view field, so a link keeps the choice,

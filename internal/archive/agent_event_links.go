@@ -52,6 +52,7 @@ const agentEventOverlapScore = 4.0
 
 type eventLinkMessage struct {
 	ID, Role, Kind, Text string
+	At                   any // created_at, for the timeline
 }
 
 type eventLinkEvent struct {
@@ -449,14 +450,14 @@ func (c *Catalog) agentEventLinks(ctx context.Context, conversationID string) ([
 	}
 	messages := []eventLinkMessage{}
 	if twoSided {
-		list, err := queryMapsContext(ctx, c.reader(), `SELECT id,role,kind,substr(text,1,?) text FROM messages
+		list, err := queryMapsContext(ctx, c.reader(), `SELECT id,role,kind,created_at,substr(text,1,?) text FROM messages
 			WHERE conversation_id=? AND kind IN ('message','reasoning','thinking')
 			ORDER BY source_order IS NULL,source_order,created_at IS NULL,created_at,id`, agentEventLinkTextLimit, conversationID)
 		if err != nil {
 			return nil, err
 		}
 		for _, m := range list {
-			messages = append(messages, eventLinkMessage{ID: firstString(m["id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]), Text: firstString(m["text"])})
+			messages = append(messages, eventLinkMessage{ID: firstString(m["id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]), Text: firstString(m["text"]), At: m["created_at"]})
 		}
 	}
 	return agentEventLinkRows(rows, messages, events), nil
@@ -465,9 +466,9 @@ func (c *Catalog) agentEventLinks(ctx context.Context, conversationID string) ([
 // agentEventLinkRows joins events with their targets for the views.
 func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, events []eventLinkEvent) []map[string]any {
 	targets := findAgentEventTargets(messages, events)
-	texts := make(map[string]string, len(messages))
+	texts, times := make(map[string]string, len(messages)), make(map[string]any, len(messages))
 	for _, m := range messages {
-		texts[m.ID] = m.Text
+		texts[m.ID], times[m.ID] = m.Text, m.At
 	}
 	out := make([]map[string]any, 0, len(rows))
 	for i, row := range rows {
@@ -480,9 +481,13 @@ func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, even
 		if utf8.RuneCountInString(sentence) > 280 {
 			sentence = string([]rune(sentence)[:279]) + "…"
 		}
+		target := agentEventTargetJSON(targets[events[i].ID], texts)
+		if target != nil && target["message_id"] != nil {
+			target["at"] = times[firstString(target["message_id"])]
+		}
 		out = append(out, map[string]any{"id": events[i].ID, "message_id": events[i].MessageID, "kind": family.Key, "label": family.Label, "group": family.Group,
 			"probability": math.Round(probability*1000) / 1000, "source": firstString(row["source"]), "sentence": sentence,
-			"target": agentEventTargetJSON(targets[events[i].ID], texts)})
+			"target": target})
 	}
 	return out
 }

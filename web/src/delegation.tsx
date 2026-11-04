@@ -10,6 +10,9 @@ import { delegationRouteValues, delegationTabs, readDelegationRoute, type Delega
 import "./delegation.css";
 import {RecursiveSessionRibbon} from "./label-session-ribbon";
 import {nativeTimelineLabels,type NativeTimelineMessage} from "./label-timeline-overlay";
+import {withEventLink} from "./event-link-url";
+import type {AgentEventLink} from "./event-link-layout";
+import type {LabelMessage} from "./conversation-labels";
 import type {Taxonomy} from "./conversation-labels";
 import {splitTimelineCallers} from "./timeline-caller-model";
 import {useTimelineColumns} from "./timeline-columns";
@@ -1810,6 +1813,7 @@ export function ParallelActivity({
   const ticks = timelineTickLabels(range,Math.max(2,Math.min(6,Math.floor((clockWidth||350)/100))));
   const lanes = new Map(visibleActivity?.lanes.map((l) => [l.session, l]));
   const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
+  const eventHref=(node:Session,e:AgentEventLink)=>withEventLink(ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:{id:e.message_id} as LabelMessage},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href),e);
   return (
     <div className={`delegation-parallel ${previewOnly?"is-preview":""} ${recursive?"is-recursive":""} ${timeline?"is-timeline":""}`} ref={track} style={timeline?columns.style:undefined}>
       {previewOnly?<button type="button" className="lt-preview-activate" aria-label="Open full-width timeline" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}><span>Open timeline to explore <Icon name="arrow-right"/></span></button>:null}
@@ -1907,6 +1911,7 @@ export function ParallelActivity({
             <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
+              events={timeline?nativeLabels.events.get(n.id):undefined} eventHref={timeline?e=>eventHref(n,e):undefined}
               foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
               restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>

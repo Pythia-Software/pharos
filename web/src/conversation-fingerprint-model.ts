@@ -56,3 +56,11 @@ export function parallelEnvelopes(segments:{x:number;width:number;token:Pick<Rib
   return {path,points,peak:Math.max(...group.map(s=>s.token.parallelism))};
  });
 }
+/** Segment widths: volume compresses logarithmically. */
+export const ribbonWeights=(tokens:Pick<RibbonToken,'count'>[])=>tokens.map(t=>1+Math.log2(t.count+1));
+/** Each message's x in [0, 1] of the fingerprint: its share of its segment, in order. */
+export function fingerprintMessagePositions(tokens:RibbonToken[]):Map<string,number>{
+ const weights=ribbonWeights(tokens),total=weights.reduce((a,b)=>a+b,0)||1,at=new Map<string,number>();let cursor=0;
+ tokens.forEach((token,i)=>{const width=weights[i]/total;token.messages.forEach((m,k)=>at.set(m.id,cursor+width*(k+.5)/token.messages.length));cursor+=width;});
+ return at;
+}
