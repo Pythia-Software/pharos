@@ -353,6 +353,24 @@ func TestCursorCaptureHoldsOnlyTheChats(t *testing.T) {
 	c, config := testCatalog(t)
 	config.Sources = []SourceConfig{source}
 	ingestSource(t, c, source)
+	// A capture stopped as a snapshot is written, before it is kept, leaves
+	// nothing behind it should not hold.
+	stopped := 0
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage != "snapshot-written" {
+			return nil
+		}
+		stopped++
+		if strings.Contains(capturedText(t, config.CaptureRoot), cursorSecret) {
+			t.Errorf("a capture stopped at %s holds Cursor's credentials or keys", rel)
+		}
+		return errors.New("stopped")
+	})
+	runCapture(t, config)
+	captureFault = nil
+	if stopped == 0 {
+		t.Fatal("no snapshot was written")
+	}
 	if result := runCapture(t, config); !result.OK {
 		t.Fatalf("capture = %+v", result)
 	}
@@ -371,7 +389,7 @@ func TestCursorCaptureHoldsOnlyTheChats(t *testing.T) {
 		}
 		db.Close()
 		for table := range tables {
-			if !cursorCaptureTables[table] {
+			if _, kept := cursorCaptureTables[table]; !kept {
 				err = errors.Join(err, fmt.Errorf("captured %s", table))
 			}
 		}
@@ -463,6 +481,64 @@ func TestCursorReadsOnlyTheComposerThatChanged(t *testing.T) {
 	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='o6' AND text='Also cleaned up the tests.'`); n != 1 || parsed != 1 {
 		t.Fatalf("after a message changed: %d, %d composers parsed", n, parsed)
 	}
+	// A change that keeps every size: a request's token count, and an exit
+	// code.
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(replace(value, '"outputTokens":300', '"outputTokens":900'), '"exitCode":2', '"exitCode":0') WHERE key IN (?, ?)`, "bubbleId:"+cursorOld+":o4", "bubbleId:"+cursorOld+":o3")
+		return err
+	})
+	parsed = ingestSource(t, c, source).Parsed
+	if total := countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`); total != 4900 || parsed != 1 {
+		t.Fatalf("after a same-size change: %d tokens, %d composers parsed", total, parsed)
+	}
+}
+
+// A message Cursor no longer holds, though the composer's headers name it,
+// stays as it was indexed.
+func TestCursorMessageCursorDroppedStaysIndexed(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := cursorFixture(t)
+	source := SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true}
+	ingestSource(t, c, source)
+	before := countRows(t, c, `SELECT COUNT(*) FROM messages`)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=NULL WHERE key=?`, "bubbleId:"+cursorOld+":o4")
+		return err
+	})
+	ingestSource(t, c, source)
+	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before || countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`) != 4300 {
+		t.Fatalf("messages %d, before %d", after, before)
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=? AND coverage='partial'`, cursorOld); n != 1 {
+		t.Fatalf("the conversation is not partial: %d", n)
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages a JOIN messages b ON b.conversation_id=a.conversation_id
+		WHERE a.native_id='o4' AND b.native_id LIKE 'o5%' AND a.source_order>=b.source_order`); n != 0 {
+		t.Fatalf("the dropped message moved after %d later ones", n)
+	}
+}
+
+// A fork of a fork drops the copy of its parent's messages, which begin
+// with its grandparent's.
+func TestCursorForkOfAForkDropsWhatItCopied(t *testing.T) {
+	root := cursorFixture(t)
+	const nested = "c0000000-0000-4000-8000-000000000008"
+	cursorWrite(t, root, func(db *sql.DB) error {
+		cursorPut(t, db,
+			cursorRow{"composerData:" + nested, map[string]any{"_v": 18, "composerId": nested, "name": "Once more", "createdAt": 1793722100000, "headerLog": map[string]any{"chunkCount": 1, "count": 4},
+				"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorFork, "forkedFromComposerId": cursorFork, "conversationLengthAtSpawn": 3, "toolCallId": "call-9"}}},
+			cursorRow{"composerConvHeaders:" + nested + ":000000", []any{map[string]any{"bubbleId": cursorPrompt}, map[string]any{"bubbleId": cursorPrompt + "/s:0"}, map[string]any{"bubbleId": "f1"}, map[string]any{"bubbleId": "g1"}}},
+			cursorRow{"bubbleId:" + nested + ":" + cursorPrompt, map[string]any{"type": 1, "text": "Write wordstats.py and test it"}},
+			cursorRow{"bubbleId:" + nested + ":" + cursorPrompt + "/s:0", map[string]any{"type": 2, "thinking": map[string]any{"text": "Plan the file."}}},
+			cursorRow{"bubbleId:" + nested + ":f1", map[string]any{"type": 1, "text": "Check again"}},
+			cursorRow{"bubbleId:" + nested + ":g1", map[string]any{"type": 2, "text": "Once more, fine."}})
+		return nil
+	})
+	for _, conversation := range cursorRecords(t, root)[cursorNew].Conversations {
+		if conversation.NativeID == nested && (conversation.AgentDepth != 2 || cursorKinds(conversation.Messages) != "assistant:message" || conversation.Coverage != "complete") {
+			t.Fatalf("fork of a fork = %+v", conversation)
+		}
+	}
 }
 
 // A message a composer's headers name that is not there makes it partial,
@@ -488,7 +564,8 @@ func TestCursorDamagedComposerLeavesTheOthers(t *testing.T) {
 }
 
 // A composer deleted in Cursor between two captures, before either was
-// indexed, is indexed from the older one.
+// indexed, is indexed from the older one: one that started its own work, and
+// one whose composer remains.
 func TestCursorComposerDeletedBeforeIndexingIsKept(t *testing.T) {
 	useHost(t, "host-a")
 	root := cursorFixture(t)
@@ -496,17 +573,25 @@ func TestCursorComposerDeletedBeforeIndexingIsKept(t *testing.T) {
 	config := captureTestConfig(t, source)
 	runCapture(t, config)
 	cursorWrite(t, root, func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "bubbleId:"+cursorOld+":*", "composerData:"+cursorOld)
+		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=? OR key GLOB ? OR key GLOB ?`,
+			"bubbleId:"+cursorOld+":*", "composerData:"+cursorOld, "*:"+cursorSide+":*", "composerData:"+cursorSide)
 		return err
 	})
 	runCapture(t, config)
 	useHost(t, "host-b")
 	c, _ := testCatalog(t)
 	indexCaptures(t, c, config.CaptureRoot, "host-a")
-	for _, id := range []string{cursorOld, cursorNew, cursorChild} {
+	for _, id := range []string{cursorOld, cursorNew, cursorChild, cursorSide} {
 		if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=?`, id); n != 1 {
 			t.Fatalf("%s: %d conversations", id, n)
 		}
+	}
+	// Placed as it was, by its window, and the side chat by its composer.
+	if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE source_id=? AND location='/work/old'`, cursorOld); n != 1 {
+		t.Fatalf("the older composer lost its folder")
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=? AND parent_id IS NOT NULL`, cursorSide); n != 1 {
+		t.Fatalf("the side chat lost its composer")
 	}
 }
 

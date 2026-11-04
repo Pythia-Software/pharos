@@ -910,6 +910,11 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := recordOriginObservation(tx, conversationID, host, record.SourceKind, conversation); err != nil {
 			return 0, 0, err
 		}
+		if conversation.Coverage == "partial" {
+			if conversation.Messages, err = keepStoredMessages(ctx, tx, conversationID, conversation.Messages); err != nil {
+				return 0, 0, err
+			}
+		}
 		var searchCurrent bool
 		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
 		 OR NOT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?)`, conversationID, messageSearchVersion, conversationID).Scan(&searchCurrent); err != nil {
@@ -1638,6 +1643,42 @@ func replaceMetrics(tx *sql.Tx, workspaceID string, values []map[string]any) err
 		}
 	}
 	return nil
+}
+
+// keepStoredMessages returns a partial read's messages with the indexed ones
+// it lacks, each after the stored message it followed. A partial read holds
+// less than its source once did (Cursor keeps the headers of messages it no
+// longer holds), so it removes nothing that was indexed, nor the usage and
+// tool calls derived from it.
+func keepStoredMessages(ctx context.Context, tx *sql.Tx, conversationID string, messages []MessageRecord) ([]MessageRecord, error) {
+	stored, err := storedMessages(ctx, tx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	read := make(map[string]bool, len(messages))
+	for _, message := range messages {
+		read[message.NativeID] = true
+	}
+	after, previous, missing := map[string][]MessageRecord{}, "", 0
+	for _, message := range stored {
+		if read[message.NativeID] {
+			previous = message.NativeID
+			continue
+		}
+		after[previous] = append(after[previous], message)
+		missing++
+	}
+	if missing == 0 {
+		return messages, nil
+	}
+	kept := make([]MessageRecord, 0, len(messages)+missing)
+	kept = append(kept, after[""]...)
+	for _, message := range messages {
+		kept = append(kept, message)
+		kept = append(kept, after[message.NativeID]...)
+		delete(after, message.NativeID)
+	}
+	return kept, nil
 }
 
 func replaceAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,12 +26,16 @@ import (
 // composer that started it. A window's own state.vscdb lists its composers,
 // which places the composers that do not name their folder themselves. The
 // same databases hold Cursor's sign-in tokens, settings and each composer's
-// encryption keys, which are neither read nor captured (cursorCaptureScrub).
+// encryption keys, which are neither read nor captured (cursorCaptureTables).
 type cursorAdapter struct {
 	baseAdapter
-	// selected, when set, limits reading to these composers, in groups whose
-	// root is among them (snapshotSessions).
+	// selected, when set, limits reading to these composers, each group
+	// those of them that started its work (snapshotSessions).
 	selected map[string]bool
+	// database, when set, is the global database to read in place of the
+	// user folder's: an older snapshot of it, whose composers are still
+	// placed by the folder's windows.
+	database string
 }
 
 // cursorExtractor versions the parser; bump it when parsing changes.
@@ -38,28 +43,27 @@ const cursorExtractor = "cursor-v1"
 
 func (a *cursorAdapter) partExtractor() string { return cursorExtractor }
 
-// cursorCaptureTables are the tables a capture keeps; every other table,
-// including any a later release adds, is left out.
-var cursorCaptureTables = map[string]bool{"ItemTable": true, "cursorDiskKV": true}
-
-// cursorCaptureScrub keeps, of those tables, only the rows the adapter
-// reads: each composer, its messages and their order, and a window's list of
-// its composers. Every other key is left out, among them Cursor's sign-in
-// tokens (cursorAuth/*) and settings, and each composer loses its
-// encryption keys and the encrypted state they open. A composer that is not
-// JSON cannot be scrubbed, so is left out too.
-var cursorCaptureScrub = map[string][]string{
-	"ItemTable": {`DELETE FROM ItemTable WHERE key IS NOT 'composer.composerData'`},
+// cursorCaptureTables are what a capture keeps: of ItemTable, a window's
+// list of its composers; of cursorDiskKV, each composer, its messages and
+// their order. Every other table and row, including any a later release adds,
+// is left out, among them Cursor's sign-in tokens (cursorAuth/*) and
+// settings, and each composer is kept without its encryption keys and the
+// encrypted state they open. A composer that is not JSON cannot be cleared
+// of them, so is left out too.
+var cursorCaptureTables = map[string]captureTable{
+	"ItemTable": {where: `key = 'composer.composerData'`},
 	"cursorDiskKV": {
-		`DELETE FROM cursorDiskKV WHERE key IS NULL OR NOT (key GLOB 'composerData:*' OR key GLOB 'bubbleId:*' OR key GLOB 'composerConvHeaders:*')`,
-		`DELETE FROM cursorDiskKV WHERE key GLOB 'composerData:*' AND value IS NOT NULL AND NOT json_valid(CAST(value AS TEXT))`,
-		`UPDATE cursorDiskKV SET value = json_remove(CAST(value AS TEXT), '$.blobEncryptionKey', '$.speculativeSummarizationEncryptionKey', '$.conversationState') WHERE key GLOB 'composerData:*' AND value IS NOT NULL`,
+		columns: `key, CASE WHEN key GLOB 'composerData:*' AND value IS NOT NULL THEN json_remove(CAST(value AS TEXT), '$.blobEncryptionKey', '$.speculativeSummarizationEncryptionKey', '$.conversationState') ELSE value END`,
+		where:   `key GLOB 'bubbleId:*' OR key GLOB 'composerConvHeaders:*' OR key GLOB 'composerData:*' AND (value IS NULL OR json_valid(CAST(value AS TEXT)))`,
 	},
 }
 
 // globalDatabase is the database holding the composers: the source itself
 // when it is a database, else globalStorage/state.vscdb.
 func (a *cursorAdapter) globalDatabase() (string, error) {
+	if a.database != "" {
+		return a.database, nil
+	}
 	info, err := os.Stat(a.config.Path)
 	if err != nil {
 		return "", err
@@ -107,8 +111,8 @@ func (a *cursorAdapter) windows() ([]cursorWindow, error) {
 	return windows, nil
 }
 
-// captureInputs are what a capture copies: the databases (scrubbed, see
-// cursorCaptureScrub) and the windows' workspace.json.
+// captureInputs are what a capture copies: the databases (only their
+// conversations, see cursorCaptureTables) and the windows' workspace.json.
 func (a *cursorAdapter) captureInputs() (databases, files []string, err error) {
 	global, err := a.globalDatabase()
 	if err != nil {
@@ -311,26 +315,34 @@ func (a *cursorAdapter) composers(database string, places map[string]cursorPlace
 	if err != nil || !tables["cursorDiskKV"] {
 		return nil, err
 	}
-	// What a composer's messages and their order add up to, without reading
-	// them: a message changing changes its size.
-	sizes := map[string]string{}
+	// A digest of each composer's messages and their order. Cursor stamps no
+	// time on a message, and a message can change without changing its size
+	// (a token count, an exit code), so the digest is of their content, read
+	// in key order.
+	digests := map[string]hash.Hash{}
 	counts := map[string]int64{}
 	for _, prefix := range []string{"bubbleId:", "composerConvHeaders:"} {
-		rows, err := tx.QueryContext(a.context(), `SELECT substr(key, ?1, instr(substr(key, ?1), ':') - 1) AS composer, COUNT(*), COALESCE(SUM(octet_length(value)), 0)
-			FROM cursorDiskKV WHERE key GLOB ?2 GROUP BY composer`, len(prefix)+1, prefix+"*")
+		rows, err := tx.QueryContext(a.context(), `SELECT key, value FROM cursorDiskKV WHERE key GLOB ? ORDER BY key`, prefix+"*")
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var id string
-			var count, bytes int64
-			if err := rows.Scan(&id, &count, &bytes); err != nil {
+			var key string
+			var value sql.RawBytes
+			if err := rows.Scan(&key, &value); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			sizes[id] += fmt.Sprintf("%s%d:%d;", prefix, count, bytes)
+			id, _, _ := strings.Cut(strings.TrimPrefix(key, prefix), ":")
+			digest := digests[id]
+			if digest == nil {
+				digest = sha256.New()
+				digests[id] = digest
+			}
+			fmt.Fprintf(digest, "%s\x00%d\x00", key, len(value))
+			digest.Write(value)
 			if prefix == "bubbleId:" {
-				counts[id] = count
+				counts[id]++
 			}
 		}
 		rows.Close()
@@ -367,7 +379,11 @@ func (a *cursorAdapter) composers(database string, places map[string]cursorPlace
 		if composer.place.location == "" {
 			composer.place = places[id]
 		}
-		composer.signal = hex.EncodeToString(digest[:8]) + ":" + sizes[id] + composer.place.location + "\x1f" + composer.place.remote
+		messages := ""
+		if digest := digests[id]; digest != nil {
+			messages = hex.EncodeToString(digest.Sum(nil)[:8])
+		}
+		composer.signal = hex.EncodeToString(digest[:8]) + ":" + messages + ":" + composer.place.location + "\x1f" + composer.place.remote
 		composers = append(composers, composer)
 	}
 	return composers, rows.Err()
@@ -388,6 +404,11 @@ func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
 	composers, err := a.composers(database, places)
 	if err != nil {
 		failures = append(failures, err)
+	}
+	// A selection is planned as if it were all there is: a selected
+	// subagent whose composer is not selected starts its own group.
+	if a.selected != nil {
+		composers = slices.DeleteFunc(composers, func(composer cursorComposer) bool { return !a.selected[composer.id] })
 	}
 	byID := map[string]cursorComposer{}
 	for _, composer := range composers {
@@ -416,12 +437,6 @@ func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
 	origin := a.original(database)
 	for _, top := range roots {
 		members := groups[top]
-		if a.selected != nil {
-			if !a.selected[top] {
-				continue
-			}
-			members = slices.DeleteFunc(slices.Clone(members), func(member cursorComposer) bool { return !a.selected[member.id] })
-		}
 		// The root first, then its subagents a level at a time, each level by
 		// ID, so a subagent follows the one that started it.
 		levels := map[string]int{}
@@ -472,9 +487,7 @@ func (a *cursorAdapter) snapshotSessions(ctx context.Context, file string) (map[
 }
 
 func (a *cursorAdapter) olderReader(file string, view *captureView, selected map[string]bool) Adapter {
-	config := a.config
-	config.Path = file
-	return &cursorAdapter{baseAdapter: baseAdapter{config: config, capability: a.capability, view: view}, selected: selected}
+	return &cursorAdapter{baseAdapter: baseAdapter{config: a.config, capability: a.capability, view: view}, selected: selected, database: file}
 }
 
 // readGroup reads, as indexing does, the group whose parts begin as parts
@@ -498,13 +511,21 @@ func (a *cursorAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourc
 
 // cursorThread is a composer as read: its data and its messages in order.
 type cursorThread struct {
-	member   cursorComposer
-	data     map[string]any
-	bubbles  []map[string]any
-	complete bool
+	member  cursorComposer
+	data    map[string]any
+	bubbles []map[string]any
+	// ids are the messages its headers name, in order, whether or not Cursor
+	// still holds them; missing those it does not; and short that headers
+	// themselves are missing.
+	ids     []string
+	missing map[string]bool
+	short   bool
 	// calls are the tool calls of its own messages, by call ID.
 	calls map[string]bool
 }
+
+// complete reports whether every message the headers name was read.
+func (t *cursorThread) complete() bool { return !t.short && len(t.missing) == 0 }
 
 // read reads a composer and its subagents in one transaction.
 func (a *cursorAdapter) read(database string, members []cursorComposer) (*WorkspaceRecord, error) {
@@ -532,13 +553,18 @@ func (a *cursorAdapter) read(database string, members []cursorComposer) (*Worksp
 			continue
 		}
 		info := mapValueDefault(thread.data["subagentInfo"])
-		// A fork starts with a copy of its parent's messages, which are the
-		// parent's.
+		// A fork starts with a copy of its parent's messages, as its parent's
+		// headers name them, which are the parent's.
 		if parent := byID[firstString(info["forkedFromComposerId"])]; parent != nil {
 			if inherited, ok := number(info["conversationLengthAtSpawn"]); ok && inherited > 0 {
 				n := int(inherited)
-				if n <= len(thread.bubbles) && n <= len(parent.bubbles) && slices.EqualFunc(thread.bubbles[:n], parent.bubbles[:n], func(x, y map[string]any) bool { return firstString(x["bubbleId"]) == firstString(y["bubbleId"]) }) {
-					thread.bubbles = thread.bubbles[n:]
+				if n <= len(thread.ids) && n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n]) {
+					copied := map[string]bool{}
+					for _, id := range thread.ids[:n] {
+						copied[id] = true
+						delete(thread.missing, id)
+					}
+					thread.bubbles = slices.DeleteFunc(thread.bubbles, func(bubble map[string]any) bool { return copied[firstString(bubble["bubbleId"])] })
 				}
 			}
 		}
@@ -579,7 +605,9 @@ func (a *cursorAdapter) read(database string, members []cursorComposer) (*Worksp
 		if conversation == nil {
 			continue
 		}
-		if member.parent != "" && byID[member.parent] != nil {
+		// Linked to its composer even when that is not read with it: deleted
+		// in Cursor, or not selected.
+		if member.parent != "" {
 			conversation.ParentNativeID = member.parent
 			conversation.AgentNickname, conversation.AgentPath = firstString(thread.data["name"]), firstString(info["subagentTypeName"])
 			if spawn != "" {
@@ -628,7 +656,7 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 	} else if err != nil {
 		return nil, err
 	}
-	thread := &cursorThread{member: member, complete: true}
+	thread := &cursorThread{member: member, missing: map[string]bool{}}
 	if err := json.Unmarshal(value, &thread.data); err != nil || thread.data == nil {
 		return nil, fmt.Errorf("Cursor composer %s: %v", member.id, defaultString(errorText(err), "not an object"))
 	}
@@ -636,6 +664,7 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 		for _, raw := range inline {
 			if bubble := mapValue(raw); bubble != nil {
 				thread.bubbles = append(thread.bubbles, bubble)
+				thread.ids = append(thread.ids, firstString(bubble["bubbleId"]))
 			}
 		}
 		return thread, nil
@@ -647,7 +676,7 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 			var raw []byte
 			err := tx.QueryRowContext(a.context(), `SELECT value FROM cursorDiskKV WHERE key=?`, fmt.Sprintf("composerConvHeaders:%s:%06d", member.id, chunk)).Scan(&raw)
 			if errors.Is(err, sql.ErrNoRows) {
-				thread.complete = false
+				thread.short = true
 				continue
 			} else if err != nil {
 				return nil, err
@@ -659,7 +688,7 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 			headers = append(headers, list...)
 		}
 		if count, ok := number(log["count"]); ok && int(count) > len(headers) {
-			thread.complete = false
+			thread.short = true
 		}
 	}
 	if len(headers) == 0 {
@@ -686,9 +715,10 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 	}
 	for _, raw := range headers {
 		id, _ := mapValueDefault(raw)["bubbleId"].(string)
+		thread.ids = append(thread.ids, id)
 		var bubble map[string]any
 		if data := stored[id]; data == nil || json.Unmarshal(data, &bubble) != nil || bubble == nil {
-			thread.complete = false
+			thread.missing[id] = true
 			continue
 		}
 		bubble["bubbleId"] = id
@@ -719,7 +749,7 @@ func (a *cursorAdapter) conversation(origin string, thread *cursorThread, spawne
 	}
 	started := iso(data["createdAt"])
 	conversation := &ConversationRecord{NativeID: id, Provider: "cursor", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cursor", Model: model, StartedAt: started}
-	if !thread.complete {
+	if !thread.complete() {
 		conversation.Coverage = "partial"
 	}
 	context := map[string]any{}

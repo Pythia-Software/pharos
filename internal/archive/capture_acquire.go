@@ -71,8 +71,8 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 		return result, nil
 	} // session exporter; production-size gate remains opt-in
 	if strings.EqualFold(source.Kind, "cursor") {
-		// Cursor's rows are kept only scrubbed (captureTables), which only its
-		// native snapshots are: no rows are copied before indexing.
+		// Only Cursor's snapshots leave out what it keeps beside its chats
+		// (captureTables): no rows are copied before indexing.
 		return result, nil
 	}
 	if strings.EqualFold(source.Kind, "tl1") || strings.EqualFold(source.Kind, "antigravity") || strings.EqualFold(source.Kind, "opencode") {

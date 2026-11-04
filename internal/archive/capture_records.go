@@ -826,13 +826,14 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 		names[n] = true
 	}
 	st, mt := firstPresent(names, "sessions", "workspaces", "threads"), firstPresent(names, "messages", "session_messages")
-	// A kind whose kept tables are also scrubbed (Cursor) is exported only
-	// from its scrubbed snapshot (exportSnapshot), never from the source.
-	keep, _ := captureTables(s.c.source.Kind)
+	// A kind that keeps only some of a table's rows (Cursor) is exported only
+	// from its snapshot (exportSnapshot), which holds no others, never from
+	// the source.
+	keep := captureTables(s.c.source.Kind)
 	for _, name := range tables {
 		where, order := "", ""
 		var args []any
-		if keep != nil && !keep[name] {
+		if _, kept := keep[name]; keep != nil && !kept {
 			v.Tables = append(v.Tables, recordTable{Name: name, Coverage: "excluded", Order: "not captured: the source keeps credentials and settings beside its sessions"})
 			continue
 		}
