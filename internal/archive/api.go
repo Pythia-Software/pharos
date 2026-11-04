@@ -175,6 +175,7 @@ func (s *Server) Serve() error {
 	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
 	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
+	s.daemon("maintainMessageLabelFacts", s.Catalog.maintainMessageLabelFacts)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
@@ -555,6 +556,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
+	case strings.HasPrefix(path, "/api/labels/conversations/"):
+		s.getMessageLabelFingerprint(w, r)
 	case path == "/api/origins":
 		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
 		if err != nil {

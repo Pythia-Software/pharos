@@ -14,8 +14,10 @@ import (
 // each call's absolute path, so its repository can be resolved again when
 // the known checkouts change (see reresolveToolPaths). v7 derives skill_usages
 // and MCP resource-API attribution and structured MCP errors. v9 marks a call
-// backgrounded when a subshell launches it, as in "(server &)".
-const toolLedgerVersion = "tools-v9-subshell-background"
+// backgrounded when a subshell launches it, as in "(server &)". v10 reads the
+// script of `zsh -lc "..."`, and classifies file-writing cat, runners (npx,
+// "pnpm exec", "uv run") by what they run, formatters, and checks.
+const toolLedgerVersion = "tools-v10-command-categories"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -681,6 +683,9 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 	texts := make([]string, len(lines))
 	primarySet := false
 	for position, line := range lines {
+		if script, ok := shellScript(line.text); ok {
+			line.text = script
+		}
 		texts[position] = line.text
 		parsed := parseShellCommand(line.text)
 		call.HasPipe = call.HasPipe || parsed.HasPipe

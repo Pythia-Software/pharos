@@ -8,9 +8,11 @@ resizing, and double-click reset; its width is remembered. Below 720 pixels of
 sidebar width, the usage table becomes a compact hierarchy with one comparison
 metric selectable from every Self and Self + children column. Hierarchy boxes,
 selection highlighting, sorting, branch collapse, and pagination remain available.
-Widening the sidebar restores the full table. Parallel activity stays available
-in the sidebar with its full-workspace overview, range selection, explicit detail
-expansion, and tool-call popovers; event grouping adapts to its narrower axis.
+Widening the sidebar restores the full table. Timeline replaces Parallel activity
+throughout the workspace explorer. Beside a reader it shows a collapsed, static
+overview; session names switch the reader, while interacting with Events or the
+clock returns to the editable full-width view. Saved `explorer=parallel` links
+open Timeline and retain their time range, session and hierarchy state.
 
 Session rows show the age of their first retained evidence on the same line as
 provider, model, and effort; the compact hierarchy places it beneath the
@@ -48,14 +50,14 @@ resolve from retained launch messages without reindexing.
 
 A **Workspace Sessions** toolbar selects the transcript, replacing the
 conversation dropdown. A single button beside the sliding
-Hierarchy & usage / Parallel activity switch shows or hides the session content.
+Hierarchy & usage / Timeline switch shows or hides the session content.
 The toolbar remains visible while collapsed, and choosing a view opens it.
 The views sit directly on the workspace without an enclosing disclosure panel. The selected row and conversation header
 share a background highlight, session outline number, and assignment label.
 Workspace totals sit alongside the workspace title and remain visible when the
 explorer is collapsed. The native workspace header omits its old Usage disclosure.
 The conversation header shows self usage and a child-session picker. Parent
-sessions and parallel activity are reached through the workspace navigator.
+sessions and Timeline are reached through the workspace navigator.
 Cross-workspace parent references retain their direct navigation link. Delegation entries gain
 links to child transcripts when their turns are materialized. Child transcripts
 open in the existing reader, with its search, context rail, and lazy tool output.

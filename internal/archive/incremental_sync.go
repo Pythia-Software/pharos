@@ -743,7 +743,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		MAX(v.checked_at) last_attempt FROM sync_verifications v LEFT JOIN sync_verification_progress p USING(host_id,source_name,unit)
 		WHERE v.host_id=? GROUP BY v.source_name,v.outcome`, currentHost().ID)
 	issues, _ := queryMaps(s.Catalog.reader(), "SELECT id,source_name,unit,last_at FROM sync_integrity_issues WHERE state='open' ORDER BY last_at DESC LIMIT 100")
-	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state!='complete' ORDER BY updated_at DESC LIMIT 30")
+	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state NOT IN ('complete','superseded') ORDER BY updated_at DESC LIMIT 30")
 	pause := ""
 	if !settings.Enabled {
 		pause = "Off"

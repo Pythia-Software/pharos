@@ -12,7 +12,7 @@ import { cardTemplates } from "../../src/card-library-model";
 import { usageDatasetTopics, readUsageWorkspace, usageDashboardReturn } from "../../src/usage-workspace-model";
 import { readDashboardQuery } from "../../src/usage-dashboard-model";
 import { trendQuery } from "../../src/dashboard-trend-model";
-import { analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-model";
+import { isTrendView, analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "../../src/token-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
@@ -74,7 +74,7 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
       assert.deepEqual(filters.query.where, cardDashboardWhere(recipe.dataset, recipe.destination.dataset, (query.grouping?.source ?? query).where), "dashboard carries compatible context");
       const catalog = catalogs[topic];
       if (catalog) assert.equal(validAnalysisState(catalog, chart), true, "the chart is a valid analysis state");
-      const dashboard = !catalog ? filters.query : (chart.view ?? "trend") === "trend" ? trendQuery(catalog, chart, filters.query.where, { now }).query : analysisQuery(catalog, chart, filters.query.where, { now }).query;
+      const dashboard = !catalog ? filters.query : isTrendView(chart.view) ? trendQuery(catalog, chart, filters.query.where, { now }).query : analysisQuery(catalog, chart, filters.query.where, { now }).query;
       // The SQLite service supports isolated source regex (unlike the generic
       // in-memory fake); wide Tools date ranges use that native capability.
       for (const part of core.planMetricSeries(dashboard, schemas[recipe.destination.dataset], { now })?.queries ?? [dashboard]) assert.deepEqual(core.toQueryRequestV3(part, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], `dashboard @${days}d`);

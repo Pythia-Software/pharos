@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 // delegation.tsx builds its date formatters when it loads, so the zone is set
 // first. Each test file runs in its own process.
 process.env.TZ = "America/Denver";
-const { cellTitle, clampRange, formatted, hierarchyFrames, localTime } = await import("../../../src/delegation");
+const { cellTitle, clampRange, formatted, hierarchyFrames, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
+const { readDelegationRoute } = await import("../../../src/delegation-route");
+const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
 
 const start = Date.parse("2026-09-24T12:00:00Z"), winter = Date.parse("2026-01-24T12:00:00Z");
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
@@ -54,6 +56,37 @@ test("timeline ranges keep their duration and stay inside the workspace", () => 
   assert.deepEqual(clampRange([start + 2000, start + 1000], full), [start + 2000, start + 2001]);
 });
 
+test("timeline drags clamp at canvas edges without moving the opposite resize endpoint",()=>{
+  const full=[1000,11000],range=[3000,7000],canvas={left:80,width:1000};
+  assert.equal(timelinePointerTime(-20,canvas,full),0,"raw horizontal positions survive outside the canvas");
+  assert.equal(timelinePointerTime(1280,canvas,full),13000);
+  assert.equal(timelinePointerTime(580,canvas,full),6000);
+  for(const grab of [6990,7050])assert.deepEqual(timelineDragRange('end',range,full,grab,13000),[3000,11000]);
+  for(const grab of [2950,3010])assert.deepEqual(timelineDragRange('start',range,full,grab,0),[1000,7000]);
+  assert.deepEqual(timelineDragRange('end',range,full,7000,0),[3000,3001]);
+  assert.deepEqual(timelineDragRange('start',range,full,3000,13000),[6999,7000]);
+  assert.deepEqual(timelineDragRange('pan',range,full,5000,13000),[7000,11000]);
+  assert.deepEqual(timelineDragRange('pan',range,full,5000,0),[1000,5000]);
+  assert.deepEqual(timelineDragRange('select',range,full,7000,13000),[7000,11000]);
+  assert.deepEqual(timelineDragRange('select',range,full,7000,0),[1000,7000]);
+  assert.deepEqual(timelineDragRange('select',range,full,11000,11000),[10999,11000]);
+});
+
+test("timeline date headings follow local day changes and distinguish repeated DST times",()=>{
+  const ticks=(from,to)=>timelineTickLabels([Date.parse(from),Date.parse(to)],4);
+  const midnight=ticks('2026-09-25T05:50:00Z','2026-09-25T06:20:00Z');
+  assert.deepEqual(midnight.map(tick=>!!tick.date),[true,true,false,false]);
+  assert.notEqual(midnight[0].date,midnight[1].date);
+  const utcMidnight=ticks('2026-09-24T23:50:00Z','2026-09-25T00:20:00Z');
+  assert.deepEqual(utcMidnight.map(tick=>!!tick.date),[true,false,false,false]);
+  const newYear=ticks('2027-01-01T06:50:00Z','2027-01-01T07:20:00Z');
+  assert.deepEqual(newYear.map(tick=>!!tick.date),[true,true,false,false]);
+  const repeated=timelineTickLabels([Date.parse('2026-11-01T07:30:00Z'),Date.parse('2026-11-01T08:30:00Z')],3);
+  assert.deepEqual(repeated.map(tick=>!!tick.date),[true,false,false]);
+  assert.notEqual(repeated[0].time,repeated[2].time,'zone names distinguish the repeated local clock time');
+  assert.ok(midnight.every(tick=>tick.time&&Number.isFinite(tick.at)));
+});
+
 test("hierarchy frames open at parents and close after their last visible descendant", () => {
   const rows = [session("root", "1", 1), session("child", "1.1", 1), session("nested", "1.1.1")];
   assert.deepEqual(frames(rows), {
@@ -68,6 +101,22 @@ test("hierarchy frames open at parents and close after their last visible descen
   assert.deepEqual(siblings.b, { start: undefined, active: ["root"], ends: [] });
   assert.deepEqual(siblings.c.ends, [0]);
   assert.deepEqual(frames([session("x", "1"), session("y", "2")]), { x: { start: undefined, active: [], ends: [] }, y: { start: undefined, active: [], ends: [] } });
+});
+
+test("timeline tree branches connect visible parents and continue only toward remaining siblings", () => {
+  const rows = [session("root", "1", 2), session("a", "1.1", 1), session("aa", "1.1.1"), session("b", "1.10", 1), session("ba", "1.10.1"), session("other", "2")];
+  const branches = timelineSessionBranches(rows);
+  assert.equal(branches.get("root").children, true);
+  assert.equal(branches.get("root").parentDepth, undefined);
+  assert.deepEqual(branches.get("a"), {parentDepth:0,rails:[0],children:true});
+  assert.deepEqual(branches.get("aa"), {parentDepth:1,rails:[0],children:false});
+  assert.deepEqual(branches.get("b"), {parentDepth:0,rails:[],children:true});
+  assert.deepEqual(branches.get("ba"), {parentDepth:1,rails:[],children:false});
+  assert.deepEqual(branches.get("other"), {parentDepth:undefined,rails:[],children:false});
+  assert.equal(timelineSessionBranches(rows.filter(row=>row.id!=="aa")).get("a").children,false,"folded children do not leave dangling branches");
+  assert.equal(timelineSessionBranches(rows.slice(1,3)).get("a").parentDepth,undefined,"off-page parents do not invent a connection");
+  const linked = timelineSessionBranches([rows[0],{...session("linked","9.4"),parent_id:"root"}]);
+  assert.equal(linked.get("linked").parentDepth,0,"recorded ownership takes precedence over outline text");
 });
 
 
@@ -91,4 +140,18 @@ test("aborted session requests cannot extend the replacement execution's cursor 
   controller.abort();pages.reset();finish({next_cursor:"expired"});await assert.rejects(pending,{name:"AbortError"});
   const calls=[];await pages.load("scope",1,async cursor=>{calls.push(cursor);return {next_cursor:cursor?"":"fresh"};},new AbortController().signal);
   assert.deepEqual(calls,["","fresh"]);
+});
+
+
+test("saved Parallel activity routes use Timeline while retaining navigation and zoom", () => {
+  const state = { delegation_start: "100", delegation_end: "200", delegation_session: "child", delegation_collapsed: "parent", delegation_mode: "rank", delegation_sort: "cost", delegation_scope: "self", delegation_direction: "asc" };
+  const legacy = readDelegationRoute(new URLSearchParams({ ...state, explorer: "parallel" }));
+  const current = readDelegationRoute(new URLSearchParams({ ...state, explorer: "timeline" }));
+  assert.deepEqual(legacy, current);
+  assert.equal(legacy.tab, "timeline");
+  assert.deepEqual(legacy.range, [100, 200]);
+  assert.equal(legacy.selected, "child");
+  assert.deepEqual(legacy.collapsed, ["parent"]);
+  assert.equal(readDelegationRoute(new URLSearchParams()).tab, "table");
+  assert.equal(readDelegationRoute(new URLSearchParams({ explorer: "unknown" })).tab, "table");
 });
