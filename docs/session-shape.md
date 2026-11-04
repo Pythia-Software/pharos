@@ -224,6 +224,61 @@ See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 AgentsView's penalty-from-100 health grade is deliberately not adopted.
 
+## The dashboard
+
+Analyze → Session Shape (`?mode=dashboards&topic=session_shape`) opens on
+sessions by length band as weekly shares. It has no headline number and no
+grade, colours no value as good or bad, and shows each rate's sample size
+beside it. The note's Definitions button scrolls to the definitions at the
+foot of the page.
+
+The chart above is the dashboard's only chart: its view, measure, breakdown
+and unit controls reach every band, distribution and rate. Starting points
+for the common views are cards (below).
+
+**Forensics.**
+
+- *Signals against your own range* compares the seven days ending at the
+  dashboard's end with the lowest and highest weekly value of the eight
+  weeks before. It applies the dashboard's filters but not its dates.
+  - A value inside the range reads "No detectable change".
+  - A value outside reads "Above your range" or "Below your range", in bold.
+    There is no colour.
+  - Fewer than four weeks with evidence reads "Not enough history".
+  - A week without the evidence a signal needs is "Not enough evidence",
+    never zero.
+  - Each row gives its numerator and denominator and the sessions with
+    evidence.
+- *Sessions to read* lists the sessions where a signal fired, most first, for
+  all signals or one (`session_signal` in the URL). Each links to the
+  reader.
+
+The main chart's catalog is described in
+[dashboard analysis](dashboard-analysis.md#the-catalogs).
+
+**Cards.** The Card Library's Session Shape category
+(`session-shape-card-recipes.ts`) has thirteen cards, each opening the
+dashboard on the state its cover draws. Automated sessions are most of
+them, so most cards count only the sessions a person typed in
+(`archetype != automated`), which arrives as a dashboard filter.
+
+- Usage: where sessions come from (by harness), your sessions by kind each
+  day, how long your sessions are (length band shares), and where your
+  active hours go (by repository).
+- Shape: active time by session kind, turn cycle and autonomy by provider,
+  each a box on a log axis, and peak context by model.
+- Failures: failure rate by model (synthetic turns left out) and by session
+  kind, and the failure rate over time.
+- Verified handbacks by repository, and when you start sessions (weekday).
+
+A log axis cannot place zero, so the active time and autonomy cards leave
+out sessions with none. Steering load has no card: correction cues are
+rare enough that nearly every group reads 0%.
+
+The dashboard counts each session or root conversation as a group, so
+`session_shape` queries get the same 100,000-group budget as `usage`
+(`queryV3Dataset`).
+
 ## Related dashboards
 
 Session shape answers these questions; the dashboards below already answer

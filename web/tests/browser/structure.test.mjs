@@ -362,6 +362,7 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  { name: "Analyze workspace session shape dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=session_shape", ready: `.usage-session-shape-dashboard ${overTimeReady}` },
   // A card's relative range, replaced by custom dates and times in the
   // dashboard's inline range picker.
   { name: "Dashboard custom date and time range", url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens",

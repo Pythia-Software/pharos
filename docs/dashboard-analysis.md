@@ -685,6 +685,7 @@ around it. Its default view is the one it always opened on.
 | Human Words | `writing_messages`: one classified user message | conversation; work | `typed`, `words` | `sent_at` (timestamp) | Over time |
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
+| Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp) | Over time: sessions by length band, weekly shares |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
@@ -817,6 +818,22 @@ around it. Its default view is the one it always opened on.
   and `gap_minutes` out of the dashboard's filters. A link may open the
   ribbon with settings it has not saved; the views then follow the saved
   ones and say so.
+- **Session Shape** (`session-shape-analysis-catalog.ts`). Sessions, active
+  hours, messages, typed messages, tool calls, and the per-session values
+  (active time, turn cycle, peak context share, autonomy) as pooled ratios of
+  a sum over the count of sessions that have the value, so Distribution
+  draws the sessions themselves. Every rate (failure rate, steering load,
+  one-shot edit turns, verified handbacks) pools its parts over the sessions
+  whose coverage flag (`has_tool_data`, `has_authorship`,
+  `has_context_window`) says the evidence was there; that `where` is the
+  rate's population. Each forensic signal is a summed measure. Breakdowns
+  are the four bands, archetype and the origin fields. The root-conversation
+  unit has no breakdowns, since a root and its delegated runs can differ in
+  every one. Its own panels (`session-shape-panels.tsx`, logic in
+  `session-shape-model.ts`) read the dashboard's filters: the signal table,
+  Sessions to read and the definitions. Its common views are Card Library
+  cards. See
+  [Session shape](session-shape.md#the-dashboard).
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).

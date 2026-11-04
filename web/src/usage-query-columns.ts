@@ -21,6 +21,7 @@ export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
   rhythm: [source(["conversation_id", "started_at"])],
   agent_events: [source([...conversation, "message_id"])],
   agent_event_messages: [source([...conversation, "message_id"])],
+  session_shape: [source(conversation)],
 };
 export const usageDrilldownField = (kind: UsageDrilldown) => `usage_drill_${kind}`;
 

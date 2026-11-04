@@ -596,6 +596,7 @@ const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
   tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
   agent_experience: { catalog: true },
+  session_shape: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
 };

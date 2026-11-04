@@ -23,8 +23,10 @@ var queryV3MaxRows = querytable.MaxLimit
 func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
 	groups := 10_000
 	// Usage has one compact fact per execution/day/model. The built-in Work
-	// preset must cover a library with more than 10,000 workspaces.
-	if schema.Name == "pharos_usage" {
+	// preset must cover a library with more than 10,000 workspaces. Session
+	// shape has one compact row per session, and its dashboard counts each
+	// session or root conversation, a group per conversation.
+	if schema.Name == "pharos_usage" || schema.Name == "pharos_session_shape" {
 		groups = 100_000
 	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",
