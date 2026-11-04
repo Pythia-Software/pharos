@@ -10,7 +10,7 @@ import { trendQuery } from "../../../src/dashboard-trend-model";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
-import { archetypeMix, binClauses, binEdgeLabel, binLabel, binPosition, dayTotals, durationEdges, formatSeconds, formatSignal, nearestRankOffset, signalDefinitions, signalParts, signalRows, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
+import { archetypeMix, mixFirstClauses, mixOther, mixRepositoryClauses, mixShownRepositories, readPercentiles, binClauses, binEdgeLabel, binLabel, binPosition, dayTotals, durationEdges, formatSeconds, formatSignal, nearestRankOffset, signalDefinitions, signalParts, signalRows, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
 import { viewFields } from "../../../src/view-contract";
 
 const field = name => document.fields.find(item => item.name === name);
@@ -95,11 +95,40 @@ test("active-time bins count each session once and place the median and p90 with
   assert.equal(binPosition(durationEdges, 1e9), durationEdges.length);
 });
 
-test("the archetype mix shares each repository's own sessions and folds the rest into Other", () => {
-  const buckets = [{ keys: ["pharos", "quick"], value: 6 }, { keys: ["pharos", "deep"], value: 2 }, { keys: [null, "automated"], value: 3 }, { keys: ["a", "quick"], value: 1 }, { keys: ["b", "standard"], value: 1 }];
-  const rows = archetypeMix(buckets, 3);
-  assert.deepEqual(rows.map(row => [row.key, row.total]), [["pharos", 8], ["", 3], ["\u0000other", 2]]);
-  assert.deepEqual(rows[2].counts, { quick: 1, standard: 1 });
+test("the archetype mix reads every session exactly however many repositories there are, folding the rest into Other", () => {
+  // Twelve repositories: more than are shown, and their archetype pairs more
+  // than one grouped request returns whole.
+  const rows = [];
+  for (let repository = 0; repository < 12; repository++) for (let index = 0; index <= repository; index++)
+    rows.push(session(`r${repository}-${index}`, { repository_name: repository === 11 ? null : `repo-${repository}`, archetype: index % 2 ? "quick" : "deep" }));
+  const run = clauses => core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, aggregations: clauses }, schemas.session_shape, { now }).metrics;
+  const [totals, repositories] = run(mixFirstClauses());
+  const shown = mixShownRepositories(repositories);
+  assert.equal(shown.folded, true);
+  assert.deepEqual(shown.repositories, ["", "repo-10", "repo-9", "repo-8", "repo-7", "repo-6", "repo-5", "repo-4", "repo-3"], "the largest first, one fewer so the last row is Other");
+  const mix = archetypeMix(totals.buckets, shown.repositories, run(mixRepositoryClauses(shown.repositories)).map(metric => metric.buckets), shown.folded);
+  assert.deepEqual(mix.map(row => [row.key, row.total]), [["", 12], ["repo-10", 11], ["repo-9", 10], ["repo-8", 9], ["repo-7", 8], ["repo-6", 7], ["repo-5", 6], ["repo-4", 5], ["repo-3", 4], [mixOther, 6]]);
+  assert.deepEqual(mix.at(-1).counts, { deep: 4, quick: 2 }, "Other is repo-0 to repo-2: every session counted once");
+  assert.equal(mix.reduce((sum, row) => sum + row.total, 0), rows.length);
+  // Ten or fewer repositories are all shown, with no Other.
+  const few = mixShownRepositories({ buckets: [{ keys: ["a"], value: 2 }, { keys: [null], value: 1 }], groupCount: 2 });
+  assert.deepEqual([few.repositories, few.folded], [["a", ""], false]);
+  assert.deepEqual(archetypeMix([{ keys: ["quick"], value: 3 }], few.repositories, [[{ keys: ["quick"], value: 2 }], [{ keys: ["quick"], value: 1 }]], false).map(row => row.key), ["a", ""]);
+});
+
+test("percentiles read again when sessions change between requests, and a missing rank is no value", async () => {
+  // The count changes once between the total and the ranks, then holds.
+  const totals = [10, 11, 11, 11];
+  let call = 0;
+  const reads = [];
+  const read = async offset => { const total = totals[Math.min(call++, totals.length - 1)]; reads.push([offset, total]); return { value: offset * 10, total }; };
+  const first = await readPercentiles(read, [0.5, 0.9]);
+  assert.deepEqual(first, { n: 11, values: [50, 90] });
+  // A rank past the rows that remain returns no value rather than throwing.
+  assert.deepEqual(await readPercentiles(async offset => ({ value: offset ? null : 1, total: 4 }), [0.5]), { n: 4, values: [null] });
+  // Sessions that never settle are an error the panel shows.
+  let n = 0;
+  await assert.rejects(readPercentiles(async () => ({ value: 1, total: ++n }), [0.5]), /changed while they were read/);
 });
 
 test("the signal table compares the last seven days with the eight weeks before and says no detectable change inside them", () => {
