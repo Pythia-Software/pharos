@@ -87,7 +87,7 @@ func (settings LabelerSettings) labelerProblem() string {
 // postLabelsSettings persists what Settings chose for the labeler (enabled,
 // threads, agent_events_threads; any of them) alongside the library's other
 // settings, and applies it to the running service without a restart. Threads
-// apply to the next run: a running one keeps its workers.
+// are a target that active runs check every two minutes.
 func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	threads := map[string]int{}
 	for _, key := range []string{"threads", "agent_events_threads"} {
