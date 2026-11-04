@@ -1,6 +1,6 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { resultLabel, sourceNames, syncTables, runTables } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
 import { applyQuery, EMPTY_QUERY } from "@pythia-software/query-table-core";
 import { test } from "node:test";
@@ -178,6 +178,20 @@ test('run history queries use measured values across the entire retained history
   assert.equal(history.rows[5].cpu_seconds, 5);
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'finished_at', op: '>=', value: new Date(reference - 60000).toISOString() }] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id).sort(), ['run-0', 'run-1']);
+});
+
+test('work history queries include analyses and backups alongside indexing', () => {
+  const operations = [
+    { id: 'index', label: 'Index changes', kind: 'index.changes.manual', state: 'succeeded', started_at: new Date(reference - 20000).toISOString(), ended_at: new Date(reference).toISOString() },
+    { id: 'analysis', label: 'Update findings', kind: 'analysis.findings', state: 'succeeded', started_at: new Date(reference - 120000).toISOString(), ended_at: new Date(reference - 60000).toISOString() },
+    { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
+  ];
+  const history = operationHistoryTable(operations);
+  assert.deepEqual(history.rows.map(row => row.work), ['Index changes', 'Update findings', 'Back up']);
+  const result = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'seconds', op: '>=', value: 60 }], orderBy: [{ field: 'seconds', dir: 'desc' }] }, history.schema);
+  assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
+  assert.equal(history.rows[2].result, 'Failed');
+  assert.equal(history.rows[2].error, 'Drive unavailable');
 });
 
 test('run results distinguish postponed verification from errors and indexing failures', () => {

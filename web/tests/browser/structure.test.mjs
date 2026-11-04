@@ -804,6 +804,38 @@ test("Background Processing items drag to another schedule for a week", { skip }
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Run Findings now');
 });
 
+test("Background Processing shares the busy switch across Hourly and Daily and shows work history", { skip }, async t => {
+  let holdWhenBusy = true;
+  const { page, calls, settled, shot } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row', api: {
+    'POST /api/background/settings': ({ body }) => {
+      holdWhenBusy = body.hold_when_busy;
+      return { ...defaultApi['GET /api/background'], settings: { ...defaultApi['GET /api/background'].settings, hold_when_busy: holdWhenBusy } };
+    },
+  } });
+  const schedule = page.locator('#backgroundSchedule');
+  assert.equal(await schedule.getByText('What it costs').count(), 0);
+  assert.equal(await schedule.getByText('Be considerate').count(), 0);
+  const hourly = schedule.locator('.bg-col[data-cadence="hourly"]').getByRole('switch', { name: 'Hold while busy' });
+  const daily = schedule.locator('.bg-col[data-cadence="daily"]').getByRole('switch', { name: 'Hold while busy' });
+  assert.ok(await hourly.isVisible());
+  assert.ok(await daily.isVisible());
+  assert.equal(await schedule.locator('.bg-mode').getByRole('switch').count(), 0);
+  await hourly.uncheck();
+  await settled();
+  assert.equal(await daily.isChecked(), false);
+  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings' && call.body?.hold_when_busy === false));
+  await daily.check();
+  await settled();
+  assert.equal(await hourly.isChecked(), true);
+  assert.equal(calls.filter(call => call.method === 'POST' && call.path === '/api/background/settings' && 'hold_when_busy' in call.body).length, 2);
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
+  assert.equal(await page.getByLabel('Last run cost').count(), 0);
+  await shot('background-processing');
+  await history.scrollIntoViewIfNeeded();
+  await shot('work-history');
+});
+
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
   const bookmarks = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
   const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': bookmarks } });

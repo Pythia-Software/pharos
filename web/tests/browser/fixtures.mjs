@@ -638,6 +638,11 @@ export const defaultApi = {
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
   "GET /api/sync/status": syncStatus,
+  "GET /api/operations": { journal: { recent: [
+    { id: "op-index-history", root_id: "op-index-history", kind: "index.changes.manual", label: "Index changes", trigger: "user", process: "service", state: "succeeded", started_at: iso(145000), updated_at: iso(120000), ended_at: iso(120000), legacy_ref: "run-0" },
+    { id: "op-findings-history", root_id: "op-findings-history", kind: "analysis.findings", label: "Update findings", trigger: "schedule", process: "service", state: "succeeded", started_at: iso(360000), updated_at: iso(300000), ended_at: iso(300000) },
+    { id: "op-backup-history", root_id: "op-backup-history", kind: "backup.local", label: "Back up", trigger: "user", process: "service", state: "failed", error: "Destination unavailable", started_at: iso(600000), updated_at: iso(540000), ended_at: iso(540000) },
+  ] } },
   "GET /api/sync/issues": { issues: [] },
   "GET /api/sync/settings": syncSettings,
   "GET /api/sync/history": { history: syncHistory },
