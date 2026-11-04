@@ -32,6 +32,7 @@ export const usageDatasets = {
   agent_event_messages: { label: "Messages checked for agent events", description: "Agent replies and thinking blocks checked for events, with matching keywords and classifications.", field: "title", searchLabel: "Agent Event Conversation Titles" },
   session_shape: { label: "Agent sessions", description: "One row per agent session: its length, active time, tool calls and autonomy, and the forensic signals that fired.", field: "title", searchLabel: "Session Titles" },
   outcomes: { label: "Workspace outcomes", description: "One row per Library workspace: its outcome, the evidence that decided it, its cost and what it changed.", field: "title", searchLabel: "Workspace Titles" },
+  branch_usage: { label: "Spend by branch", description: "Sessions' priced usage in Git repositories, per branch, attributed turn by turn when a session switches branches.", field: "title", searchLabel: "Session Titles" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 
@@ -61,6 +62,7 @@ export const engineUsageTopics = {
   carbon: { label: "Carbon Impact", description: "Estimated electricity and emissions, with explicit assumptions." },
   agent_event_rates: { label: "Agent Events", description: "How often do agents run into each kind of event? Rates per message, turn or conversation the event pass read, by kind, model and effort, who prompted, prompt length, repository and more." },
   outcomes: { label: "Outcomes", description: "What became of agents' work, and what did it cost? Workspaces by outcome, rework, cost per kept change and evidence coverage, with or without Git." },
+  branches: { label: "Spend by Branch", description: "Which branches did agents spend on? Cost per branch in Git repositories, turn by turn, with how much of it has a recorded branch." },
   agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
   session_shape: { label: "Session Shape", description: "What does a typical session look like, and which went badly? Session length, active time, tool calls, autonomy and turn cycles, and forensic signals against your own history." },
 } as const;
@@ -75,13 +77,13 @@ export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   messages: "human",
   people_message_labels:"labels", message_labels:"labels",
   compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
-  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "work_hours", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", agent_event_rates: "agent_event_rates", session_shape: "session_shape", outcomes: "outcomes",
+  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "work_hours", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", agent_event_rates: "agent_event_rates", session_shape: "session_shape", outcomes: "outcomes", branch_usage: "branches",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   scatter: "scatter",
   compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
-  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", work_hours: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", agent_event_rates: "agent_event_rates", session_shape: "session_shape", outcomes: "outcomes",
+  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", work_hours: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", agent_event_rates: "agent_event_rates", session_shape: "session_shape", outcomes: "outcomes", branches: "branch_usage",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
@@ -95,7 +97,7 @@ const timeFields: Record<UsageDataset, string[]> = {
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
   mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"], rhythm: ["started_at", "day", "hour_of_day", "week", "month"],
-  agent_events: ["occurred_at", "day", "week", "month"], agent_event_messages: ["occurred_at", "day", "week", "month"], agent_event_rates: ["occurred_at", "day", "week", "month"], session_shape: ["started_at", "day", "week", "month"], outcomes: ["started_at"],
+  agent_events: ["occurred_at", "day", "week", "month"], agent_event_messages: ["occurred_at", "day", "week", "month"], agent_event_rates: ["occurred_at", "day", "week", "month"], session_shape: ["started_at", "day", "week", "month"], outcomes: ["started_at"], branch_usage: ["usage_at"],
 };
 const builtWith: Partial<Record<UsageDataset, string[]>> = { parallelism: ["counting", "gap_minutes"] };
 const termFields = (term: WhereTerm): string[] => predicatesOf(term).map(clause => clause.field);

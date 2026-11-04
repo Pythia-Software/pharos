@@ -24,7 +24,7 @@ import (
 // projectDatasets are the query tables that carry project_name.
 var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_messages", "conversation_activity", "skill_usages",
 	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests", "messages", "compactions",
-	"agent_event_rates", "session_shape", "message_labels", "people_message_labels", "outcomes"}
+	"agent_event_rates", "session_shape", "message_labels", "people_message_labels", "outcomes", "branch_usage"}
 
 // projectDatasetsWithoutRows are the project datasets the fixtures' short
 // sessions leave empty: they need skills, or the agent event pass.
@@ -199,6 +199,11 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	}
 	if !maps.Equal(analyzed, outcomes) {
 		t.Fatalf("outcomes dataset %#v, library %#v", analyzed, outcomes)
+	}
+	// Spend by branch is for Git sessions only: without Git it has no rows,
+	// and none of them reads as a zero branch.
+	if rows := queryProjects(t, server, "branch_usage"); len(rows) != 0 {
+		t.Fatalf("spend by branch without Git: %#v", rows)
 	}
 	// Agents reach the dashboard and its values through the site tools.
 	link, _, err := callSiteMCP(context.Background(), library.catalog, "site_link", map[string]any{"page": "analyze/outcomes", "options": map[string]any{"view": "compare", "metric": "cost_per_kept_change", "split": "evidence_tier"}})

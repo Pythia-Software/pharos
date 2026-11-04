@@ -120,8 +120,9 @@ A **catalog** describes one dashboard topic: Tokens and Cost
 Pharos MCP (`mcp-analysis-catalog.ts`), Tool Time and Skills
 (`record-analysis-catalogs.ts`), Human Words (`human-analysis-catalog.ts`),
 Carbon (`carbon-analysis-catalog.ts`), Parallelism
-(`parallelism-analysis-catalog.ts`) and Outcomes
-(`outcomes-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
+(`parallelism-analysis-catalog.ts`), Outcomes
+(`outcomes-analysis-catalog.ts`) and Spend by Branch
+(`branch-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
 what each offers and why.
 
 - **Measures.** Each has a label and format, and a record-level aggregate:
@@ -930,6 +931,7 @@ around it. Its default view is the one it always opened on.
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
 | Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp), or `last_message_at` placed by last message | Over time: sessions by length band, weekly shares |
 | Outcomes | `outcomes`: one Library workspace, at its start | none | `cost`, `tokens`, `files_changed`, lines | `started_at` (timestamp) | Over time |
+| Spend by Branch | `branch_usage`: one session's usage on one branch, with one model, on one local day | none | `cost`, `tokens` | `usage_at` (timestamp) | Compare |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
@@ -1102,6 +1104,13 @@ around it. Its default view is the one it always opened on.
   panels follow the chart: rework rate by project, cost per kept change by
   main model, and how many sessions reached each evidence tier. See
   [projects and outcomes](projects-and-outcomes.md#analyze--outcomes).
+- **Spend by Branch** (`branch-analysis-catalog.ts`). Cost, tokens and
+  distinct sessions, by branch, coverage, project, provider, model, harness
+  and whether the branch was recorded per turn or per session. Branch and
+  how it was recorded imply the population "on a branch". The summary row
+  is the coverage split. A library with no usage in a repository shows a
+  note instead of the views. See
+  [spend by branch](projects-and-outcomes.md#spend-by-branch).
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).

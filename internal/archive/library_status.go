@@ -187,6 +187,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 			fmt.Fprintf(os.Stderr, "Commit links: %v\n", err)
 			failure = errors.Join(failure, err)
 		}
+		meter.report(activityWork{Phase: "attributing spend to branches"})
+		if err := s.Catalog.refreshBranchUsage(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Spend by branch: %v\n", err)
+			failure = errors.Join(failure, err)
+		}
 		meter.finish(ctx.Err() == nil)
 		meter.model = "analysis-v1:findings"
 		meter.report(activityWork{Phase: "refreshing findings"})
