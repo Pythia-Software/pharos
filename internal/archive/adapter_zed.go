@@ -688,9 +688,10 @@ func zedToolContent(content any) string {
 }
 
 // zedToolInput is a call's input, which a release tags with its type:
-// {"type": "json", "value": …}.
+// {"type": "json", "value": …}, or "text". Other input is as it was given,
+// which may itself have a type and a value.
 func zedToolInput(input any) any {
-	if value := mapValue(input); len(value) == 2 && value["type"] != nil {
+	if value := mapValue(input); len(value) == 2 && (value["type"] == "json" || value["type"] == "text") {
 		if inner, ok := value["value"]; ok {
 			return inner
 		}

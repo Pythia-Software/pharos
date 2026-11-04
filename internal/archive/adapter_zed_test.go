@@ -253,6 +253,10 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	if strings.Contains(unread.Text, "exit_code") {
 		t.Fatalf("a result without text = %s", unread.Text)
 	}
+	// Only Zed's own tags are taken off an input.
+	if input := jsonText(zedToolInput(map[string]any{"type": "integer", "value": 7})); input != `{"type":"integer","value":7}` {
+		t.Fatalf("an untagged input = %s", input)
+	}
 }
 
 // A thread's usage is its sum of every request, once.
