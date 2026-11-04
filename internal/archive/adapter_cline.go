@@ -22,7 +22,7 @@ import (
 type clineAdapter struct{ baseAdapter }
 
 // clineExtractor versions the parser; bump it when parsing changes.
-const clineExtractor = "cline-v1"
+const clineExtractor = "cline-v2"
 
 func (a *clineAdapter) partExtractor() string { return clineExtractor }
 
@@ -342,8 +342,17 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 	}
 	conversation := ConversationRecord{NativeID: sessionID, Provider: "cline", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cline",
 		HarnessVersionFirst: version, HarnessVersionLast: version, Model: model, StartedAt: started, EndedAt: ended, Messages: messages}
+	// Cline's CLI and its editor extensions share this folder; the client
+	// that ran a session is its channel.
+	context := map[string]any{}
+	if client := firstString(metadata["client_name"]); client != "" {
+		context["source"] = client
+	}
 	if provider := firstString(manifest["provider"]); provider != "" {
-		conversation.NativeContext = map[string]any{"model_provider": provider}
+		context["model_provider"] = provider
+	}
+	if len(context) > 0 {
+		conversation.NativeContext = context
 	}
 	return &WorkspaceRecord{SourceID: sessionID, SourceKind: "cline", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended,
 		Location: cwd, Repository: a.repository(cwd, firstString(mapValueDefault(meta["git"])["url"])), Metadata: metadata, Conversations: []ConversationRecord{conversation}}

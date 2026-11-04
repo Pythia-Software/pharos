@@ -112,6 +112,32 @@ func TestClineSessionKeepsItsTurnsToolsAndUsage(t *testing.T) {
 	}
 }
 
+// Cline's CLI and its editor extensions share its folder; a session's
+// channel is the client that ran it.
+func TestClineChannelIsItsClient(t *testing.T) {
+	for client, want := range map[string]string{"cli": "cli", "vscode": "ide"} {
+		root := clineFixture(t)
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".json") {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err == nil {
+				err = os.WriteFile(path, []byte(strings.ReplaceAll(string(data), `"source":"cli"`, `"source":"`+client+`"`)), 0o644)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := testCatalog(t)
+		ingestSource(t, c, SourceConfig{Name: "cline", Kind: "cline", Path: root, Account: "local", Enabled: true})
+		if n := countRows(t, c, `SELECT COUNT(*) FROM origin_observations o JOIN conversations v ON v.id=o.conversation_id WHERE v.native_id=? AND o.channel=?`, clineSessionID, want); n != 1 {
+			t.Fatalf("a session %s ran has no %s channel", client, want)
+		}
+	}
+}
+
 func TestClineUsageCountsEachRequestOnce(t *testing.T) {
 	c, _ := testCatalog(t)
 	ingestSource(t, c, SourceConfig{Name: "cline", Kind: "cline", Path: clineFixture(t), Account: "local", Enabled: true})

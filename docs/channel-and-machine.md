@@ -131,6 +131,12 @@ claims of equal authority produce a conflict, not whichever source indexed
 last. An SDK entrypoint or headless process by itself proves a runtime, not
 who started it. A bare `source_kind=codex` or `harness=codex` does not prove CLI.
 New unrecognized markers remain unknown until their meaning is established.
+A harness whose own store only one client writes proves that client: the
+Copilot CLI's and the Cursor CLI's sessions are CLI, and Cursor's, Zed's and VS
+Code Copilot's are IDE. Cline's CLI and its editor extensions share one folder,
+so a Cline session's channel is the client its manifest names (`cli`, or
+`vscode` or `jetbrains` for IDE). OpenCode's terminal and desktop apps share
+its database and record neither, so OpenCode's channel stays unknown.
 Do not infer the channel from transcript prose mentioning an app or a familiar
 working-directory path.
 

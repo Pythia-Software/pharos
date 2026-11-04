@@ -123,6 +123,11 @@ func TestOpenCodeSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 	if main.NativeID != "ses_root" || main.Provider != "opencode" || main.Harness != "opencode" || main.HarnessVersionLast != "2.2.5" || main.Model != "big-pickle" {
 		t.Fatalf("main = %+v", main)
 	}
+	// OpenCode's terminal and desktop apps share its database and record
+	// neither.
+	if channel, _ := harnessChannel(main.Harness, session.SourceKind); channel != "" {
+		t.Fatalf("channel = %q", channel)
+	}
 	if review.NativeID != "ses_child" || review.ParentNativeID != "ses_root" || review.AgentDepth != 1 || review.AgentPath != "explore" {
 		t.Fatalf("subagent = %+v", review)
 	}

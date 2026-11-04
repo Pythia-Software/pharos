@@ -112,6 +112,9 @@ func TestCopilotSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 	if main.NativeID != "sess-1" || main.Provider != "copilot" || main.Harness != "copilot-cli" || main.HarnessVersionLast != "1.0.105" || main.Model != "gpt-6-luna" || main.Effort != "medium" {
 		t.Fatalf("main = %+v", main)
 	}
+	if channel, _ := harnessChannel(main.Harness, "copilot"); channel != "cli" {
+		t.Fatalf("channel = %q", channel)
+	}
 	if review.NativeID != "agent-1" || review.ParentNativeID != "sess-1" || review.AgentDepth != 1 || review.AgentNickname != "app-review" {
 		t.Fatalf("subagent = %+v", review)
 	}
