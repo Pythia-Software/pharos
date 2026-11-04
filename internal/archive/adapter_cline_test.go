@@ -137,6 +137,24 @@ func TestClineUsageCountsEachRequestOnce(t *testing.T) {
 	if strings.Join(got, " ") != "c1=40 c2=30 c3=30" {
 		t.Fatalf("output tokens per call: %v", got)
 	}
+	// Cline runs commands as a list, each its own command line.
+	commands, err := c.DB.Query(`SELECT call_id, tool_category, COALESCE(program,''), command_count FROM tool_calls WHERE provider='cline' ORDER BY call_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer commands.Close()
+	got = got[:0]
+	for commands.Next() {
+		var id, category, program string
+		var count int
+		if err := commands.Scan(&id, &category, &program, &count); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s=%s:%s:%d", id, category, program, count))
+	}
+	if strings.Join(got, " ") != "c1=command:ls:1 c2=command:wc:1 c3=command:cat:1" {
+		t.Fatalf("commands per call: %v", got)
+	}
 }
 
 // A messages file without its list, as one cut short or from another

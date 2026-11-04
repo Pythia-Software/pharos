@@ -89,13 +89,13 @@ var (
 	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
 	blockSuffixPattern    = regexp.MustCompile(`(:(reasoning-)?block:\d+|:usage)$`)
 	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
-	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
+	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true, "run_commands": true}
 	toolCategoryByName    = map[string]string{}
 	toolCategoryEntries   = map[string][]string{
-		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec"},
+		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec", "run_commands"},
 		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item"},
-		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name"},
-		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content"},
+		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name", "search_codebase"},
+		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content", "editor"},
 		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content"},
 		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents"},
 		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree", "manage_task"},
@@ -660,6 +660,18 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 		}
 	}
 	lowerName := strings.ToLower(call.ToolName)
+	if len(lines) == 0 && shellToolNames[lowerName] {
+		// Cline runs a list of command lines in one call.
+		listed, _ := mapValueDefault(input)["commands"].([]any)
+		for _, command := range listed {
+			if text := firstString(command); text != "" {
+				lines = append(lines, struct {
+					text               string
+					exitCode, duration *int64
+				}{text: text})
+			}
+		}
+	}
 	if len(lines) == 0 && shellToolNames[lowerName] {
 		if text := shellCommandText(input); text != "" {
 			lines = append(lines, struct {
