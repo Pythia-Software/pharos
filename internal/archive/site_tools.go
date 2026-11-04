@@ -523,7 +523,7 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 	ctx, cancel := context.WithTimeout(parent, siteValuesDeadline)
 	defer cancel()
 	slow := fmt.Sprintf("Counting this field's values would take longer than %s on this library, so none are listed; filter with contains instead.", siteValuesDeadline)
-	if table, ok := sqlDatasetFor(dataset); ok {
+	if table, ok := c.sqlDatasetFor(dataset); ok {
 		document, err := querySchemaDocument(dataset)
 		if err != nil {
 			return nil, err.Error()
@@ -645,6 +645,9 @@ func (site *siteMap) browseChart(node *siteNode) map[string]any {
 		"defaults": defaults, "items": items}
 	if len(dashboard.UnavailableViews) > 0 {
 		result["unavailable_views"] = dashboard.UnavailableViews
+	}
+	if len(dashboard.Series) > 0 {
+		result["series"] = dashboard.Series
 	}
 	if node.Settings != "" {
 		result["note"] = node.Settings

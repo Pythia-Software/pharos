@@ -1,13 +1,21 @@
 import { CursorPagination } from "./cursor-pagination";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
-import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createPortal } from "react-dom";
 import { preferences } from "./preferences";
 import { Icon } from "./icons";
-import { delegationRouteValues, readDelegationRoute, type DelegationRoute } from "./delegation-route";
+import { delegationRouteValues, delegationTabs, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
+import {RecursiveSessionRibbon} from "./label-session-ribbon";
+import {nativeTimelineLabels,useTimelineLabelSource,type NativeTimelineMessage,type TimelineLabelSource} from "./label-timeline-overlay";
+import type {Taxonomy} from "./label-trajectories-model";
+import {splitTimelineCallers} from "./timeline-caller-model";
+import {useTimelineColumns} from "./timeline-columns";
+import {timelineSessionBranches} from "./label-timeline-model";
+import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
+import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
 // reader-model.js loads before the bundle and also supplies turn ages.
 declare function relativeAge(value: number | null | undefined): string;
@@ -26,7 +34,7 @@ type Reference = {
   provider: string;
   message_id?: string;
 };
-type Session = {
+export type Session = {
   id: string;
   conversation_id: string;
   workspace_id: string;
@@ -54,7 +62,7 @@ type Session = {
   self: Record<string, Metric>;
   all: Record<string, Metric>;
 };
-type Analysis = {
+export type Analysis = {
   snapshot: string;
   rows: Session[];
   ancestors: Session[];
@@ -82,6 +90,9 @@ type Mark = Span & {
   error: boolean;
   tool_id?: string;
   message_id?: string;
+  preview?: string;
+  preview_truncated?: boolean;
+  status?: string;
   name: string;
 };
 type Lane = {
@@ -90,15 +101,21 @@ type Lane = {
   model_inferred: Span[];
   episodes: Span[];
   truncated: boolean;
+  messages?: NativeTimelineMessage[];
+  messages_truncated?: boolean;
+  labels_pending?: boolean;
 };
-type Activity = Span & { snapshot: string; lanes: Lane[]; inference: string };
+export type Activity = Span & { snapshot: string; lanes: Lane[]; inference: string; taxonomy?: Taxonomy };
 type Props = {
   workspace: string;
   conversation: string;
   contextHost: HTMLElement | null;
   headingHost?: HTMLElement | null;
   statsHost?: HTMLElement | null;
+  readerHost?: HTMLElement | null;
   compact?: boolean;
+  splitReader?: boolean;
+  openOverview?: () => void;
   openConversation: (id: string, message?: string, session?: string) => Promise<void>;
   // Reports whether the workspace's sessions form a hierarchy: more than one
   // session, or one linked to a parent or child elsewhere.
@@ -182,8 +199,29 @@ const localDate = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
 });
+const localCutoffTime = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZoneName: "short",
+});
 export function localTime(value: number) {
   return localDateTime.format(new Date(value));
+}
+/** Date headings mark local-day boundaries, independently of UTC or DST. */
+export function timelineTickLabels(range: Range, count = 6) {
+  const width=range[1]-range[0];
+  const time=new Intl.DateTimeFormat(undefined,{
+    hour:"numeric",minute:"2-digit",
+    ...(width<=60000?{second:"2-digit" as const}:{}),
+    ...(new Date(range[0]).getTimezoneOffset()!==new Date(range[1]).getTimezoneOffset()?{timeZoneName:"short" as const}:{}),
+  });
+  let previous="";
+  return Array.from({length:count},(_,i)=>{
+    const at=range[0]+width*i/Math.max(1,count-1),value=new Date(at),day=`${value.getFullYear()}-${value.getMonth()}-${value.getDate()}`;
+    const date=day!==previous?localDate.format(value):null;previous=day;
+    return {at,date,time:time.format(value)};
+  });
 }
 function SessionAge({ start, prefix = "" }: { start: number | null; prefix?: string }) {
   const label = relativeAge(start);
@@ -194,6 +232,18 @@ export function clampRange(range: Range, full: Range): Range {
   const width = Math.max(1, Math.min(full[1] - full[0], range[1] - range[0]));
   const start = Math.max(full[0], Math.min(full[1] - width, range[0]));
   return [start, start + width];
+}
+export function timelinePointerTime(clientX:number,rect:{left:number;width:number},full:Range){
+  return full[0]+(clientX-rect.left)/Math.max(1,rect.width)*(full[1]-full[0]);
+}
+/** Panning preserves duration; selection and resize clamp endpoints independently. */
+export function timelineDragRange(mode:string,initial:Range,full:Range,anchor:number,current:number):Range{
+  const delta=current-anchor,limit=(at:number)=>Math.max(full[0],Math.min(full[1],at));
+  if(mode==='pan')return clampRange([initial[0]+delta,initial[1]+delta],full);
+  if(mode==='start')return [Math.min(initial[1]-1,limit(current<=full[0]?full[0]:initial[0]+delta)),initial[1]];
+  if(mode==='end')return [initial[0],Math.max(initial[0]+1,limit(current>=full[1]?full[1]:initial[1]+delta))];
+  const start=Math.min(limit(anchor),limit(current)),end=Math.max(limit(anchor),limit(current));
+  return [Math.min(start,full[1]-1),Math.min(full[1],Math.max(start+1,end))];
 }
 async function readJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal });
@@ -429,17 +479,19 @@ export function DelegationExplorer({
   contextHost,
   headingHost,
   statsHost,
+  readerHost,
   compact = false,
+  splitReader = false,
+  openOverview,
   openConversation,
   onHierarchy,
 }: Props) {
-  const contentID = useId();
   const onWorkPage=()=>location.pathname===`/work/${encodeURIComponent(workspace)}`||location.pathname.startsWith(`/work/${encodeURIComponent(workspace)}/`);
   const active=onWorkPage();
   const endpoint = `/api/work/${encodeURIComponent(workspace)}`;
   const initial = readDelegationRoute(new URLSearchParams(location.search));
-  const [open, setOpen] = useState(initial.open);
   const [tab, setTab] = useState<string>(initial.tab);
+  const [readerView, setReaderView] = useViewState("reader_view", "conversation", active);
   const [mode, setMode] = useState<DelegationRoute["mode"]>(initial.mode);
   const [sort, setSort] = useState(initial.sort),
     [scope, setScope] = useState(initial.scope),
@@ -473,12 +525,23 @@ export function DelegationExplorer({
   const [revision, setRevision] = useState(0),
     [selected, setSelected] = useState(initial.selected);
   const [range, setRange] = useState<Range | null>(null);
+  const single = !!data && data.session_count === 1 && !data.rows.some(n => n.context_only || n.parent_id || n.external_parent || n.external_child);
+  const timeline = single ? readerView === "timeline" : tab === "timeline";
+  useEffect(() => {
+    readerHost?.classList.toggle("conversation-timeline-active", single && timeline);
+    return () => readerHost?.classList.remove("conversation-timeline-active");
+  }, [readerHost, single, timeline]);
   useEffect(() => {
     const restore = () => {
-      const route = readDelegationRoute(new URLSearchParams(location.search));
+      const url = new URL(location.href);
+      const route = readDelegationRoute(url.searchParams);
+      if (onWorkPage() && url.searchParams.get("explorer") === "parallel") {
+        url.searchParams.set("explorer", route.tab);
+        history.replaceState(history.state, "", url);
+        window.dispatchEvent(new Event("pharos:uri-changed"));
+      }
       setSelected(route.selected);
       setTab(route.tab);
-      setOpen(route.open);
       setMode(route.mode);
       setSort(route.sort);
       setScope(route.scope);
@@ -487,6 +550,7 @@ export function DelegationExplorer({
       livePages.current.reset();
       setRange(route.range);
     };
+    restore();
     window.addEventListener("pharos:workspace-history", restore);
     return () => window.removeEventListener("pharos:workspace-history", restore);
   }, []);
@@ -497,7 +561,7 @@ export function DelegationExplorer({
     setLoading(true);
     setError("");
     const params = new URLSearchParams({
-      mode,
+      mode: tab === "table" ? mode : "hierarchy",
       sort,
       scope,
       direction,
@@ -549,6 +613,7 @@ export function DelegationExplorer({
     active,
     endpoint,
     conversation,
+    tab,
     mode,
     sort,
     scope,
@@ -606,23 +671,14 @@ export function DelegationExplorer({
     setDirection(active ? "asc" : "desc");
     resetPage();
   }
-  function toggleSessions() {
-    const opened = !open;
-    setOpen(opened);
-    const url = new URL(location.href);
-    if (opened) url.searchParams.set("explorer", tab);
-    else url.searchParams.delete("explorer");
-    if (opened) url.searchParams.delete("sessions");
-    else url.searchParams.set("sessions", "hidden");
-    if (url.href !== location.href) history.replaceState(null, "", url);
-  }
   function display(next: string) {
     setTab(next);
-    setOpen(true);
+    resetPage();
     const url = new URL(location.href);
     url.searchParams.set("explorer", next);
     url.searchParams.delete("sessions");
     history.replaceState(null, "", url);
+    window.dispatchEvent(new Event("pharos:uri-changed"));
   }
   function toggle(n: Session) {
     resetPage();
@@ -634,10 +690,10 @@ export function DelegationExplorer({
   }
   const rows = useMemo(() => {
     if (!data) return [];
-    return mode === "hierarchy"
+    return mode === "hierarchy" || tab !== "table"
       ? [...data.rows, ...data.ancestors].sort((a, b) => a.order - b.order)
       : data.rows;
-  }, [data, mode]);
+  }, [data, mode, tab]);
   const byID = useMemo(
     () => new Map([...rows, ...(data?.focus || [])].map((n) => [n.id, n])),
     [rows, data],
@@ -673,7 +729,7 @@ export function DelegationExplorer({
     if (window.pharosNavigate) window.pharosNavigate(target);
     else location.assign(target);
   }
-  const openNode = (n: Session, message?: string) => {
+  const openNode = (n: Session, message?: string, sourceConversation?: string) => {
     if (n.navigation) {
       openExternal(n.navigation);
       return;
@@ -684,7 +740,7 @@ export function DelegationExplorer({
     }
     setSelected(n.id);
     void openConversation(
-      n.conversation_id,
+      sourceConversation || n.conversation_id,
       message ||
         (n.parent_id &&
         byID.get(n.parent_id)?.conversation_id === n.conversation_id
@@ -848,33 +904,24 @@ export function DelegationExplorer({
       {context}
       {headingHost && createPortal(heading, headingHost)}
       {statsHost && createPortal(totals, statsHost)}
-      <section className="delegation-panel" aria-label="Workspace sessions">
+      <section className={`delegation-panel${single ? " delegation-single" : ""}`} aria-label={single ? "Conversation views" : "Workspace sessions"}>
         <div className="delegation-controls delegation-toolbar">
-          <button
-            type="button"
-            className="delegation-toggle"
-            aria-expanded={open}
-            aria-controls={contentID}
-            title={`${open ? "Hide" : "Show"} workspace sessions${data ? ` · ${data.session_count} execution sessions` : ""}`}
-            onClick={toggleSessions}
-          >
-            <Icon name={open ? "chevron-down" : "chevron-right"} />
-            Workspace Sessions
-          </button>
+          {!single && <span className="delegation-heading">Workspace Sessions</span>}
           <div
             className="delegation-tabs"
             role="tablist"
-            aria-label="Delegation view"
-            data-view={tab}
+            aria-label={single ? "Conversation view" : "Delegation view"}
+            style={{"--tab-count":2,"--tab-index":single ? (timeline ? 1 : 0) : delegationTabs.indexOf(tab as DelegationRoute["tab"])} as React.CSSProperties}
+            data-view={single ? readerView : tab}
           >
-            {["table", "parallel"].map((t) => (
+            {(single ? ["conversation", "timeline"] : delegationTabs).map((t, index, tabs) => (
               <button
                 type="button"
                 role="tab"
-                aria-selected={tab === t}
-                tabIndex={tab === t ? 0 : -1}
+                aria-selected={(single ? readerView : tab) === t}
+                tabIndex={(single ? readerView : tab) === t ? 0 : -1}
                 key={t}
-                onClick={() => display(t)}
+                onClick={() => single ? setReaderView(t) : display(t)}
                 onKeyDown={(event) => {
                   if (
                     !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
@@ -883,26 +930,16 @@ export function DelegationExplorer({
                   )
                     return;
                   event.preventDefault();
-                  const next =
-                    event.key === "Home"
-                      ? "table"
-                      : event.key === "End"
-                        ? "parallel"
-                        : t === "table"
-                          ? "parallel"
-                          : "table";
-                  display(next);
-                  const tabs = event.currentTarget.parentElement!;
-                  tabs
-                    .querySelectorAll<HTMLButtonElement>("button")
-                    [next === "table" ? 0 : 1].focus();
+                  const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+                  if (single) setReaderView(tabs[nextIndex]); else display(tabs[nextIndex]);
+                  event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>("button")[nextIndex].focus();
                 }}
               >
-                {t === "table" ? "Hierarchy & usage" : "Parallel activity"}
+                {t === "table" ? "Hierarchy & usage" : t === "conversation" ? "Conversation" : "Timeline"}
               </button>
             ))}
           </div>
-          {open && data && tab === "table" && !compact && (
+          {!single && data && tab === "table" && !compact && (
             <>
               <span className="delegation-controls-spacer" />
               <select
@@ -934,7 +971,7 @@ export function DelegationExplorer({
             </>
           )}
         </div>
-        <div className="delegation-body" id={contentID} hidden={!open}>
+        <div className="delegation-body" hidden={single && !timeline}>
           {error && (
             <div className="delegation-error" role="alert">
               {error}{" "}
@@ -948,9 +985,9 @@ export function DelegationExplorer({
               </button>
             </div>
           )}
-          {data && (
+          {data && (!single || timeline) && (
             <>
-              {tab === "table" && compact ? (
+              {!single && tab === "table" && compact ? (
                 <InboxSessions
                   rows={rows}
                   data={data}
@@ -974,7 +1011,7 @@ export function DelegationExplorer({
                     resetPage();
                   }}
                 />
-              ) : tab === "table" ? (
+              ) : !single && tab === "table" ? (
                 <>
                   <div className="delegation-table-size">
                     <div
@@ -989,7 +1026,7 @@ export function DelegationExplorer({
                                 onClick={showHierarchy}
                                 title="Show the session hierarchy"
                               >
-                                Execution session
+                                Session
                               </button>
                             </th>
                             {specs.length > 0 && (
@@ -1227,6 +1264,10 @@ export function DelegationExplorer({
                 </>
               ) : range && data.start != null && data.end != null ? (
                 <ParallelActivity
+                  timeline
+                  single={single}
+                  previewOnly={splitReader}
+                  openOverview={openOverview}
                   endpoint={endpoint}
                   data={data}
                   rows={rows}
@@ -1236,7 +1277,7 @@ export function DelegationExplorer({
                   collapsed={collapsed}
                   toggle={toggle}
                   selected={shownSession?.id || ""}
-                  openNode={openNode}
+                  openNode={(node, message, sourceConversation) => { if (single) setReaderView("conversation"); openNode(node, message, sourceConversation); }}
                 />
               ) : (
                 <p>No retained timestamps are available for a timeline.</p>
@@ -1275,7 +1316,7 @@ export function DelegationExplorer({
                   </button>
                 </div>
               )}
-              <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Metric definitions & evidence">
+              {!single && <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Metric definitions & evidence">
                 <p>
                   Self is one execution. Self + children includes distinct
                   ownership descendants. Workspace totals count each canonical
@@ -1294,7 +1335,7 @@ export function DelegationExplorer({
                     </React.Fragment>
                   ))}
                 </dl>
-              </ViewDisclosure>
+              </ViewDisclosure>}
             </>
           )}
           {!data && !error && <p>Loading session analysis…</p>}
@@ -1364,19 +1405,37 @@ function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direct
 }
 
 function TimelineOverview({
+  readOnly = false,
   full,
   range,
   density,
   preview,
   change,
+  pending = false,
+  label = "Whole workspace",
 }: {
   full: Range;
   range: Range;
   density: number[];
   preview: Range | null;
   change: (range: Range) => void;
+  pending?: boolean;
+  label?: string;
+  readOnly?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const cutoffs = useRef<HTMLOutputElement>(null);
+  const [sizes, setSizes] = useState({host:0,cutoffs:0});
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next={host:host.current?.clientWidth??0,cutoffs:cutoffs.current?.offsetWidth??0};
+      setSizes(previous=>previous.host===next.host&&previous.cutoffs===next.cutoffs?previous:next);
+    };
+    measure();const observer=new ResizeObserver(measure);
+    if(host.current)observer.observe(host.current);
+    if(cutoffs.current)observer.observe(cutoffs.current);
+    return()=>observer.disconnect();
+  },[]);
   const [draft, setDraft] = useState<Range | null>(null);
   const drag = useRef<{
     mode: string;
@@ -1384,60 +1443,61 @@ function TimelineOverview({
     initial: Range;
     pointer: number;
     draft: Range | null;
+    rect: DOMRect;
+    x: number;
   } | null>(null);
   const view = draft || preview || range,
     width = full[1] - full[0];
   const percentage = (time: number) => ((time - full[0]) / width) * 100;
+  const whole = view[0]===full[0]&&view[1]===full[1];
+  const cutoffLeft = Math.max(8,Math.min(sizes.host-sizes.cutoffs-8,percentage((view[0]+view[1])/2)/100*sizes.host-sizes.cutoffs/2));
+  const differentDays = new Date(view[0]).toDateString()!==new Date(view[1]).toDateString();
+  const cutoff = (time:number) => `${differentDays?localDate.format(new Date(time))+' · ':''}${localCutoffTime.format(new Date(time))}`;
   const maxDensity = Math.max(1, ...density);
-  function at(event: React.PointerEvent) {
-    const rect = host.current!.getBoundingClientRect();
-    return Math.max(
-      full[0],
-      Math.min(
-        full[1],
-        full[0] + ((event.clientX - rect.left) / rect.width) * width,
-      ),
-    );
-  }
   function down(event: React.PointerEvent) {
     if (event.button !== 0) return;
     if (drag.current) return;
     const mode =
       (event.target as HTMLElement).closest<HTMLElement>("[data-handle]")
         ?.dataset.handle || "select";
+    const rect=host.current!.getBoundingClientRect();
     drag.current = {
       mode,
-      at: at(event),
+      at: timelinePointerTime(event.clientX,rect,full),
       initial: range,
       pointer: event.pointerId,
       draft: null,
+      rect,
+      x:event.clientX,
     };
     host.current!.setPointerCapture(event.pointerId);
   }
   function move(event: React.PointerEvent) {
     const d = drag.current;
-    if (!d || d.pointer !== event.pointerId) return;
-    const now = at(event),
-      delta = now - d.at;
-    let next: Range;
-    if (d.mode === "pan") next = [d.initial[0] + delta, d.initial[1] + delta];
-    else if (d.mode === "start")
-      next = [Math.min(d.initial[0] + delta, d.initial[1] - 1), d.initial[1]];
-    else if (d.mode === "end")
-      next = [d.initial[0], Math.max(d.initial[1] + delta, d.initial[0] + 1)];
-    else next = [Math.min(d.at, now), Math.max(d.at + 1, now)];
-    d.draft = clampRange(next, full);
+    if (!d || d.pointer !== event.pointerId || !d.draft&&Math.abs(event.clientX-d.x)<4) return;
+    event.preventDefault();
+    d.draft = timelineDragRange(d.mode,d.initial,full,d.at,timelinePointerTime(event.clientX,d.rect,full));
     setDraft(d.draft);
   }
   function up(event: React.PointerEvent) {
-    if (drag.current?.pointer !== event.pointerId) return;
-    if (drag.current.draft) change(drag.current.draft);
+    const d=drag.current;
+    if (!d || d.pointer !== event.pointerId) return;
+    if(d.draft||Math.abs(event.clientX-d.x)>=4)change(timelineDragRange(d.mode,d.initial,full,d.at,timelinePointerTime(event.clientX,d.rect,full)));
     setDraft(null);
     drag.current = null;
     if (host.current?.hasPointerCapture(event.pointerId))
       host.current.releasePointerCapture(event.pointerId);
   }
+  function cancelDrag(){
+    const d=drag.current;drag.current=null;setDraft(null);
+    if(d&&host.current?.hasPointerCapture(d.pointer))host.current.releasePointerCapture(d.pointer);
+  }
+  useEffect(()=>{
+    const cancel=(event:KeyboardEvent)=>{if(event.key==='Escape'&&drag.current){event.preventDefault();cancelDrag();}};
+    window.addEventListener('keydown',cancel);return()=>window.removeEventListener('keydown',cancel);
+  },[]);
   function key(event: React.KeyboardEvent, handle: string) {
+    if(event.key==='Escape'){if(drag.current){event.preventDefault();cancelDrag();}return;}
     const step = (range[1] - range[0]) / (event.shiftKey ? 2 : 10);
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
@@ -1453,25 +1513,18 @@ function TimelineOverview({
     } else if (["ArrowLeft", "ArrowRight"].includes(event.key)) {
       event.preventDefault();
       const delta = event.key === "ArrowLeft" ? -step : step;
-      change(
-        clampRange(
-          handle === "start"
-            ? [Math.min(range[0] + delta, range[1] - 1), range[1]]
-            : handle === "end"
-              ? [range[0], Math.max(range[1] + delta, range[0] + 1)]
-              : [range[0] + delta, range[1] + delta],
-          full,
-        ),
-      );
+      const anchor=handle==='end'?range[1]:range[0];
+      change(timelineDragRange(handle,range,full,anchor,anchor+delta));
     }
   }
   return (
-    <div className="delegation-overview-wrap">
+    <div className="delegation-overview-wrap" ref={element=>{if(element)element.inert=readOnly;}}>
       <div className="delegation-overview-label">
-        <strong>Whole workspace</strong>
+        <strong>{whole?label:`Showing ${duration(view[1]-view[0])} of ${duration(width)}`}</strong>
         <small>
-          Retained event density · drag the window to pan, its edges to resize
+          {pending?"Loading this window…":"drag to zoom and pan"}
         </small>
+        <button type="button" className="delegation-overview-reset" onClick={()=>{cancelDrag();change(full);}}>Reset</button>
       </div>
       <div
         className="delegation-overview"
@@ -1480,10 +1533,9 @@ function TimelineOverview({
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
-        onPointerCancel={() => {
-          drag.current = null;
-          setDraft(null);
-        }}
+        onPointerCancel={cancelDrag}
+        onLostPointerCapture={cancelDrag}
+        onKeyDown={event=>{if(event.key==='Escape'&&drag.current){event.preventDefault();cancelDrag();}}}
         onDoubleClick={() => change(full)}
       >
         <div className="delegation-histogram">
@@ -1540,6 +1592,11 @@ function TimelineOverview({
             }}
           />
         </div>
+        <output ref={cutoffs} className="delegation-overview-cutoffs" aria-label="Selected timeline window" aria-live="off" hidden={whole} style={{left:cutoffLeft}}>
+          <time dateTime={new Date(view[0]).toISOString()} title={localTime(view[0])}>{cutoff(view[0])}</time>
+          <span aria-hidden="true">→</span>
+          <time dateTime={new Date(view[1]).toISOString()} title={localTime(view[1])}>{cutoff(view[1])}</time>
+        </output>
       </div>
       <div className="delegation-overview-bounds">
         <span>{localTime(full[0])}</span>
@@ -1549,7 +1606,7 @@ function TimelineOverview({
   );
 }
 
-function ParallelActivity({
+export function ParallelActivity({
   endpoint,
   data,
   rows,
@@ -1560,7 +1617,10 @@ function ParallelActivity({
   toggle,
   selected,
   openNode,
+  activityOverride,labelSource,prototype=false,timeline=false,single=false,previewOnly=false,openOverview,
 }: {
+  previewOnly?:boolean;openOverview?:()=>void;
+  activityOverride?:Activity;labelSource?:TimelineLabelSource;prototype?:boolean;timeline?:boolean;single?:boolean;
   endpoint: string;
   data: Analysis;
   rows: Session[];
@@ -1570,13 +1630,23 @@ function ParallelActivity({
   collapsed: Set<string>;
   toggle: (node: Session) => void;
   selected: string;
-  openNode: (node: Session, message?: string) => void;
+  openNode: (node: Session, message?: string, sourceConversation?: string) => void;
 }) {
+  const [labLabelMode,setLabelMode]=useViewState("label_timeline_labels","functions",prototype);
+  const labelMode=timeline?"detail":labLabelMode;
+  const snapshotLabels=useTimelineLabelSource(prototype&&labelMode!=="off",labelSource);
   const [activity, setActivity] = useState<Activity | null>(null),
     [error, setError] = useState("");
-  const [breadcrumbs, setBreadcrumbs] = useState<Range[]>([]);
+  const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,range[0],range[1]]);
+  const labelData=timeline?nativeLabels:snapshotLabels;
+  const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
+  const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
+  const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
+  const recursive=timeline||prototype&&labelMode!=="off";
   const [brush, setBrush] = useState<Range | null>(null);
-  const [expandedIDs, setExpandedIDs] = useViewState<string[]>("delegation_expanded", [],location.pathname.startsWith("/work/"));
+  const [workExpanded,setWorkExpanded]=useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/")&&!prototype);
+  const [labExpanded,setLabExpanded]=useViewState<string[]>("label_timeline_expanded",[],prototype);
+  const expandedIDs=prototype?labExpanded:workExpanded,setExpandedIDs=prototype?setLabExpanded:setWorkExpanded;
   const expanded = useMemo(() => new Set(expandedIDs), [expandedIDs]);
   const setExpanded = (change: (value: Set<string>) => Set<string>) => setExpandedIDs(previous => [...change(new Set(previous))].sort());
   const gesture = useRef<{
@@ -1594,20 +1664,28 @@ function ParallelActivity({
     mark: Mark;
     anchor: HTMLButtonElement;
   } | null>(null);
-  const [eventID,setEventID] = useViewState("delegation_event", "",location.pathname.startsWith("/work/"));
+  const [workEvent,setWorkEvent]=useViewState("delegation_event","",location.pathname.startsWith("/work/")&&!prototype);
+  const [labEvent,setLabEvent]=useViewState("label_timeline_event","",prototype);
+  const eventID=prototype?labEvent:workEvent,setEventID=prototype?setLabEvent:setWorkEvent;
   const closeMark = useCallback(() => {setMark(null);setEventID("");}, [setEventID]);
   const [pending, setPending] = useState(true);
   const track = useRef<HTMLDivElement>(null);
+  const clock = useRef<HTMLDivElement>(null);
   const [trackWidth, setTrackWidth] = useState(900);
+  const [clockWidth, setClockWidth] = useState(0);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const observer = new ResizeObserver(() => {
       clearTimeout(timer);
-      timer = setTimeout(() => setTrackWidth(track.current?.clientWidth || 900), 150);
+      timer = setTimeout(() => {
+        setTrackWidth(track.current?.clientWidth || 900);
+        setClockWidth(clock.current?.clientWidth || 0);
+      }, 150);
     });
     if (track.current) observer.observe(track.current);
+    if (clock.current) observer.observe(clock.current);
     return () => { clearTimeout(timer); observer.disconnect(); };
-  }, []);
+  }, [timeline,recursive]);
   // A page may carry extra ancestor context; lane requests remain bounded.
   const laneRows = useMemo(() => {
     const included = new Set(data.rows.map((n) => n.id));
@@ -1623,6 +1701,7 @@ function ParallelActivity({
     setBrush(null);
   }, [range]);
   useEffect(() => {
+    if(activityOverride){setActivity(activityOverride);setPending(false);return;}
     const controller = new AbortController();
     setPending(true);
     setError("");
@@ -1632,6 +1711,7 @@ function ParallelActivity({
       end: String(range[1]),
       sessions: ids,
       width: String(trackWidth),
+      ...(timeline ? {labels:"1"} : {}),
     });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal)
       .then(setActivity, (e) => {
@@ -1641,31 +1721,32 @@ function ParallelActivity({
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, ids, data.snapshot, range, trackWidth]);
+  }, [endpoint, ids, data.snapshot, range, trackWidth,activityOverride,timeline]);
   const visibleActivity =
     activity?.start === range[0] && activity?.end === range[1]
       ? activity
       : null;
+  const shownLaneRows=useMemo(()=>{
+    const active=rows.filter(node=>node.start!=null&&node.end!=null&&node.start<=range[1]&&node.end>=range[0]);
+    return laneRows.filter(node=>active.some(other=>other.id===node.id||other.outline.startsWith(`${node.outline}.`)));
+  },[rows,laneRows,range[0],range[1]]);
+  const sessionBranches=useMemo(()=>timelineSessionBranches(shownLaneRows),[shownLaneRows]);
+  const legend=useMemo(()=>timelineLegendWindow([
+    {id:`caller:${data.rows[0]?.workspace_id??endpoint}`,caller:true,messages:actors.caller,marks:visibleActivity?.lanes.flatMap(lane=>lane.marks)??[],neighbors:allMessages},
+    ...shownLaneRows.map(node=>({id:node.id,messages:actors.messages.get(node.id)??[],marks:visibleActivity?.lanes.find(lane=>lane.session===node.id)?.marks??[],neighbors:nativeLabels.messages.get(node.id)})),
+  ],range),[actors,visibleActivity,shownLaneRows,nativeLabels,allMessages,range[0],range[1]]);
+  const eventsExpanded=!previewOnly&&legend.populated.some(id=>timelineDisclosures[`delegation-labels:${id}:session`]);
+  const columns=useTimelineColumns(timeline,{eventsCollapsed:timeline&&!eventsExpanded});
   const width = range[1] - range[0];
   function change(next: Range) {
-    const clamped = clampRange(next, full);
-    if (clamped[0] > range[0] || clamped[1] < range[1])
-      setBreadcrumbs((old) =>
-        [
-          ...old.filter((r) => r[0] <= clamped[0] && r[1] >= clamped[1]),
-          range,
-        ].slice(-5),
-      );
-    setRange(clamped);
+    setRange(clampRange(next, full));
   }
   function brushDown(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || gesture.current) return;
     suppressClick.current = false;
     const rect = event.currentTarget.getBoundingClientRect();
     const capture = event.target as HTMLElement;
-    const at =
-      range[0] +
-      Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * width;
+    const at =timelinePointerTime(event.clientX,rect,range);
     gesture.current = {
       pointer: event.pointerId,
       capture,
@@ -1687,16 +1768,14 @@ function ParallelActivity({
     )
       return;
     event.preventDefault();
-    const now =
-      g.initial[0] +
-      Math.max(0, Math.min(1, (event.clientX - g.rect.left) / g.rect.width)) *
-        (g.initial[1] - g.initial[0]);
-    g.draft = clampRange([Math.min(g.at, now), Math.max(g.at, now)], g.initial);
+    const now =timelinePointerTime(event.clientX,g.rect,g.initial);
+    g.draft = timelineDragRange('select',g.initial,g.initial,g.at,now);
     setBrush(g.draft);
   }
   function finishBrush(event?: React.PointerEvent<HTMLDivElement>) {
     const g = gesture.current;
     if (!g || (event && g.pointer !== event.pointerId)) return;
+    if(event?.type==='pointerup'&&(g.draft||Math.abs(event.clientX-g.x)>=4))g.draft=timelineDragRange('select',g.initial,g.initial,g.at,timelinePointerTime(event.clientX,g.rect,g.initial));
     gesture.current = null;
     if (g.capture.hasPointerCapture(g.pointer))
       g.capture.releasePointerCapture(g.pointer);
@@ -1724,6 +1803,7 @@ function ParallelActivity({
     onPointerMove: brushMove,
     onPointerUp: finishBrush,
     onPointerCancel: finishBrush,
+    onLostPointerCapture:finishBrush,
   };
   function style(span: Span): React.CSSProperties {
     const left = Math.max(range[0], span.start),
@@ -1733,66 +1813,30 @@ function ParallelActivity({
       width: `${(Math.max(0, right - left) / width) * 100}%`,
     };
   }
-  const tickTime = new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    ...(width <= 60000 ? { second: "2-digit" as const } : {}),
-  });
-  const ticks = Array.from({ length: 6 }, (_, i) => range[0] + (width * i) / 5);
+  const ticks = timelineTickLabels(range,Math.max(2,Math.min(6,Math.floor((clockWidth||350)/100))));
   const lanes = new Map(visibleActivity?.lanes.map((l) => [l.session, l]));
+  const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
   return (
-    <div className="delegation-parallel" ref={track}>
+    <div className={`delegation-parallel ${previewOnly?"is-preview":""} ${recursive?"is-recursive":""} ${timeline?"is-timeline":""}`} ref={track} style={timeline?columns.style:undefined}>
+      {previewOnly?<button type="button" className="lt-preview-activate" aria-label="Open full-width timeline" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}><span>Open timeline to explore <Icon name="arrow-right"/></span></button>:null}
+      <div>
+      {prototype?<label className="lt-timeline-mode">Message labels<select data-view-field="label_timeline_labels" value={labelMode} onChange={e=>setLabelMode(e.target.value)}><option value="off">Off</option><option value="functions">General Labels</option><option value="detail">Specific labels</option></select></label>:null}
       <TimelineOverview
+        readOnly={previewOnly}
+        label={single ? "Whole conversation" : "Whole workspace"}
         full={full}
         range={range}
         density={data.density}
         preview={brush}
         change={change}
+        pending={pending}
       />
-      <div className="delegation-breadcrumbs">
-        <button
-          onClick={() => {
-            setBreadcrumbs([]);
-            setRange(full);
-          }}
-        >
-          Whole workspace · {duration(full[1] - full[0])}
-        </button>
-        {breadcrumbs
-          .filter(
-            (r) =>
-              r[0] <= range[0] &&
-              r[1] >= range[1] &&
-              r[1] - r[0] > width + 1 &&
-              (r[0] !== full[0] || r[1] !== full[1]),
-          )
-          .map((r, i) => (
-            <React.Fragment key={i}>
-              <span>›</span>
-              <button onClick={() => setRange(r)}>
-                {duration(r[1] - r[0])}
-              </button>
-            </React.Fragment>
-          ))}
-        <span>
-          › Viewing {duration(width)} · offset {duration(range[0] - full[0])} ·{" "}
-          {((full[1] - full[0]) / width).toFixed(1)}× zoom
-        </span>
-      </div>
-      <p className="delegation-window">
-        {brush ? "Selecting: " : ""}{localTime((brush || range)[0])} →{" "}
-        {localTime((brush || range)[1])}
-        {pending ? " · Loading this window…" : ""}
-        <span className="delegation-drag-hint">
-          Drag across the timeline to zoom
-        </span>
-      </p>
-      <div className="delegation-legend">
-        <span>
+      {timeline?<TimelineLegend messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error}/>:<div className="delegation-legend">
+        {!prototype&&!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred
-        </span>
-        {Object.entries(categories).map(([key, text]) => (
+        </span>:null}
+        {Object.entries(categories).filter(([key])=>!prototype||visibleActivity?.lanes.some(l=>l.marks.some(m=>m.category===key))).map(([key, text]) => (
           <span key={key}>
             <i className={key} />
             {text}
@@ -1802,13 +1846,13 @@ function ParallelActivity({
           <i className="error" />
           Error
         </span>
-      </div>
-      <p className="delegation-evidence-note">
+      </div>}
+      {!prototype&&!timeline?<p className="delegation-evidence-note">
         Dark violet is inferred activity between nearby observations. Tools
         punctuate this background; blank time is unclassified. Width is
         call-to-result elapsed time, not CPU time or process lifetime. Wait
         calls and polling are distinct; blocking time needs explicit boundaries.
-      </p>
+      </p>:null}
       {error && (
         <p className="delegation-error" role="alert">
           {error}
@@ -1831,13 +1875,17 @@ function ParallelActivity({
           }
         }}
       >
-        <div className="delegation-axis">
-          <span>Execution session</span>
-          <div {...brushHandlers}>
+        {timeline?<div className="delegation-axis lt-resizable-axis">
+          <span className="lt-column-heading">Session{columns.handle('execution')}</span>
+          <span className="lt-column-heading">Events{columns.handle('events')}</span>
+          <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=><small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}</div>
+        </div>:<div className="delegation-axis">
+          <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Session</span><span>Events</span></>:"Session"}</span>
+          <div ref={clock} {...brushHandlers}>
             {ticks.map((tick, i) => (
-              <small key={i} style={{ left: `${i * 20}%` }}>
-                <span>{localDate.format(new Date(tick))}</span>
-                <span>{tickTime.format(new Date(tick))}</span>
+              <small key={i} style={{ left: `${i/(ticks.length-1)*100}%` }}>
+                <span className="delegation-tick-date">{tick.date}</span>
+                <time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time>
               </small>
             ))}
             {brush && (
@@ -1847,8 +1895,14 @@ function ParallelActivity({
               />
             )}
           </div>
-        </div>
-        {laneRows.map((n) => {
+        </div>}
+        {timeline?<div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
+          <RecursiveSessionRibbon collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} detail prototype={false} brushHandlers={brushHandlers} preview={brush}
+            sourceHref={item=>{const owner=rows.find(row=>row.id===item.message?.session_id);return owner?sourceHref(owner,item):null;}}
+            foldControl={<Icon name="human"/>} restore={()=>{}}
+            select={item=>{if(!item.message)return;const owner=rows.find(row=>row.id===item.message!.session_id);if(owner){setEventID('label:'+item.message.id);openNode(owner,item.message.id,item.message.conversation_id);}}}/>
+        </div>:null}
+        {shownLaneRows.map((n) => {
           const lane = lanes.get(n.id);
           const detailed = expanded.has(n.id);
           const visible =
@@ -1856,15 +1910,16 @@ function ParallelActivity({
             n.end != null &&
             n.start <= range[1] &&
             n.end >= range[0];
-          const descendantsVisible = rows.some(
-            (c) =>
-              c.outline.startsWith(`${n.outline}.`) &&
-              c.start != null &&
-              c.end != null &&
-              c.start <= range[1] &&
-              c.end >= range[0],
-          );
-          if (!visible && !descendantsVisible) return null;
+          if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
+            <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={labelMode==="off"?[]:actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} detail={labelMode==="detail"} prototype={prototype} brushHandlers={brushHandlers} preview={brush}
+              openSession={timeline?()=>openNode(n):undefined}
+              sourceHref={timeline?item=>sourceHref(n,item):undefined}
+              foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
+              restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
+              select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>
+            {lane?.truncated?<small className="delegation-truncation">Showing first 2,400 marks; zoom in for remaining events.</small>:null}
+            {lane?.messages_truncated?<small className="delegation-truncation">Message display is limited to 2,400 observations per session. Zoom in to see more.</small>:null}
+          </div>;
           return (
             <div
               key={n.id} data-session-id={n.id}
@@ -1952,7 +2007,7 @@ function ParallelActivity({
                     </small>
                   ))}
                 {lane?.marks.map((m, i) => (
-                  <button data-view-field="delegation_event"
+                  <button data-view-field={prototype?"label_timeline_event":"delegation_event"}
                     key={i}
                     className={`delegation-mark ${m.category} ${m.error ? "failed" : ""}`}
                     style={{
@@ -1993,7 +2048,7 @@ function ParallelActivity({
           );
         })}
       </div>
-      {mark && (
+      {!previewOnly && mark && (
         <ActivityPopover
           key={`${mark.node.id}:${mark.mark.start}:${mark.mark.name}`}
           {...mark}
@@ -2004,7 +2059,7 @@ function ParallelActivity({
           }}
         />
       )}
-      {selected && (
+      {selected && !prototype && !previewOnly && (
         <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected session · inferred evidence episodes">
           <p>
             Clusters use tool/request timestamps and the first and last session
@@ -2028,6 +2083,7 @@ function ParallelActivity({
           ))}
         </ViewDisclosure>
       )}
+      </div>
     </div>
   );
 }
@@ -2148,7 +2204,7 @@ declare global {
         props: Props,
       ) => {
         conversation: (id: string, host: HTMLElement | null) => void;
-        layout: (compact: boolean) => void;
+        layout: (compact: boolean, splitReader: boolean) => void;
         destroy: () => void;
       };
     };
@@ -2168,8 +2224,8 @@ export function installDelegationExplorer() {
           current = { ...current, conversation: id, contextHost: host };
           owned.render(<DelegationExplorer {...current} />);
         },
-        layout(compact) {
-          current = { ...current, compact };
+        layout(compact, splitReader) {
+          current = { ...current, compact, splitReader };
           owned.render(<DelegationExplorer {...current} />);
         },
         destroy() {

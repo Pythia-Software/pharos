@@ -75,6 +75,12 @@ test('log timelines compare independent series on the same axis, regardless of s
   close(linear.y(2010), 100);
   assert.equal(timelineGeometry(buckets, series, { scale: 'logarithmic', percent: true }).lines, false, 'shares keep their linear stack');
   close(timelineGeometry(buckets, series, { scale: 'logarithmic', reference: 10000 }).y(10000), 100, 'reference values remain inside the axis');
+  for (const scale of modes) {
+    const bars = timelineGeometry(buckets, series, { scale, bars: true, grouped: true, lines: true });
+    assert.equal(bars.lines, false, 'explicit bars keep their shape, including on a log scale');
+    close(bars.y(1000), 100, 'overlapping categories use an independent baseline, not a sum');
+    close(timelineGeometry(buckets, [...series].reverse(), { scale, bars: true, grouped: true }).y(1000), bars.y(1000));
+  }
 });
 
 test('timeline lines preserve gaps in non-additive measures and remain visible for a single period', () => {

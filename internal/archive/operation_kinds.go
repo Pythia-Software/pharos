@@ -144,6 +144,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops between batches; it carries on later.", Latency: "batch", Journal: journalLonger(30 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.search.query", Label: "Build Query Table text indexes", Verb: "Building table search", Holds: "D:w W:w", Affects: "search.query",
 		OnEject: "Stops between batches; it carries on later.", Latency: "batch", Journal: journalLonger(30 * time.Second), Priority: priorityBackground},
+	{Kind: "maintenance.labels.query", Label: "Index message labels", Verb: "Indexing message labels", Holds: "D:w W:w", Affects: "labels.query",
+		OnEject: "Stops between batches; it carries on later.", Latency: "batch", Journal: journalLonger(30 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.upgrade-count", Label: "Count upgrade steps", Verb: "Counting upgrade steps", Holds: "D:w W:w", Affects: "upgrade, an.ledger",
 		OnEject: "Stops; it counts again the next time Pharos opens the library.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.checkpoint", Label: "Save the catalog", Verb: "Saving the catalog", Holds: "D:w W:w", Affects: "—",

@@ -12,7 +12,8 @@ import { cycleBoxes, cycleFrame, cycleGroups, cycleRangeError, cycleSamples, hou
 // can state truthfully; the state is one flat object so it round-trips through
 // `analyze_chart` beside a dashboard's existing trend fields.
 
-export type AnalysisView = "trend" | "compare" | "distribution" | "scatter" | "cycle";
+export type AnalysisView = "trend" | "trend_line" | "trend_bar" | "compare" | "distribution" | "scatter" | "cycle";
+export const isTrendView = (view: unknown): view is "trend" | "trend_line" | "trend_bar" | undefined => view === undefined || view === "trend" || view === "trend_line" || view === "trend_bar";
 export type AnalysisReduce = "total" | "mean" | "median" | "max" | "count";
 export type AnalysisMeasure = {
   label: string; unit: string; format: MetricValueFormat;
@@ -24,6 +25,8 @@ export type AnalysisMeasure = {
   value?: string;
   // Additive measures partition a total, so groups may be shown as shares.
   additive: boolean;
+  // Overlapping groups may share a distinct population rather than partition it.
+  populationShare?: boolean;
   // A population the measure implies, such as fully priced usage.
   where?: WhereTerm[];
   note: string;
@@ -84,6 +87,10 @@ export type AnalysisRequest = { params?: Record<string, string>; note?: string }
 export type AnalysisUnit = { label: string; plural: string; key: string | string[]; where: WhereTerm[]; breakdowns: Record<string, string[]>; note: string };
 export type AnalysisCatalog = {
   dataset: string;
+  // A topic may limit its useful views and require a meaningful breakdown.
+  // Unspecified catalogs retain all of the shared engine's choices.
+  views?: AnalysisView[];
+  allowNoSplit?: boolean;
   time: { first: string; last: string };
   measures: Record<string, AnalysisMeasure>;
   breakdowns: Record<string, AnalysisBreakdown>;
@@ -105,12 +112,16 @@ export type AnalysisCatalog = {
   // ledger (usage) keeps its recorded hour field too.
   timestamp?: string;
   request?: AnalysisRequest;
-  // The trend's default measure and breakdown.
-  trend: { metric: string; split: string };
+  // A bounded ontology can show every series, ignoring legacy series caps.
+  // Other catalogs retain their normal expandable series limit.
+  trend: { metric: string; split: string; allSeries?: boolean };
   // Reads a link or saved state written in an older vocabulary, such as a
   // metric name that meant a measure shown as shares. It must return a state
   // in the catalog's terms and leave a current one unchanged.
   legacy?: (state: AnalysisState) => AnalysisState;
+  // Removed vocabulary still accepted by saved URLs, also published to CLI
+  // readers so they apply the same migration as the page.
+  legacyValues?: Partial<Record<keyof AnalysisState, Array<string | number | boolean>>>;
   // What a records minimum counts when one record is not one observation: a
   // summed field, such as the calls a daily tools summary holds, or a field's
   // distinct values, such as the conversations usage records belong to.
@@ -158,6 +169,9 @@ export type ResolvedAnalysis = AnalysisState & Required<Pick<AnalysisState, "vie
 // Reserved ids: no catalog unit may be named records, nor a breakdown none.
 export const records = "records", noSplit = "none";
 export const analysisViews: Array<[AnalysisView, string]> = [["trend", "Over time"], ["compare", "Compare groups"], ["distribution", "Distribution"], ["scatter", "Two measures"], ["cycle", "Hour / weekday cycle"]];
+const explicitTrendViews: Array<[AnalysisView, string]> = [["trend_line", "Over time - line"], ["trend_bar", "Over time - bar"]];
+export const allAnalysisViews = [...analysisViews, ...explicitTrendViews];
+export const catalogViews = (catalog: AnalysisCatalog) => catalog.views ? catalog.views.map(view => allAnalysisViews.find(([id]) => id === view)!) : analysisViews;
 export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "Total"], ["mean", "Mean per unit"], ["median", "Median per unit"], ["max", "Largest unit"], ["count", "Number of units"]];
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
@@ -175,12 +189,13 @@ const has = (record: object, key: unknown) => typeof key === "string" && Object.
 // no observation a person cares about, so without units or per-record values
 // nothing can be distributed or paired.
 export function viewUnavailable(catalog: AnalysisCatalog, view: AnalysisView): string | undefined {
+  if (!catalogViews(catalog).some(([id]) => id === view)) return "This dashboard does not offer this view";
   const units = Object.keys(catalog.units).length > 0, subject = catalog.records.plural.toLowerCase();
   if (view === "distribution" && !units && !Object.values(catalog.measures).some(measure => measure.value)) return `These ${subject} are summaries, with no value per observation to distribute`;
   if (view === "scatter" && !units) return `A scatter pairs two measures of each conversation or run; these ${subject} have no such unit`;
   if (view === "cycle" && !Object.keys(catalog.cycle ?? {}).length) return `These ${subject} have no hours or dates to fold into a cycle`;
 }
-export const availableViews = (catalog: AnalysisCatalog) => analysisViews.filter(([view]) => !viewUnavailable(catalog, view));
+export const availableViews = (catalog: AnalysisCatalog) => catalogViews(catalog).filter(([view]) => !viewUnavailable(catalog, view));
 export const cycleUnavailable = (catalog: AnalysisCatalog, cycle: CalendarCycle) => catalog.cycle?.[cycle] ? undefined : `These ${catalog.records.plural.toLowerCase()} have no ${cycle === "hour" ? "time of day" : "dates"} to fold`;
 
 // Why the trend cannot draw this state, if it cannot. The trend draws every
@@ -191,7 +206,7 @@ export const cycleUnavailable = (catalog: AnalysisCatalog, cycle: CalendarCycle)
 export const notTrended = (measure: AnalysisMeasure) => !measure.ratio && !measure.expression && (measure.op === "max" || measure.op === "min")
   ? `${measure.label} is one ${measure.op === "max" ? "largest" : "smallest"} value per group; averaging or adding it across periods would be another quantity, so Over time does not draw it` : undefined;
 export function trendUnavailable(catalog: AnalysisCatalog, state: AnalysisState): string | undefined {
-  if ((state.view ?? "trend") === "trend") return;
+  if (isTrendView(state.view)) return;
   const resolved = normalizeAnalysis(catalog, state), measure = catalog.measures[resolved.metric];
   if (notTrended(measure)) return `${notTrended(measure)}.`;
   if (resolved.view === "compare" && resolved.unit !== records && resolved.reduce !== "total") {
@@ -200,7 +215,7 @@ export function trendUnavailable(catalog: AnalysisCatalog, state: AnalysisState)
 }
 // Each view's option, disabled with its reason where this state cannot move.
 export const viewOptions = (catalog: AnalysisCatalog, state: AnalysisState): Array<[AnalysisView, string, string?]> =>
-  analysisViews.map(([view, label]) => [view, label, view === "trend" ? trendUnavailable(catalog, state) : viewUnavailable(catalog, view)]);
+  catalogViews(catalog).map(([view, label]) => [view, label, isTrendView(view) ? trendUnavailable(catalog, state) : viewUnavailable(catalog, view)]);
 export function catalogProblems(catalog: AnalysisCatalog): string[] {
   const problems: string[] = [];
   if (has(catalog.units, records)) problems.push(`A unit may not be named ${records}.`);
@@ -240,7 +255,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && [state.share, state.nonzero, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
     && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000);
   if (!trendFields || state.v !== undefined && state.v !== analysisVersion) return false;
-  if (state.view === undefined || state.view === "trend") return has(catalog.measures, state.metric) && trendSplit(catalog, state.split)
+  if (isTrendView(state.view)) return (state.view === undefined || !viewUnavailable(catalog, state.view)) && has(catalog.measures, state.metric) && trendSplit(catalog, state.split)
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit));
   return oneOf(state.view, availableViews(catalog).map(([view]) => view))
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit))
@@ -256,8 +271,8 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
 export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
   && (state.unit !== records && state.reduce === "count" || catalog.measures[state.metric].additive && state.reduce === "total");
 // The trend draws records by any breakdown, a component breakdown, or none.
-export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit || has(catalog.breakdowns, split) || has(catalog.components ?? {}, split);
-export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit].breakdowns, split));
+export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) || has(catalog.components ?? {}, split);
+export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
 // Units add up an additive measure, and pool a ratio's parts. Distinct counts
 // and other non-additive values have no honest unit total.
 export const unitTotal = (measure: AnalysisMeasure) => measure.additive || Boolean(measure.ratio);
@@ -302,7 +317,8 @@ export const changeState = <T extends AnalysisState>(catalog: AnalysisCatalog, s
 export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T & ResolvedAnalysis {
   const next = { ...analysisDefaults, ...canonicalState(catalog, state) } as T & ResolvedAnalysis;
   next.view ??= "trend";
-  if (next.view === "trend") return normalizeTrend(catalog, next);
+  if (catalog.views && !catalog.views.includes(next.view)) next.view = catalog.views[0] ?? "trend";
+  if (isTrendView(next.view)) return normalizeTrend(catalog, next);
   const firstUnit = Object.keys(catalog.units)[0];
   // A view this catalog cannot show at all becomes Compare; viewOptions
   // disables it with the reason.
@@ -320,7 +336,7 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   if (next.view === "distribution" && next.unit === records && !catalog.measures[next.metric].value) {
     if (firstUnit) next.unit = firstUnit; else next.metric = Object.keys(catalog.measures).find(id => catalog.measures[id].value)!;
   }
-  if (!splitValid(catalog, next.unit, next.split)) next.split = noSplit;
+  if (!splitValid(catalog, next.unit, next.split)) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
   // A cycle summarizes slot values: a box per slot by default, or their mean,
   // or their total where slot values add up (not ratios or distinct counts).
   if (next.view === "cycle") { if (state.reduce === undefined || !["total", "mean", "median"].includes(next.reduce) || next.reduce === "total" && !cycleTotal(catalog.measures[next.metric])) next.reduce = "median"; }
@@ -351,7 +367,7 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     return parts && !parts.measures.includes(state.metric) ? `${parts.label} splits ${parts.measures.map(id => catalog.measures[id].label.toLowerCase()).join(" and ")} only` : undefined;
   };
   return {
-    share: !measure.additive ? `${measure.label} does not add up across groups, so it has no shares` : state.split === noSplit ? "Shares need a breakdown" : undefined,
+    share: !measure.additive && !measure.populationShare ? `${measure.label} does not add up across groups, so it has no shares` : state.split === noSplit ? "Shares need a breakdown" : undefined,
     cumulative: kind === "count" ? `A running count of distinct ${measure.unit} cannot be built from per-period counts` : kind === "level" ? `${measure.label} does not accumulate` : undefined,
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
@@ -389,7 +405,7 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
 // What normalizeTrend changed that the state asked for, in words, so the
 // dashboard can say why the chart differs from the link or the last choice.
 export function trendAdjustments(catalog: AnalysisCatalog, input: AnalysisState): string[] {
-  if ((input.view ?? "trend") !== "trend") return [];
+  if (!isTrendView(input.view)) return [];
   const asked = { ...analysisDefaults, ...canonicalState(catalog, input) };
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   const limits = trendLimits(catalog, { ...state, split: asked.split, display: asked.display, share: asked.share === true });
@@ -416,11 +432,12 @@ export const rollingSumUnit = (measure: AnalysisMeasure, period: ChartPeriod) =>
 // another view); the other views are saved as drawn, as in phase 1.
 export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, input: T, view: AnalysisView): T & ResolvedAnalysis {
   const state = canonicalState(catalog, input), current = state.view ?? "trend";
-  if (view === "trend") {
-    if (current === "trend" || trendUnavailable(catalog, state)) return normalizeAnalysis(catalog, state);
+  if (isTrendView(view)) {
+    if (trendUnavailable(catalog, state)) return normalizeAnalysis(catalog, state);
+    if (isTrendView(current)) return normalizeAnalysis(catalog, { ...state, view });
     return { ...state, view, share: current === "compare" && state.compareAs === "share" } as T & ResolvedAnalysis;
   }
-  if (current === "trend") {
+  if (isTrendView(current)) {
     const trend = normalizeTrend(catalog, { ...analysisDefaults, ...state, view: "trend" } as T & ResolvedAnalysis);
     return normalizeAnalysis(catalog, { ...state, view, metric: trend.metric, compareAs: trend.share ? "share" as const : "bars" as const, ...view === "cycle" ? { reduce: "median" as const } : {},
       split: has(catalog.breakdowns, trend.split) ? trend.split : noSplit });
@@ -503,7 +520,7 @@ const samplesColumn = (samples: NonNullable<AnalysisCatalog["samples"]>): Summar
 
 export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, inputWhere: WhereTerm[], { zone = "UTC", now = Date.now() }: { zone?: string; now?: number } = {}): AnalysisQuery {
   const state = normalizeAnalysis(catalog, input);
-  if (state.view === "trend") throw new Error("The trend view has its own chart.");
+  if (isTrendView(state.view)) throw new Error("The trend view has its own chart.");
   const shares = state.view === "compare" && state.compareAs === "share" && state.split !== noSplit;
   // The selection is of the breakdown's groups, drawn on the group fields of
   // the current unit.

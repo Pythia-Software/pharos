@@ -13,6 +13,12 @@ shown by `pharos labels status` and `pharos labels explain`, and highlighted
 in the conversation reader when its **Message labels** highlight is on
 ([In the reader](#in-the-reader)). No query table or MCP tool reads them yet.
 
+The opt-in [Conversation shapes lab](label-trajectories.md) explores an explicit
+private snapshot of this ledger in twelve active views, preserving Sender/Receiver
+functions, recorded subagent nesting, transitions, motifs and state-machine
+experiments. It runs
+in the dev UI and reports the snapshot's actual model and sample coverage.
+
 ## Turning it on
 
 In **Settings → Background Processing → Labeling on this Mac** (below the

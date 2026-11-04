@@ -1182,15 +1182,18 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 }
 
 type delegationMark struct {
-	Start     float64 `json:"start"`
-	End       float64 `json:"end"`
-	EndKnown  bool    `json:"end_known"`
-	Category  string  `json:"category"`
-	Count     int     `json:"count"`
-	Error     bool    `json:"error"`
-	ToolID    string  `json:"tool_id,omitempty"`
-	MessageID string  `json:"message_id,omitempty"`
-	Name      string  `json:"name"`
+	Start            float64 `json:"start"`
+	End              float64 `json:"end"`
+	EndKnown         bool    `json:"end_known"`
+	Category         string  `json:"category"`
+	Count            int     `json:"count"`
+	Error            bool    `json:"error"`
+	ToolID           string  `json:"tool_id,omitempty"`
+	MessageID        string  `json:"message_id,omitempty"`
+	Name             string  `json:"name"`
+	Preview          string  `json:"preview,omitempty"`
+	PreviewTruncated bool    `json:"preview_truncated,omitempty"`
+	Status           string  `json:"status,omitempty"`
 }
 
 func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request, snapshot *delegationSnapshot) {
@@ -1230,6 +1233,16 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	lanes := []map[string]any{}
+	var messageLanes map[string]map[string]any
+	var taxonomy []map[string]any
+	if q.Get("labels") == "1" {
+		var err error
+		messageLanes, taxonomy, err = s.Catalog.delegationTimelineMessages(r.Context(), snapshot, ids, start, end)
+		if err != nil {
+			writeError(w, err, 500)
+			return
+		}
+	}
 	width := min(1600, max(100, queryInt(r, "width", 900)))
 	bucket := (end - start) / float64(width/4)
 	for _, id := range ids {
@@ -1259,7 +1272,7 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 			knots = append(knots, *t.Start, stop)
 			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name}
 			// Small neighboring calls share a mark. Errors retain their own reference.
-			if stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error {
+			if q.Get("labels") != "1" && stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error {
 				key := fmt.Sprintf("%s:%d", t.Category, int((*t.Start-start)/bucket))
 				if existing := groups[key]; existing != nil {
 					existing.End = max(existing.End, stop)
@@ -1287,6 +1300,12 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		if truncated {
 			marks = marks[:2400]
 		}
+		if q.Get("labels") == "1" {
+			if err := s.Catalog.delegationToolPreviews(r.Context(), n.WorkspaceID, marks); err != nil {
+				writeError(w, err, 500)
+				return
+			}
+		}
 		sort.Float64s(knots)
 		phases := []delegationSpan{}
 		for i := 1; i < len(knots); i++ {
@@ -1300,7 +1319,15 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 				phases = append(phases, delegationSpan{a, b})
 			}
 		}
-		lanes = append(lanes, map[string]any{"session": n.ID, "marks": marks, "model_inferred": phases, "episodes": n.episodes, "truncated": truncated})
+		lane := map[string]any{"session": n.ID, "marks": marks, "model_inferred": phases, "episodes": n.episodes, "truncated": truncated}
+		for key, value := range messageLanes[n.ID] {
+			lane[key] = value
+		}
+		lanes = append(lanes, lane)
 	}
-	writeJSON(w, map[string]any{"snapshot": snapshot.ID, "start": start, "end": end, "lanes": lanes, "inference": "Model/orchestration between nearby retained observations (at most 90 seconds); not measured processing or streaming. Blank time is unclassified."}, 200)
+	body := map[string]any{"snapshot": snapshot.ID, "start": start, "end": end, "lanes": lanes, "inference": "Model/orchestration between nearby retained observations (at most 90 seconds); not measured processing or streaming. Blank time is unclassified."}
+	if messageLanes != nil {
+		body["taxonomy"] = taxonomy
+	}
+	writeJSON(w, body, 200)
 }

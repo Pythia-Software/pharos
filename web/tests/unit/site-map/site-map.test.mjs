@@ -70,7 +70,7 @@ test("the site map's rules judge every dashboard case, partial charts included, 
     assert.equal(chartVerdict(item.topic, item.chart), item.verdict, name);
     assert.equal(judgeChart(facts, map.analyze.version, item.chart), item.verdict, name);
     verdicts[item.verdict]++;
-    const view = facts.views[merged(item.topic, item.chart).view ?? "trend"];
+    const view = facts.views[readChart(facts, item.chart).merged.view ?? "trend"];
     if (view && view.keys.some(key => !(key in item.chart))) partial++;
     // What the rules draw is what the page draws, and keeping only the
     // view's keys (what Go writes) changes neither the verdict nor the drawing.

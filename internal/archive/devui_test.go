@@ -55,6 +55,54 @@ func TestDevUIConcurrencyPrototypeIsOptionalAndAuthenticated(t *testing.T) {
 	}
 }
 
+func TestDevUILabelTrajectoriesAreOptionalAndAuthenticated(t *testing.T) {
+	assets := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assets, "ui.py"), []byte("APP_HTML = r'''<!doctype html><html><title>Pharos</title></html>'''\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(t.TempDir(), "labels.json")
+	const payload = `{"version":1,"conversations":[]}`
+	if err := os.WriteFile(data, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := httptest.NewServer(http.NotFoundHandler())
+	defer service.Close()
+	target, _ := url.Parse(service.URL)
+	handler := newDevUI(assets, target, "secret", 8812)
+	serve := func(path string, auth, cross bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if auth {
+			r.AddCookie(&http.Cookie{Name: "pharos_dev_token_8812", Value: "secret"})
+		}
+		if cross {
+			r.Header.Set("Sec-Fetch-Site", "cross-site")
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	path := "/api/usage/label-trajectories"
+	if w := serve(path, true, false); w.Code != http.StatusNotFound {
+		t.Fatal("snapshot available without opt-in")
+	}
+	if w := serve("/analyze", true, false); strings.Contains(w.Body.String(), "data-label-trajectories") {
+		t.Fatal("labels enabled without opt-in")
+	}
+	handler.labelTrajectoriesData = data
+	if w := serve(path, false, false); w.Code != http.StatusUnauthorized {
+		t.Fatal("labels available anonymously")
+	}
+	if w := serve(path, true, true); w.Code != http.StatusForbidden {
+		t.Fatal("labels available cross-origin")
+	}
+	if w := serve(path, true, false); w.Code != http.StatusOK || w.Body.String() != payload || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("snapshot response: %d %s", w.Code, w.Body.String())
+	}
+	if w := serve("/analyze", true, false); !strings.Contains(w.Body.String(), "data-label-trajectories") {
+		t.Fatal("labels not enabled with snapshot")
+	}
+}
+
 func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 	var forwarded *http.Request
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

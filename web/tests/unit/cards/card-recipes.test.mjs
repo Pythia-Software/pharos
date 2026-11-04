@@ -682,7 +682,7 @@ test("every active card opens a primary dashboard with the source population and
       if (recipe.destination.chart.unit) assert.equal(state.unit, recipe.destination.chart.unit, `${recipe.id}: observation unit`);
       assert.equal(state.view, recipe.destination.chart.view ?? "trend", `${recipe.id}: chart view`);
       assert.equal(state.metric, recipe.destination.chart.metric === "percent" ? "tokens" : recipe.destination.chart.metric === "percent_cost" ? "cost" : recipe.destination.chart.metric, recipe.id);
-      const query = analysisQuery(catalog, { ...state, view: state.view === "trend" ? "compare" : state.view }, filters, { now: clock.getTime() });
+      const query = analysisQuery(catalog, { ...state, view: ["trend", "trend_line", "trend_bar"].includes(state.view) ? "compare" : state.view }, filters, { now: clock.getTime() });
       for (const part of core.planMetricSeries(query.query, schemas[catalog.dataset], { now: clock.getTime() })?.queries ?? [query.query]) {
         const request = core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now: clock.getTime(), rows: false });
         assert.deepEqual(request.diagnostics, [], recipe.id);

@@ -1,6 +1,6 @@
 import { EMPTY_QUERY, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { canonicalState, normalizeAnalysis, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+import { isTrendView, canonicalState, normalizeAnalysis, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
@@ -33,7 +33,7 @@ export type DashboardCardTarget = "chart" | "ribbon" | HabitsCardTarget;
 export function dashboardCardTargets(address: string): Array<{ id: DashboardCardTarget; label: string; title: string }> {
   // Each is labelled with the heading it has on the page.
   const { topic, state } = readDashboardCard(address), catalog = analysisCatalogs[topic]!, title = dashboardCardTitle(catalog, state);
-  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: state.view === "trend" ? trendTitle(catalog, state) : title, title }];
+  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: isTrendView(state.view) ? trendTitle(catalog, state) : title, title }];
   if (topic === "habits") {
     const view = readHabitsCardView(new URL(address, location.origin).searchParams);
     return [...habitsCardTargets.map(id => ({ id, label: habitsCardTitle(id, view), title: habitsCardTitle(id, view) })), ...charts];
@@ -62,7 +62,7 @@ export function readDashboardCard(address: string, now = new Date()) {
 export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisState): string {
   const view = normalizeAnalysis(catalog, state), measure = catalog.measures[view.metric].label;
   const split = catalog.breakdowns[view.split]?.label;
-  return `${measure}${view.view === "trend" ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
+  return `${measure}${isTrendView(view.view) ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
 }
 
 export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}, templateId?: string): Bookmark {
@@ -121,7 +121,7 @@ export function dashboardCardPresentation(address: string, target: DashboardCard
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
     : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" || topic === "habits" ? "machines" : "tools";
-  const kind = state.view === "trend" ? state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
+  const kind = isTrendView(state.view) ? state.view === "trend_line" || state.view !== "trend_bar" && state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
   const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : 4;
   return { category, loading: { kind, count, height: fittedCoverHeight(kind, count) } };
 }

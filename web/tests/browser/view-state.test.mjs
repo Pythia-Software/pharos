@@ -1,12 +1,410 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,busyStatus,eventStream} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,busyStatus,eventStream,labelTrajectorySnapshot} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
+import messageLabelsDocument from '../../../schemas/message_labels.schema.json' with {type:'json'};
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
+
+test('label trajectory filters, hierarchy and source selection restore across browsers and history',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?label_lab=path',labelTrajectories:true,ready:'.lt-evidence-message'}),{page}=app;
+ await page.getByRole('button',{name:'State path',exact:false}).click();
+ await page.getByRole('combobox',{name:'Messages',exact:true}).selectOption('thinking');
+ await page.getByRole('combobox',{name:'Inspect conversation',exact:true}).selectOption('fixture-second');
+ await page.getByRole('combobox',{name:'Message',exact:true}).selectOption('second-3');
+ await page.getByRole('combobox',{name:'State detail',exact:true}).selectOption('label');
+ await page.getByRole('combobox',{name:'Path steps',exact:true}).selectOption('messages');
+ await page.getByRole('combobox',{name:'Repository',exact:true}).selectOption('example');
+ await page.getByRole('combobox',{name:'Provider',exact:true}).selectOption('claude');
+ await app.settled();
+ const saved=path(page),fresh=await open(t,{url:saved,labelTrajectories:true,ready:'.lt-evidence-message'});
+ for(const [label,value] of [['Messages','thinking'],['Inspect conversation','fixture-second'],['Message','second-3'],['State detail','label'],['Path steps','messages'],['Repository','example'],['Provider','claude']])assert.equal(await fresh.page.getByRole('combobox',{name:label,exact:true}).inputValue(),value);
+ const reader=await fresh.page.getByRole('link',{name:'Open original message in reader',exact:false}).first().getAttribute('href');
+ assert.equal(new URL(reader,'http://localhost').searchParams.get('reveal'),'message:second-3');
+ const destination='/analyze?label_lab=replay&label_conversation=fixture-first&label_message=first-5';
+ await page.evaluate(url=>window.pharosNavigate(url),destination);
+ await page.getByRole('combobox',{name:'Message',exact:true}).selectOption('first-5');
+ await app.settled();
+ await page.goBack();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('label_lab')==='path');
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'second-3');
+ await page.goForward();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('label_lab')==='replay');
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'first-5');
+ await page.getByRole('link',{name:'Tokens and Cost',exact:true}).click();
+ await page.waitForFunction(()=>!new URLSearchParams(location.search).has('label_lab'));
+ await app.settled();
+});
+
+test('label trajectory replay, recorded results and branching choices keep their source identities',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?label_lab=replay&label_conversation=fixture-first&label_session=fixture-child&label_message=child-0',labelTrajectories:true,ready:'.lt-evidence-message'}),{page}=app;
+ await page.getByRole('button',{name:'Next state →',exact:true}).click();
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'child-1');
+ assert.equal(await page.getByRole('combobox',{name:'Inspect branch',exact:true}).inputValue(),'fixture-child');
+ await page.getByRole('button',{name:'← Previous state',exact:true}).click();
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'child-0');
+ await page.getByRole('button',{name:'12 Call / result',exact:true}).click();
+ await page.getByRole('button',{name:'Inspect recorded result',exact:false}).click();
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'fixture-receipt');
+ assert.equal(await page.getByRole('combobox',{name:'Inspect branch',exact:true}).inputValue(),'fixture-first:main');
+ await page.getByRole('button',{name:'Enter branch',exact:false}).first().click();
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'child-0');
+ assert.equal(await page.getByRole('combobox',{name:'Inspect branch',exact:true}).inputValue(),'fixture-child');
+
+});
+
+test('label trajectory frequency selection and hierarchy restore as a conversation chooser',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?label_lab=flow&label_conversation=fixture-first',labelTrajectories:true,ready:'.lt-conversation-browser'}),{page}=app;
+ await page.locator('[data-pharos-target="section:label-frequency:P.request"] > summary .lt-caret').click();
+ await page.locator('[data-pharos-target="section:label-frequency:P.request.work"] > summary .lt-caret').click();
+ await page.getByRole('button',{name:'Browse Implement in Opening',exact:true}).click();await app.settled();
+ const copy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});
+ assert.equal(new URL(copy.page.url()).searchParams.get('label_function'),'P.request.work.implement');
+ assert.equal(new URL(copy.page.url()).searchParams.get('label_column'),'Opening');
+ assert.equal(await copy.page.locator('[data-pharos-target="section:label-frequency:P.request"]').evaluate(e=>e.open),true);
+ const link=await copy.page.locator('.lt-result-actions a').first().getAttribute('href');assert.equal(new URL(link,'http://localhost').searchParams.get('reveal'),'message:first-0');
+ await page.getByRole('combobox',{name:'Break down by',exact:true}).selectOption('actor');await app.settled();
+ const actorCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.equal(await actorCopy.page.getByRole('combobox',{name:'Break down by',exact:true}).inputValue(),'actor');
+ await page.getByRole('button',{name:'Label detail',exact:true}).first().click();await app.settled();assert.equal(new URL(page.url()).searchParams.get('label_lab'),'labels');
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'first-0');
+});
+
+test('label detail links migrate into the native Message Labels dashboard with their population',{skip},async t=>{
+ const params=new URLSearchParams({label_lab:'labels',label_conversation:'fixture-first',label_session:'fixture-first:main'}),app=await open(t,{url:'/analyze?'+params,labelTrajectories:true,ready:'.lt-evidence-message'}),{page}=app;
+ await page.getByRole('link',{name:'Explore Request over time',exact:true}).click();await page.locator('.usage-labels-dashboard').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_topic'),'labels');assert.equal(new URL(page.url()).searchParams.has('label_lab'),false);
+ const filters=decodeQueryStrict(new URL(page.url()).searchParams.get('analyze_filters'));assert.ok(filters.where.some(term=>term.any?.some(clause=>clause.value==='P.request')));
+ await page.goBack();await page.locator('.lt-evidence-message').waitFor();
+});
+
+test('label trajectory inclusive tag prefix restores the selected parent path and matching conversations',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?label_lab=trie',labelTrajectories:true,ready:'.lt-conversation-browser'}),{page}=app;
+ await page.locator('.lt-prefix-column').last().getByRole('button',{name:/Request/}).first().click();
+ await page.locator('.lt-prefix-column').last().getByRole('button',{name:/Report/}).first().click();await app.settled();
+ const prefix=JSON.parse(new URL(page.url()).searchParams.get('label_prefix'));assert.deepEqual(prefix,['P.request','C.report']);
+ const copy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.deepEqual(JSON.parse(new URL(copy.page.url()).searchParams.get('label_prefix')),prefix);
+ assert.equal(await copy.page.locator('.lt-prefix-summary').textContent(),await page.locator('.lt-prefix-summary').textContent());
+ assert.ok(await copy.page.locator('.lt-result-actions a').first().getAttribute('href'));
+});
+
+test('label trajectory ribbons and the actual workspace timeline label controls restore',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?label_lab=fingerprints&label_conversation=fixture-first',labelTrajectories:true,ready:'.lt-conversation-browser'}),{page}=app;
+ await page.getByRole('combobox',{name:'Fingerprint treatment',exact:true}).selectOption('threads');await app.settled();
+ const copy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.equal(await copy.page.getByRole('combobox',{name:'Fingerprint treatment',exact:true}).inputValue(),'threads');
+ await page.getByRole('button',{name:'Hatched overlap',exact:true}).click();await app.settled();
+ const parallelCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.equal(new URL(parallelCopy.page.url()).searchParams.get('label_parallel'),'steps');
+ const before=path(page);await page.locator('.lt-selected-emblem svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();
+ await page.keyboard.press('Escape');await page.getByRole('tooltip').waitFor({state:'hidden'});assert.equal(path(page),before);
+ await page.getByRole('button',{name:'00 Workspace timeline',exact:true}).click();await page.getByRole('combobox',{name:'Message labels',exact:true}).selectOption('detail');await app.settled();
+ const timelineCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.delegation-lane'});assert.equal(await timelineCopy.page.getByRole('combobox',{name:'Message labels',exact:true}).inputValue(),'detail');
+ const key='label-timeline:fixture-first:main:';
+ for(const id of ['session','labels','labels:P','labels:P:P.request','labels:P:P.request:P.request.work','labels:P:P.request:P.request.work:P.request.work.implement'])await page.locator(`[data-pharos-target="section:${key}${id}"] > summary`).click();
+ await app.settled();
+ const expandedCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-session-leaf button'});
+ await expandedCopy.page.locator('.lt-session-leaf button').first().click();await expandedCopy.settled();
+ assert.match(new URL(expandedCopy.page.url()).searchParams.get('label_timeline_event'),/^label:/);
+ await page.locator('.lt-session-leaf button').first().click();await app.settled();
+ assert.match(new URL(page.url()).searchParams.get('label_timeline_event'),/^label:/);
+ assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'first-0');
+ for(const id of ['activity','activity:read'])await page.locator(`[data-pharos-target="section:${key}${id}"] > summary`).click();
+ await page.locator(`[data-pharos-target="section:${key}activity:read"] .lt-session-leaf button`).click();await page.getByRole('dialog',{name:/Activity:/}).waitFor();await app.settled();
+ const eventCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-session-root'});await eventCopy.page.getByRole('dialog',{name:/Activity:/}).waitFor();
+});
+
+test('saved Parallel activity links open the native Timeline and retain the selected range and session',{skip},async t=>{
+ const analysis=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const range=[analysis.start+10000,analysis.end-10000],params=new URLSearchParams({explorer:'parallel',delegation_start:String(range[0]),delegation_end:String(range[1]),delegation_session:'s-root',delegation_labels:'off'});
+ const app=await open(t,{url:`/work/${workID}?${params}`,ready:'.lt-session-root'}),{page}=app;
+ await app.settled();
+ const url=new URL(page.url());
+ assert.equal(url.searchParams.get('explorer'),'timeline');
+ assert.equal(url.searchParams.get('delegation_start'),String(range[0]));
+ assert.equal(url.searchParams.get('delegation_end'),String(range[1]));
+ assert.equal(url.searchParams.get('delegation_session'),'s-root');
+ assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('labels')==='1'));
+ assert.equal(app.calls.filter(call=>call.path==='/api/usage/label-trajectories').length,0);
+ const copy=await open(t,{url:path(page),ready:'.lt-session-root'});
+ assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+});
+
+test('workspace Timeline uses native labels and restores tabs, recursive tracks and message navigation',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=table&delegation_labels=off&sessions=hidden`,labelTrajectories:true,ready:'.delegation-tabs'}),{page}=app;
+ assert.equal(await page.locator('.delegation-body').isVisible(),true,'legacy hidden-session URLs still show the workspace content');
+ await page.getByRole('tab',{name:'Timeline',exact:true}).click();
+ await page.locator('.lt-session-root').first().waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('explorer'),'timeline');
+ assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('labels')==='1'));
+ assert.equal(app.calls.filter(call=>call.path==='/api/usage/label-trajectories').length,0);
+ for(const id of ['session','labels','labels:P','labels:P:P.request','labels:P:P.request:P.request.work','labels:P:P.request:P.request.work:P.request.work.implement'])await page.locator(`[data-pharos-target="section:delegation-labels:caller:${workID}:${id}"] > summary`).click();
+ await page.locator('.lt-session-leaf button').first().waitFor();await app.settled();
+ const copy=await open(t,{url:path(page),ready:'.lt-session-leaf button'});
+ assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+ await copy.page.locator('.lt-session-leaf button').first().click();
+ await copy.page.getByRole('group',{name:'Ribbon segment details',exact:true}).getByRole('link').first().click();await copy.settled();
+ assert.equal(new URL(copy.page.url()).searchParams.get('message'),'m-1');
+ assert.equal(new URL(copy.page.url()).searchParams.get('conversation'),rootConversation);
+ await page.getByRole('tab',{name:'Timeline',exact:true}).press('ArrowLeft');
+
+ assert.equal(await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).getAttribute('aria-selected'),'true');
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?explorer=timeline`);await app.settled();
+ await page.goBack();await app.settled();
+ assert.equal(await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).getAttribute('aria-selected'),'true');
+ await page.goForward();await app.settled();
+ assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+});
+
+for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{
+ const root=`delegation-labels:caller:${workID}:`,disclosures=Object.fromEntries(['session','authorship','authorship:m-1'].map(id=>[root+id,true]));
+ const params=new URLSearchParams({explorer:'timeline',conversation:rootConversation,message:'m-1',disclosures:JSON.stringify(disclosures),timeline_columns:JSON.stringify({execution:205,events:185,time:480})});
+ const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.lt-preview-activate'}),{page}=app;
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
+ const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();}};
+ const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
+ await reveal();
+ const before=await settings(),saved=path(page),activate=page.getByRole('button',{name:'Open full-width timeline',exact:true});
+ assert.equal(await page.getByRole('slider',{name:'Timeline window start',exact:true}).evaluate(el=>{el.focus();return document.activeElement===el;}),false,'preview controls cannot receive keyboard focus');
+ assert.equal(await page.locator('.delegation-parallel').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'static overview fits the sidebar');
+ if(width===1440){
+  await page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true}).press('End');
+  await page.locator('.workspace-inbox:not(.compact)').waitFor();
+  assert.equal(await activate.isVisible(),true,'a wide sidebar still uses the read-only overview');
+  // Even a zoom-like drag is consumed by the overview activation.
+  const ribbon=await page.locator('.lt-caller-row .lt-session-ribbon').boundingBox();
+  await page.mouse.move(ribbon.x+5,ribbon.y+ribbon.height/2);await page.mouse.down();await page.mouse.move(ribbon.x+ribbon.width-5,ribbon.y+ribbon.height/2);await page.mouse.up();
+ }else{await activate.focus();await activate.press('Space');}
+ await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
+ assert.deepEqual(await settings(),before,'activation preserves saved timeline settings');
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),null);
+ assert.equal(await page.locator(`[data-pharos-target="section:${root}authorship:m-1"]`).evaluate(el=>el.open),true);
+ const start=page.getByRole('slider',{name:'Timeline window start',exact:true});assert.equal(await start.isVisible(),true);
+ await page.goBack();await page.locator('.lt-preview-activate').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ await reveal();await page.getByRole('button',{name:'Open full-width timeline',exact:true}).press('Enter');
+ await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();assert.deepEqual(await settings(),before);
+ await page.goBack();await page.locator('.lt-preview-activate').waitFor();await app.settled();
+ await page.goForward();await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
+ await start.focus();await start.press('ArrowRight');await app.settled();assert.ok(Number(new URL(page.url()).searchParams.get('delegation_start'))>Number(before.delegation_start));
+ const copy=await open(t,{url:saved,viewport:{width,height:900},ready:'.lt-preview-activate'});await copy.settled();
+ assert.equal(await copy.page.locator('.delegation-parallel [inert]').count(),1);
+ assert.equal(await copy.page.locator('.delegation-parallel details[open]').count(),0);
+ assert.equal(JSON.parse(new URL(copy.page.url()).searchParams.get('disclosures'))[root+'authorship:m-1'],true);
+ assert.ok(await copy.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+});
+
+for(const width of [1280,390])test(`Timeline session navigation and event expansion remain independent at ${width}px`,{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,viewport:{width,height:900},ready:'.lt-session-root'}),{page}=app;
+ const session=id=>page.locator(`[data-session-id="${id}"]`).getByRole('button',{name:/^Open session /});
+ const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','disclosures','timeline_columns'].map(key=>[key,p.get(key)]));});
+ await app.settled();const before=await settings();
+ await session('s-root').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');assert.deepEqual(await settings(),before);
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ await show();await session('s-child').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');assert.equal(await page.locator('.workspace-reader').isVisible(),true);assert.deepEqual(await settings(),before);
+ await show();
+ const eventBox=await page.locator('[data-session-id="s-child"] .lt-session-row-label').boundingBox();await page.mouse.click(eventBox.x+eventBox.width/2,eventBox.y+eventBox.height/2);
+ await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),null);assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');assert.deepEqual(await settings(),before);
+ const compactWidth=(await page.locator('.lt-column-heading').nth(1).boundingBox()).width,root=page.locator('[data-pharos-target="section:delegation-labels:s-root:session"] > summary');
+ await root.locator('.lt-session-row-label').click();await page.waitForFunction(width=>document.querySelector('.lt-column-heading:nth-child(2)').getBoundingClientRect().width>width,compactWidth);await app.settled();const expandedWidth=(await page.locator('.lt-column-heading').nth(1).boundingBox()).width;assert.ok(expandedWidth>compactWidth);
+ await root.locator('.lt-session-row-label').click();await page.waitForFunction(width=>document.querySelector('.lt-column-heading:nth-child(2)').getBoundingClientRect().width<width,expandedWidth);await app.settled();assert.ok((await page.locator('.lt-column-heading').nth(1).boundingBox()).width<expandedWidth);
+ await session('s-child').focus();await session('s-child').press('Enter');await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ await show();await session('s-root').press('Enter');await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');
+ await page.goBack();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');
+});
+
+test('workspace Timeline message links preserve source transcripts across canonical session aliases',{skip},async t=>{
+ const keys=['session','labels','labels:P','labels:P:P.request','labels:P:P.request:P.request.work','labels:P:P.request:P.request.work:P.request.work.implement'];
+ const disclosures=Object.fromEntries(keys.map(id=>['delegation-labels:caller:'+workID+':'+id,true]));
+ const api={'GET /api/work/:id/parallel':({query})=>{
+  const data=defaultApi['GET /api/work/:id/parallel']({query});
+  return {...data,lanes:data.lanes.map(lane=>lane.session==='s-root'?{...lane,messages:lane.messages?.map((m,i)=>i===0?{...m,id:'conv-child-reply',conversation_id:'conv-child'}:m)}:lane)};
+ }};
+ const app=await open(t,{url:`/work/${workID}?`+new URLSearchParams({explorer:'timeline',disclosures:JSON.stringify(disclosures)}),api,ready:'.lt-session-leaf button'});
+ await app.page.locator('.lt-session-leaf button').first().click();
+ await app.page.getByRole('group',{name:'Ribbon segment details',exact:true}).getByRole('link').first().click();await app.settled();
+ assert.equal(new URL(app.page.url()).searchParams.get('conversation'),'conv-child');
+ assert.equal(new URL(app.page.url()).searchParams.get('message'),'conv-child-reply');
+ await app.page.locator('.conversation-panel [data-message-id="conv-child-reply"]').first().waitFor();
+});
+
+for(const width of [1440,390])test(`single-agent Conversation and Timeline share the actual reader at ${width}px`,{skip},async t=>{
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const analysis={...base,rows:[{...base.rows[0],child_count:0}],focus:[{...base.rows[0],child_count:0}],session_count:1,total:1};
+ const api={'GET /api/work/:id':{...work,conversations:[work.conversations[0]]},'GET /api/work/:id/delegation':analysis};
+ const app=await open(t,{url:`/work/${workID}`,api,viewport:{width,height:900},ready:'.delegation-single'}),{page}=app;
+ await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();
+ assert.equal(await page.getByRole('tab',{name:'Conversation',exact:true}).getAttribute('aria-selected'),'true');
+ await page.getByRole('tab',{name:'Timeline',exact:true}).click();await page.locator('.lt-session-root').first().waitFor();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),false);
+ assert.equal(new URL(page.url()).searchParams.get('reader_view'),'timeline');
+ const copy=await open(t,{url:path(page),api,viewport:{width,height:900},ready:'.lt-session-root'});await copy.settled();
+ assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+ for(const id of ['session','labels','labels:P','labels:P:P.request','labels:P:P.request:P.request.work','labels:P:P.request:P.request.work:P.request.work.implement'])await page.locator(`[data-pharos-target="section:delegation-labels:caller:${workID}:${id}"] > summary`).click();
+ await page.locator('.lt-session-leaf button').first().click();
+ await page.getByRole('group',{name:'Ribbon segment details',exact:true}).getByRole('link').first().click();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_view'),'conversation');
+ assert.equal(new URL(page.url()).searchParams.get('message'),'m-1');
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ assert.equal(await page.getByRole('tab',{name:'Conversation',exact:true}).getAttribute('aria-selected'),'true');
+ assert.ok(await copy.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page overflow');
+ await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?reader_view=timeline`);await app.settled();
+ assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+ await page.goBack();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),true);
+ await page.goForward();await app.settled();
+ assert.equal(await page.locator('.conversation-panel').isVisible(),false);
+ await app.shot(`single-timeline-${width}`);
+});
+
+test('Timeline resizing, window controls and Caller disclosures restore without changing their source identities',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline&timeline_labels=off&timeline_columns=${encodeURIComponent(JSON.stringify({execution:175,events:165,time:480}))}`,ready:'.lt-caller-row .lt-session-root'}),{page}=app;
+ const before=new URL(page.url()).searchParams;
+ const windowBefore=[before.get('delegation_start'),before.get('delegation_end')];
+ const cutoffs=page.getByRole('status',{name:'Selected timeline window',exact:true}).locator('time');
+ const readCutoffs=()=>cutoffs.evaluateAll(elements=>elements.map(element=>Date.parse(element.dateTime)));
+ const readWindow=async(p=page)=>Promise.all(['start','end'].map(async edge=>Math.trunc(Number(await p.getByRole('slider',{name:`Timeline window ${edge}`,exact:true}).getAttribute('aria-valuenow')))));
+ const whole=await readWindow();
+ const root=`section:delegation-labels:caller:${workID}:`;
+ const summary=page.locator(`[data-pharos-target="${root}session"] > summary`);
+ const compactWidth=(await page.locator('.lt-column-heading').nth(1).boundingBox()).width;
+ await summary.locator('.lt-session-row-label').click();
+ await page.waitForFunction(width=>document.querySelector('.lt-column-heading:nth-child(2)').getBoundingClientRect().width>width,compactWidth);
+ assert.ok((await page.locator('.lt-column-heading').nth(1).boundingBox()).width>compactWidth,'event details have room once expanded');
+ for(const label of ['session','events']){
+  const resize=page.getByRole('separator',{name:`Resize ${label} column`,exact:true});
+  await resize.focus();await resize.press('ArrowRight');
+ }
+ const events=page.getByRole('separator',{name:'Resize events column',exact:true}),box=await events.boundingBox();
+ await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+35,box.y+box.height/2);await page.mouse.up();
+ await app.settled();
+ const params=new URL(page.url()).searchParams,widths=JSON.parse(params.get('timeline_columns'));
+ assert.ok(widths.execution>175&&widths.events>165);
+ const edge=await page.locator('.delegation-lane-scroll').boundingBox(),clock=await page.locator('.lt-clock-heading').boundingBox(),ribbons=await page.locator('.lt-session-root > summary .lt-session-ribbon').evaluateAll(elements=>elements.map(element=>element.getBoundingClientRect().right));
+ assert.ok(Math.abs(clock.x+clock.width-edge.x-edge.width)<1,'the clock fills the remaining table width');
+ assert.ok(ribbons.every(right=>Math.abs(right-clock.x-clock.width)<1),'every session ribbon reaches the clock endpoint');
+ assert.deepEqual([params.get('delegation_start'),params.get('delegation_end')],windowBefore);
+ await page.locator(`[data-pharos-target="${root}authorship"] > summary`).click();
+ await page.locator(`[data-pharos-target="${root}authorship:m-1"] > summary`).click();await app.settled();
+ const spans=page.locator(`[data-pharos-target="${root}authorship:m-1"] .lt-session-leaf button`);
+ await spans.first().focus();
+ assert.equal(await page.getByRole('tooltip').locator('blockquote').textContent(),'Implement th');
+ await spans.last().focus();
+ assert.equal(await page.getByRole('tooltip').locator('blockquote').textContent(),'is change');
+ const copy=await open(t,{url:path(page),ready:'.lt-caller-row .lt-session-root'});await copy.settled();
+ assert.deepEqual(JSON.parse(new URL(copy.page.url()).searchParams.get('timeline_columns')),widths);
+ assert.equal(await copy.page.locator(`[data-pharos-target="${root}authorship"]`).evaluate(e=>e.open),true);
+ assert.equal(await copy.page.locator(`[data-pharos-target="${root}authorship:m-1"]`).evaluate(e=>e.open),true);
+ await copy.page.locator(`[data-pharos-target="${root}authorship:m-1"] .lt-session-leaf button`).last().click();
+ await copy.page.getByRole('group',{name:'Ribbon segment details',exact:true}).getByRole('link').first().click();await copy.settled();
+ assert.equal(new URL(copy.page.url()).searchParams.get('message'),'m-1');
+ assert.equal(new URL(copy.page.url()).searchParams.get('conversation'),rootConversation);
+ const rangeStart=Number(new URL(page.url()).searchParams.get('delegation_start'));
+ await page.getByRole('slider',{name:'Timeline window start',exact:true}).focus();await page.getByRole('slider',{name:'Timeline window start',exact:true}).press('ArrowRight');await app.settled();
+ assert.ok(Number(new URL(page.url()).searchParams.get('delegation_start'))>rangeStart);
+ const saved=await open(t,{url:path(page),ready:'.lt-caller-row'});await saved.settled();
+ assert.equal(new URL(saved.page.url()).searchParams.get('delegation_start'),new URL(page.url()).searchParams.get('delegation_start'));
+ // The drag's displayed endpoints update before pointer-up commits the URL.
+ const end=page.getByRole('slider',{name:'Timeline window end',exact:true}),endBox=await end.boundingBox(),shown=await readCutoffs(),urlBeforeDrag=path(page);
+ await page.mouse.move(endBox.x+endBox.width/2,endBox.y+endBox.height/2);await page.mouse.down();
+ await page.mouse.move(endBox.x+endBox.width/2-45,endBox.y+endBox.height/2);
+ await page.waitForFunction(before=>Date.parse(document.querySelector('.delegation-overview-cutoffs time:last-child').dateTime)!==before,shown[1]);
+ assert.equal(path(page),urlBeforeDrag);
+ const draft=await readCutoffs();assert.equal(draft[0],shown[0]);assert.ok(draft[1]<shown[1]);
+ await page.mouse.up();await app.settled();
+ assert.equal(Math.trunc(Number(new URL(page.url()).searchParams.get('delegation_end'))),draft[1]);
+ // Pointer capture keeps resize active above/below the overview. Passing its
+ // edges clamps the moved end, without shifting the end we did not drag.
+ const overview=await page.locator('.delegation-overview').boundingBox(),heldStart=(await readWindow())[0],endAgain=await end.boundingBox();
+ await page.mouse.move(endAgain.x+endAgain.width/2,endAgain.y+endAgain.height/2);await page.mouse.down();await page.mouse.move(overview.x+overview.width+40,overview.y-40);await page.mouse.up();await app.settled();
+ assert.deepEqual(await readWindow(),[heldStart,whole[1]]);
+ const startAgain=await page.getByRole('slider',{name:'Timeline window start',exact:true}).boundingBox();
+ await page.mouse.move(startAgain.x+startAgain.width/2,startAgain.y+startAgain.height/2);await page.mouse.down();await page.mouse.move(Math.max(0,overview.x-20),overview.y+overview.height+40);await page.mouse.up();await app.settled();
+ assert.deepEqual(await readWindow(),whole);
+ // A release may carry a newer X coordinate than the last move event.
+ await page.evaluate(()=>window.addEventListener('pointerdown',event=>{window.__timelinePointerId=event.pointerId;},{once:true}));
+ const terminalStart=await page.getByRole('slider',{name:'Timeline window start',exact:true}).boundingBox();
+ await page.mouse.move(terminalStart.x+terminalStart.width/2,terminalStart.y+terminalStart.height/2);await page.mouse.down();
+ await page.locator('.delegation-overview').evaluate((element,point)=>element.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:window.__timelinePointerId,clientX:point.x,clientY:point.y})),{x:overview.x+overview.width*.25,y:overview.y+overview.height+40});
+ await page.mouse.up();await app.settled();assert.ok((await readWindow())[0]>whole[0]);assert.equal((await readWindow())[1],whole[1]);
+ const beforeCancel=path(page),cancelStart=await page.getByRole('slider',{name:'Timeline window start',exact:true}).boundingBox();
+ await page.mouse.move(cancelStart.x+cancelStart.width/2,cancelStart.y+cancelStart.height/2);await page.mouse.down();await page.mouse.move(cancelStart.x+35,cancelStart.y+60);await page.keyboard.press('Escape');await page.mouse.up();await app.settled();
+ assert.equal(path(page),beforeCancel,'cancelling a captured drag leaves its saved window alone');
+ await page.getByRole('button',{name:'Reset',exact:true}).click();await app.settled();
+ assert.deepEqual(await readWindow(),whole);
+ assert.equal(await page.getByRole('status',{name:'Selected timeline window',exact:true}).isVisible(),false);
+ const reset=await open(t,{url:path(page),ready:'.lt-caller-row'});await reset.settled();
+ assert.deepEqual(await readWindow(reset.page),whole);
+});
+
+test('Timeline grows with its rows and scrolls in the page instead of a nested vertical viewport',{skip},async t=>{
+ const base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const rows=Array.from({length:35},(_,i)=>({...base.rows[0],id:i?'many-'+i:'s-root',outline:String(i+1),order:i,depth:0,child_count:0}));
+ const api={'GET /api/work/:id/delegation':{...base,rows,focus:rows,session_count:rows.length,total:rows.length}};
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api,ready:'.lt-caller-row'});await app.settled();
+ assert.ok(await app.page.locator('.delegation-lane-scroll').evaluate(element=>element.scrollHeight<=element.clientHeight+1),'the chart must not create its own vertical scroll viewport');
+ await app.page.locator('[data-session-id="many-34"]').scrollIntoViewIfNeeded();
+ assert.equal(await app.page.locator('[data-session-id="many-34"]').isVisible(),true);
+});
+
+test('Timeline tool hover selects the recorded call on each overlapping track',{skip},async t=>{
+ const api={'GET /api/work/:id/parallel':({query})=>{
+  const data=defaultApi['GET /api/work/:id/parallel']({query});
+  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000}]})};
+ }};
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api,ready:'.lt-session-root'}),{page}=app;
+ const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary');
+ await root.scrollIntoViewIfNeeded();
+ for(const [id,preview] of [['tool-read','/repo/README.md'],['tool-error','npm test']]){
+  const point=await root.locator(`[data-tool-id="${id}"] line`).evaluate(line=>{
+   const transform=line.getScreenCTM(),point=new DOMPoint((Number(line.getAttribute('x1'))+Number(line.getAttribute('x2')))/2,Number(line.getAttribute('y1'))).matrixTransform(transform);
+   return {x:point.x,y:point.y};
+  });
+  await page.mouse.move(point.x,point.y);
+  const content=page.getByRole('tooltip').locator('pre');await content.waitFor();
+  assert.equal(await content.textContent(),preview);
+ }
+});
+
+test('Timeline segments pin exact content before revealing their conversation source',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-session-root'}),{page}=app;
+ const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary'),pinned=page.getByRole('group',{name:'Ribbon segment details',exact:true});
+ await root.scrollIntoViewIfNeeded();await app.settled();
+ const point=await root.locator('[data-tool-id="tool-read"] line').evaluate(line=>{const p=new DOMPoint((Number(line.getAttribute('x1'))+Number(line.getAttribute('x2')))/2,Number(line.getAttribute('y1'))).matrixTransform(line.getScreenCTM());return {x:p.x,y:p.y};});
+ const before=path(page);await page.mouse.move(point.x,point.y);await page.getByRole('tooltip').locator('pre').waitFor();
+ await page.mouse.click(point.x,point.y);await pinned.waitFor();
+ assert.equal(path(page),before,'pinning does not navigate or toggle disclosures');
+ assert.equal(await pinned.locator('pre').textContent(),'/repo/README.md');
+ await page.mouse.move(20,80);assert.equal(await pinned.isVisible(),true);
+ const link=pinned.getByRole('link'),url=new URL(await link.getAttribute('href'),'http://localhost');
+ assert.equal(url.searchParams.get('conversation'),rootConversation);assert.equal(url.searchParams.get('message'),'m-1');assert.equal(url.searchParams.get('call'),'tool-read');
+ await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
+ // Keyboard inspection pins the focused message and makes the source link reachable.
+ const caller=page.locator('.lt-caller-row').getByRole('button',{name:/Inspect Events ribbon/});await caller.focus();await caller.press('Enter');await pinned.waitFor();
+ assert.equal(await pinned.getByRole('link').first().evaluate(el=>el===document.activeElement),true);
+ assert.match(await pinned.locator('blockquote').first().textContent(),/Implement/);
+ await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
+ assert.equal(await caller.evaluate(el=>el===document.activeElement),true);
+ // A brush still changes the time window instead of pinning a card.
+ const fullEnd=await page.getByRole('slider',{name:'Timeline window end',exact:true}).getAttribute('aria-valuenow');
+ const ribbon=await root.locator('.lt-session-ribbon').boundingBox();await page.mouse.move(ribbon.x+ribbon.width*.1,ribbon.y+2);await page.mouse.down();await page.mouse.move(ribbon.x+ribbon.width+20,ribbon.y+ribbon.height+50);await page.mouse.up();await app.settled();
+ assert.notEqual(path(page),before);assert.equal(await pinned.isVisible(),false);
+ assert.equal(Number(new URL(page.url()).searchParams.get('delegation_end')),Number(fullEnd),'off-canvas releases still finish at the clock endpoint');
+ // Selecting a segment's source reveals it, retaining the timeline in its sidebar preview.
+ await page.getByRole('button',{name:'Reset',exact:true}).click();await app.settled();
+ await page.mouse.click(point.x,point.y);await pinned.waitFor();
+ await page.getByRole('tab',{name:'Timeline',exact:true}).click();await pinned.waitFor({state:'hidden'});
+ await page.mouse.click(point.x,point.y);await pinned.waitFor();await pinned.getByRole('link').first().click();
+ await page.locator('.conversation-panel [data-message-id="m-1"]').first().waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reveal'),'message:m-1');
+ assert.equal(await page.getByRole('button',{name:'Open full-width timeline',exact:true}).isVisible(),true);
+ assert.equal(await pinned.isVisible(),false);
+});
 
 function jsonInspectorFixture() {
  const schema=loadSchema(mcpCallsDocument),now=Date.now(),definitions=new Map();
@@ -597,4 +995,79 @@ test('Thinking custom date editor follows the viewer zone and writes absolute da
  assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-20T00:00');
  await page.getByLabel('From date and time',{exact:true}).fill('2026-10-21T12:30');await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('thinking')).from,'2026-10-21T18:30:00.000Z');
+});
+
+test('Message Labels category menus apply to descendants and restore mixed selection with keyboard access',{skip},async t=>{
+ const now=Date.now(),at=new Date(now-86400000).toISOString(),schema=loadSchema(messageLabelsDocument);
+ const labels=['C.difficulty','C.difficulty.blocker','C.difficulty.ambiguity','C.report.finding','P.request.work.implement'];
+ const rows=labels.map((label,i)=>({id:'category-'+i,message_id:'message-'+i,conversation_id:'conversation',occurred_at:at,day:at.slice(0,10),label,family:label.split('.').slice(0,2).join('.'),function_role:label.startsWith('P')?'Sender':'Receiver'}));
+ const api={'* /api/query/message_labels/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
+ const app=await open(t,{url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend',metric:'messages',split:'label'})}),api,ready:'.usage-chart-legend'}),{page}=app;
+ const category=page.getByRole('button',{name:'Difficulty category',exact:true});
+ await category.focus();await category.press('ArrowDown');
+ const menu=page.getByRole('menu',{name:'Filter Difficulty category',exact:true});
+ assert.equal(await menu.getByRole('menuitem',{name:/Show only this category/}).evaluate(node=>node===document.activeElement),true);
+ await menu.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
+ assert.equal(await category.getAttribute('aria-pressed'),'true');
+ assert.equal(await page.getByRole('button',{name:'Receiver category',exact:true}).getAttribute('aria-pressed'),'mixed');
+ await page.getByRole('button',{name:'Missing context',exact:true}).click();
+ await page.getByRole('menuitem',{name:/Remove from selection/}).click();await app.settled();
+ assert.equal(await category.getAttribute('aria-pressed'),'mixed');
+ await category.click();await menu.getByRole('menuitem',{name:/Add all to selection/}).click();await app.settled();
+ assert.equal(await category.getAttribute('aria-pressed'),'true');
+ await category.click();await menu.getByRole('menuitem',{name:/Show all except this category/}).click();await app.settled();
+ assert.equal(await category.getAttribute('aria-pressed'),'false');
+ const saved=path(page),fresh=await open(t,{url:saved,api,ready:'.usage-chart-legend'});
+ assert.equal(await fresh.page.getByRole('button',{name:'Difficulty category',exact:true}).getAttribute('aria-pressed'),'false');
+ assert.equal(await fresh.page.getByRole('button',{name:'Receiver category',exact:true}).getAttribute('aria-pressed'),'mixed');
+ await page.setViewportSize({width:390,height:900});await category.click();
+ const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
+ await page.keyboard.press('Escape');assert.equal(await category.evaluate(node=>node===document.activeElement),true);
+});
+
+test('native Message Labels dashboards and conversation cards share standard navigation and saved query presentation',{skip},async t=>{
+ const definitions=new Map(),api={'PUT /api/query-snapshots':({body})=>{definitions.set(body.code,body);return body},'GET /api/query-snapshots':({query})=>definitions.get(query.get('code'))};
+ const read=page=>{const token=new URL(page.url()).searchParams.get('q_message_labels');return decodeQueryStrict(token?.startsWith('@')?definitions.get(token.slice(1)).token:token)};
+ const app=await open(t,{api,url:'/analyze?label_lab=distribution&label_audience=thinking',ready:'.usage-labels-dashboard'}),{page}=app;
+ assert.equal(new URL(page.url()).searchParams.get('analyze_topic'),'labels');assert.equal(new URL(page.url()).searchParams.has('label_lab'),false);
+ const view=page.getByRole('combobox',{name:'View',exact:true});
+ assert.equal(await view.inputValue(),'trend_line');
+ await view.selectOption({label:'Over time - bar'});await app.settled();
+ assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).view,'trend_bar');
+ await page.locator('.usage-chart-legend').getByRole('button',{name:'Report',exact:true}).click();
+ await page.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
+ assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).selection.excluded,true);
+ await page.getByRole('button',{name:'Show all',exact:true}).click();await app.settled();
+ const point=page.locator('.usage-chart-bars').getByRole('button',{name:/Report/}).first();await point.focus();await point.press('Enter');
+ await page.locator('.usage-chart-tip.pinned').waitFor();assert.ok(await page.locator('.usage-chart-tip.pinned a').count());
+ await page.keyboard.press('Escape');
+ const plot=await page.locator('.usage-chart-bars').boundingBox();await page.mouse.move(plot.x+plot.width*.2,plot.y+plot.height/2);await page.mouse.down();await page.mouse.move(plot.x+plot.width*.7,plot.y+plot.height/2);await page.mouse.up();await app.settled();
+ assert.ok(new URL(page.url()).searchParams.get('analyze_filters'));
+ await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('label');
+ await page.getByRole('combobox',{name:'Show as',exact:true}).selectOption('values');
+ await page.getByRole('combobox',{name:'Scale',exact:true}).selectOption('logarithmic');await app.settled();
+ const copy=await open(t,{api,url:path(page),ready:'.usage-labels-dashboard'});assert.equal(await copy.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'label');
+ assert.equal(await copy.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend_bar');
+ await copy.page.getByRole('combobox',{name:'View',exact:true}).selectOption({label:'Over time - line'});await copy.settled();
+ const line=await open(t,{api,url:path(copy.page),ready:'.usage-labels-dashboard'});assert.equal(await line.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend_line');
+ await page.getByRole('link',{name:/Matching conversations/}).click();await page.locator('.message-label-result-card').first().waitFor();await app.settled();
+ const native=read(page);assert.ok(native.grouping);assert.ok(native.grouping.source.where.some(term=>term.field==='source'&&term.value==='thinking'));
+ await page.getByRole('button',{name:'Table',exact:true}).click();await page.locator('.qt-row').first().waitFor();await app.settled();
+ const rowsURL=path(page),fresh=await open(t,{api,url:rowsURL,ready:'.qt-row'});assert.equal(await fresh.page.getByRole('button',{name:'Table',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Cards',exact:true}).click();await page.locator('.message-label-result-card').first().waitFor();await app.settled();
+ const cards=read(page);assert.deepEqual(cards.grouping.source.where,native.grouping.source.where);
+ assert.ok(await page.locator('.message-label-result-card .message-label-fingerprint svg').count());
+ const link=await page.locator('.message-label-source').first().getAttribute('href');assert.ok(link.includes('/conversation/')||link.includes('/work/'));
+});
+
+test('fingerprint taxonomy inspection supports pointer handoff and scrolling without changing URL selection',{skip},async t=>{
+ const snapshot=structuredClone(labelTrajectorySnapshot),ids=['P.request.work.implement','P.request.work.review','P.request.work.verify','P.request.input.information','P.request.input.permission','P.frame.scope','P.frame.constraint','P.control.redirect','C.input.answer','C.input.permission.grant','C.feedback.accept','C.feedback.challenge','C.report.finding','C.report.product','C.report.progress','C.deliberation.plan','C.deliberation.hypothesis','C.difficulty.blocker'];
+ snapshot.conversations[0].messages[0].labels=ids.map(id=>[id,.9]);
+ const app=await open(t,{url:'/analyze?label_lab=fingerprints&label_conversation=fixture-first',labelTrajectories:true,api:{'/api/usage/label-trajectories':()=>snapshot},ready:'.lt-selected-emblem',viewport:{width:390,height:480}}),{page}=app;
+ const before=path(page);await page.locator('.lt-selected-emblem svg g[tabindex]').first().hover();const tooltip=page.getByRole('tooltip');await tooltip.waitFor();await tooltip.hover();
+ const box=await tooltip.boundingBox(),viewport=page.viewportSize();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=viewport.width&&box.y+box.height<=viewport.height);
+ const scroller=tooltip.locator('.lt-ribbon-taxonomy-scroll');await scroller.hover();await page.mouse.wheel(0,420);await page.waitForFunction(()=>document.querySelector('.lt-ribbon-taxonomy-scroll')?.scrollTop>0);
+ assert.equal(path(page),before);await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
+ await page.locator('.lt-conversation-card svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();assert.equal(path(page),before);await page.keyboard.press('Escape');
+ await app.shot('fingerprint-taxonomy');
 });

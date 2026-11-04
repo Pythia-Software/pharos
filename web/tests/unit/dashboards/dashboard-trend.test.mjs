@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { capabilities, core, execution, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState, availableViews, canonicalState, trendSplit } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -575,4 +575,95 @@ test("Conversations trends group event timestamps into local calendar periods", 
     assert.equal(result.error, undefined, period);
     assert.deepEqual(result.buckets.map(bucket => bucket.value).sort((a, b) => a - b), period === "week" ? [13] : [5, 8], period);
   }
+});
+
+import {messageLabelsCatalog} from '../../../src/message-labels-catalog';
+import messageLabelsDocument from '../../../../schemas/message_labels.schema.json';
+import {messageLabelConversationQuery,messageLabelHostQuery,labelResultsMode} from '../../../src/message-label-results-model';
+import {messageLabelLegacyURL} from '../../../src/message-label-legacy';
+import {legendGroups} from '../../../src/chart-series';
+import {chartSeriesStyle} from '../../../src/chart-colors';
+test('Message Labels keeps all chart views centered on the ontology and migrates older views',()=>{
+ assert.deepEqual(availableViews(messageLabelsCatalog).map(([id])=>id),['trend_line','trend_bar','compare']);
+ assert.deepEqual(Object.keys(messageLabelsCatalog.breakdowns),['function_role','family','label']);
+ assert.equal(messageLabelsCatalog.breakdowns.family.label,'General Label');
+ assert.equal(trendSplit(messageLabelsCatalog,'none'),false);
+ for(const view of ['trend','compare','distribution','scatter','cycle'])for(const split of ['none','repository_name','model','source','label_status']){
+  const old={view,metric:'messages',split,unit:'conversation',selection:{values:['old-repository'],excluded:false}};
+  const mapped=canonicalState(messageLabelsCatalog,old),drawn=normalizeAnalysis(messageLabelsCatalog,old);
+  assert.ok(validAnalysisState(messageLabelsCatalog,mapped));
+  assert.equal(drawn.split,'family');assert.equal(drawn.unit,'records');assert.deepEqual(drawn.selection,{values:[],excluded:false});
+  assert.equal(drawn.view,view==='compare'?'compare':'trend_line');
+ }
+ for(const split of ['function_role','family','label'])for(const view of ['trend_line','trend_bar','compare']){
+  const state={view,metric:'messages',split};assert.equal(normalizeAnalysis(messageLabelsCatalog,state).split,split);
+  const q=view!=='compare'?trendQuery(messageLabelsCatalog,state,[],{now}).query:analysisQuery(messageLabelsCatalog,state,[],{now}).query;
+  assert.ok(q.aggregations.some(clause=>clause.groupBy.includes(messageLabelsCatalog.breakdowns[split].fields[0])));
+ }
+});
+test('label line and bar views share amounts and preserve chart settings when switching',()=>{
+ const initial={view:'trend_line',metric:'messages',split:'label',period:'day',rollingPeriods:3,share:true,scale:'logarithmic',selection:{values:['C.difficulty.blocker'],excluded:false}};
+ const line=normalizeAnalysis(messageLabelsCatalog,initial),bar=switchView(messageLabelsCatalog,line,'trend_bar');
+ assert.deepEqual({...bar,view:'trend_line'},line);
+ assert.deepEqual(switchView(messageLabelsCatalog,bar,'trend_line'),line);
+ const where=[{field:'occurred_at',op:'>=',value:'-30d'}],date=new Date(now-3*86400000),data=[{id:'label',message_id:'message',label:'C.difficulty.blocker',day:localDay(date),occurred_at:date.toISOString()}];
+ assert.deepEqual(trendQuery(messageLabelsCatalog,line,where,{now}),trendQuery(messageLabelsCatalog,bar,where,{now}));
+ const query=trendQuery(messageLabelsCatalog,line,where,{now});
+ const results=core.evaluateMetrics(data,query.query,core.loadSchema(messageLabelsDocument),{now}).metrics;
+ const lineSeries=trendSeries(messageLabelsCatalog,line,query,results,{now}),barSeries=trendSeries(messageLabelsCatalog,bar,query,results,{now});
+ assert.equal(lineSeries.lines,true,'a single label still uses the selected line view');
+ assert.equal(barSeries.lines,false);
+ assert.ok(barSeries.buckets.some(bucket=>Object.values(bucket.values).some(value=>value>0)),'comparison includes actual label amounts');
+ assert.deepEqual({...barSeries,lines:true},lineSeries);
+ const compare=switchView(messageLabelsCatalog,bar,'compare');
+ assert.equal(compare.compareAs,'bars','overlapping labels remain values when comparison cannot form shares');
+ assert.equal(switchView(messageLabelsCatalog,compare,'trend_bar').view,'trend_bar');
+});
+test('label legend groups retain full ancestry, series identity and separate repeated subgroup names',()=>{
+ const ids=['P.request.work.implement','P.request.work.refine','P.frame.scope','C.report.finding','?'];
+ const items=ids.map(id=>({key:id,label:id,...chartSeriesStyle('label',id)}));
+ const tree=legendGroups(items);
+ assert.deepEqual(tree.groups.map(group=>group.label),['Sender','Receiver','Coverage']);
+ const work=tree.groups[0].groups.find(group=>group.label==='Request').groups[0];
+ assert.deepEqual(work.items.map(item=>item.key),ids.slice(0,2));
+ const flatten=group=>[...group.items,...group.groups.flatMap(flatten)];assert.deepEqual(flatten(tree).map(item=>item.key),ids);
+ const repeated=legendGroups([{key:'s',label:'a',color:'blue',groupPath:['Sender','Generic']},{key:'r',label:'b',color:'red',groupPath:['Receiver','Generic']}]);
+ assert.equal(repeated.groups[0].groups[0].items[0].key,'s');assert.equal(repeated.groups[1].groups[0].items[0].key,'r');
+ const acceptedParent=legendGroups(['C.report','C.report.finding'].map(value=>({key:value,value,label:value==='C.report'?'Report':'Finding',...chartSeriesStyle('label',value)})));
+ assert.deepEqual(acceptedParent.groups[0].groups[0].items.map(item=>item.value),['C.report','C.report.finding']);
+});
+test('message label shares use distinct interval populations and remain fixed when a label is hidden',()=>{
+ const s=core.loadSchema(messageLabelsDocument),data=[{id:'a:P',message_id:'a',conversation_id:'c',label:'P.request',family:'P.request',day:'2026-10-01',occurred_at:'2026-10-01T12:00:00Z'},{id:'a:C',message_id:'a',conversation_id:'c',label:'C.report',family:'C.report',day:'2026-10-01',occurred_at:'2026-10-01T12:00:00Z'},{id:'b:C',message_id:'b',conversation_id:'d',label:'C.report',family:'C.report',day:'2026-10-01',occurred_at:'2026-10-01T13:00:00Z'}];
+ const state={...base,view:'trend',metric:'messages',split:'family',share:true},query=trendQuery(messageLabelsCatalog,state,[],{now:Date.parse('2026-10-02')}),results=core.evaluateMetrics(data,query.query,s,{now:Date.parse('2026-10-02')}).metrics;
+ const built=trendSeries(messageLabelsCatalog,state,query,results,{now:Date.parse('2026-10-02')}),values=built.buckets.find(b=>Object.values(b.values).some(v=>v>0))?.values;
+ assert.ok(values,JSON.stringify({error:built.error,results,query:query.query,buckets:built.buckets}));assert.equal(built.series[0].group,'Sender');
+ assert.ok(Object.values(values).includes(.5));assert.ok(Object.values(values).includes(1));assert.equal(Object.values(values).reduce((a,b)=>a+b,0),1.5);
+ const selected={...state,selection:{values:['P.request'],excluded:true}},hidden=trendQuery(messageLabelsCatalog,selected,[],{now:Date.parse('2026-10-02')});assert.deepEqual(hidden.query,query.query);
+ assert.ok(!query.supporting.aggregations.some(clause=>clause.id==='trend:population'));
+});
+test('Message Labels shows every specific label despite old series caps, including smoothing history',()=>{
+ const schema=core.loadSchema(messageLabelsDocument),now=Date.parse('2026-10-03T12:00:00Z');
+ const data=Array.from({length:37},(_,i)=>({id:`m${i}:label`,message_id:`m${i}`,conversation_id:'conversation',label:`P.request.variant${i}`,family:'P.request',day:'2026-10-02',occurred_at:'2026-10-02T12:00:00Z'}));
+ data.push({id:'history:label',message_id:'history',conversation_id:'conversation',label:'C.report.finding',family:'C.report',day:'2026-10-01',occurred_at:'2026-10-01T12:00:00Z'});
+ const where=[{field:'occurred_at',op:'>=',value:'2026-10-02T00:00:00Z'},{field:'occurred_at',op:'<',value:'2026-10-03T00:00:00Z'}];
+ for(const metric of ['messages','observations']){
+  const state={...base,view:'trend',metric,split:'label',seriesLimit:1,rollingPeriods:2};
+  const query=trendQuery(messageLabelsCatalog,state,where,{now}),results=core.evaluateMetrics(data,query.query,schema,{now}).metrics;
+  const built=trendSeries(messageLabelsCatalog,state,query,results,{now});
+  assert.equal(built.error,undefined);assert.equal(built.series.length,38);
+  assert.ok(built.series.every(item=>!item.hiddenCount&&item.key!=='other'));
+  assert.ok(built.buckets.some(bucket=>bucket.values['s:C.report.finding']>0),'history-only labels contribute to the rolling window');
+  const selected=trendSeries(messageLabelsCatalog,{...state,selection:{values:['P.request.variant0'],excluded:true}},query,results,{now});
+  assert.deepEqual(selected.selected,['s:P.request.variant0']);assert.equal(selected.excluded,true);
+ }
+});
+test('message-label conversation results preserve the native source definition and saved card/table display',()=>{
+ const source={...core.EMPTY_QUERY,where:[{field:'family',op:'=',value:'P.request'},{field:'occurred_at',op:'>=',value:'-30d'}]},query=messageLabelConversationQuery(source);
+ assert.deepEqual(query.grouping.source.where,source.where);assert.ok(query.select.some(c=>c.field==='fingerprint'));
+ const s=core.loadSchema(messageLabelsDocument);
+ const grouped=core.applyQuery([{id:'a',fingerprint:'c',message_id:'a',title:'Example',occurred_at:'2026-10-01T12:00:00Z',family:'P.request'},{id:'b',fingerprint:'c',message_id:'b',title:'Example',occurred_at:'2026-10-01T13:00:00Z',family:'P.request'}],{...query,grouping:{...query.grouping,source:{...source,where:[]}}},s);
+ assert.equal(grouped.rows.length,1);assert.equal(grouped.rows[0].matching_messages,2);assert.equal(grouped.rows[0].conversation_title,'Example');
+ const host=messageLabelHostQuery(s.fields),cards=host.normalize({version:1,params:{label_results:['cards']}}),table=host.normalize({version:1,params:{label_results:['table']}});
+ assert.equal(labelResultsMode({...query,hostState:cards}),'cards');assert.equal(labelResultsMode({...query,hostState:table}),'table');assert.throws(()=>host.normalize({version:1,params:{label_results:['bad']}}));
+ const params=new URLSearchParams({label_chart:JSON.stringify({measure:'count',scale:'logarithmic',smoothing:3,resolution:'label'}),label_audience:'thinking',label_repository:'r',label_focus:'P.request'}),url=new URL(messageLabelLegacyURL(params),'http://localhost');assert.equal(url.searchParams.get('analyze_topic'),'labels');const filters=core.decodeQueryStrict(url.searchParams.get('analyze_filters'));assert.ok(filters.where.some(c=>c.field==='source'&&c.value==='thinking'));assert.equal(JSON.parse(url.searchParams.get('analyze_chart')).rollingPeriods,3);assert.equal(url.searchParams.has('label_lab'),false);
 });

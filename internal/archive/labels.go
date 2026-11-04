@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS message_labels_models (
   model TEXT PRIMARY KEY,
   labels_json TEXT NOT NULL
 );
-`
+` + messageLabelLedgerIndexSQL + ";"
 
 // labelsDirtyTriggers mark a conversation dirty when anything its items are
 // built from changes: its messages, their classification, reasoning
@@ -152,7 +152,7 @@ func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 	if version, err := c.metaValue(ctx, "labels_schema_version"); err == nil && version == labelsSchemaVersion {
 		return nil
 	}
-	return c.writeTransaction(ctx, "create the labels ledger", func(tx *sql.Tx) error {
+	err := c.writeTransaction(ctx, "create the labels ledger", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, labelsSchemaDDL); err != nil {
 			return err
 		}
@@ -161,9 +161,16 @@ func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}
 		}
+		if err := messageLabelFactTriggers(ctx, tx); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('labels_schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, labelsSchemaVersion)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	return c.ensureQueryCacheGeneration()
 }
 
 func (c *Catalog) hasLabelsLedger() bool {

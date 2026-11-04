@@ -17,6 +17,7 @@ export type AskFamily = { id: string; area: string; form: AskForm; prior: number
 export const askForms: AskForm[] = ["understand", "compare", "change", "find", "improve", "check", "learn"];
 
 export const askAreas: AskArea[] = [
+  {id:"message-labels",label:"Conversation functions",pages:["analyze/labels","analyze/query/message_labels"],signals:["labels.coverage"]},
   { id: "verification", label: "Tests and builds", pages: ["analyze/calls", "analyze/time"], signals: ["verification.failures", "verification.time"] },
   { id: "tool-failures", label: "Failing tool calls", pages: ["analyze/calls", "analyze/tools", "analyze/query/tool_calls", "analyze/query/tools"], signals: ["tools.failures"] },
   { id: "machine-time", label: "Where agent time goes", pages: ["analyze/time", "analyze/tools"], signals: ["tools.time"] },
@@ -55,6 +56,7 @@ export const askExcludedPages: Record<string, string> = {
 };
 
 export const askFamilies: AskFamily[] = [
+  {id:"message-label-patterns",area:"message-labels",form:"understand",prior:1,variants:["How do the functions of my conversations change over time{scope}?","Which message labels show up most often{scope}?"]},
   { id: "verification-latency", area: "verification", form: "understand", prior: 1, signals: ["verification.time"], variants: ["Find the causes of testing latency{scope}.", "Where do tests and builds slow my agents down{scope}?"] },
   { id: "verification-reliability", area: "verification", form: "understand", prior: 1, signals: ["verification.failures"], variants: ["What makes my tests and builds unreliable{scope}?", "Why do my agents struggle to get tests passing{scope}?"] },
   { id: "verification-improve", area: "verification", form: "improve", prior: 0.9, variants: ["How could my agents spend less time verifying their work{scope}?"] },

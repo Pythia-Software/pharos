@@ -11,6 +11,12 @@
  ],
  "areas": [
   {
+   "id": "message-labels",
+   "label": "Conversation functions",
+   "pages": ["analyze/labels","analyze/query/message_labels"],
+   "signals": ["labels.coverage"]
+  },
+  {
    "id": "verification",
    "label": "Tests and builds",
    "pages": ["analyze/calls","analyze/time"],
@@ -168,6 +174,13 @@
   }
  ],
  "families": [
+  {
+   "id": "message-label-patterns",
+   "area": "message-labels",
+   "form": "understand",
+   "prior": 1,
+   "variants": ["How do the functions of my conversations change over time{scope}?","Which message labels show up most often{scope}?"]
+  },
   {
    "id": "verification-latency",
    "area": "verification",

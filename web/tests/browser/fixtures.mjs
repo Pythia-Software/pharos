@@ -13,6 +13,32 @@ const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const schemas = Object.fromEntries(readdirSync(join(repo, "schemas")).filter(file => file.endsWith(".schema.json"))
   .map(file => [file.replace(".schema.json", ""), core.loadSchema(JSON.parse(readFileSync(join(repo, "schemas", file), "utf8")))]));
 const now = Date.now();
+// Invented strings for structural tests; production exports never enter git.
+export const labelTrajectorySnapshot = {
+  version:1,
+  source:{kind:'test fixture',catalog:'fixture.sqlite3',exported_at:'2026-10-31T12:00:00Z',models:['fixture-model/v1'],taxonomy:'candidate-0.3',ledger:{messages:14,conversations:2},candidate_conversations:2,limit:2,minimum_labeled_prose:2,selection:'Synthetic browser-test fixture.'},
+  taxonomy:[{id:'P.request.work.implement',name:'Implement',definition:'Request work.'},{id:'C.report.product',name:'Product',definition:'Report a product.'}],
+  conversations:['first','second'].map((id,index)=>({id:`fixture-${id}`,work_id:'fixture-work',title:index?'Review the retained conversation sequence and compare its recurring message functions':'Add a conversation explorer',repository:index?'example':'fixture',provider:index?'claude':'codex',started_at:'2026-10-30T12:00:00Z',
+    messages:['P.request.work.implement','C.deliberation.plan','C.report.product','P.control.redirect','C.report.product','P.request.work.implement','C.report.product'].map((label,i)=>({id:`${id}-${i}`,role:i===0||i===3||i===5?'user':'assistant',kind:i===1?'reasoning':'message',at:new Date(Date.parse('2026-10-30T12:00:00Z')+i*60000).toISOString(),segment:i===0||i===3||i===5?'H-typed':i===1?'TH':'AR',labels:[[label,.92]],text:'A small invented fixture for browser layout and navigation.',text_source:'Test fixture',truncated:false,chunks:1}))})),
+};
+// Recorded-structure fixture: one child and grandchild, including an async
+// acknowledgement. These invented records never enter the production export.
+for (const c of labelTrajectorySnapshot.conversations) {
+  c.main_session=c.id+':main';
+  c.sessions=[{id:c.main_session,parent_id:null,conversation_id:c.id,work_id:c.work_id,name:'Main agent',kind:'root',depth:0,link_evidence:'sample root',call_message_id:null,result_message_id:null}];
+  c.messages.forEach((m,i)=>Object.assign(m,{session_id:c.main_session,conversation_id:c.id,work_id:c.work_id,order:i*10,call_id:null}));
+  if(c.id!=='fixture-first')continue;
+  const event=(id,kind,session,order,labels,role='assistant')=>({id,kind,role,at:new Date(Date.parse('2026-10-30T12:00:00Z')+(session===c.main_session?order*6000:session==='fixture-child'?165000+order*50000:205000+order*25000)).toISOString(),segment:role==='tool'?'DEL':'AR',labels,text:'Invented nested workflow fixture.',text_source:'Test fixture',truncated:false,chunks:labels.length?1:0,session_id:session,conversation_id:c.id,work_id:c.work_id,order,call_id:id.includes('call')||id.includes('receipt')?'call-handle':null});
+  c.sessions.push({id:'fixture-child',parent_id:c.main_session,conversation_id:c.id,work_id:c.work_id,name:'Review helper',kind:'subagent',depth:1,link_evidence:'delegation handle',call_message_id:'fixture-call',result_message_id:'fixture-receipt'},
+    {id:'fixture-grandchild',parent_id:'fixture-child',conversation_id:c.id,work_id:c.work_id,name:'Nested helper',kind:'subagent',depth:2,link_evidence:'native session parent',call_message_id:null,result_message_id:null});
+  c.messages.push(event('fixture-call','delegation',c.main_session,25,[['P.request.work.review',.94]]),event('fixture-receipt','delegation_result',c.main_session,26,[['C.report.progress',.92]],'tool'),
+    event('child-0','message','fixture-child',0,[['P.request.work.review',.93],['C.report.intent',.91]]),event('child-1','message','fixture-child',1,[['C.report.product',.95]]),event('child-2','message','fixture-child',2,[['P.request.work.review',.93],['C.report.intent',.91]]),
+    event('grandchild-0','message','fixture-grandchild',0,[]),event('grandchild-1','message','fixture-grandchild',1,[['C.report.product',.95]]),
+    event('grandchild-2','message','fixture-grandchild',2,[]),event('grandchild-3','message','fixture-grandchild',3,[['C.report.product',.95]]));
+  c.messages.sort((a,b)=>a.order-b.order);
+}
+for(const c of labelTrajectorySnapshot.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
+labelTrajectorySnapshot.version=2;
 export const sourceSetupCandidates = [
   {name:'claude',kind:'claude',path:'/Users/test/.claude/projects',display_path:'~/.claude/projects',count:24,unit:'session',bytes:2400000,status:'found',acceptable:true,recommended:true},
   {name:'claude-work',kind:'claude',path:'/Users/test/.claude-work/projects',display_path:'~/.claude-work/projects',count:8,unit:'session',bytes:800000,status:'found',acceptable:true,recommended:true},
@@ -31,6 +57,7 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+for(const [i,row] of datasets.message_labels.entries())Object.assign(row,{fingerprint:row.conversation_id,message_id:"label-message-"+i,label:i%3?"C.report.finding":"P.request.work.implement",family:i%3?"C.report":"P.request",function_role:i%3?"Receiver":"Sender",label_status:"matched",source:["human","output","thinking"][i%3]});
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
 // Habits: four months of days, with streaks, a vacation, a punchcard and
@@ -157,9 +184,10 @@ function workPreview(id, query) {
 }
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
-  return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
+  return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:labelTrajectorySnapshot.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
+    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false}:{}),
     model_inferred: [{ start: Math.max(from, start + 1000), end: Math.min(to, sessionEnd - 1000) }], episodes: [{ start, end: sessionEnd }], truncated: false,
-    marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2" }] })) };
+    marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1", preview: "/repo/README.md", status: "ok" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2", preview: "npm test", status: "error" }] })) };
 }
 
 // Findings: open, in-cart and watching cards with a detail chart.
@@ -566,6 +594,7 @@ export const defaultApi = {
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
+  "GET /api/labels/conversations/:id":({params})=>({conversation:{...labelTrajectorySnapshot.conversations[0],id:params.id},taxonomy:labelTrajectorySnapshot.taxonomy,truncated:false}),
   // Query Table, on the production transport.
   "POST /api/query/usage/carbon": carbon,
   "POST /api/query/writing/series": ({ body }) => ({ works: 2, ...(body?.hourly ? { hourly: [] } : {}),
@@ -583,6 +612,7 @@ export const defaultApi = {
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
+  "GET /api/usage/label-trajectories": labelTrajectorySnapshot,
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
     days: [iso(day).slice(0, 10), iso(0).slice(0, 10)],

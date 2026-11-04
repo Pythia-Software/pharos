@@ -24,11 +24,13 @@ export function optimizePages(): NestedPage[] {
 
 // Preview pages (agent-events-flag.ts) are listed only when turned on.
 export function analyzePages(params: URLSearchParams, previews = agentEventsEnabled()): NestedPage[] {
-  return (["dashboards", "query"] as UsageMode[]).map(mode => ({
+  const pages: NestedPage[] = (["dashboards", "query"] as UsageMode[]).map(mode => ({
     id: mode, label: mode === "dashboards" ? "Dashboards" : "Query", children: mode === "dashboards"
       ? Object.entries(usageTopics).filter(([topic]) => previews || !agentEventTopics.has(topic)).map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode, topic: topic as keyof typeof usageTopics, report: "" }, params) }))
       : Object.entries(usageDatasets).filter(([dataset]) => previews || !agentEventDatasets.has(dataset)).map(([dataset, item]) => ({ id: `query:${dataset}`, label: item.label, href: usageWorkspaceURL({ mode, dataset: dataset as keyof typeof usageDatasets, topic: usageDatasetTopics[dataset as keyof typeof usageDatasets], report: "" }, params) })),
   }));
+  if (typeof document !== "undefined" && document.documentElement.hasAttribute("data-label-trajectories")) pages.push({id:"label-trajectories",label:"Conversation shapes · lab",href:"/analyze?label_lab=fingerprints"});
+  return pages;
 }
 
 export type AppSection = { id: string; label: string; href: string; pages: readonly NestedPage[] };
@@ -63,6 +65,7 @@ export function appLocation(path: string, params: URLSearchParams) {
   if (path.startsWith("/settings")) return { section: "settings", current: path };
   if (path === "/mcp") return { section: "analyze", current: "dashboards:mcp" };
   if (path === "/analyze" || path === "/tools") {
+    if (params.has("label_lab")) return {section:"analyze",current:params.get("label_lab")==="distribution"?(params.get("label_audience")==="human"?"label-human":params.get("label_audience")==="thinking"?"label-thinking":"label-distribution"):"label-trajectories"};
     const state = readUsageWorkspace(new URL(canonicalAnalyzeURL(path, params), "http://localhost").searchParams);
     return { section: "analyze", current: `${state.mode}:${state.mode === "dashboards" ? state.topic : state.dataset}` };
   }

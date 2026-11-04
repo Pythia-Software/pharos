@@ -2,7 +2,7 @@ import type { AggregationResultEntry, FieldSchema } from "@pythia-software/query
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
-import { analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
+import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { DASHBOARD_CARD_ACTION, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
@@ -62,7 +62,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const request = { ...catalog.request?.params, ...topic === "parallelism" ? { parallelism_settings: JSON.stringify({ counting: parallelism.counting, gap: parallelism.gap }) } : {} };
   const run = (query: Parameters<typeof runAnalysisQuery>[2]) => runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
-  if (state.view === "trend") {
+  if (isTrendView(state.view)) {
     const trend = trendQuery(catalog, state, where, { now, zone });
     const built = trendSeries(catalog, state, trend, await run(trend.query), { now, label });
     if (built.error) throw new Error(built.error);
@@ -73,7 +73,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, state),
-      dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
+      dashboardTrend: { prepared: true, lines: state.view !== "trend_bar" && (built.lines || state.display === "cumulative"), bars: state.view === "trend_bar", grouped: state.view === "trend_bar" && (!built.additive || state.scale === "logarithmic" && !state.share), percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
         unit: percent ? "percent" : catalog.measures[state.metric].format.kind === "duration" ? "ms" : catalog.measures[state.metric].unit,
         xLabel: state.period, yLabel: trendTitle(catalog, state) } };
   }

@@ -31,7 +31,8 @@ type devUI struct {
 	proxy  *httputil.ReverseProxy
 	// Optional, read-only timing snapshot for visual prototypes. Kept outside
 	// assets so personal library data is never bundled into a build.
-	concurrencyData string
+	concurrencyData       string
+	labelTrajectoriesData string
 }
 
 func newDevUI(assets string, service *url.URL, token string, port int) *devUI {
@@ -119,6 +120,15 @@ func (d *devUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/usage/label-trajectories" && d.labelTrajectoriesData != "":
+		payload, err := os.ReadFile(d.labelTrajectoriesData)
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(payload)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/usage/concurrency-prototype" && d.concurrencyData != "":
 		payload, err := os.ReadFile(d.concurrencyData)
 		if err != nil {
@@ -138,6 +148,9 @@ func (d *devUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		html := strings.Replace(uiHTML(source), "<title>Pharos</title>", "<title>Pharos (dev)</title>", 1)
 		if d.concurrencyData != "" {
 			html = strings.Replace(html, "<html", "<html data-concurrency-prototype", 1)
+		}
+		if d.labelTrajectoriesData != "" {
+			html = strings.Replace(html, "<html", "<html data-label-trajectories", 1)
 		}
 		// Dev previews open with annotation controls, without changing the
 		// library's optional-button preferences used by the installed app.
@@ -159,6 +172,7 @@ func runDevUICLI(config Config, args []string) error {
 	noOpen := flags.Bool("no-open", false, "")
 	openPath := flags.String("open-path", "/", "Local UI page to open after signing in, including query filters")
 	concurrencyData := flags.String("concurrency-data", "", "Read-only concurrency prototype JSON produced by tools/concurrency-prototype.py")
+	labelTrajectoriesData := flags.String("label-trajectories-data", "", "Read-only message-label snapshot produced by tools/label-trajectories.py")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -189,6 +203,20 @@ func runDevUICLI(config Config, args []string) error {
 	target := page.String()
 	fmt.Printf("Serving the UI in %s against %s\n%s\n", *assets, service, target)
 	handler := newDevUI(*assets, service, config.APIToken, *port)
+	if *labelTrajectoriesData != "" {
+		data, err := os.ReadFile(*labelTrajectoriesData)
+		if err != nil {
+			return fmt.Errorf("read label trajectories: %w", err)
+		}
+		var snapshot struct {
+			Version       int               `json:"version"`
+			Conversations []json.RawMessage `json:"conversations"`
+		}
+		if err := json.Unmarshal(data, &snapshot); err != nil || (snapshot.Version != 1 && snapshot.Version != 2) || snapshot.Conversations == nil {
+			return fmt.Errorf("label trajectories must be a version-1 or version-2 snapshot with conversations")
+		}
+		handler.labelTrajectoriesData = *labelTrajectoriesData
+	}
 	if *concurrencyData != "" {
 		data, err := os.ReadFile(*concurrencyData)
 		if err != nil {
