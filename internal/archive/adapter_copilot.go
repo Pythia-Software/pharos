@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -339,29 +340,18 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 	}
 	// Receipts by request, under its API and its provider ID alike: a
 	// request reported again updates its one record, as token accounting
-	// reads it. beforeShutdown is their usage per model at the last shutdown.
+	// reads it. A receipt is totalled once a shutdown follows it.
 	type receipt struct {
-		agent   *copilotAgent
-		index   int
-		model   string
-		request string
-		usage   map[string]any
+		agent    *copilotAgent
+		index    int
+		model    string
+		request  string
+		usage    map[string]any
+		totalled bool
 	}
 	receipts, byRequest := []*receipt{}, map[string]*receipt{}
-	receipted := func() map[string]map[string]float64 {
-		sums := map[string]map[string]float64{}
-		for _, r := range receipts {
-			if sums[r.model] == nil {
-				sums[r.model] = map[string]float64{}
-			}
-			for key, value := range r.usage {
-				n, _ := number(value)
-				sums[r.model][key] += n
-			}
-		}
-		return sums
-	}
-	beforeShutdown := map[string]map[string]float64{}
+	// Records of receipts found to be one request, by conversation.
+	merged := map[*copilotAgent]map[int]bool{}
 	var lastShutdown map[string]any
 	shutdownAt, shutdownLocator := "", ""
 	started, ended := "", ""
@@ -386,10 +376,11 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		line, log := integer(event["_line"]), defaultString(firstString(event["_origin"]), origin)
 		eventID := firstString(event["id"])
 		if eventID == "" {
-			// Both of a session's logs have a line 2.
+			// Both of a session's logs have a line 2. A flat log's IDs stay
+			// as they were before the session had a folder.
 			eventID = fmt.Sprintf("line-%d", line)
-			if log != origin {
-				eventID = "flat:" + eventID
+			if log == origin && filepath.Base(filepath.Dir(session.events)) == session.id {
+				eventID = "events:" + eventID
 			}
 		}
 		// The event's type and ID stand in for its raw text, so text quoting
@@ -531,9 +522,33 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			}
 			var r *receipt
 			for _, key := range keys {
-				if r = byRequest[key]; r != nil {
-					break
+				found := byRequest[key]
+				if found == nil || found == r {
+					continue
 				}
+				if r == nil {
+					r = found
+					continue
+				}
+				// Reports under each ID alone, then under both: the earlier
+				// receipt keeps the request, the later one's fields superseding.
+				first, later := r, found
+				if later.index < first.index {
+					first, later = later, first
+				}
+				maps.Copy(first.usage, later.usage)
+				first.model, first.request, first.totalled = later.model, firstString(first.request, later.request), first.totalled || later.totalled
+				if merged[agent] == nil {
+					merged[agent] = map[int]bool{}
+				}
+				merged[agent][later.index] = true
+				receipts = slices.DeleteFunc(receipts, func(x *receipt) bool { return x == later })
+				for k, x := range byRequest {
+					if x == later {
+						byRequest[k] = first
+					}
+				}
+				r = first
 			}
 			if r == nil {
 				item := base
@@ -560,19 +575,43 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		case "session.shutdown":
 			// Each shutdown totals the whole session so far, receipts included.
 			lastShutdown, shutdownAt, shutdownLocator = data, timestamp, base.EvidenceLocator
-			beforeShutdown = receipted()
+			for _, r := range receipts {
+				r.totalled = true
+			}
 		case "session.error", "assistant.error", "error":
 			item := base
 			item.Role, item.Kind, item.Text = "system", "error", firstString(data["message"], data["error"], jsonText(data))
 			add(item)
 		}
 	}
+	for agent, indexes := range merged {
+		messages := agent.conversation.Messages[:0]
+		for index, message := range agent.conversation.Messages {
+			if !indexes[index] {
+				messages = append(messages, message)
+			}
+		}
+		agent.conversation.Messages = messages
+	}
 	// Releases that wrote no receipts still totalled each model at shutdown,
 	// and a session resumed after an upgrade holds both. What the last
-	// shutdown totals beyond the receipts before it is usage no receipt
-	// records. Its ID names no line, so a later total replaces it rather
-	// than adding to it.
+	// shutdown totals beyond the receipts before it, as last reported, is
+	// usage no receipt records. Its ID names no line, so a later total
+	// replaces it rather than adding to it.
 	if lastShutdown != nil {
+		beforeShutdown := map[string]map[string]float64{}
+		for _, r := range receipts {
+			if !r.totalled {
+				continue
+			}
+			if beforeShutdown[r.model] == nil {
+				beforeShutdown[r.model] = map[string]float64{}
+			}
+			for key, value := range r.usage {
+				n, _ := number(value)
+				beforeShutdown[r.model][key] += n
+			}
+		}
 		metrics := mapValueDefault(lastShutdown["modelMetrics"])
 		models := make([]string, 0, len(metrics))
 		for model := range metrics {

@@ -471,15 +471,19 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 	for _, conversation := range record.Conversations {
 		selected[conversation.Origin] = true
 	}
+	// Metadata neither versions the record nor makes another input of the
+	// same version a conflicting one, so a rename alone is read.
 	values := []string{}
 	for _, part := range parts {
-		values = append(values, part.item, part.signal)
+		if !part.metadata {
+			values = append(values, part.item, part.signal)
+		}
 	}
 	for _, f := range view.manifest.Files {
 		// A compressed rollout is selected by the plain path it stands for.
-		if selected[f.Path] || selected[plainRollout(f.Path)] {
+		if (selected[f.Path] || selected[plainRollout(f.Path)]) && !metadata[f.Path] {
 			values = append(values, f.Path, f.SHA256)
-			if f.ObservedNS > record.Observed && !metadata[f.Path] {
+			if f.ObservedNS > record.Observed {
 				observe(record, f.ObservedNS)
 			}
 		}

@@ -194,9 +194,10 @@ func TestCopilotUsageCountsEachRequestOnce(t *testing.T) {
 }
 
 // copilotUpgraded is a session begun by a release that wrote no receipts and
-// resumed by one that does: each shutdown totals the whole session. Each of
-// its requests is reported twice, first in part: once under the provider's
-// ID before the API's, once before its model. A prompt quotes usage JSON.
+// resumed by one that does: each shutdown totals the whole session. Its
+// requests are reported more than once, first in part: under the provider's
+// ID, then the API's, then both, and once without the model until after the
+// shutdown. A prompt quotes usage JSON.
 const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","copilotVersion":"0.0.330"},"id":"m1","timestamp":"2026-01-02T10:00:00.000Z"}
 {"type":"user.message","data":{"content":"Hello"},"id":"m2","timestamp":"2026-01-02T10:00:01.000Z"}
 {"type":"assistant.message","data":{"messageId":"b1","content":"Hi","model":"claude-sonnet-4.5"},"id":"m3","timestamp":"2026-01-02T10:00:02.000Z"}
@@ -206,9 +207,11 @@ const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","c
 {"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"cacheReadTokens":80,"providerCallId":"p-9"}},"id":"m7a","timestamp":"2026-01-03T10:00:01.500Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"outputTokens":10,"cacheReadTokens":80,"cacheWriteTokens":0,"apiCallId":"api-9","providerCallId":"p-9"}},"id":"m7","timestamp":"2026-01-03T10:00:02.000Z"}
 {"type":"assistant.message","data":{"messageId":"b2","content":"Hi again","model":"claude-sonnet-4.5","apiCallId":"api-9"},"id":"m8","timestamp":"2026-01-03T10:00:02.100Z"}
-{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"apiCallId":"api-10"}},"id":"m10a","timestamp":"2026-01-03T10:00:02.500Z"}
-{"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":50,"outputTokens":5,"apiCallId":"api-10"}},"id":"m10","timestamp":"2026-01-03T10:00:02.600Z"}
+{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"providerCallId":"p-10"}},"id":"m10a","timestamp":"2026-01-03T10:00:02.500Z"}
+{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"apiCallId":"api-10"}},"id":"m10b","timestamp":"2026-01-03T10:00:02.550Z"}
+{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"outputTokens":5,"apiCallId":"api-10","providerCallId":"p-10"}},"id":"m10c","timestamp":"2026-01-03T10:00:02.600Z"}
 {"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390,"outputTokens":30,"cacheReadTokens":180,"cacheWriteTokens":0}},"gpt-5-mini":{"usage":{"inputTokens":50,"outputTokens":5}}}},"id":"m9","timestamp":"2026-01-03T10:00:03.000Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":50,"outputTokens":5,"apiCallId":"api-10"}},"id":"m10","timestamp":"2026-01-03T10:00:03.100Z"}
 `
 
 func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
@@ -222,8 +225,7 @@ func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
 	// from the quoted JSON: while the session is open, and once its last
 	// shutdown totals it.
 	log := filepath.Join(root, "session-state", "sess-3", "events.jsonl")
-	lines := strings.SplitAfter(strings.TrimSpace(copilotUpgraded), "\n")
-	writeSourceFile(t, log, strings.Join(lines[:len(lines)-1], ""))
+	writeSourceFile(t, log, copilotUpgraded[:strings.Index(copilotUpgraded, `{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390`)])
 	ingestSource(t, c, source)
 	if got := total(); got != 475 {
 		t.Fatalf("open session: %d tokens, want 475", got)
@@ -303,9 +305,20 @@ func TestCopilotFlatAndFolderLogsOfOneSessionAreReadTogether(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "session-state")
 	writeSourceFile(t, filepath.Join(sessions, "sess-5.jsonl"), strings.ReplaceAll(strings.ReplaceAll(copilotLegacy, "sess-0", "sess-5"), `,"id":"l2"`, ""))
+	// The flat log is indexed alone first, then with the folder a later
+	// release starts: its records keep their IDs.
+	c, _ := testCatalog(t)
+	source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true}
+	ingestSource(t, c, source)
 	writeSourceFile(t, filepath.Join(sessions, "sess-5", "events.jsonl"), `{"type":"session.resume","data":{},"id":"r1","timestamp":"2026-01-03T10:00:00.000Z"}
 {"type":"user.message","data":{"content":"Again"},"timestamp":"2026-01-03T10:00:01.000Z"}
 `)
+	ingestSource(t, c, source)
+	for _, text := range []string{"Hello", "Again"} {
+		if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE role='user' AND text=?`, text); n != 1 {
+			t.Fatalf("%d prompts %q", n, text)
+		}
+	}
 	records := discoverCopilot(t, root)
 	texts, ids, residual := []string{}, map[string]bool{}, ""
 	for _, message := range records["sess-5"].Conversations[0].Messages {
@@ -325,6 +338,29 @@ func TestCopilotFlatAndFolderLogsOfOneSessionAreReadTogether(t *testing.T) {
 	}
 	if !strings.HasSuffix(residual, "sess-5.jsonl:4") {
 		t.Fatalf("shutdown usage points to %q", residual)
+	}
+}
+
+// A session renamed in Copilot is renamed in Pharos too, though its log, which
+// versions it, is unchanged; also when sessions are read from retained copies.
+func TestCopilotRenameIsReadWithoutANewTurn(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "retained"}[retained], func(t *testing.T) {
+			c, _ := testCatalog(t)
+			root := copilotFixture(t)
+			source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": retained}}
+			ingestSource(t, c, source)
+			yaml := filepath.Join(root, "session-state", "sess-1", "workspace.yaml")
+			writeSourceFile(t, yaml, strings.Replace(copilotWorkspace, "Word counter: first pass", "Word counter, renamed", 1))
+			later := time.Now().Add(time.Hour)
+			if err := os.Chtimes(yaml, later, later); err != nil {
+				t.Fatal(err)
+			}
+			ingestSource(t, c, source)
+			if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE title='Word counter, renamed'`); n != 1 {
+				t.Fatalf("renamed workspaces: %d", n)
+			}
+		})
 	}
 }
 
