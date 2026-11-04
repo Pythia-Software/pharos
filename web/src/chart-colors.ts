@@ -1,3 +1,4 @@
+import {shortLabel,stateColor} from "./conversation-labels";
 import catalog from "../../pricing/model_colors.json";
 import { activities, activityPresentation } from "./machine-activity-data";
 import { orderedValues } from "./session-shape-bands";
@@ -5,7 +6,7 @@ import { orderedValues } from "./session-shape-bands";
 type Provider = keyof typeof catalog.providers;
 type ModelStyle = { provider: Provider; class: string; color: string };
 type SourceStyle = { provider: Provider; color: string };
-export type SeriesStyle = { color: string; group?: string; order?: string };
+export type SeriesStyle = { color: string; group?: string; groupPath?: string[]; order?: string };
 const models = catalog.models as Record<string, ModelStyle>;
 const sources = catalog.sources as Record<string, SourceStyle>;
 const providerOrder: Provider[] = ["anthropic", "google", "openai", "other"];
@@ -75,6 +76,12 @@ export const orderedScope = (scope: string) => sortedScopes.has(scope.startsWith
 // slices and bars keep that order too, unlike models or providers.
 export const steppedScope = (scope: string) => scope === "effort" || scope === "level_band" || Object.hasOwn(orderedValues, scope);
 export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
+  if (scope === "function_role") return {color:stateColor(name === "Sender" ? "P" : name === "Receiver" ? "C" : "?"),order:name === "Sender" ? "0" : name === "Receiver" ? "1" : "2"};
+  if(["label","family"].includes(scope)&&(name==="?"||/^[PC](\.|$)/.test(name))){
+    const group=name.startsWith("P")?"Sender":name.startsWith("C")?"Receiver":"Coverage",parts=name.split('.');
+    return {color:stateColor(name),order:(name.startsWith("P")?"0":name.startsWith("C")?"1":"2")+name,group,
+      groupPath:[group,...scope==='label'?parts.slice(1,-1).map((_,index)=>shortLabel(parts.slice(0,index+2).join('.'))):[]]};
+  }
   if (scope.startsWith("root_")) scope = scope.slice(5);
   // Daily covers key series by their displayed label; Machine Time's palette applies to either.
   if (scope === "hour_of_day") return { color: hourOfDayColor(Number.parseInt(name, 10)), order: name };

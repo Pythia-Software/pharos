@@ -494,6 +494,7 @@ test("quick search takes focus from the header button and from the keyboard shor
     }), 'sidebar control is covered by page content');
     await press(expand);
     await sidebar.waitFor();
+    await press(sidebar.locator('summary').filter({ hasText: /^People$/ }));
     await press(sidebar.getByRole('link', { name: /^Human words$/i }));
     await page.locator('.usage-human-dashboard .usage-chart').waitFor();
     await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
@@ -505,7 +506,7 @@ test('navigation and header focus stay reachable when resizing between layouts',
   const { page, settled } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart' });
   // The section sidebar hands focus to the phone switcher and back.
   const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
-  await sidebar.getByRole('link', { name: /^Human words$/i }).focus();
+  await sidebar.getByRole('link', { name: 'Tokens and Cost', exact: true }).focus();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForFunction(() => document.activeElement === document.getElementById('appNavigationToggle'));
   await press(page.locator('#appNavigationToggle'));
@@ -589,10 +590,34 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
 {
   const viewport = { width: 390, height: 844 };
   test(`app navigation takes and returns focus, and reaches other app sections at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
+    const { page, shot } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
     const opener = page.locator('#appNavigationToggle'), dialog = page.getByRole('dialog', { name: 'Navigate Pharos' });
     await press(opener);
     await holdsFocus(page, dialog, opener);
+    await press(opener);
+    const outcomes = dialog.locator('summary').filter({ hasText: /^Outcomes$/ });
+    await press(outcomes);
+    assert.equal(await dialog.getByRole('link', { name: 'Tokens and Cost', exact: true }).isVisible(), false);
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+    await press(opener);
+    await page.waitForFunction(element => document.activeElement === element, await outcomes.elementHandle());
+    await press(outcomes);
+    const people = dialog.locator('summary').filter({ hasText: /^People$/ });
+    await press(people);
+    await page.waitForFunction(element => {
+      const rect = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    }, await people.elementHandle());
+    await shot('nested-dashboards');
+    await dialog.getByRole('link', { name: 'TL1 attempts', exact: true }).scrollIntoViewIfNeeded();
+    assert.equal(await onScreen(dialog.getByRole('button', { name: 'All pages', exact: true })), true, 'scrolling keeps the way back reachable');
+    assert.equal(await onScreen(dialog.getByRole('button', { name: 'Close navigation', exact: true })), true, 'scrolling keeps the close control reachable');
+    await shot('scrolled-navigation');
+    await press(dialog.getByRole('link', { name: 'Human Words', exact: true }));
+    await page.locator('.usage-human-dashboard .usage-chart').waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     await press(opener);
     await press(dialog.getByRole('button', { name: 'All pages', exact: true }));
     await press(dialog.getByRole('button', { name: 'Settings', exact: true }));
@@ -749,13 +774,6 @@ test("All Cards moves focus to its content and browser history returns Home", { 
   await welcome.waitFor();
   await settled();
   assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "returning Home leaves the welcome text unfocusable");
-});
-
-test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
-  const { page } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
-  const edit = page.locator(".card-library-entry button[aria-label^='Edit card']").first();
-  await press(edit);
-  await holdsFocus(page, page.locator("dialog.card-template-editor"), edit);
 });
 
 test("the findings prompt review takes focus, keeps it and returns it on Escape", { skip }, async t => {
@@ -1540,8 +1558,26 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   }});
   await page.emulateMedia({reducedMotion:motion});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const hintVisible=()=>editor.evaluate(element=>{
+    const hint=getComputedStyle(element,'::after');
+    return !['none','normal','""'].includes(hint.content)&&hint.display!=='none'&&hint.visibility==='visible';
+  });
+  assert.ok(await hintVisible(),'the empty, unfocused composer offers an invitation');
+  await shot('empty-invitation');
+  await editor.focus();
+  assert.equal(await hintVisible(),false,'focus hides the invitation before any typing');
+  await shot('focused-empty');
+  await editor.fill('An unsent draft');
+  await page.locator('.pharos-model-trigger').focus();
+  assert.equal(await hintVisible(),false,'a blurred draft must not regain a placeholder');
+  await editor.fill('');
+  assert.equal(await hintVisible(),false,'deleting the draft while focused keeps the invitation hidden');
+  await page.locator('.pharos-model-trigger').focus();
+  assert.ok(await hintVisible(),'leaving an empty composer restores the invitation');
   await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true}),editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  assert.equal(await hintVisible(),false,'opening the modal focuses a clear editor');
   const finishMotion=()=>modal.evaluate(async element=>{
     for(;;){
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));

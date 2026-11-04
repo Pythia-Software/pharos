@@ -14,6 +14,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
+import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
 
 import {
   thinkingBreakdowns,
@@ -43,6 +44,9 @@ import {
   ThinkingScatter,
 } from "./thinking-charts";
 import "./thinking.css";
+
+// The page's address is its cards' definition (thinking-card.ts).
+const cardSource = { page: true as const, schema: loadSchema(modelRequestDocument) };
 
 async function loadThinking(
   url: string,
@@ -442,6 +446,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
   const trace =
     data?.traces?.find((t) => t.ID === state.session) ?? data?.traces?.[0];
   return (
+    <DashboardCardSourceContext.Provider value={cardSource}>
     <section
       className="thinking-dashboard"
       data-view-field="thinking"
@@ -676,7 +681,10 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           </p>
           {detail ? (
             <>
-              <h2>Compare whole distributions</h2>
+              <div className="thinking-card-title">
+                <h2>Compare whole distributions</h2>
+                <CreateDashboardCard target="thinking-distributions" />
+              </div>
               {fixed ? (
                 <p className="usage-dashboard-note">
                   Effort stays low to high, with Unreported last. Model panels
@@ -903,7 +911,10 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 not a pure inference or first-token clock.
               </p>
               <div className="thinking-overview-pair">
-                <ThinkingCDF groups={data.groups} />
+                <ThinkingCDF
+                  groups={data.groups}
+                  action={<CreateDashboardCard target="thinking-waits" />}
+                />
                 <div>
                   <h2>What affects the wait?</h2>
                   <p className="usage-dashboard-note">
@@ -1006,9 +1017,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   necessarily API vendor.
                 </p>
               </ViewDisclosure>
-              <h2 className="thinking-section-title">
-                Compaction and thinking time
-              </h2>
+              <div className="thinking-card-title">
+                <h2 className="thinking-section-title">
+                  Compaction and thinking time
+                </h2>
+                <CreateDashboardCard target="thinking-compactions" />
+              </div>
               <p className="usage-dashboard-note">
                 Compare median waits before and after compaction within the
                 same model, effort and conversation stream. We use up to three
@@ -1160,5 +1174,6 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
         </div>
       ) : null}
     </section>
+    </DashboardCardSourceContext.Provider>
   );
 }

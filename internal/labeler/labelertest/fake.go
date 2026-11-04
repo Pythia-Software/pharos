@@ -22,6 +22,8 @@ import (
 const (
 	FakeWorkerEnv = "PHAROS_LABELER_FAKE_WORKER"
 	FakeCountEnv  = "PHAROS_LABELER_FAKE_COUNT"
+	// FakeHelloEnv optionally records each worker's handshake as JSONL.
+	FakeHelloEnv = "PHAROS_LABELER_FAKE_HELLO"
 )
 
 // FakeProb is the fake model: (sum of the row's real token ids + j) mod 100
@@ -98,6 +100,14 @@ func FakeWorker(mode string) int {
 	}
 	var hello labeler.Hello
 	_ = json.Unmarshal(payload, &hello)
+	if path := os.Getenv(FakeHelloEnv); path != "" {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return 2
+		}
+		_ = json.NewEncoder(file).Encode(hello)
+		_ = file.Close()
+	}
 	if mode == "refuse" {
 		fmt.Fprintln(os.Stderr, "cannot open the model file")
 		writeJSON(labeler.FrameError, labeler.ErrorReply{Code: labeler.ErrCodeModel, Message: "no model at " + hello.Model, Fatal: true})

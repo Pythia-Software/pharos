@@ -24,14 +24,15 @@ export const isHabitsCardTarget = (target: string): target is HabitsCardTarget =
 export type HabitsCover =
   | { chart: "calendar"; summary: HabitsSummary; actor: StreakActor; weeks: number; weekends: boolean }
   | { chart: "punchcard"; summary: HabitsSummary; view: PunchcardView }
-  | { chart: "days"; summary: HabitsSummary };
+  | { chart: "days"; summary: HabitsSummary; count: number };
 
-export type HabitsCardView = { mode: HabitsMode; weeks: number; calendar: StreakActor; weekends: boolean; punchcard: PunchcardView; range: string };
+export type HabitsCardView = { mode: HabitsMode; weeks: number; calendar: StreakActor; weekends: boolean; punchcard: PunchcardView; range: string; shapeDays: number };
 export function readHabitsCardView(params: URLSearchParams): HabitsCardView {
   return {
     mode: readViewState<HabitsMode>("habits_streak", "all", params), weeks: Number(readViewState("habits_weeks", "53", params)),
     calendar: readViewState<StreakActor>("habits_calendar", "you", params), weekends: readViewState<string>("habits_weekends", "show", params) !== "hide",
     punchcard: readViewState<PunchcardView>("habits_punchcard", "you", params), range: readViewState("habits_punchcard_days", "90", params),
+    shapeDays: Number(readViewState("habits_shape_days", "28", params)),
   };
 }
 
@@ -56,7 +57,7 @@ export function habitsCardDescription(target: HabitsCardTarget, view: HabitsCard
     case "habits-streaks": return `Days in a row with a message you typed${view.mode === "weekdays" ? ", counting weekdays only" : ""}; your longest run; and your engaged time yesterday and over the last seven days.`;
     case "habits-calendar": return `Each square is a day of ${actorLabel(view.calendar).toLowerCase()}; darker is more time.`;
     case "habits-punchcard": return `Minutes per week of ${viewLabel(view.punchcard).toLowerCase()} in each weekday hour, coloured by time of day.`;
-    case "habits-days": return "Each of the last 28 days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.";
+    case "habits-days": return `Each of the last ${view.shapeDays} days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.`;
     case "habits-pace": return "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.";
     case "habits-automations": return "What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.";
   }
@@ -67,6 +68,7 @@ export function habitsCardWindow(target: HabitsCardTarget, view: HabitsCardView)
     case "habits-streaks": return "Today";
     case "habits-calendar": return `Past ${Math.min(view.weeks, cardCalendarWeeks)} weeks`;
     case "habits-punchcard": case "habits-automations": return rangeLabel(view.range);
+    case "habits-days": return `Past ${view.shapeDays} days`;
     default: return "Past 28 days";
   }
 }
@@ -74,7 +76,7 @@ export function habitsCardWindow(target: HabitsCardTarget, view: HabitsCardView)
 export function habitsCardPresentation(target: HabitsCardTarget, view: HabitsCardView): { category: QueryCategory; loading: CardLoadingSpec } {
   const agents = target === "habits-automations" || target === "habits-calendar" && view.calendar !== "you" || target === "habits-punchcard" && view.punchcard !== "you";
   const kind: CardLoadingSpec["kind"] = target === "habits-streaks" || target === "habits-pace" || target === "habits-automations" ? "list" : "columns";
-  const count = target === "habits-automations" ? 6 : kind === "list" ? 4 : target === "habits-days" ? 28 : 24;
+  const count = target === "habits-automations" ? 6 : kind === "list" ? 4 : target === "habits-days" ? view.shapeDays : 24;
   return { category: agents ? "machines" : "human", loading: { kind, count, height: target === "habits-calendar" ? view.weekends ? 130 : 105 : target === "habits-punchcard" ? 115 : target === "habits-days" ? 160 : fittedCoverHeight(kind, count, kind === "list" ? { belowLabels: true, labelLines: 1 } : {}) } };
 }
 
@@ -123,8 +125,8 @@ export function habitsCardPreview(target: HabitsCardTarget, view: HabitsCardView
       return { ...base, state: "ready", note: `Minutes per week in each hour, ${formatDay(summary.punchcard.from)} to ${formatDay(summary.punchcard.to)}. Colours are the time of day.`,
         coverHeight: 115, habits: { chart: "punchcard", summary, view: view.punchcard } };
     case "habits-days":
-      return { ...base, state: summary.days.slice(-28).some(day => day.you.first !== undefined) ? "ready" : "empty", emptyLabel: "No engaged time in the last four weeks",
+      return { ...base, state: summary.days.slice(-view.shapeDays).some(day => day.you.first !== undefined) ? "ready" : "empty", emptyLabel: `No engaged time in the last ${view.shapeDays} days`,
         note: "From your first engaged minute to your last; solid pieces are when you were engaged, coloured by time of day.",
-        coverHeight: 160, habits: { chart: "days", summary } };
+        coverHeight: 160, habits: { chart: "days", summary, count: view.shapeDays } };
   }
 }

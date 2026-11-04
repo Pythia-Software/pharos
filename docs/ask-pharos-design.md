@@ -71,6 +71,16 @@ The prompt editor expands automatically. Focus enlivens the whole composer and i
 ribbon border. Provide light and dark appearances, a paper-plane send button, and
 an icon beside it to switch to ordinary search.
 
+An empty new chat cycles through the library's suggestion questions every
+twelve seconds, starting with a randomly chosen question. Questions currently
+readable in the suggestion carousel are excluded, including after scrolling,
+resizing or refreshing it. If none remain, use “Ask about your past work…”;
+when suggestions are hidden, the whole slate is available. The placeholder
+disappears immediately on focus and returns only when the editor is empty and
+unfocused. Rotation pauses and resets its idle time while focused, hidden,
+loading a chat, or holding a draft or context chip. Reduced motion keeps the
+invitation still. Existing chats use a short follow-up invitation instead.
+
 The expanded composer, floating progress panel and header button share the
 `createPharosGlow` effect in `assets/ask-glow.js` and the `.pharos-glow` styles.
 The effect owns its SVG contour, ribbon, aura, resizing and working state; attach

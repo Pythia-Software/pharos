@@ -28,7 +28,31 @@ func TestParseShellCommand(t *testing.T) {
 		{"sed -n '1,20p' file.go", "sed", "", "read", 1, false, false, false},
 		{"echo '---' ; rg -n 'a|b' src", "rg", "", "search", 2, false, false, false},
 		{"git commit -m \"$(cat <<'EOF'\nFix it; don't break\n\nCo-Authored-By: x\nEOF\n)\" && git push", "git", "commit", "vcs", 2, false, false, true},
-		{"cat > out.txt <<EOF\nline one && two\nEOF\nls -la", "cat", "", "read", 2, false, true, true},
+		{"cat > out.txt <<EOF\nline one && two\nEOF\nls -la", "cat", "", "file-write", 2, false, true, true},
+		{"cat a.go 2>/dev/null", "cat", "", "read", 1, false, true, false},
+		{"npx tsc --noEmit", "npx", "tsc", "build", 1, false, false, false},
+		{"npx -y vitest run", "npx", "vitest", "test", 1, false, false, false},
+		{"npx next dev", "npx", "next", "run", 1, false, false, false},
+		{"pnpm --filter web exec playwright test", "pnpm", "exec playwright", "test", 1, false, false, false},
+		{"pnpm dlx prettier --check .", "pnpm", "dlx prettier", "test", 1, false, false, false},
+		{"npm exec -- prettier --check .", "npm", "exec prettier", "test", 1, false, false, false},
+		{"npm exec --yes -- eslint .", "npm", "exec", "test", 1, false, false, false},
+		{"pnpm exec cat > out.txt", "pnpm", "exec cat", "file-write", 1, false, true, false},
+		{"npx prettier --write . 2>/dev/null", "npx", "prettier", "file-write", 1, false, true, false},
+		{"pnpm typecheck", "pnpm", "typecheck", "test", 1, false, false, false},
+		{"uv run --with rich pytest -q", "uv", "run", "test", 1, false, false, false},
+		{"uv run python script.py", "uv", "run", "run", 1, false, false, false},
+		{"cargo +1.91.0 clippy --all-targets", "cargo", "clippy", "test", 1, false, false, false},
+		{"cargo check", "cargo", "check", "test", 1, false, false, false},
+		{"go list ./...", "go", "list", "read", 1, false, false, false},
+		{"gofmt -l -w .", "gofmt", "", "file-write", 1, false, false, false},
+		{"gofmt -l .", "gofmt", "", "test", 1, false, false, false},
+		{"rustfmt --check src/main.rs", "rustfmt", "", "test", 1, false, false, false},
+		{"gzip -dc log.gz", "gzip", "", "read", 1, false, false, false},
+		{"gzip big.log", "gzip", "", "file-write", 1, false, false, false},
+		{"source ~/.nvm/nvm.sh && nvm use && npm --prefix web test", "npm", "test", "test", 3, false, false, false},
+		{"command -v uvx", "command", "", "shell", 1, false, false, false},
+		{"unzip -l a.zip", "unzip", "", "read", 1, false, false, false},
 		{"sudo -n /usr/bin/lsof -i :3000 &", "lsof", "", "process", 1, false, false, false},
 	}
 	for _, test := range cases {
@@ -43,6 +67,25 @@ func TestParseShellCommand(t *testing.T) {
 		if parsed.HasPipe != test.pipe || parsed.HasRedirect != test.redirect || parsed.HasHeredoc != test.heredoc {
 			t.Errorf("%q: pipe/redirect/heredoc %v/%v/%v", test.line, parsed.HasPipe, parsed.HasRedirect, parsed.HasHeredoc)
 		}
+	}
+	for _, test := range []struct{ line, script string }{
+		{`/bin/zsh -lc "sed -n '1,9p' a.go && rg -n \"x\" ."`, `sed -n '1,9p' a.go && rg -n "x" .`},
+		{`bash -c 'echo '"'"'hi'"'"''`, `echo 'hi'`},
+		{`zsh -lc "cat a" > out`, ""},
+		{`bash -c "go test" && ls`, ""},
+		{`bash script.sh`, ""},
+		{`python3 -c "print(1)"`, ""},
+	} {
+		if script, ok := shellScript(test.line); script != test.script || ok != (test.script != "") {
+			t.Errorf("%q: script %q, %v; want %q", test.line, script, ok, test.script)
+		}
+	}
+	// A command line that hands its script to a shell is read as the script,
+	// as the argv form ["/bin/zsh","-lc",script] already is.
+	call := toolCall{ToolName: "shell"}
+	applyToolCommands(&call, map[string]any{"command": `/bin/zsh -lc "cd sub && sed -n '1,9p' a.go"`}, nil)
+	if call.Program != "sed" || call.CommandCategory != "read" || call.Command != "cd sub && sed -n '1,9p' a.go" {
+		t.Errorf("shell script call: %q %q %q", call.Program, call.CommandCategory, call.Command)
 	}
 	if !parseShellCommand("sleep 10 &").IsBackgrounded || parseShellCommand("go test 2>&1").IsBackgrounded {
 		t.Fatal("background detection")
