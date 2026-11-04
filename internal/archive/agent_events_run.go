@@ -805,6 +805,13 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
 	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
+	if err == nil {
+		// Fixes group these events (fixes.go); a rebuild is a no-op when
+		// nothing changed, and spaced out while events keep arriving.
+		if err := s.Catalog.refreshFixesSoon(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
+		}
+	}
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
 		return errStageContinues
@@ -841,6 +848,11 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 			}
 		}()
 		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
+		if err == nil {
+			if err := s.Catalog.refreshFixes(ctx, false); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
+			}
+		}
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			op.legacyOutcome("interrupted", nil)
