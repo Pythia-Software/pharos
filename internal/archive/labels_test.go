@@ -92,6 +92,89 @@ func labelCount(t *testing.T, catalog *Catalog, where string, args ...any) int {
 	return n
 }
 
+func labelerHelloThreads(t *testing.T, path string) []int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var threads []int
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	for {
+		var hello labelrt.Hello
+		if err := decoder.Decode(&hello); err == io.EOF {
+			return threads
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		threads = append(threads, hello.Threads)
+	}
+}
+
+func TestLabelsLiveThreadTarget(t *testing.T) {
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	settings.MaxBatch = 1 // Enough batches to change targets during one run.
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	override(t, &labelerThreadCheck, time.Duration(0))
+	var observed []int
+	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{ThreadTarget: func() LabelerSettings {
+		if catalog.labelers != nil {
+			threads, _, _ := catalog.labelers.Usage()
+			if len(observed) == 0 || observed[len(observed)-1] != threads {
+				observed = append(observed, threads)
+			}
+		}
+		target := settings
+		target.Threads = 1
+		if slices.Contains(observed, 1) {
+			target.Threads = 4
+		}
+		if slices.Contains(observed, 4) {
+			target.Threads = 2
+		}
+		return target
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats.Complete || stats.MessagesFailed != 0 || stats.ItemsLabeled != len(liveItems(t, catalog)) || labelCount(t, catalog, "") != stats.MessagesLabeled {
+		t.Fatalf("changing cores lost work: %+v", stats)
+	}
+	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{1, 4, 2}) {
+		t.Fatalf("worker thread targets: %v", threads)
+	}
+	if stats.Restarts != 0 {
+		t.Fatalf("deliberate core changes counted as crashes: %+v", stats)
+	}
+}
+
+func TestLabelerThreadTargetPolling(t *testing.T) {
+	settings := LabelerSettings{Threads: 2, Workers: 3, ModelDir: "original", BatchTokens: 4096}
+	reads := 0
+	target := labelerThreadTarget{read: func() LabelerSettings {
+		reads++
+		return LabelerSettings{Threads: 4, PeerThreads: 2, ThreadBudget: 8, ModelDir: "other"}
+	}}
+	got := target.settings(settings)
+	if got.Threads != 4 || got.PeerThreads != 2 || got.ThreadBudget != 8 || got.Workers != settings.Workers || got.ModelDir != settings.ModelDir || got.BatchTokens != settings.BatchTokens {
+		t.Fatalf("thread settings: %+v", got)
+	}
+	_ = target.settings(got)
+	if reads != 1 {
+		t.Fatalf("polled before the interval elapsed: %d", reads)
+	}
+	target.next = time.Now().Add(-time.Second)
+	_ = target.settings(got)
+	if reads != 2 {
+		t.Fatalf("did not poll after the interval: %d", reads)
+	}
+	if fixed := (&labelerThreadTarget{}).settings(settings); fixed != settings {
+		t.Fatalf("a CLI run changed settings: %+v", fixed)
+	}
+}
+
 func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	catalog := labeledCatalog(t)
 	settings := labelsTestSettings(t, "ok")

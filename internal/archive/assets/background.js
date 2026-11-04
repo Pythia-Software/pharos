@@ -570,7 +570,7 @@
   function renderLabels(labels, events) {
     const card = node('section', 'bg-card');
     card.append(node('h3', '', 'Labeling on this Mac'),
-      node('p', 'muted', 'Small models label your library in the background and the reader highlights what they find. These settings follow the library. Turning one off keeps what it found; a run in progress finishes. Cores apply from each model\'s next run; on battery each uses at most 2.'));
+      node('p', 'muted', 'Small models label your library in the background and the reader highlights what they find. These settings follow the library. Turning one off keeps what it found; a run in progress finishes. Active runs check the cores target every two minutes and finish their current batches before adjusting; on battery each uses at most 2.'));
     card.append(labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
       'Label each message by what it does: requests, replies, feedback and more.', labels,
       enabled => call('/api/labels/settings', {enabled}),
