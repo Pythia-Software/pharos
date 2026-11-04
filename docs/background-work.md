@@ -1738,9 +1738,11 @@ the same schedule from one declaration (`backgroundItems`):
   Only when you ask group, and its column heads carry the same ▶. The panel is titled Background Processing,
   under "Library NAME (1/3) on DRIVE", the name linking to Settings →
   Libraries; other libraries are only counted there. Running now and
-  Schedule head their sections, and each running line says where it
-  comes from: "Part of Hourly" for a background pass, else who started
-  it (`trigger`). An alert's title and action share a line, its detail
+  Schedule head their sections. A background pass leads with its current
+  task, shows its cadence beside it, and marks its place among the planned
+  tasks. The marker is a task position, not an elapsed-time percentage; a
+  measured step has a separate progress bar. Other running lines say who
+  started them (`trigger`). An alert's title and action share a line, its detail
   below.
 
 ## Known hazards this contract must not hide

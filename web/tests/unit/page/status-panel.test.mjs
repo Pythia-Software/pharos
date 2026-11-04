@@ -284,11 +284,25 @@ test("other libraries are only counted in the library line; an app operation tou
   assert.equal(model(view({}, { service: { name: "Only", position: 1, count: 1 } })).library.of, "", "one library: no count");
 });
 
-test("each running line says where it comes from, so it reads against the schedule", () => {
+test("non-background work says what started it", () => {
   const origin = changes => plain(panel.operationLine(operation("a", changes))).secondary[0];
-  assert.equal(origin({ kind: "background.update", variant: "hourly", trigger: "schedule" }), "Part of Hourly");
   assert.equal(origin({ trigger: "user" }), "Started by you");
   assert.equal(origin({ trigger: "chained" }), "Follows other work");
+});
+
+test("a background pass leads with the current task and its planned position", () => {
+  const pass = changes => plain(panel.operationLine(operation("a", {kind: "background.update", variant: "frequent", priority: "background", label: "Frequent update", ...changes})));
+  const current = pass({step: {index: 2, count: 4, name: "Repositories & merges", unit: null, done: 0, total: null}});
+  assert.equal(current.label, "Repositories & merges");
+  assert.equal(current.cadence, "Frequently");
+  assert.deepEqual(current.position, {index: 2, count: 4});
+  assert.deepEqual(current.primary, []);
+  assert.deepEqual(current.secondary, []);
+  assert.equal(current.fraction, null, "task position is not a measured percentage");
+  assert.match(plain(panel.chipModel(view({operations: [operation("a", {kind: "background.update", variant: "frequent", priority: "background", label: "Frequent update", step: {index: 2, count: 4, name: "Repositories & merges"}})]})).title), /Repositories & merges · Frequently/);
+  assert.equal(pass({step: {index: 2, count: null, name: "Repositories & merges"}}).position, null);
+  assert.equal(pass({step: {index: 5, count: 4, name: "Repositories & merges"}}).position, null);
+  assert.equal(pass({step: null}).label, "Frequent update", "before the first task starts, retain the operation name");
 });
 
 test("the panel is titled for what it shows, under the library and its drive", () => {
