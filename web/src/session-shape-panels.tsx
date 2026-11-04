@@ -1,32 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
-import type { AggregationClause, AggregationResultEntry, FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
-import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { analysisQuery, normalizeAnalysis, type AnalysisState } from "./dashboard-analysis-model";
-import { useAnalysisResult } from "./dashboard-analysis";
-import { toolMetricPresentation } from "./tools-dashboard-model";
+import type { AggregationClause, FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { postMetrics, type MetricResult } from "./metric-request";
 import { onDatasetRefresh } from "./dataset-refresh";
-import { chartSeriesStyle } from "./chart-colors";
-import { ChartLegend } from "./chart-legend";
 import { conversationRowURL } from "./usage-row-model";
-import { usageWorkspaceURL } from "./usage-workspace-model";
 import { useViewState } from "./view-state";
-import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog, type BandBreakdown } from "./session-shape-analysis-catalog";
-import { archetypeMix, mixFirstClauses, mixOther, mixRepositoryClauses, mixShownRepositories, readPercentiles, binClauses, formatSeconds, binEdgeLabel, binLabel, binPosition, dayTotals, durationEdges, formatSignal, sessionSignalLabels, sessionSignals, signalParts, signalRows, signalTableStart,
-  withoutDates, type SessionSignal, type SignalRow } from "./session-shape-model";
+import { sessionShapeAnalysisCatalog as catalog } from "./session-shape-analysis-catalog";
+import { formatSeconds, dayTotals, formatSignal, sessionSignalLabels, sessionSignals, signalParts, signalRows, signalTableStart, withoutDates, type SessionSignal, type SignalRow } from "./session-shape-model";
 import "./session-shape.css";
 
-// The Session Shape dashboard's panels around its engine chart: the band
-// toggle with the median and p90, active time per session, turn cycles by
-// provider, archetype mix by repository, the signal table, the sessions to
-// read and the definitions (docs/session-shape.md). Each follows the
-// dashboard's filters.
+// The Session Shape dashboard's panels below its engine chart, for what the
+// chart cannot draw: the signal table, the sessions to read and the
+// definitions (docs/session-shape.md). Each follows the dashboard's filters.
 
 const dataset = "session_shape";
 const seconds = formatSeconds;
-const fieldFormat: Record<string, (value: number) => string> = {
-  messages: value => value.toLocaleString(), tool_calls: value => value.toLocaleString(), active_seconds: seconds, autonomy: value => value.toLocaleString(undefined, { maximumFractionDigits: 1 }),
-};
 
 // Rows from the session_shape query table, again on Refresh.
 function useRefresh() {
@@ -55,133 +42,6 @@ function useLoad<T>(key: string, load: (signal: AbortSignal) => Promise<T>): Loa
 }
 function useSessionMetrics(where: WhereTerm[], schema: FieldSchema<any>, requests: AggregationClause[][]): Loaded<MetricResult[]> {
   return useLoad(JSON.stringify([where, requests]), async signal => (await Promise.all(requests.map(clauses => postMetrics(dataset, schema, where, clauses, signal)))).flat());
-}
-
-// The median and p90 of a field over the sessions that have it: the
-// nearest-rank values, read as the rows at those ranks.
-type Percentiles = { n: number; p50: number | null; p90: number | null };
-function usePercentiles(where: WhereTerm[], field: string): Loaded<Percentiles> {
-  return useLoad(JSON.stringify([where, field]), async signal => {
-    const request = { select: [field], where: [...where, { field, op: "is_not_null", value: "" }], orderBy: [{ field, dir: "asc" }, { field: "id", dir: "asc" }] };
-    const { n, values: [p50, p90] } = await readPercentiles(async offset => {
-      const { rows, total } = await postRows({ ...request, limit: 1, offset }, signal);
-      const value = rows[0]?.[field] == null ? NaN : Number(rows[0][field]);
-      return { value: Number.isFinite(value) ? value : null, total };
-    }, [0.5, 0.9]);
-    return { n, p50, p90 };
-  });
-}
-const sessionsText = (n: number) => `${n.toLocaleString()} ${n === 1 ? "session" : "sessions"}`;
-
-// Above the engine chart: which band the chart's shares follow, and that
-// band's measure in the range, median and p90.
-export function SessionShapeBandSummary({ where, split, onSplit }: { where: WhereTerm[]; split: string; onSplit: (split: BandBreakdown) => void }) {
-  const band = (split in bandBreakdowns ? split : "length_band") as BandBreakdown, { field, label } = bandBreakdowns[band];
-  const result = usePercentiles(where, field), format = fieldFormat[field];
-  const value = result.value;
-  return <div className="session-shape-band-summary">
-    <div className="combo-button session-shape-bands" role="group" aria-label="Band">
-      {(Object.keys(bandBreakdowns) as BandBreakdown[]).map(id => <button key={id} type="button" aria-pressed={band === id && split === id} onClick={() => onSplit(id)}>{bandBreakdowns[id].label}</button>)}
-    </div>
-    <p className="muted" role="status" aria-busy={result.loading}>
-      {result.error ? `${label} percentiles are unavailable: ${result.error}` : result.loading || !value ? `${label} per session: loading…`
-        : !value.n ? `No sessions in this range have a ${label.toLowerCase()} value.`
-        : value.p50 === null || value.p90 === null ? `${label} percentiles are unavailable; Refresh to try again.`
-        : <>{label} per session: median <strong>{format(value.p50)}</strong>, p90 <strong>{format(value.p90)}</strong>, over {sessionsText(value.n)}.</>}
-    </p>
-  </div>;
-}
-
-const binColor = chartSeriesStyle("session_shape", "sessions").color;
-// Active time per session as a histogram over log-spaced bins, with the
-// median and p90 marked where they fall.
-export function ActiveTimeDistribution({ where, schema, onOpen }: { where: WhereTerm[]; schema: FieldSchema<any>; onOpen: (state: AnalysisState) => void }) {
-  const clauses = useMemo(() => binClauses("active_seconds", durationEdges), []);
-  const bins = useSessionMetrics(where, schema, [clauses]), percentiles = usePercentiles(where, "active_seconds");
-  const counts = durationEdges.map((_, index) => Number(bins.value?.find(result => result.id === `bin_${index}`)?.buckets[0]?.value) || 0);
-  const highest = Math.max(1, ...counts), total = counts.reduce((sum, value) => sum + value, 0);
-  // A rank without a value is left unmarked.
-  const marks: Array<[string, number]> = [];
-  if (percentiles.value?.n) for (const [label, value] of [["p50", percentiles.value.p50], ["p90", percentiles.value.p90]] as const) if (value !== null) marks.push([label, value]);
-  const loading = bins.loading || percentiles.loading, error = bins.error || percentiles.error;
-  return <section className="session-shape-panel" aria-busy={loading}>
-    <header>
-      <h3>Active time per session</h3>
-      <p className="muted">Time between consecutive messages, counting gaps of five minutes or less; a longer gap counts as nothing. Bins widen as time grows. {total ? `${sessionsText(total)} with timestamps.` : ""}</p>
-    </header>
-    {error ? <p className="query-table-error" role="alert">{error}</p> : !loading && !total ? <p className="muted">No sessions with timestamps match these filters.</p> : <>
-      <div className="session-shape-histogram" role="img" aria-label={`Sessions by active time${marks.map(([label, value]) => `; ${label === "p50" ? "median" : label} ${seconds(value)}`).join("")}`}>
-        <div className="session-shape-bins">
-          {counts.map((count, index) => <i key={index} className="qt-metric-mark" style={{ height: `${100 * count / highest}%`, background: binColor }} data-chart-tooltip={`${binLabel(durationEdges, index)}\n${sessionsText(count)}`} />)}
-          {marks.map(([label, value]) => {
-            const at = 100 * binPosition(durationEdges, value) / durationEdges.length;
-            return <span key={label} className={`session-shape-mark${at > 50 ? " is-end" : ""}`} style={{ left: `${at}%` }}><b>{label}</b> {seconds(value)}</span>;
-          })}
-        </div>
-        <div className="session-shape-bin-labels muted">{durationEdges.map((_, index) => <span key={index}>{binEdgeLabel(durationEdges, index)}</span>)}</div>
-      </div>
-    </>}
-    <p className="session-shape-panel-actions"><button type="button" className="secondary" onClick={() => onOpen({ view: "distribution", unit: "records", metric: "active_time", split: "none" })}>Open in the chart above</button></p>
-  </section>;
-}
-
-// A fixed engine view drawn as the engine draws it, beside the dashboard's
-// own chart: a panel, not a second set of controls.
-function FixedAnalysis({ state, where, schema }: { state: AnalysisState; where: WhereTerm[]; schema: FieldSchema<any> }) {
-  const view = normalizeAnalysis(catalog, state), zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  const analysis = useMemo(() => analysisQuery(catalog, view, where, { zone }), [JSON.stringify(view), JSON.stringify(where), zone]);
-  const result = useAnalysisResult(dataset, schema, analysis.query);
-  const entry = result.results[0];
-  const presentation = useMemo(() => toolMetricPresentation(entry, analysis.clause.groupBy, catalog.labels), [entry, analysis.clause]);
-  if (result.error) return <p className="query-table-error" role="alert">{result.error}</p>;
-  if (!result.loading && entry && !entry.buckets.some(bucket => bucket.distribution?.kind === "box" ? bucket.distribution.summary : true)) return <p className="muted">No sessions with a turn cycle match these filters.</p>;
-  return <MetricCard clause={analysis.clause} result={presentation.metric as AggregationResultEntry | undefined} fields={schema.fields} loading={result.loading} renderers={defaultRenderers} />;
-}
-const turnCycles: AnalysisState = { view: "distribution", unit: "records", metric: "turn_cycle", split: "provider" };
-export function TurnCycleByProvider({ where, schema, onOpen }: { where: WhereTerm[]; schema: FieldSchema<any>; onOpen: (state: AnalysisState) => void }) {
-  return <section className="session-shape-panel">
-    <header>
-      <h3>Turn cycle by provider</h3>
-      <p className="muted">Each session's median gap from a message you typed to the agent's next message, leaving out gaps over 30 minutes: how fast the loop turns for you. It differs from the post-tool gap on <a href={usageWorkspaceURL({ mode: "dashboards", topic: "thinking-overview", report: "" }, new URLSearchParams())}>Waiting and Compaction</a>, which times the model's wait after each tool result, inside a turn, whoever started it.</p>
-    </header>
-    <FixedAnalysis state={turnCycles} where={where} schema={schema} />
-    <p className="session-shape-panel-actions"><button type="button" className="secondary" onClick={() => onOpen(turnCycles)}>Open in the chart above</button></p>
-  </section>;
-}
-
-// Each repository's sessions by archetype, as shares of its sessions.
-const archetypeColor = (archetype: string) => chartSeriesStyle("archetype", archetype).color;
-const archetypeLabel = (archetype: string) => (archetypes.values as Record<string, string>)[archetype] ?? (archetype || "Not enough evidence");
-export function ArchetypeMix({ where, schema, onOpen }: { where: WhereTerm[]; schema: FieldSchema<any>; onOpen: (state: AnalysisState) => void }) {
-  const result = useLoad(JSON.stringify(["mix", where]), async signal => {
-    const [totals, repositories] = await postMetrics(dataset, schema, where, mixFirstClauses(), signal);
-    for (const metric of [totals, repositories]) if (metric?.error) throw new Error(metric.error);
-    const shown = mixShownRepositories(repositories);
-    const each = shown.repositories.length ? await postMetrics(dataset, schema, where, mixRepositoryClauses(shown.repositories), signal) : [];
-    for (const metric of each) if (metric.error) throw new Error(metric.error);
-    return archetypeMix(totals.buckets, shown.repositories, each.map(metric => metric.buckets), shown.folded);
-  });
-  const rows = result.value ?? [];
-  // The known archetypes in their order, then any value the data adds.
-  const present = [...new Set([...archetypes.order, ...rows.flatMap(row => Object.keys(row.counts)).sort(), ""])].filter(archetype => rows.some(row => row.counts[archetype]));
-  return <section className="session-shape-panel" aria-busy={result.loading}>
-    <header>
-      <h3>Archetype mix by repository</h3>
-      <p className="muted">Each repository's sessions by how many messages you typed: Automated (none), Quick (up to 5), Standard (up to 15), Deep (up to 50) and Marathon. Shares of each repository's own sessions.</p>
-    </header>
-    {result.error ? <p className="query-table-error" role="alert">{result.error}</p> : !result.loading && !rows.length ? <p className="muted">No sessions match these filters.</p> : <>
-      <ChartLegend items={present.map(archetype => ({ key: archetype || "none", label: archetypeLabel(archetype), color: archetypeColor(archetype) }))} />
-      <ul className="session-shape-mix">
-        {rows.map(row => <li key={row.key}>
-          <span className="session-shape-mix-label">{row.key === mixOther ? "Other repositories" : row.key || "No repository"}</span>
-          <span className="session-shape-mix-bar">{present.filter(archetype => row.counts[archetype]).map(archetype => <i key={archetype} className="qt-metric-mark" style={{ flexGrow: row.counts[archetype], background: archetypeColor(archetype) }}
-            data-chart-tooltip={`${archetypeLabel(archetype)}: ${(100 * row.counts[archetype] / row.total).toFixed(0)}%\n${sessionsText(row.counts[archetype])} of ${row.total.toLocaleString()}`} />)}</span>
-          <span className="session-shape-mix-n muted">{sessionsText(row.total)}</span>
-        </li>)}
-      </ul>
-    </>}
-    <p className="session-shape-panel-actions"><button type="button" className="secondary" onClick={() => onOpen({ view: "compare", unit: "records", metric: "sessions", split: "archetype", compareAs: "share" })}>Open in the chart above</button></p>
-  </section>;
 }
 
 // The signal table: the last seven days against your eight weeks before

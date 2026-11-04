@@ -1,30 +1,8 @@
-import { predicatesOf, type AggregationClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { predicatesOf, type WhereTerm } from "@pythia-software/query-table-core";
 
-// The Session Shape dashboard's own panels, without a DOM: percentiles by
-// rank, a log-spaced histogram with its p50 and p90 marked, the archetype mix
-// of each repository, and the signal table, which compares the last seven
-// days with the eight weeks before them (docs/session-shape.md).
-
-// The nearest-rank percentile's position in n ascending values: the value at
-// ceil(p·n), counted from one. The dataset's own percentiles use this rule
-// (nearestRank in session_shape.go).
-export function nearestRankOffset(n: number, p: number): number | null {
-  if (!Number.isInteger(n) || n < 1) return null;
-  return Math.min(n, Math.max(1, Math.ceil(p * n))) - 1;
-}
-// Nearest-rank percentiles read as rows at their ranks, one request each.
-// Sessions can be added or removed between requests, so every read must
-// report the count the ranks came from; a changed count reads them again. A
-// rank that returns no value is unavailable, never a crash.
-export type RankRead = (offset: number) => Promise<{ value: number | null; total: number }>;
-export async function readPercentiles(read: RankRead, ps: readonly number[], attempts = 3): Promise<{ n: number; values: Array<number | null> }> {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const { total } = await read(0);
-    const reads = await Promise.all(ps.map(p => { const offset = nearestRankOffset(total, p); return offset === null ? null : read(offset); }));
-    if (reads.every(item => item === null || item.total === total)) return { n: total, values: reads.map(item => item?.value ?? null) };
-  }
-  throw new Error("the sessions changed while they were read; Refresh to try again");
-}
+// The Session Shape dashboard's own panels, without a DOM: the signal table,
+// which compares the last seven days with the eight weeks before them, and
+// the signals Sessions to read ranks by (docs/session-shape.md).
 
 // A duration in seconds, as people say it: 42 s, 12 min, 1 h 20 min.
 export function formatSeconds(value: number): string {
@@ -33,83 +11,6 @@ export function formatSeconds(value: number): string {
   if (value < 3600) return `${Math.round(value / 60)} min`;
   const hours = Math.floor(value / 3600), minutes = Math.round((value % 3600) / 60);
   return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
-}
-
-// Durations in seconds spread over orders of magnitude, so the histogram's
-// bins are log-spaced; the last is open.
-export const durationEdges = [0, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 28800] as const;
-const durationText = (seconds: number) => seconds < 60 ? `${seconds} s` : seconds < 3600 ? `${seconds / 60} min` : `${seconds / 3600} h`;
-// The axis names each bin by its lower edge; the tooltip gives the whole range.
-export function binEdgeLabel(edges: readonly number[], index: number): string {
-  return index === edges.length - 1 ? `${durationText(edges[index])}+` : durationText(edges[index]);
-}
-export function binLabel(edges: readonly number[], index: number): string {
-  return index === edges.length - 1 ? `${durationText(edges[index])}+` : `${durationText(edges[index])}–${durationText(edges[index + 1])}`;
-}
-// One summed condition per bin, so a single request counts every bin.
-export function binClauses(field: string, edges: readonly number[]): AggregationClause[] {
-  return edges.map((low, index) => {
-    const high = edges[index + 1];
-    const condition = high === undefined ? `[${field}]>=${low}` : `[${field}]>=${low} AND [${field}]<${high}`;
-    return { id: `bin_${index}`, op: "sum", expression: `SUM(IF(${condition},1,0))`, groupBy: [] };
-  });
-}
-// Where a value falls along the bins, from 0 at the first edge to the bin
-// count at the end of the last, interpolated in log space inside a bin (the
-// first bin linearly, since it starts at zero). The open bin ends at twice
-// its start.
-export function binPosition(edges: readonly number[], value: number): number {
-  if (!(value > 0)) return 0;
-  for (let index = 0; index < edges.length; index++) {
-    const low = edges[index], high = edges[index + 1] ?? low * 2;
-    if (value < high || index === edges.length - 1) {
-      const fraction = low === 0 ? value / high : Math.log(value / low) / Math.log(high / low);
-      return index + Math.min(1, Math.max(0, fraction));
-    }
-  }
-  return edges.length;
-}
-
-// Each repository's sessions by archetype, largest repositories first, with
-// the rest folded into Other so every session counts once. A breakdown by
-// repository and archetype together has too many groups to read whole, so
-// the mix is read exactly in two steps: sessions by archetype and the largest
-// repositories (mixFirstClauses), then each of those repositories by
-// archetype (mixRepositoryClauses). Other is the archetype totals less the
-// repositories shown.
-export type MixRow = { key: string; total: number; counts: Record<string, number> };
-export const mixOther = "\u0000other", mixRepositories = 10;
-const bucketKey = (value: unknown) => value == null || value === "" ? "" : String(value);
-export function mixFirstClauses(limit = mixRepositories): AggregationClause[] {
-  return [{ id: "archetypes", op: "count", groupBy: ["archetype"] },
-    { id: "repositories", op: "count", groupBy: ["repository_name"], sort: [{ key: "value", dir: "desc" }, { key: "group0", dir: "asc" }], groupLimit: limit }];
-}
-// The repositories shown: all of them when they fit, otherwise one fewer, so
-// the last row can be Other.
-// More repositories exist when the result counted groups beyond those
-// returned or reports an omitted remainder.
-export function mixShownRepositories(result: { buckets: Array<{ keys: unknown[]; value: unknown }>; groupCount?: number; other?: { value: unknown } }, limit = mixRepositories): { repositories: string[]; folded: boolean } {
-  const keys = result.buckets.filter(bucket => Number(bucket.value) > 0).map(bucket => bucketKey(bucket.keys[0]));
-  const folded = (result.groupCount ?? 0) > result.buckets.length || Number(result.other?.value) > 0 || keys.length > limit;
-  return { repositories: folded ? keys.slice(0, limit - 1) : keys, folded };
-}
-export function mixRepositoryClauses(repositories: string[]): AggregationClause[] {
-  return repositories.map((repository, index) => ({ id: `repository_${index}`, op: "count", groupBy: ["archetype"],
-    where: [repository ? { field: "repository_name", op: "=", value: repository } : { field: "repository_name", op: "is_null", value: "" }] }));
-}
-export function archetypeMix(totals: Array<{ keys: unknown[]; value: unknown }>, repositories: string[], perRepository: Array<Array<{ keys: unknown[]; value: unknown }>>, folded: boolean): MixRow[] {
-  const counts = (buckets: Array<{ keys: unknown[]; value: unknown }>) => {
-    const result: Record<string, number> = {};
-    for (const bucket of buckets) { const archetype = bucketKey(bucket.keys[0]); result[archetype] = (result[archetype] ?? 0) + (Number(bucket.value) || 0); }
-    return result;
-  };
-  const sum = (record: Record<string, number>) => Object.values(record).reduce((total, value) => total + value, 0);
-  const rows = repositories.map((key, index) => { const row = counts(perRepository[index] ?? []); return { key, total: sum(row), counts: row }; }).filter(row => row.total > 0);
-  const other = counts(totals);
-  for (const row of rows) for (const [archetype, value] of Object.entries(row.counts)) other[archetype] = (other[archetype] ?? 0) - value;
-  for (const [archetype, value] of Object.entries(other)) if (value <= 0) delete other[archetype];
-  const sorted = rows.sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
-  return folded && sum(other) > 0 ? [...sorted, { key: mixOther, total: sum(other), counts: other }] : sorted;
 }
 
 // The signal table. Each signal is a pooled rate: a summed numerator over a

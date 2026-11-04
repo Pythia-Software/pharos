@@ -1,31 +1,10 @@
 /* Session Shape's panels: neutral marks only; a value outside your own range
    is set in bold, never coloured as good or bad. */
 .session-shape-heading{margin:28px 0 0;font-size:var(--fs-xl,18px)}
-.session-shape-band-summary{display:flex;align-items:center;gap:12px 18px;flex-wrap:wrap;margin:10px 0}
-.session-shape-bands{flex-wrap:wrap;row-gap:4px}
-.session-shape-band-summary p{margin:0;font-size:var(--fs-sm)}
-.session-shape-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:0 18px}
 .session-shape-panel{margin:18px 0 0;padding:18px 20px;border:1px solid var(--line);border-radius:10px;background:var(--panel);min-width:0}
 .session-shape-panel h3{margin:0 0 4px;font-size:var(--fs-lg)}
 .session-shape-panel header p{margin:0 0 12px;font-size:var(--fs-sm);line-height:1.5}
 .session-shape-panel-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 0;font-size:var(--fs-sm)}
-/* Active time: columns over log-spaced bins, the median and p90 as rules. */
-.session-shape-histogram{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:180px auto;min-width:0}
-.session-shape-bins{position:relative;display:flex;align-items:flex-end;gap:2px;height:100%;border-bottom:1px solid var(--line)}
-.session-shape-bins>i{flex:1 1 0;min-width:2px;min-height:1px;border-radius:3px 3px 0 0}
-.session-shape-mark{position:absolute;top:0;bottom:0;border-left:1px dashed var(--ink);padding-left:4px;font-size:var(--fs-xs,11px);white-space:nowrap;pointer-events:none}
-.session-shape-mark.is-end{padding:0 4px 0 0;border-left:0;border-right:1px dashed var(--ink);transform:translateX(-100%)}
-.session-shape-mark+.session-shape-mark{padding-top:16px}
-.session-shape-bin-labels{display:flex;gap:2px;margin-top:4px;font-size:var(--fs-xs,11px)}
-.session-shape-bin-labels>span{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
-@media (max-width:640px){.session-shape-bin-labels>span:nth-child(even){visibility:hidden}}
-/* Archetype mix: one 100% bar per repository. */
-.session-shape-mix{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
-.session-shape-mix li{display:grid;grid-template-columns:minmax(0,14rem) minmax(0,1fr) auto;align-items:center;gap:10px;font-size:var(--fs-sm)}
-.session-shape-mix-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.session-shape-mix-bar{display:flex;height:14px;border-radius:4px;overflow:hidden;min-width:0}
-.session-shape-mix-bar>i{display:block;min-width:2px}
-@media (max-width:640px){.session-shape-mix li{grid-template-columns:minmax(0,1fr) auto}.session-shape-mix-bar{grid-column:1/-1;grid-row:2}}
 /* The signal and sessions tables scroll within their panel on narrow screens. */
 .session-shape-table-scroll{overflow-x:auto;max-width:100%}
 .session-shape-panel table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}

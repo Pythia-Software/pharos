@@ -7079,33 +7079,6 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "90d98ebae7a09e76:0",
-      "file": "web/src/session-shape-panels.tsx",
-      "owner": "ActiveTimeDistribution",
-      "tag": "button",
-      "control": "onClick={() => onOpen({ view: \"distribution\", unit: \"records\", metric: \"active_time\", split: \"none\" })}",
-      "contract": "dashboard",
-      "reason": "Opens the panel's fixed view in the dashboard chart: writes analyze_chart, the applied chart state."
-    },
-    {
-      "key": "38873f155d5b4c0f:0",
-      "file": "web/src/session-shape-panels.tsx",
-      "owner": "ArchetypeMix",
-      "tag": "button",
-      "control": "onClick={() => onOpen({ view: \"compare\", unit: \"records\", metric: \"sessions\", split: \"archetype\", compareAs: \"share\" })}",
-      "contract": "dashboard",
-      "reason": "Opens the panel's fixed view in the dashboard chart: writes analyze_chart, the applied chart state."
-    },
-    {
-      "key": "7a0cc0da59af2a51:0",
-      "file": "web/src/session-shape-panels.tsx",
-      "owner": "SessionShapeBandSummary",
-      "tag": "button",
-      "control": "onClick={() => onSplit(id)}",
-      "contract": "dashboard",
-      "reason": "Chooses the band the chart's shares follow: writes the breakdown into analyze_chart."
-    },
-    {
       "key": "3c0938979a8182b4:0",
       "file": "web/src/session-shape-panels.tsx",
       "owner": "SessionsToRead",
@@ -7123,15 +7096,6 @@
       "binding": "session_signal",
       "contract": "view.session_signal",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "a63f9d7326c5eecd:0",
-      "file": "web/src/session-shape-panels.tsx",
-      "owner": "TurnCycleByProvider",
-      "tag": "button",
-      "control": "onClick={() => onOpen(turnCycles)}",
-      "contract": "dashboard",
-      "reason": "Opens the panel's fixed view in the dashboard chart: writes analyze_chart, the applied chart state."
     },
     {
       "key": "85efc2b35d82ffac:0",
