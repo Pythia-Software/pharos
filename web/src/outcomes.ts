@@ -33,6 +33,14 @@ export type ProjectKind = "repository" | "folder" | "none";
 // the reason: failing to look is not zero either, and a session that changed
 // nothing in its repository has no commits to look for. A count that was
 // recorded shows.
+// A session's branch: a folder has none to record, and a repository session
+// that recorded none says so; neither is a blank.
+export function branchDisplay(value: unknown, kind: unknown): { text: string; muted: boolean; title?: string } {
+  if (value != null && value !== "") return { text: String(value), muted: false };
+  if (kind === "repository") return { text: "No branch", muted: true, title: "The session recorded no branch." };
+  return gitFactDisplay(null, kind);
+}
+
 export function gitFactDisplay(value: unknown, kind: unknown, check?: unknown, reason?: unknown): { text: string; muted: boolean; title?: string } {
   if (value != null && value !== "") return { text: Number(value).toLocaleString("en-US"), muted: false };
   if (kind === "folder") return { text: "Not a repository", muted: true, title: "This project is a folder; Git facts do not apply." };

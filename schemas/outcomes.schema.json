@@ -1,0 +1,82 @@
+{
+
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_outcomes",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "started_at",
+      "dir": "desc",
+      "nulls": "last"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "started_at",
+      "width": 130
+    },
+    {
+      "field": "title",
+      "width": 280
+    },
+    {
+      "field": "project_name",
+      "width": 150
+    },
+    {
+      "field": "outcome_label",
+      "width": 150
+    },
+    {
+      "field": "evidence_tier",
+      "width": 150
+    },
+    {
+      "field": "model_family",
+      "width": 140
+    },
+    {
+      "field": "cost_usd",
+      "width": 100
+    },
+    {
+      "field": "files_changed",
+      "width": 100
+    }
+  ],
+  "fields": [
+    {"name": "id", "label": "ID", "type": "text", "select": {"default": false}, "bindings": {"postgres": {"expr": "id", "synthetic": true}, "sqlite": {"expr": "r.\"id\""}}},
+    {"name": "workspace_id", "label": "Session", "type": "text", "select": {"default": false}, "bindings": {"postgres": {"expr": "workspace_id", "synthetic": true}, "sqlite": {"expr": "r.\"workspace_id\""}}, "aggregate": {"groupable": true}},
+    {"name": "title", "label": "Work", "type": "text", "group": "Work", "render": "work_title", "bindings": {"postgres": {"expr": "title", "synthetic": true}, "sqlite": {"expr": "r.\"title\""}}},
+    {"name": "started_at", "label": "Started", "type": "datetime", "group": "Time", "render": "datetime_rel", "description": "The session's first priced usage, else its first edit, else its last activity. A session's cost and outcome count at its start.", "bindings": {"postgres": {"expr": "started_at", "synthetic": true}, "sqlite": {"expr": "r.\"started_at\"", "datetimeFormat": "rfc3339"}}, "aggregate": {"groupable": true}},
+    {"name": "activity_at", "label": "Last activity", "type": "datetime", "group": "Time", "render": "datetime_rel", "select": {"default": false}, "bindings": {"postgres": {"expr": "activity_at", "synthetic": true}, "sqlite": {"expr": "r.\"activity_at\"", "datetimeFormat": "rfc3339"}}, "aggregate": {"groupable": true}},
+    {"name": "outcome_label", "label": "Outcome label", "type": "enum", "group": "Outcome", "render": "outcome_label", "description": "What became of the session's changes, decided by the evidence tier outcome_why names. Landed and Committed need local Git evidence.", "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "landed", "label": "Landed"}, {"value": "committed", "label": "Committed"}, {"value": "changed_kept", "label": "Changed and kept"}, {"value": "changed_recent", "label": "Changed, too recent"}, {"value": "reworked", "label": "Reworked"}, {"value": "no_changes", "label": "No changes"}, {"value": "unknown", "label": "Unknown"}]}}, "bindings": {"postgres": {"expr": "outcome_label", "synthetic": true}, "sqlite": {"expr": "r.\"outcome_label\""}}, "aggregate": {"groupable": true}},
+    {"name": "evidence_tier", "label": "Evidence tier", "type": "enum", "group": "Outcome", "render": "option_label", "description": "The highest tier of evidence the session reached: local Git checked its commits (Tier 2), its transcript recorded tool calls (Tier 1), or neither. No forge (Tier 3) data exists.", "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "local_git", "label": "Local Git (Tier 2)"}, {"value": "transcript", "label": "Transcript (Tier 1)"}, {"value": "none", "label": "No evidence"}]}}, "bindings": {"postgres": {"expr": "evidence_tier", "synthetic": true}, "sqlite": {"expr": "r.\"evidence_tier\""}}, "aggregate": {"groupable": true}},
+    {"name": "git_check", "label": "Local Git", "type": "enum", "group": "Outcome", "render": "option_label", "description": "Whether local Git was asked about the session's commits; not applicable outside a repository or for a session that changed nothing in one.", "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "checked", "label": "Checked"}, {"value": "not_checked", "label": "Not checked"}, {"value": "not_applicable", "label": "Not applicable"}]}}, "bindings": {"postgres": {"expr": "git_check", "synthetic": true}, "sqlite": {"expr": "r.\"git_check\""}}, "aggregate": {"groupable": true}, "select": {"default": false}},
+    {"name": "project_name", "label": "Project", "type": "text", "group": "Context", "render": "project", "description": "The repository, else the working folder (home as ~); empty for a session with no working directory (No project).", "bindings": {"postgres": {"expr": "project_name", "synthetic": true}, "sqlite": {"expr": "r.\"project_name\""}}, "aggregate": {"groupable": true}},
+    {"name": "project_kind", "label": "Project kind", "type": "enum", "group": "Context", "render": "option_label", "description": "Whether the project is a repository, a folder, or none.", "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "repository", "label": "Repository"}, {"value": "folder", "label": "Folder"}, {"value": "none", "label": "No project"}]}}, "bindings": {"postgres": {"expr": "project_kind", "synthetic": true}, "sqlite": {"expr": "r.\"project_kind\""}}, "aggregate": {"groupable": true}, "select": {"default": false}},
+    {"name": "branch", "label": "Branch", "type": "text", "group": "Context", "render": "git_branch", "description": "The session's last recorded branch; empty outside a repository (Not a repository) and for a repository session that recorded none (No branch).", "select": {"default": false}, "bindings": {"postgres": {"expr": "branch", "synthetic": true}, "sqlite": {"expr": "r.\"branch\""}}, "aggregate": {"groupable": true}},
+    {"name": "source_kind", "label": "Harness", "type": "enum", "group": "Context", "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "tl1", "label": "TL1"}, {"value": "tl1-export", "label": "TL1 export"}, {"value": "conductor", "label": "Conductor"}, {"value": "codex", "label": "Codex"}, {"value": "claude", "label": "Claude"}, {"value": "chatgpt", "label": "ChatGPT"}, {"value": "antigravity", "label": "Antigravity"}, {"value": "canonical", "label": "Canonical"}]}}, "bindings": {"postgres": {"expr": "source_kind", "synthetic": true}, "sqlite": {"expr": "r.\"source_kind\""}}, "aggregate": {"groupable": true}},
+    {"name": "provider", "label": "Main provider", "type": "text", "group": "Context", "select": {"default": false}, "description": "The provider of the session's main model.", "bindings": {"postgres": {"expr": "provider", "synthetic": true}, "sqlite": {"expr": "r.\"provider\""}}, "aggregate": {"groupable": true}},
+    {"name": "model_family", "label": "Main model", "type": "text", "group": "Context", "description": "The model that took most of the session's cost (most of its tokens when unpriced); empty when it recorded no usage.", "bindings": {"postgres": {"expr": "model_family", "synthetic": true}, "sqlite": {"expr": "r.\"model_family\""}}, "aggregate": {"groupable": true}},
+    {"name": "cost_usd", "label": "Cost (API $)", "type": "number", "group": "Cost", "render": "usd", "description": "The session's API-equivalent cost, priced as the Library prices it.", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "cost_usd", "synthetic": true}, "sqlite": {"expr": "r.\"cost_usd\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "tokens", "label": "Tokens", "type": "number", "group": "Cost", "render": "number", "description": "The session's reconciled tokens, the ones its cost prices.", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "tokens", "synthetic": true}, "sqlite": {"expr": "r.\"tokens\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "price_status", "label": "Price status", "type": "enum", "group": "Cost", "select": {"default": false}, "filter": {"editor": "set", "values": {"source": "static", "options": ["priced", "assumed", "partial", "unpriced"]}}, "bindings": {"postgres": {"expr": "price_status", "synthetic": true}, "sqlite": {"expr": "r.\"price_status\""}}},
+    {"name": "files_changed", "label": "Files changed", "type": "number", "group": "Outcome", "render": "number", "description": "Files the session edited, from its own tool calls.", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "files_changed", "synthetic": true}, "sqlite": {"expr": "r.\"files_changed\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "lines_added", "label": "Lines added", "type": "number", "group": "Outcome", "render": "number", "description": "Lines its edits added; empty when its harness records no line counts.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "lines_added", "synthetic": true}, "sqlite": {"expr": "r.\"lines_added\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "lines_removed", "label": "Lines removed", "type": "number", "group": "Outcome", "render": "number", "description": "Lines its edits removed; empty when its harness records no line counts.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "lines_removed", "synthetic": true}, "sqlite": {"expr": "r.\"lines_removed\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "kept_lines", "label": "Kept lines", "type": "number", "group": "Outcome", "render": "number", "description": "Lines it added and still had at its end, as rework judges them.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "kept_lines", "synthetic": true}, "sqlite": {"expr": "r.\"kept_lines\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "rework_removed_lines", "label": "Lines reworked", "type": "number", "group": "Outcome", "render": "number", "description": "Of its kept lines, those later sessions removed within the rework window.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "rework_removed_lines", "synthetic": true}, "sqlite": {"expr": "r.\"rework_removed_lines\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "kept_change", "label": "Kept change", "type": "number", "group": "Outcome", "render": "number", "description": "1 for a session whose changes were kept (Landed, Committed or Changed and kept), else 0.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "kept_change", "synthetic": true}, "sqlite": {"expr": "r.\"kept_change\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "linked_commits", "label": "Linked commits", "type": "number", "group": "Outcome", "render": "git_count", "description": "Commits local Git linked to the session; empty unless local Git checked it.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "linked_commits", "synthetic": true}, "sqlite": {"expr": "r.\"linked_commits\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}},
+    {"name": "landed_commits", "label": "Commits on mainline", "type": "number", "group": "Outcome", "render": "git_count", "description": "Of its linked commits, those that reached mainline; empty unless local Git checked it.", "select": {"align": "right", "default": false}, "bindings": {"postgres": {"expr": "landed_commits", "synthetic": true}, "sqlite": {"expr": "r.\"landed_commits\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}}
+  ]
+}
