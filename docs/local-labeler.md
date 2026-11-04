@@ -8,10 +8,12 @@ in [library labeling](library-labeling.md) (taxonomy `candidate-0.3`; the
 research is in [labeler-research/](labeler-research/README.md), the decision
 in [shipping-encoder.md](labeler-research/shipping-encoder.md)).
 
-**Status: prototype, off by default.** Labels are stored in the catalog,
-shown by `pharos labels status` and `pharos labels explain`, and highlighted
-in the conversation reader when its **Message labels** highlight is on
-([In the reader](#in-the-reader)). No query table or MCP tool reads them yet.
+**Off by default.** Labels are stored in the catalog, shown by
+`pharos labels status` and `pharos labels explain`, and highlighted in the
+conversation reader when its **Message labels** highlight is on
+([In the reader](#in-the-reader)). The [Message Labels dashboard and query pages](message-labels.md)
+explore the stored labels without running inference. Conversation timelines
+combine message labels, caller-text origin and recorded tool actions.
 
 ## Turning it on
 

@@ -20382,6 +20382,180 @@
       }
     },
     {
+      "id": "message-labels-trend",
+      "title": "Message labels over time",
+      "description": "Stored message labels over the last {days} days.",
+      "dataset": "message_labels",
+      "field": "occurred_at",
+      "category": "views",
+      "idea": "labels-01",
+      "unit": "messages",
+      "days": [
+        30,
+        90
+      ],
+      "where": [],
+      "measures": [
+        {
+          "id": "label_messages",
+          "op": "count_distinct",
+          "field": "message_id",
+          "groupBy": [
+            "day",
+            "family"
+          ],
+          "label": "Messages by general label"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "label_messages",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "labels",
+        "chart": {
+          "v": 2,
+          "view": "trend_line",
+          "metric": "messages",
+          "split": "family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "share": true
+        },
+        "dataset": "message_labels",
+        "detailAction": "Explore message labels"
+      },
+      "action": "Explore Message Labels",
+      "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
+    },
+    {
+      "id": "human-labels-trend",
+      "title": "How human input changes",
+      "description": "Stored message labels over the last {days} days.",
+      "dataset": "message_labels",
+      "field": "occurred_at",
+      "category": "views",
+      "idea": "labels-01",
+      "unit": "messages",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "source",
+          "op": "=",
+          "value": "human"
+        }
+      ],
+      "measures": [
+        {
+          "id": "label_messages",
+          "op": "count_distinct",
+          "field": "message_id",
+          "groupBy": [
+            "day",
+            "family"
+          ],
+          "label": "Messages by general label"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "label_messages",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "labels",
+        "chart": {
+          "v": 2,
+          "view": "trend_line",
+          "metric": "messages",
+          "split": "family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "share": true
+        },
+        "dataset": "message_labels",
+        "detailAction": "Explore message labels"
+      },
+      "action": "Explore Message Labels",
+      "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
+    },
+    {
+      "id": "thinking-labels-trend",
+      "title": "What agents think about",
+      "description": "Stored message labels over the last {days} days.",
+      "dataset": "message_labels",
+      "field": "occurred_at",
+      "category": "views",
+      "idea": "labels-01",
+      "unit": "messages",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "source",
+          "op": "=",
+          "value": "thinking"
+        }
+      ],
+      "measures": [
+        {
+          "id": "label_messages",
+          "op": "count_distinct",
+          "field": "message_id",
+          "groupBy": [
+            "day",
+            "family"
+          ],
+          "label": "Messages by general label"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "label_messages",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "labels",
+        "chart": {
+          "v": 2,
+          "view": "trend_line",
+          "metric": "messages",
+          "split": "family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "share": true
+        },
+        "dataset": "message_labels",
+        "detailAction": "Explore message labels"
+      },
+      "action": "Explore Message Labels",
+      "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
+    },
+    {
       "dataset": "usage",
       "field": "first_usage_at",
       "unit": "tokens",

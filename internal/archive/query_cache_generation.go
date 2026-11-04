@@ -28,6 +28,10 @@ var queryCacheTables = []string{
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",
 	"agent_events", "agent_event_messages",
+	"message_labels", "message_labels_models", "message_labels_conversations", "message_labels_dirty",
+	// Enqueue and publication invalidate the label view once per conversation;
+	// individual fact/membership writes are internal to that atomic refresh.
+	"message_label_facts_dirty",
 }
 
 // Re-observing unchanged inputs refreshes these bookkeeping fields without
@@ -73,6 +77,9 @@ func (c *Catalog) ensureQueryCacheGeneration() error {
 		if err != nil {
 			return err
 		}
+		if len(columns) == 0 {
+			continue
+		} // Optional derived ledgers may not exist yet.
 		changed := make([]string, 0, len(columns))
 		for _, column := range columns {
 			field := firstString(column["name"])

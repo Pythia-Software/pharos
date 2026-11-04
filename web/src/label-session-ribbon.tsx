@@ -1,0 +1,145 @@
+import React,{useEffect,useId,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {Icon,type IconName} from './icons';
+import {ViewDisclosure} from './view-disclosure';
+import {useViewEntry} from './view-state';
+import {useRibbonInspector} from './label-ribbon-inspector';
+import {PageLink} from './nested-pages';
+import {timelinePreviewText} from './timeline-preview';
+import {ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolTracks,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
+import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
+import {authorshipSegments,callerSource} from './timeline-caller-model';
+
+type Props={outline?:string;branch?:TimelineSessionBranch;openSession?:()=>void;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
+const branchX=(depth:number)=>12+Math.min(depth,8)*12;
+function SessionBranches({props,root}:{props:Props;root:boolean}){
+ const branch=props.branch;if(!branch)return null;
+ const x=branchX(props.depth);
+ return <svg className="lt-session-branches" width={x+10} height="100%" aria-hidden="true">
+  {branch.rails.map(depth=><line key={depth} x1={branchX(depth)} x2={branchX(depth)} y1="0" y2="100%"/>)}
+  {root&&branch.parentDepth!==undefined?<path d={branch.rails.includes(branch.parentDepth)?`M${branchX(branch.parentDepth)} 19H${props.foldControl?x-8:x+6}`:`M${branchX(branch.parentDepth)} 0V19H${props.foldControl?x-8:x+6}`}/>:null}
+  {branch.children?<line x1={x} x2={x} y1={root?27:0} y2="100%"/>:null}
+ </svg>;
+}
+function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;sourceHref?:Props['sourceHref'];close?:()=>void;children:React.ReactNode}){
+ const href=sourceHref?.(item);
+ return href?<PageLink href={href} className="lt-observation-source" onClick={event=>{event.stopPropagation();close?.();}}>{children}<span>Show in conversation →</span></PageLink>:<>{children}</>;
+}
+function MessagePreview({message}:{message:LabelMessage}){
+ const body=timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'}),characters=Array.from(body);
+ const clipped=characters.length>640||message.preview_truncated===true||message.preview===undefined&&message.truncated&&Array.from(message.text).length>=320;
+ return <blockquote>{characters.slice(0,640).join('')}{clipped&&!body.endsWith('…')?'…':''}</blockquote>;
+}
+function ObservationCard({items,sourceHref,close}:{items:RibbonObservation[];sourceHref?:Props['sourceHref'];close?:()=>void}){
+ const counts=ribbonCounts(items),labels=new Map<string,Set<string>>(),origins=new Map<string,Set<string>>();
+ for(const item of items){
+  if(item.label){const ids=labels.get(item.label)??new Set<string>();ids.add(item.message!.id);labels.set(item.label,ids);}
+  if(item.authorship){const ids=origins.get(item.authorship)??new Set<string>();ids.add(item.message!.id);origins.set(item.authorship,ids);}
+ }
+ const messages=[...new Map(items.flatMap(item=>item.message?[[item.message.id,item.message] as const]:[])).values()];
+ const composition=[...new Map(items.filter(item=>item.composition).map(item=>[JSON.stringify([item.message!.id,item.composition,item.authorship]),item])).values()];
+ const tools=[...new Map(items.filter(item=>item.mark).map(item=>[item.id,item])).values()];
+ const totals=[counts.messages>1?`${counts.messages} messages`:null,counts.activity>1?`${counts.activity} tool calls`:null,counts.inferred>1?`${counts.inferred} inferred spans`:null].filter(Boolean);
+ return <>
+  {totals.length?<p>{totals.join(' · ')}</p>:null}
+  {messages.length<=1?<div className="lt-observation-tags">
+   {[...labels.keys()].slice(0,8).map(id=><span key={id}><i style={{background:stateColor(id)}}/>{id==='?'?'Uncategorized':shortLabel(id)}</span>)}
+   {counts.thinking===1?<span>Thinking</span>:null}
+   {[...origins.keys()].map(category=><span key={category}><i className={`lt-source-swatch is-${callerSource(category).pattern}`}/>{callerSource(category).name}</span>)}
+  </div>:<dl>
+   {[...labels].slice(0,8).map(([id,ids])=><React.Fragment key={id}><dt><i style={{background:stateColor(id)}}/>{id==='?'?'Uncategorized':shortLabel(id)}</dt><dd>{ids.size}</dd></React.Fragment>)}
+   {[...origins].map(([category,ids])=><React.Fragment key={category}><dt>{callerSource(category).name}</dt><dd>{ids.size}</dd></React.Fragment>)}
+  </dl>}
+  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{part.excerpt.text}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
+  {tools.slice(0,4).map(item=>{
+   const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
+   return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
+    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{elapsed===null?'End not recorded':elapsed<1000?`${Math.round(elapsed)}ms`:`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`}{mark.error?' · Error':''}</span></div>
+    {mark.preview?<pre>{timelinePreviewText(mark.preview,{input:true})}{mark.preview_truncated?'…':''}</pre>:<small>Arguments not retained</small>}
+   </div></SourceContent>;
+  })}
+  {items.some(item=>item.inferred)?<span>Inferred orchestration</span>:null}
+ </>;
+}
+function SessionRibbon({node,range,brushHandlers,preview,caller,inspector,sourceHref,disabled=false}:{node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean}){
+ const pattern=useId().replace(/:/g,''),container=useRef<HTMLDivElement>(null);
+ const [scale,setScale]=useState({x:1,y:1});
+ useEffect(()=>{inspector.close();},[range[0],range[1],node.id]);
+ // Counter the SVG's nonuniform stretch so pattern cells stay in CSS pixels,
+ // just as vector-effect keeps tool markers independent of the row's height.
+ useLayoutEffect(()=>{
+  const element=container.current;if(!element)return;
+  const resize=()=>{const rect=element.getBoundingClientRect();if(!rect.width||!rect.height)return;const x=1000/rect.width,y=32/rect.height;setScale(previous=>previous.x===x&&previous.y===y?previous:{x,y});};
+  resize();const observer=new ResizeObserver(resize);observer.observe(element);return()=>observer.disconnect();
+ },[]);
+ const items=useMemo(()=>{const labeled=new Set(node.items.filter(item=>item.label&&!item.authorship).map(item=>item.message?.id));return ribbonLayers(node.items.filter(item=>!item.authorship||!labeled.has(item.message?.id)));},[node.items]);
+ const inspectItems=useMemo(()=>{if(!caller)return node.items;const composed=new Set(node.items.filter(item=>item.composition).map(item=>item.message?.id));return node.items.flatMap(item=>item.message&&!item.composition&&!composed.has(item.message.id)?[item,...ribbonOriginParts(item)]:[item]);},[caller,node.items]);
+ const toolTracks=useMemo(()=>ribbonToolTracks(inspectItems),[inspectItems]);
+ const span=Math.max(1,range[1]-range[0]),x=(at:number)=>Math.max(0,Math.min(1000,(at-range[0])/span*1000)),patternTransform=`scale(${scale.x} ${scale.y})`;
+ const typed=new Map<string,{left:number;width:number;y:number;height:number}>();
+ const glyphs=items.map(({item,height,y,trackCount})=>{
+  const instantPart=item.end===item.start?item.composition:undefined;
+  const width=instantPart?2*(instantPart.end-instantPart.start):item.authorship?x(item.end)-x(item.start):Math.max(2,x(item.end)-x(item.start)),left=instantPart?Math.min(998,x(item.start))+2*instantPart.start:Math.min(998,x(item.start));
+  // A round zero-length stroke remains circular in screen space.
+  if(item.mark){
+   const center=y+height/2,spacing=32/scale.y/trackCount,diameter=Math.min(8,spacing*.75);
+   return <g key={item.id} data-tool-id={item.mark.tool_id}>{item.mark.end_known&&item.end>item.start?<line x1={x(item.start)} x2={x(item.end)} y1={center} y2={center} stroke={item.color} strokeWidth={Math.min(1,spacing/4)} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${x(item.start)} ${center}h0`} fill="none" stroke={item.color} strokeWidth={diameter} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
+  }
+  const parts=caller&&item.message?item.authorship?[{category:item.authorship,start:0,end:1}]:authorshipSegments(item.message):[];
+  return <g key={item.id}><rect x={left} y={y} width={width} height={height} fill={item.color} opacity={item.inferred ? .3 : 1}/>{parts.map((part,index)=>{
+   const source=callerSource(part.category),start=item.start+(item.end-item.start)*part.start,end=item.start+(item.end-item.start)*part.end;
+   if(start>range[1]||end<range[0])return null;
+   const partLeft=item.end===item.start?left+width*part.start:x(start),partWidth=item.end===item.start?width*(part.end-part.start):x(end)-x(start);
+   if(part.category==='typed'&&partWidth>0){
+    const key=JSON.stringify([item.message!.id,item.composition??{start:part.start,end:part.end}]);
+    if(!typed.has(key)||typed.get(key)!.height<height)typed.set(key,{left:partLeft,width:partWidth,y,height});
+   }
+   return source.pattern==='solid'?null:<rect key={index} x={partLeft} y={y} width={partWidth} height={height} fill={`url(#${pattern}-${source.pattern})`}/>;
+  })}</g>;
+ });
+ const candidates=[...new Map(inspectItems.map(item=>[item.mark?item.id:JSON.stringify([item.message?.id,item.composition]),item])).values()].sort((a,b)=>a.start-b.start||a.id.localeCompare(b.id));
+ const cursor=useRef(0);
+ const hitsAt=(event:React.MouseEvent<SVGSVGElement>)=>{const rect=event.currentTarget.getBoundingClientRect(),at=range[0]+(event.clientX-rect.left)/rect.width*span;return ribbonPointerHits(inspectItems,at,span*5/rect.width,(event.clientY-rect.top)/rect.height*32,32/rect.height,toolTracks);};
+ const pin=(target:Element,hits:RibbonObservation[],x?:number,focus=false)=>inspector.pin(target,<ObservationCard items={hits} sourceHref={sourceHref} close={inspector.close}/>,x,focus);
+ return <div ref={container} className={`lt-session-ribbon ${node.id==='session'?'is-session':'is-detail'}`} {...(disabled?{}:brushHandlers)} onPointerLeave={inspector.leave}><svg viewBox="0 0 1000 32" preserveAspectRatio="none" role={!disabled&&sourceHref&&node.children.length?'button':'img'} tabIndex={!disabled&&sourceHref&&node.children.length?0:undefined} aria-label={!disabled&&sourceHref&&node.children.length?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} aria-describedby={inspector.id}
+  onFocus={event=>{if(disabled)return;const item=candidates[cursor.current]??candidates[0];if(item)inspector.show(event.currentTarget,<ObservationCard items={[item]}/>);}} onBlur={inspector.leave}
+  onKeyDown={event=>{if(disabled||!sourceHref||!['ArrowLeft','ArrowRight','Enter',' '].includes(event.key)||!candidates.length)return;event.preventDefault();event.stopPropagation();if(event.key==='ArrowLeft'||event.key==='ArrowRight'){cursor.current=(cursor.current+(event.key==='ArrowLeft'?-1:1)+candidates.length)%candidates.length;inspector.close();inspector.show(event.currentTarget,<ObservationCard items={[candidates[cursor.current]]}/>);}else pin(event.currentTarget,[candidates[cursor.current]??candidates[0]],undefined,true);}}
+  onClick={event=>{if(disabled||!sourceHref)return;const hits=hitsAt(event);if(!hits.length)return;event.preventDefault();event.stopPropagation();pin(event.currentTarget,hits,event.clientX);}}
+  onPointerMove={event=>{if(disabled)return;if(preview){inspector.close();return;}const hits=hitsAt(event);if(hits.length)inspector.show(event.currentTarget,<ObservationCard items={hits}/>,event.clientX);else inspector.leave();}}>
+
+  <defs>
+   <pattern id={pattern+'-diagonal'} width="7" height="7" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><path d="M-2 2 2 -2M0 7 7 0M5 9 9 5" stroke="var(--ink)" strokeWidth="1.3" opacity=".65"/></pattern>
+   <pattern id={pattern+'-dots'} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><circle cx="2" cy="2" r=".8" fill="var(--ink)" opacity=".6"/></pattern>
+   <pattern id={pattern+'-rings'} width="8" height="8" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><circle cx="4" cy="4" r="1.8" fill="none" stroke="var(--ink)" strokeWidth="1" opacity=".65"/></pattern>
+   <pattern id={pattern+'-grid'} width="8" height="8" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><path d="M0 8V0H8" fill="none" stroke="var(--ink)" strokeWidth="1" opacity=".55"/></pattern>
+   <pattern id={pattern+'-crosshatch'} width="8" height="8" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><path d="M0 0 8 8M0 8 8 0" fill="none" stroke="var(--ink)" strokeWidth="1" opacity=".55"/></pattern>
+   <pattern id={pattern+'-dashes'} width="8" height="6" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><path d="M2 3H6" stroke="var(--ink)" strokeWidth="1" opacity=".6"/></pattern>
+  </defs>
+  <rect x="0" y="15" width="1000" height={node.id==='session'?2:.6} fill="var(--muted)" opacity={node.id==='session'?.3:.12}/>
+  {glyphs}
+  {[...typed].map(([key,rect])=>{const dx=Math.min(scale.x,rect.width/2),dy=Math.min(scale.y,rect.height/2);return <path key={key} className="lt-typed-outline" d={`M${rect.left+dx} ${rect.y+dy}h${Math.max(0,rect.width-2*dx)}v${Math.max(0,rect.height-2*dy)}h${-Math.max(0,rect.width-2*dx)}z`} fill="none" strokeWidth="1.6" vectorEffect="non-scaling-stroke"/>;})}
+  {preview?<rect x={x(preview[0])} y="0" width={x(preview[1])-x(preview[0])} height="32" fill="var(--gold)" opacity=".25"/>:null}
+ </svg>{inspector.portal}</div>;
+}
+function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
+ const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
+ const inspector=useRibbonInspector();
+ const fullName=[props.outline,props.name].filter(Boolean).join(' · ');
+ const identityContent=<><SessionBranches props={props} root/><strong>{props.name}</strong><small>{props.outline?<><span className="lt-session-outline">{props.outline}</span><span aria-hidden="true"> · </span></>:null}{props.metadata}</small></>;
+ const identityStyle={paddingLeft:branchX(props.depth)+16};
+ const identity=root?props.openSession?<button type="button" className="lt-session-identity is-interactive" style={identityStyle} title={`${fullName}\n${props.metadata}`} aria-label={`Open session ${fullName}`} onClick={event=>{event.preventDefault();event.stopPropagation();props.openSession?.();}}>{identityContent}</button>:<span className="lt-session-identity" style={identityStyle}>{identityContent}</span>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches props={props} root={false}/></span>;
+ const icons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
+ const icon=node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
+ const count=ribbonEventCount(node.items);
+ const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}><span className="lt-session-caret">{node.children.length?'›':'·'}</span>{root?<strong className="lt-event-count">{count}</strong>:<>{icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{counts.messages||counts.activity||counts.inferred}</small></>}</span>;
+ const content=<>{identity}{label}<SessionRibbon node={node} range={props.range} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed}/></>;
+ if(props.collapsed)return <div className="lt-session-row lt-session-preview">{content}</div>;
+ if(!node.items.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{label}<SessionRibbon node={node} range={props.range} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed}/></div>;
+ if(!node.children.length)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field="delegation_event" className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
+ return <ViewDisclosure viewKey={viewKey} className={`lt-session-node ${root?'lt-session-root':''}`} summary={content}>{open?node.children.map(child=><RecursiveRibbonRow key={child.id} node={child} props={props} level={level+1}/>):null}</ViewDisclosure>;
+}
+export function RecursiveSessionRibbon(props:Props){
+ const tree=useMemo(()=>sessionRibbonTree(props.messages,props.marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,props.boundaryMarks),[props.messages,props.marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,props.boundaryMarks]);
+ const untimed=props.messages.filter(m=>!m.at||!Number.isFinite(Date.parse(m.at))).length;
+ return <div className="lt-session-tree">{props.foldControl?<div className="lt-session-fold-anchor"><div className="lt-session-fold" style={{left:branchX(props.depth)-10}}>{props.foldControl}</div></div>:null}<RecursiveRibbonRow node={tree} props={props}/>{untimed?<small className="lt-session-untimed">{untimed} messages without timestamps cannot be placed on this clock.</small>:null}</div>;
+}

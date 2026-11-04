@@ -367,6 +367,14 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	if _, err := c.DB.Exec(`UPDATE tool_calls SET ended_at=NULL,duration_ms=NULL WHERE id='t-child'`); err != nil {
 		t.Fatal(err)
 	}
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('tool-input','root','tool-input','assistant','tool_call','{"tool":"Bash","input":{"command":"npm test","workdir":"/repo"}}','tool-input');
+INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_message_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at) VALUES
+('short-a','delegation-work','root','root-session',NULL,10,'test','tool_call','Bash','shell','ok','2026-01-01T00:00:02Z','2026-01-01T00:00:02.020Z'),
+('short-b','delegation-work','root','root-session','tool-input',11,'test','tool_call','Bash','shell','ok','2026-01-01T00:00:02.001Z','2026-01-01T00:00:02.021Z');`)
+	command := "  " + strings.Repeat("echo 😎; ", 100)
+	if _, err := c.DB.Exec(`UPDATE tool_calls SET command=? WHERE id='short-a'`, command); err != nil {
+		t.Fatal(err)
+	}
 	s := testServer(t, config, c)
 	_, body := delegationGET(t, s, "/api/work/delegation-work/delegation")
 	snapshot := body["snapshot"].(string)
@@ -385,6 +393,28 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	}
 	if !strings.Contains(timeline["inference"].(string), "not measured") {
 		t.Fatal("evidence contract must accompany inference")
+	}
+	_, plain := delegationGET(t, s, "/api/work/delegation-work/parallel?sessions=root-session&width=100")
+	plainMarks := plain["lanes"].([]any)[0].(map[string]any)["marks"].([]any)
+	if len(plainMarks) != 2 {
+		t.Fatalf("ordinary parallel view should retain short-call grouping: %v", plainMarks)
+	}
+	_, native := delegationGET(t, s, "/api/work/delegation-work/parallel?sessions=root-session&width=100&labels=1")
+	nativeMarks := native["lanes"].([]any)[0].(map[string]any)["marks"].([]any)
+	if len(nativeMarks) != 3 {
+		t.Fatalf("native Timeline must keep overlapping calls distinct: %v", nativeMarks)
+	}
+	for _, value := range nativeMarks {
+		mark := value.(map[string]any)
+		if mark["count"] != float64(1) {
+			t.Fatalf("individual call lost: %v", mark)
+		}
+		if mark["tool_id"] == "short-a" && (mark["preview"] != string([]rune(command)[:640]) || mark["preview_truncated"] != true) {
+			t.Fatalf("bounded command preview: %v", mark)
+		}
+		if mark["tool_id"] == "short-b" && mark["preview"] != "npm test" {
+			t.Fatalf("primary command content: %v", mark)
+		}
 	}
 	code, _ := delegationGET(t, s, "/api/work/delegation-work/parallel?start=NaN")
 	if code != 400 {
@@ -406,6 +436,180 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	code, _ = delegationGET(t, s, "/api/work/delegation-work/parallel?sessions="+strings.Repeat("child-session,", 101))
 	if code != 400 {
 		t.Fatal("bounded timeline lanes")
+	}
+}
+
+// The Timeline tab asks the existing parallel endpoint for local labels. It
+// must keep embedded and aliased executions separate, and never run inference.
+func TestDelegationTimelineMessageLabels(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `UPDATE messages SET created_at='2026-01-01T00:00:03Z';
+ INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json) VALUES('user','root','delegation-work','2026-01-01T00:00:03Z','2026-01-01',12,'[{"start":0,"end":5,"category":"typed"},{"start":5,"end":9,"category":"pasted"},{"start":9,"end":12,"category":"typed"}]');
+ INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('root-session','user',0),('embedded','launch',1),('child-session','nested-launch',0),('nested-alias','nested-result',1)`)
+	server := testServer(t, config, c)
+	read := func(query string) map[string]any {
+		t.Helper()
+		status, body := delegationGET(t, server, "/api/work/delegation-work/parallel?"+query)
+		if status != 200 {
+			t.Fatalf("timeline: %d %v", status, body)
+		}
+		return body
+	}
+	body := read("sessions=root-session,embedded,child-session,nested-session&labels=1")
+	lanes := body["lanes"].([]any)
+	want := [][]string{{"user"}, {"launch"}, {"nested-launch"}, {"nested-result"}}
+	for i, lane := range lanes {
+		messages := lane.(map[string]any)["messages"].([]any)
+		if i == 2 { // unowned delegation results cannot also belong to the parent
+			if len(messages) != 1 {
+				t.Fatalf("child ownership: %v", messages)
+			}
+		}
+		if len(messages) != len(want[i]) {
+			t.Fatalf("lane %d ownership: %v", i, messages)
+		}
+		for j, message := range messages {
+			if message.(map[string]any)["id"] != want[i][j] {
+				t.Fatalf("lane %d: %v", i, messages)
+			}
+		}
+	}
+	aliasMessage := lanes[3].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if aliasMessage["conversation_id"] != "child" {
+		t.Fatal("canonical lane lost its message's source transcript")
+	}
+	// Unwrap display content before clipping, without rewriting the retained
+	// source excerpt that authorship positions and source navigation refer to.
+	ack := strings.Repeat("Async agent launched successfully.\n", 40)
+	envelope := jsonText(map[string]any{"content": []any{map[string]any{"text": ack}}, "tool": "Task", "details": map[string]any{"agentId": "exact-child"}})
+	if _, err := c.DB.Exec(`UPDATE messages SET text=? WHERE id='nested-result'`, envelope); err != nil {
+		t.Fatal(err)
+	}
+	result := read("sessions=nested-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if result["preview"] != string([]rune(ack)[:640]) || result["preview_truncated"] != true || !strings.HasPrefix(firstString(result["text"]), `{"content":`) {
+		t.Fatalf("readable result content or raw source lost: %v", result)
+	}
+	for _, tc := range []struct{ name, body, want string }{
+		{"untyped text blocks", `{"content":[{"text":"First\nline"},{"type":"text","text":"Second"}],"is_error":false,"details":{"agentId":"opaque"}}`, "First\nline\n\nSecond"},
+		{"nested message", `{"message":{"content":[{"type":"output_text","text":"Reply"}]},"usage":{"tokens":9}}`, "Reply"},
+		{"thinking", `{"content":[{"type":"thinking","thinking":"Check the premise"}]}`, "Check the premise"},
+		{"media placeholders", `{"content":[{"type":"image","source":{"data":"opaque"}},{"text":"Caption"}]}`, "[Image]\n\nCaption"},
+		{"plain text", "Keep \nline breaks", "Keep \nline breaks"},
+		{"domain JSON", `{"text":"Keep me","records":[1,2]}`, `{"text":"Keep me","records":[1,2]}`},
+		{"malformed prefix", `{"content":[{"text":"unfinished`, `{"content":[{"text":"unfinished`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			if err := c.reader().QueryRowContext(t.Context(), `WITH source(body) AS (VALUES(?)) SELECT `+timelineContentSQL("body")+` FROM source`, tc.body).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("primary content = %q; want %q", got, tc.want)
+			}
+		})
+	}
+
+	for _, tc := range []struct{ name, body, want string }{
+		{"encoded arguments", jsonText(map[string]any{"tool": "exec_command", "arguments": jsonText(map[string]any{"cmd": "npm test", "timeout_ms": 1000})}), "npm test"},
+		{"delegation prompt", `{"tool":"Task","input":{"description":"Check","prompt":"Read the source\nCheck tests","subagent_type":"Reviewer"}}`, "Read the source\nCheck tests"},
+		{"literal script", `{"tool":"exec","input":"\"literal\""}`, `"literal"`},
+		{"structured edit", `{"tool":"Edit","input":{"file_path":"a.go","old_string":"before","new_string":"after"}}`, `{"file_path":"a.go","old_string":"before","new_string":"after"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			if err := c.reader().QueryRowContext(t.Context(), `WITH source(body) AS (VALUES(?)) SELECT `+timelineInputSQL("source.body")+` FROM source`, tc.body).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("primary input = %q; want %q", got, tc.want)
+			}
+		})
+	}
+
+	input := lanes[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	parts := input["authorship"].([]any)
+	if len(parts) != 3 || parts[0].(map[string]any)["category"] != "typed" || parts[0].(map[string]any)["bytes"] != float64(5) || parts[1].(map[string]any)["category"] != "pasted" || parts[1].(map[string]any)["bytes"] != float64(4) || parts[2].(map[string]any)["category"] != "typed" || parts[2].(map[string]any)["bytes"] != float64(3) {
+		t.Fatalf("retained text origins: %v", parts)
+	}
+	for i, text := range []string{"Imple", "ment", " it"} {
+		if parts[i].(map[string]any)["text"] != text || parts[i].(map[string]any)["truncated"] != false {
+			t.Fatalf("span excerpt %d: %v", i, parts[i])
+		}
+	}
+	if _, exposed := input["authorship_spans"]; exposed {
+		t.Fatal("raw authorship offsets escaped compact projection")
+	}
+	if c.hasLabelsLedger() {
+		t.Fatal("reading created the labels ledger")
+	}
+	// Positions use original UTF-8 bytes, even beyond the clipped excerpt.
+	if _, err := c.DB.Exec(`UPDATE messages SET text=? WHERE id='user'`, strings.Repeat("é", 400)+"!"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE message_authorship SET spans_json='[{"start":4,"end":800,"category":"quoted"},{"start":0,"end":2,"category":"typed"},{"start":801,"end":900,"category":"pasted"}]' WHERE message_id='user'`)
+	positioned := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	positionParts := positioned["authorship"].([]any)
+	wantOrigins := []string{"typed", "unknown", "quoted", "unknown"}
+	wantBytes := []float64{2, 2, 796, 1}
+	wantText := []string{"é", "é", strings.Repeat("é", 240), "!"}
+	if len(positionParts) != len(wantOrigins) {
+		t.Fatalf("positioned text origins: %v", positionParts)
+	}
+	for i, part := range positionParts {
+		p := part.(map[string]any)
+		if p["category"] != wantOrigins[i] || p["bytes"] != wantBytes[i] {
+			t.Fatalf("span %d lost its position or full byte length: %v", i, p)
+		}
+		if p["text"] != wantText[i] || p["truncated"] != (i == 2) {
+			t.Fatalf("span %d must have its own bounded Unicode excerpt: %v", i, p)
+		}
+	}
+	// An excerpt byte cap must not expose a partial UTF-8 rune at its edge.
+	if _, err := c.DB.Exec(`UPDATE messages SET text=? WHERE id='user'`, "a"+strings.Repeat("😎", 300)+"tail"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE message_authorship SET spans_json='[{"start":0,"end":1201,"category":"typed"},{"start":1201,"end":1205,"category":"quoted"}]' WHERE message_id='user'`)
+	emoji := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)["authorship"].([]any)
+	if emoji[0].(map[string]any)["text"] != "a"+strings.Repeat("😎", 239) || emoji[1].(map[string]any)["text"] != "tail" {
+		t.Fatalf("Unicode excerpt boundary: %v", emoji)
+	}
+	if _, ok := read("sessions=root-session")["taxonomy"]; ok {
+		t.Fatal("parallel view loaded message labels without opting in")
+	}
+	// A small ledger names probabilities in its stored model order.
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('test','["P","P.request","P.request.work.implement"]');
+ INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('root','test',1,'2026-01-01');
+ DELETE FROM message_labels_dirty`)
+	if _, err := c.DB.Exec(`INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('user','root','H-typed',7,?,1,1,'test','test','test','2026-01-01')`, encodeLabelProbs([]float32{1, .98, .95})); err != nil {
+		t.Fatal(err)
+	}
+	labeled := read("sessions=root-session&labels=1")
+	message := labeled["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if message["labels"].(map[string]any)["ids"].([]any)[2] != "P.request.work.implement" || len(labeled["taxonomy"].([]any)) != 3 {
+		t.Fatalf("labels/taxonomy: %v", labeled)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('root','pending')`)
+	pending := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)
+	if pending["labels_pending"] != true {
+		t.Fatal("pending labels hidden")
+	}
+	if _, ok := pending["messages"].([]any)[0].(map[string]any)["labels"]; ok {
+		t.Fatal("stale labels presented as current")
+	}
+	override(t, &delegationMessageLimit, 1)
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('legacy','root','legacy','assistant','message','Legacy reply','legacy','2026-01-01T00:00:04Z')`)
+	bounded := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)
+	if bounded["messages_truncated"] != true || len(bounded["messages"].([]any)) != 1 {
+		t.Fatalf("unbounded messages: %v", bounded)
+	}
+	start := *delegationTime("2026-01-01T00:00:04Z")
+	zoom := read(fmt.Sprintf("sessions=root-session&labels=1&start=%.0f&end=%.0f", start, start+500))["lanes"].([]any)[0].(map[string]any)
+	if zoom["messages"].([]any)[0].(map[string]any)["id"] != "legacy" {
+		t.Fatal("preceding context crowded the visible message out of the cap")
 	}
 }
 

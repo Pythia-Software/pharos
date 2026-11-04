@@ -1,3 +1,4 @@
+import messageLabels from "../../../../schemas/message_labels.schema.json";
 // Shared fixtures for recipe tests: loaded schemas, the server's execution
 // contract, and helpers that run a card's destination table or cover metric
 // against in-memory rows.
@@ -27,7 +28,7 @@ export { core, instantiateRecipe, queryRecipes, cardCoverQuery };
 
 // Every dataset the repository defines a schema for.
 export const schemas = Object.fromEntries(Object.entries({
-  model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages,
+  message_labels:messageLabels, model_requests: modelRequests, activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, rhythm, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages, agent_events: agentEvents, agent_event_messages: agentEventMessages,
 }).map(([dataset, document]) => [dataset, core.loadSchema(document)]));
 export { execution, queryCapabilities as capabilities } from "../../support/query-server.mjs";
 export const day = 86400000;

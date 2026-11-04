@@ -26,7 +26,7 @@ export function optimizePages(): NestedPage[] {
 const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   activity: "People", human: "People", habits: "People",
   skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
-  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents",
+  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
   tokens: "Outcomes", carbon: "Outcomes",
 };
@@ -43,6 +43,7 @@ export function analyzePages(params: URLSearchParams, previews = agentEventsEnab
       .map(([dataset, item]) => ({ id: `query:${dataset}`, label: item.label, href: usageWorkspaceURL({ mode: "query", dataset: dataset as keyof typeof usageDatasets, topic: usageDatasetTopics[dataset as keyof typeof usageDatasets], report: "" }, params) })),
     },
   ];
+
 }
 
 export type AppSection = { id: string; label: string; href: string; pages: readonly NestedPage[] };

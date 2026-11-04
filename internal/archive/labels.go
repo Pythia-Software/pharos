@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS message_labels_models (
   model TEXT PRIMARY KEY,
   labels_json TEXT NOT NULL
 );
-`
+` + messageLabelLedgerIndexSQL + ";"
 
 // labelsDirtyTriggers mark a conversation dirty when anything its items are
 // built from changes: its messages, their classification, reasoning
@@ -152,7 +152,7 @@ func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 	if version, err := c.metaValue(ctx, "labels_schema_version"); err == nil && version == labelsSchemaVersion {
 		return nil
 	}
-	return c.writeTransaction(ctx, "create the labels ledger", func(tx *sql.Tx) error {
+	err := c.writeTransaction(ctx, "create the labels ledger", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, labelsSchemaDDL); err != nil {
 			return err
 		}
@@ -161,9 +161,16 @@ func (c *Catalog) ensureLabelsSchema(ctx context.Context) error {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}
 		}
+		if err := messageLabelFactTriggers(ctx, tx); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('labels_schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, labelsSchemaVersion)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	return c.ensureQueryCacheGeneration()
 }
 
 func (c *Catalog) hasLabelsLedger() bool {
@@ -1439,12 +1446,19 @@ func (c *Catalog) labelsReusers(ctx context.Context) (map[string][]string, error
 // names and definitions. Without a ledger it attaches nothing and summary is
 // nil; it only reads, so a page never starts labeling.
 func (c *Catalog) messageLabelsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
+	return c.messageLabelsAttacherContext(context.Background(), conversationID, nil)
+}
+
+// A non-nil messageIDs slice restricts both label decoding and the taxonomy
+// summary to those messages. An empty sample reads no labels; nil retains the
+// full conversation reader's behavior. Preview callers pass their request context.
+func (c *Catalog) messageLabelsAttacherContext(ctx context.Context, conversationID any, messageIDs []string) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
 	attach, summary = func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
 	var tables int
-	if err := c.reader().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='message_labels_models'`).Scan(&tables); err != nil || tables == 0 {
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='message_labels_models'`).Scan(&tables); err != nil || tables == 0 {
 		return attach, summary, err
 	}
-	models, err := queryMaps(c.reader(), `SELECT model,labels_json FROM message_labels_models`)
+	models, err := queryMapsContext(ctx, c.reader(), `SELECT model,labels_json FROM message_labels_models`)
 	if err != nil {
 		return attach, summary, err
 	}
@@ -1455,13 +1469,26 @@ func (c *Catalog) messageLabelsAttacher(conversationID any) (attach func(map[str
 			orders[firstString(row["model"])] = order
 		}
 	}
-	rows, err := queryMaps(c.reader(), `SELECT message_id,segment,labels,probs,model FROM message_labels WHERE conversation_id=?`, conversationID)
+	query := `SELECT message_id,segment,labels,probs,model FROM message_labels WHERE conversation_id=?`
+	args := []any{conversationID}
+	if messageIDs != nil {
+		encoded, err := json.Marshal(messageIDs)
+		if err != nil {
+			return attach, summary, err
+		}
+		query += ` AND message_id IN (SELECT value FROM json_each(?))`
+		args = append(args, string(encoded))
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), query, args...)
 	if err != nil {
 		return attach, summary, err
 	}
 	byID := map[string]map[string]any{}
 	named := map[string]bool{}
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return attach, summary, err
+		}
 		order := orders[firstString(row["model"])]
 		// queryMaps reads a BLOB as a string.
 		raw, _ := row["probs"].([]byte)
@@ -1490,7 +1517,7 @@ func (c *Catalog) messageLabelsAttacher(conversationID any) (attach func(map[str
 	}
 	summary = func() (map[string]any, error) {
 		var pending bool
-		if err := c.reader().QueryRow(`SELECT EXISTS(SELECT 1 FROM message_labels_dirty WHERE conversation_id=?)
+		if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM message_labels_dirty WHERE conversation_id=?)
 			OR NOT EXISTS(SELECT 1 FROM message_labels_conversations WHERE conversation_id=?)`, conversationID, conversationID).Scan(&pending); err != nil {
 			return nil, err
 		}

@@ -1,3 +1,7 @@
+import {messageLabelLegacyURL} from "./message-label-legacy";
+import {MessageLabelDisplay,MessageLabelCards,messageLabelRenderers} from "./message-label-results";
+import {messageLabelHostQuery,messageLabelConversationQuery,labelResultsMode} from "./message-label-results-model";
+import {messageLabelsCatalog} from "./message-labels-catalog";
 import { hostQueryV3Transport } from "./host-query-transport";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
@@ -40,6 +44,7 @@ import type { TokenChartView } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { MetricRequestError, postMetrics, postQueryV3Metrics, type MetricResult } from "./metric-request";
 import { tokenSummaryMetrics } from "./token-chart-request";
+import messageLabelsDocument from "../../schemas/message_labels.schema.json";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -112,7 +117,7 @@ import { readDashboardLink, parallelismSelectionQuery } from "./usage-dashboard-
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
@@ -126,7 +131,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -185,6 +190,7 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  message_labels:loadSchema<Row>(messageLabelsDocument),
   model_requests: loadSchema<Row>(modelRequestsDocument),
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
@@ -394,6 +400,7 @@ const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dat
 const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
+  message_labels:"No messages match these labels and filters.",
   model_requests: "No model requests match this query.",
   library: "No work matches this query.",
   usage: "No token usage matches this query.",
@@ -464,7 +471,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   const schema = useMemo(() => usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset) } : renderers, [dataset]);
-  const tableRenderers = useUsageTableRenderers(usageRenderers);
+  const tableRenderers = useUsageTableRenderers(dataset==="message_labels"?{...usageRenderers,...messageLabelRenderers}:usageRenderers);
   const detailSchema = useMemo(() => usageDetailsSchema(schema, dataset), [schema, dataset]);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
@@ -513,7 +520,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     const stored = libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) });
     // Fit a new Analyze table by default, while respecting every restored URL,
     // named/default save and last-used manual sizing choice.
-    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? fittedDefaultQuery(schema) } : stored;
+    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? (dataset==="message_labels"?messageLabelConversationQuery(fittedDefaultQuery(schema)):fittedDefaultQuery(schema)) } : stored;
   }, [bookmarkRevision, usageActions, schema]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
@@ -585,7 +592,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [visible, receipt?.key, receipt?.status]);
   // Empty states describe the rows: a failed metric alone does not empty them.
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
-  const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
+  const resultsView = dataset==="message_labels"?labelResultsMode(api.query):searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const attentionSchema = api.itemDetails?.schema.name;
   const detailsReady = nativeDetailsReady({ visible: Boolean(visible), restored: api.restoration.ready, loading: api.loading, rows: api.execution?.rows, schema: attentionSchema });
   const nativeDetailSurface = resultsView === "table";
@@ -710,7 +717,8 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectionBar && !api.query.grouping ? selectionBar(api) : null}
-    {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
+    {dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
+
       : <DataTable
       maxHeight={100000}
       fields={api.query.grouping ? usageGroupFields(api.visibleFields, api.query) : api.visibleFields}
@@ -1114,6 +1122,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 }
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
+  if(topic==="labels")return <CatalogDashboard catalog={messageLabelsCatalog} dataset="message_labels" name="labels" defaults={dashboardDefaults.labels}/>;
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} summary={where => <ConversationsSummary where={where} />} />;
@@ -1189,7 +1198,7 @@ function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
-  if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
+  if (!isTrendView(state.view.view)) return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
     onChange={state.update} onView={choose} onFilter={state.onFilter} />;
   return <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}
     format={tokenAmount} tick={tokenTick}>
@@ -1307,7 +1316,7 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
   const views: CatalogViews = (drawn, amount = format) => {
     const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
     return <>
-      {(state.view.view ?? "trend") !== "trend"
+      {!isTrendView(state.view.view)
         ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
         : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
       {panels?.(state.where, state.onFilter)}
@@ -1399,6 +1408,7 @@ function SkillsDashboard() {
 function UsagePage() {
   useLocationRevision();
   if (location.pathname !== "/analyze") return null;
+  if(new URLSearchParams(location.search).has("label_lab")){history.replaceState(history.state,"",messageLabelLegacyURL(new URLSearchParams(location.search)));}
   if (!isUsageWorkspace()) history.replaceState(history.state, "", canonicalAnalyzeURL(location.pathname, new URLSearchParams(location.search)) + location.hash);
   return <UsageChartColorsProvider>
     <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
@@ -1410,11 +1420,12 @@ function UsagePage() {
 // its own state into record_search, which the service validates and runs.
 function AnalyzeQueryTable({ dataset }: { dataset: UsageDataset }) {
   const fields = schemas[dataset].fields;
-  const host = useMemo((): SurfaceHost => ({ requiresV3: true, query: recordKeywordHostQuery(dataset, fields), find: state => recordKeywordFind(state, dataset, fields) }), [dataset]);
+  const host = useMemo((): SurfaceHost => ({ requiresV3: true, query: dataset==="message_labels"?messageLabelHostQuery(fields):recordKeywordHostQuery(dataset, fields), find: state => recordKeywordFind(state, dataset, fields) }), [dataset]);
   return <>
     {/* Keep record predicates and grouped HAVING in the native builder,
         including datasets whose older pages use RecordSearchEditor. */}
     <QuerySurface dataset={dataset} usageActions host={host}
+      resultPresentation={dataset==="message_labels"?api=><MessageLabelDisplay api={api}/>:undefined}
       querySummary={api => { const value = readRecordKeyword(api.query.hostState, dataset, fields); return value ? <span>{(api.query.grouping?.source ?? api.query).where.length} source filters{api.query.grouping ? ` · ${api.query.where.length} group filters` : ""} · {recordKeywordSummary(value, fields, usageDatasets[dataset])}</span> : undefined; }}
       queryContent={api => <AnalyzeRecordKeyword api={api} dataset={dataset} host={host.query} />}
       presets={dataset === "mcp_calls" ? () => <MCPUsageNote /> : undefined} />

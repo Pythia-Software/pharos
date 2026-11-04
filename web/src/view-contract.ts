@@ -9,6 +9,9 @@ import { logSourceIds } from "./logs-model";
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
+  label_results: field("label_results",["analyze/query/message_labels"],"enum","Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.",["cards","table"],"cards"),
+  timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
+  reader_view: field("reader_view",["work"],"enum","Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.",["conversation","timeline"],"conversation"),
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
   thinking: field("thinking",["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],"json","Thinking dashboard applied filters and presentation. All controls share one range; dates are half-open ISO bounds."),
   disclosures: field("disclosures", ["*"], "json", "Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded."),
@@ -180,6 +183,7 @@ export function encodeViewValue(field: ViewField, value: unknown): string {
 // Existing composite owners implement their published codecs directly. Every
 // other host field must have a discovered useViewState/read/write binding.
 export const delegatedViewFields: Record<string,{file:string; symbol:string}> = {
+  label_results:{file:"web/src/message-label-results-model.ts",symbol:"messageLabelHostQuery"},
   dashboard_timezone:{file:"web/src/usage-dashboard-model.ts",symbol:"readDashboardLink"},
   carbon:{file:"internal/archive/assets/carbon.js",symbol:"syncSettingsURL"},
   parallelism:{file:"web/src/concurrency.tsx",symbol:"routeParameter"},

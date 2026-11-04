@@ -1,7 +1,7 @@
 import { decodeQueryStrict, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
 import { chartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
-import { normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
 import { cardLibraryParams } from "./card-library-model";
@@ -83,7 +83,7 @@ function chartCases(map: SiteMap): ChartCase[] {
       // Charts the page rejects: an unknown or ill-typed value per option.
       const invalid: Record<string, unknown>[] = [
         { v: 3 }, { metric: "no_such_measure" }, { split: "no_such_breakdown" }, { scale: "huge" }, { selection: { values: [1], excluded: false } },
-        ...view === "trend" ? [{ period: "fortnight" }, { hours: 0 }, { rollingPeriods: -1 }, { normPeriods: 1001 }, { share: "yes" }]
+        ...isTrendView(view) ? [{ period: "fortnight" }, { hours: 0 }, { rollingPeriods: -1 }, { normPeriods: 1001 }, { share: "yes" }]
           : [{ unit: "no_such_unit" }, { minSamples: -1 }, { reduce: "sum" }, { compareAs: "pie" }, { cycle: "month" }, { metricY: "no_such_measure" }],
       ];
       // Each as a one-key chart; the first also over the whole default chart.
@@ -195,8 +195,8 @@ function nodeCases(map: SiteMap) {
   const route = { mode: "rank" as const, sort: "cost", scope: "self", direction: "asc", collapsed: ["session-b", "session-a"], selected: "session-c", range: [1767268800000, 1767272400000] as [number, number] };
   const reader = new URL(conversationRowURL({ workspace_id: "workspace-1", conversation_id: "conversation-2" })!, "http://localhost");
   for (const [key, value] of Object.entries(delegationRouteValues(route))) if (value) reader.searchParams.set(key, value);
-  reader.searchParams.set("explorer", "parallel");
-  add("work", reader.pathname + reader.search, { work_id: "workspace-1", conversation: "conversation-2", ...route, collapsed: [...route.collapsed].sort(), tab: "parallel" });
+  reader.searchParams.set("explorer", "timeline");
+  add("work", reader.pathname + reader.search, { work_id: "workspace-1", conversation: "conversation-2", ...route, collapsed: [...route.collapsed].sort(), tab: "timeline" });
   return cases;
 }
 

@@ -2,7 +2,7 @@ import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pyt
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
-import { analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
+import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
@@ -84,7 +84,7 @@ function ribbonPreview(address: string, data: ConcurrencyData, now: number): Que
 async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), groups?: number): Promise<QueryPreview> {
   const opened = readDashboardCard(address, new Date(now)), { topic, dataset, where, params } = opened;
   const counted = groups !== undefined && dashboardCardGroups(address);
-  const state = counted && opened.state.view === "trend" ? { ...opened.state, seriesLimit: groups } : opened.state;
+  const state = counted && isTrendView(opened.state.view) ? { ...opened.state, seriesLimit: groups } : opened.state;
   if (schema.name !== `pharos_${dataset}`) throw new Error("This dashboard card's dataset is unavailable.");
   const calculator = window.pharosCarbon;
   if (topic === "carbon" && !calculator) throw new Error("Carbon assumptions are still loading. Refresh this card to try again.");
@@ -103,7 +103,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const request = { ...catalog.request?.params, ...topic === "parallelism" ? { parallelism_settings: JSON.stringify({ counting: parallelism.counting, gap: parallelism.gap }) } : {} };
   const run = (query: Parameters<typeof runAnalysisQuery>[2]) => runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
-  if (state.view === "trend") {
+  if (isTrendView(state.view)) {
     const trend = trendQuery(catalog, state, where, { now, zone });
     const built = trendSeries(catalog, state, trend, await run(trend.query), { now, label });
     if (built.error) throw new Error(built.error);
@@ -114,7 +114,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, state),
-      dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
+      dashboardTrend: { prepared: true, lines: state.view !== "trend_bar" && (built.lines || state.display === "cumulative"), bars: state.view === "trend_bar", grouped: state.view === "trend_bar" && (!built.additive || state.scale === "logarithmic" && !state.share), percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
         unit: percent ? "percent" : catalog.measures[state.metric].format.kind === "duration" ? "ms" : catalog.measures[state.metric].unit,
         xLabel: state.period, yLabel: trendTitle(catalog, state) } };
   }
