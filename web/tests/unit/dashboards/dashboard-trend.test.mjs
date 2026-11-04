@@ -73,6 +73,8 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
     [{ metric: "conversations", split: "none", display: "cumulative" }, { display: "interval" }, /running count of distinct conversations/],
     [{ metric: "output_share", split: "none", rollingPeriods: 7, rollingOp: "sum" }, { rollingOp: "mean" }, /pools its window/],
     [{ metric: "agent_sessions", split: "none", period: "days", days: 3 }, { period: "day" }, /counted per hour, day, week or month/],
+    [{ metric: "average_fanout", split: "none", period: "days", days: 3 }, { period: "day" }, /several periods would add/],
+    [{ metric: "average_fanout", split: "none", period: "hours", hours: 3 }, { period: "hour" }, /several periods would add/],
     [{ metric: "cost", split: "type" }, { split: "provider" }, /Token type splits tokens only/],
     [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no norm/],
     [{ metric: "tokens", split: "none", display: "cumulative", norm: true }, { norm: false }, /running totals/],

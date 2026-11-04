@@ -21,6 +21,9 @@ const measures: Record<string, AnalysisMeasure> = {
   conversations: { label: "Conversations reached", unit: "conversations", format: tokens, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with usage. A conversation using several groups counts once in each, so groups do not add up to the total." },
   agent_sessions: { label: "Agent sessions", unit: "sessions", format: tokens, op: "count_distinct", field: "agent_session_id", additive: false, note: "Distinct agent sessions with usage. A session using several groups counts once in each." },
   delegated_runs: { label: "Delegated runs", unit: "runs", format: tokens, op: "count_distinct", field: "delegated_session_id", additive: false, note: "Distinct delegated executions with usage; the top-level run is not one. Handles and child transcripts count once." },
+  average_fanout: { label: "Average direct child runs per delegating agent", unit: "runs per delegating agent", format: { kind: "number", decimals: 1 }, op: "sum", expression: "COUNT_DISTINCT([delegated_session_id])/NULLIF(COUNT_DISTINCT([delegated_parent_session_id]),0)", additive: false,
+    where: [{ field: "total_tokens", op: ">", value: "0" }, { field: "root_conversation_id", op: "is_not_null", value: "" }, { field: "root_conversation_id", op: "!=", value: "" }, { field: "delegated_run_depth", op: ">", value: "0" }, { field: "delegated_parent_session_id", op: "is_not_null", value: "" }, { field: "delegated_parent_session_id", op: "!=", value: "" }],
+    note: "Distinct direct child executions divided by their distinct canonical parents, including initiating agents and nested parents. Each parent has equal weight; only parents with matching positive-token child usage count. Repeated days and linked transcripts count once within each period. Periods with no delegation have no value. Smoothing, when selected, averages period means; it does not recalculate distinct counts across periods." },
 };
 
 const breakdowns: AnalysisCatalog["breakdowns"] = {
@@ -61,6 +64,8 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
       breakdowns: { effort: ["effort"], run_role: ["run_role"] }, note: "One root run or delegated execution at one effort, with usage in the selected range pooled. A run that changes effort contributes once to each effort used." },
     delegated_run: { label: "Delegated run", plural: "Delegated runs", key: "delegated_session_id", where: [...present("delegated_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
       note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and repository." },
+    delegating_run: { label: "Delegating agent", plural: "Delegating agents", key: ["root_conversation_id", "delegated_parent_session_id"], where: [...present("root_conversation_id"), ...present("delegated_parent_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
+      note: "One canonical parent execution, including initiating agents and nested parents, represented by its direct children's matching usage. Delegated runs counts its distinct active direct children; parent usage need not be in the window. Agents with no matching children are excluded. Provider, model, effort and repository describe the top-level conversation." },
   },
   // Token type splits a token total into its parts. Cost is priced per
   // request, not per token type, so cost by type shows providers, as the
