@@ -152,7 +152,7 @@ const dashboards: Record<string, CardDashboard> = {
   // Session Shape: one record per agent session. Rates carry their coverage
   // population as the card's filters.
   "session-sources": sessions("sessions", "harness", {}),
-  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend" }),
+  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend", share: false }),
   "session-length-mix": sessions("sessions", "length_band", { view: "trend", rollingPeriods: 7, share: true }),
   "session-active-time": sessions("active_time", "archetype", { view: "distribution", scale: "logarithmic" }),
   "session-turn-cycle": sessions("turn_cycle", "provider", { view: "distribution", scale: "logarithmic" }),
