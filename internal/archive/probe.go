@@ -195,7 +195,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		"cline":          {".cline/data"},
 		"vscode-copilot": vscodeUserDirs,
 		"cursor":         {cursorUserDir},
-		"cursor-cli":     {".cursor"},
+		"cursor-cli":     {".cursor/chats"}, // the editor's extensions are in .cursor too
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")

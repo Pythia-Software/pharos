@@ -1,7 +1,6 @@
 package archive
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -73,12 +72,6 @@ func cursorCLIConversation() cursorCLIChatSpec {
 	}
 }
 
-// cursorCLIBlob is a blob's ID: the sha256 of its data.
-func cursorCLIBlob(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
 // cursorCLIRootBlob encodes a root as the CLI does: its messages' IDs, the
 // context meter and the folder's URI.
 func cursorCLIRootBlob(ids []string, folder string) []byte {
@@ -114,7 +107,7 @@ func cursorCLIWriteChat(t *testing.T, root string, chat cursorCLIChatSpec) strin
 	ids := []string{}
 	for _, message := range chat.messages {
 		data := []byte(jsonText(message))
-		ids = append(ids, cursorCLIBlob(data))
+		ids = append(ids, cursorCLIBlobID(data))
 		if _, err := db.Exec(`INSERT OR IGNORE INTO blobs VALUES(?, ?)`, ids[len(ids)-1], data); err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +119,7 @@ func cursorCLIWriteChat(t *testing.T, root string, chat cursorCLIChatSpec) strin
 			listed = append(listed, ids[index])
 		}
 		data := cursorCLIRootBlob(listed, chat.folder)
-		latest = cursorCLIBlob(data)
+		latest = cursorCLIBlobID(data)
 		if _, err := db.Exec(`INSERT OR IGNORE INTO blobs VALUES(?, ?)`, latest, data); err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +225,7 @@ func TestCursorCLIChatKeepsItsTurnsAndTools(t *testing.T) {
 			t.Fatalf("message %d (%s) selected = %v", index, message.Text, message.Selected)
 		}
 	}
-	if messages[len(messages)-1].Text != "Abandoned reply." {
+	if messages[len(messages)-1].Text != "Abandoned reply." || messages[len(messages)-1].Model != "cursor-old" || messages[2].Model != "cursor-test-high" {
 		t.Fatalf("rewound = %+v", messages[len(messages)-1])
 	}
 	// Without meta.json, the folder is the root's and the title the prompt;
@@ -254,7 +247,7 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 	source := cursorCLISource(root)
 	ingestSource(t, c, source)
 	before := countRows(t, c, `SELECT COUNT(*) FROM messages`)
-	reply := cursorCLIBlob([]byte(jsonText(cursorCLIConversation().messages[7])))
+	reply := cursorCLIBlobID([]byte(jsonText(cursorCLIConversation().messages[7])))
 	cursorCLIStore(t, dir, func(db *sql.DB) error {
 		_, err := db.Exec(`DELETE FROM blobs WHERE id=?`, reply)
 		return err
@@ -267,7 +260,7 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before || countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Fixed.'`) != 1 {
 		t.Fatalf("messages %d, before %d", after, before)
 	}
-	rewound := cursorCLIBlob([]byte(jsonText(cursorCLIConversation().messages[8])))
+	rewound := cursorCLIBlobID([]byte(jsonText(cursorCLIConversation().messages[8])))
 	cursorCLIStore(t, dir, func(db *sql.DB) error {
 		_, err := db.Exec(`DELETE FROM blobs WHERE id=?`, rewound)
 		return err
@@ -279,8 +272,24 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before {
 		t.Fatalf("without an older root's message: messages %d, before %d", after, before)
 	}
-	// The latest root is gone, alone: the longest one left orders what it
-	// lists.
+	// Nor is it lost once nothing that older root lists is left.
+	cursorCLIStore(t, dir, func(db *sql.DB) error {
+		for _, message := range cursorCLIConversation().messages[:3] {
+			if _, err := db.Exec(`DELETE FROM blobs WHERE id=?`, cursorCLIBlobID([]byte(jsonText(message)))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; !slices.Contains(record.Unread, rewound[:16]) {
+		t.Fatalf("without what an older root lists: unread %v", record.Unread)
+	}
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Abandoned reply.'`); n != 1 {
+		t.Fatalf("without what an older root lists: %d rewound replies", n)
+	}
+	// The latest root is cut short, as one being written: the longest root
+	// left orders what it lists.
 	c, _ = testCatalog(t)
 	root = filepath.Join(t.TempDir(), ".cursor")
 	dir = cursorCLIWriteChat(t, root, cursorCLIConversation())
@@ -294,15 +303,15 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 		}
 		raw, _ := hex.DecodeString(value)
 		latest = firstString(mapValueDefault(parseJSONValue(string(raw)))["latestRootBlobId"])
-		_, err := db.Exec(`DELETE FROM blobs WHERE id=?`, latest)
+		_, err := db.Exec(`UPDATE blobs SET data=substr(data, 1, 100) WHERE id=?`, latest)
 		return err
 	})
 	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" || record.Unread != nil || !record.Messages[0].Selected {
-		t.Fatalf("without the latest root: coverage %s, unread %v", record.Coverage, record.Unread)
+		t.Fatalf("with the latest root cut short: coverage %s, unread %v", record.Coverage, record.Unread)
 	}
 	ingestSource(t, c, source)
 	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before {
-		t.Fatalf("without the latest root: messages %d, before %d", after, before)
+		t.Fatalf("with the latest root cut short: messages %d, before %d", after, before)
 	}
 
 	// A prompt sent twice, then rewound to before the second.
@@ -368,9 +377,9 @@ func TestCursorCLICaptureHoldsOnlyTheChats(t *testing.T) {
 	secret := func(text string) bool {
 		return strings.Contains(text, cursorCLISecret) || strings.Contains(strings.ToLower(text), hex.EncodeToString([]byte(cursorCLISecret)))
 	}
-	// Metadata naming the key twice, as JSON allows.
+	// Metadata naming the key, and the chat, twice, as JSON allows.
 	cursorCLIStore(t, filepath.Join(root, "chats", hashBytes([]byte("/work/docs"))[:32], cursorCLIChatB), func(db *sql.DB) error {
-		_, err := db.Exec(`UPDATE meta SET value=hex(substr(CAST(unhex(value) AS TEXT), 1, length(CAST(unhex(value) AS TEXT))-1) || ?)`, `,"blobEncryptionKey":"`+cursorCLISecret+`"}`)
+		_, err := db.Exec(`UPDATE meta SET value=hex(substr(CAST(unhex(value) AS TEXT), 1, length(CAST(unhex(value) AS TEXT))-1) || ?)`, `,"blobEncryptionKey":"`+cursorCLISecret+`","name":"Docs summary"}`)
 		return err
 	})
 	c, config := testCatalog(t)
@@ -409,6 +418,15 @@ func TestCursorCLICaptureHoldsOnlyTheChats(t *testing.T) {
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
 	if captured := messages(other); captured != live || live == 0 || countRows(t, other, `SELECT COUNT(*) FROM workspaces WHERE location IN ('/work/app','/work/docs')`) != 2 {
 		t.Fatalf("captured %d messages, live %d", captured, live)
+	}
+	titles := func(c *Catalog) (titles string) {
+		if err := c.DB.QueryRow(`SELECT group_concat(title, ',') FROM (SELECT title FROM workspaces ORDER BY source_id)`).Scan(&titles); err != nil {
+			t.Fatal(err)
+		}
+		return titles
+	}
+	if got, want := titles(other), titles(c); got != want {
+		t.Fatalf("captured titles %s, live %s", got, want)
 	}
 }
 
@@ -476,6 +494,9 @@ func TestCursorCLIIsFoundAndSetUp(t *testing.T) {
 	useHost(t, "host-a")
 	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, ".cursor", "extensions", "extensions.json"), "[]")
+	if tools := probeTools(home, Config{}); strings.Contains(jsonText(tools), "cursor-cli") {
+		t.Fatalf("the editor's folder was found as the CLI: %v", tools)
+	}
 	for _, candidate := range probeSources(home, Config{}, nil).Candidates {
 		if candidate.Kind == "cursor-cli" {
 			t.Fatalf("a folder without chats was offered: %+v", candidate)

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,19 +164,19 @@ func (a *cursorCLIAdapter) open(store string) (*sql.DB, *sql.Tx, error) {
 	return db, tx, nil
 }
 
-// cursorCLIMeta reads a chat's metadata: the first row of meta, hex-encoded
-// JSON.
+// cursorCLIMeta reads a chat's metadata: what is read of the first row of
+// meta that is hex-encoded JSON. It is read as a capture copies it
+// (cursorCLICaptureTables), so a key written twice is read the same live and
+// captured.
 func cursorCLIMeta(tx *sql.Tx) (map[string]any, error) {
 	var value string
-	if err := tx.QueryRow(`SELECT value FROM meta ORDER BY key LIMIT 1`).Scan(&value); err != nil {
+	if err := tx.QueryRow(`SELECT json_object(` + cursorCLIMetaColumns() + `) FROM meta WHERE ` + cursorCLICaptureTables["meta"].where + ` ORDER BY key LIMIT 1`).Scan(&value); errors.Is(err, sql.ErrNoRows) {
+		return nil, errors.New("the chat has no metadata")
+	} else if err != nil {
 		return nil, err
 	}
-	raw, err := hex.DecodeString(strings.TrimSpace(value))
-	if err != nil {
-		return nil, fmt.Errorf("chat metadata is not hex: %w", err)
-	}
 	meta := map[string]any{}
-	if err := json.Unmarshal(raw, &meta); err != nil {
+	if err := json.Unmarshal([]byte(value), &meta); err != nil {
 		return nil, fmt.Errorf("chat metadata: %w", err)
 	}
 	return meta, nil
@@ -263,9 +263,9 @@ type cursorCLIRoot struct {
 
 // cursorCLIParseRoot reads a root (protoFields): field 1 lists its
 // messages' blob IDs, 5 the context meter (tokens used, then the window)
-// and 9 the folder's URI. A blob that is not a root, as it lists anything but
-// message IDs or no message the chat holds, is reported as nil.
-func cursorCLIParseRoot(data []byte, isMessage func(string) bool) *cursorCLIRoot {
+// and 9 the folder's URI. A blob that is not a root, as it lists no message
+// or anything but message IDs, is reported as nil.
+func cursorCLIParseRoot(data []byte) *cursorCLIRoot {
 	fields := protoFields(data)
 	root := &cursorCLIRoot{}
 	for _, value := range fields[1] {
@@ -275,27 +275,25 @@ func cursorCLIParseRoot(data []byte, isMessage func(string) bool) *cursorCLIRoot
 		}
 		root.messages = append(root.messages, hex.EncodeToString(id))
 	}
-	if !slices.ContainsFunc(root.messages, isMessage) {
+	if len(root.messages) == 0 {
 		return nil
 	}
-	if meter, ok := firstProto(fields[5]).([]byte); ok {
+	if meter, ok := protoLast(fields[5]).([]byte); ok {
 		values := protoFields(meter)
-		used, _ := firstProto(values[1]).(uint64)
-		window, _ := firstProto(values[2]).(uint64)
+		used, _ := protoLast(values[1]).(uint64)
+		window, _ := protoLast(values[2]).(uint64)
 		root.contextUsed, root.window = int64(used), int64(window)
 	}
-	if folder, ok := firstProto(fields[9]).([]byte); ok {
+	if folder, ok := protoLast(fields[9]).([]byte); ok {
 		root.folder = string(folder)
 	}
 	return root
 }
 
-// firstProto is a field's first value, or nil.
-func firstProto(values []any) any {
-	if len(values) == 0 {
-		return nil
-	}
-	return values[0]
+// cursorCLIBlobID is the ID of a blob holding data: its sha256.
+func cursorCLIBlobID(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // read reads a chat in one transaction.
@@ -325,7 +323,11 @@ func (a *cursorCLIAdapter) read(chat cursorCLIChat) (*WorkspaceRecord, error) {
 			rows.Close()
 			return nil, err
 		}
-		blobs[id] = data
+		// A blob that is not what its ID names, as one cut short, is read
+		// as gone.
+		if strings.EqualFold(id, cursorCLIBlobID(data)) {
+			blobs[strings.ToLower(id)] = data
+		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
@@ -351,14 +353,14 @@ type cursorCLIMessage struct {
 // record builds a chat's record from its metadata, its meta.json and blobs.
 func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any, blobs map[string][]byte, version int64) *WorkspaceRecord {
 	isMessage := func(id string) bool { data := blobs[id]; return len(data) > 0 && data[0] == '{' }
-	latest := firstString(meta["latestRootBlobId"])
-	root := cursorCLIParseRoot(blobs[latest], func(string) bool { return true })
+	latest := strings.ToLower(firstString(meta["latestRootBlobId"]))
+	root := cursorCLIParseRoot(blobs[latest])
 	older := []*cursorCLIRoot{}
 	for id, data := range blobs {
 		if id == latest || isMessage(id) {
 			continue
 		}
-		if candidate := cursorCLIParseRoot(data, isMessage); candidate != nil {
+		if candidate := cursorCLIParseRoot(data); candidate != nil {
 			older = append(older, candidate)
 		}
 	}
@@ -391,12 +393,12 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	for _, blob := range root.messages {
 		place(blob, held[blob]+1, true)
 	}
-	// An older root's message whose blob is gone is unread, as one the
-	// latest root lists is.
+	// An older root's message whose blob is gone or unreadable is unread, as
+	// one the latest root lists is.
 	for _, candidate := range older {
 		occurrences := map[string]int{}
 		for _, blob := range candidate.messages {
-			if occurrences[blob]++; occurrences[blob] > held[blob] && (isMessage(blob) || len(blobs[blob]) == 0) {
+			if occurrences[blob]++; occurrences[blob] > held[blob] {
 				place(blob, occurrences[blob], false)
 			}
 		}
@@ -416,9 +418,14 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	if len(context) > 0 {
 		conversation.NativeContext = context
 	}
-	at, model := started, ""
+	// model is the conversation's, from what is selected; current is the
+	// one each reply ran on, unknown again where what was rewound begins.
+	at, model, current := started, "", ""
 	add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
-	for _, message := range messages {
+	for n, message := range messages {
+		if !message.selected && (n == 0 || messages[n-1].selected) {
+			current = ""
+		}
 		data := blobs[message.blob]
 		var value map[string]any
 		if len(data) == 0 || json.Unmarshal(data, &value) != nil {
@@ -459,11 +466,13 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 		case "assistant":
 			for index, part := range parts {
 				part := mapValueDefault(part)
-				if name := firstString(mapValueDefault(mapValueDefault(part["providerOptions"])["cursor"])["modelName"]); name != "" && message.selected {
-					model = name
+				if name := firstString(mapValueDefault(mapValueDefault(part["providerOptions"])["cursor"])["modelName"]); name != "" {
+					if current = name; message.selected {
+						model = name
+					}
 				}
 				item := base
-				item.NativeID, item.Model = message.id+":"+strconv.Itoa(index), model
+				item.NativeID, item.Model = message.id+":"+strconv.Itoa(index), current
 				switch firstString(part["type"]) {
 				case "reasoning":
 					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
