@@ -236,6 +236,7 @@
   {"path":"findings","url":"/findings?finding=tool-failures%3Arepository%3Aabc123&tab=evidence","state":{"finding":"tool-failures:repository:abc123","tab":"evidence"}},
   {"path":"findings/settings","url":"/findings?view=settings","state":{"view":"settings"}},
   {"path":"findings/safety","url":"/findings?optimize_area=safety"},
+  {"path":"findings/safety","url":"/findings?optimize_area=safety&safety_rank=danger&safety_place=repo%3Aexample"},
   {"path":"findings/safety","url":"/findings?optimize_area=safety&safety_rank=recent&safety_place=repo%3Aexample"},
   {"path":"findings/safety","url":"/findings?optimize_area=safety&safety_rank=calls&safety_place=repo%3Aexample"},
   {"path":"findings/safety","url":"/findings?optimize_area=safety&safety_rank=evidence&safety_place=repo%3Aexample"},

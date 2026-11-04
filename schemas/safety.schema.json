@@ -6,6 +6,10 @@
   "defaultLimit": 50,
   "defaultSort": [
     {
+      "field": "danger",
+      "dir": "desc"
+    },
+    {
       "field": "last_seen_at",
       "dir": "desc"
     }
@@ -20,6 +24,10 @@
     {
       "field": "state",
       "width": 110
+    },
+    {
+      "field": "danger",
+      "width": 90
     },
     {
       "field": "title",
@@ -45,9 +53,9 @@
   "fields": [
     {
       "name": "id",
-      "label": "Review ID",
+      "label": "Notice ID",
       "type": "text",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "id",
@@ -63,9 +71,9 @@
     },
     {
       "name": "title",
-      "label": "Review",
+      "label": "Notice",
       "type": "text",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "title",
@@ -81,7 +89,7 @@
       "name": "state",
       "label": "State",
       "type": "enum",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "state",
@@ -117,7 +125,7 @@
       "name": "rule_label",
       "label": "Check",
       "type": "text",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "rule_label",
@@ -134,10 +142,151 @@
       }
     },
     {
+      "name": "rule",
+      "label": "Check type",
+      "type": "enum",
+      "group": "Notice",
+      "bindings": {
+        "postgres": {
+          "expr": "rule",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"rule\""
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "api",
+              "label": "Remote service changed by an API request"
+            },
+            {
+              "value": "boundary-delete",
+              "label": "Deletion outside the checkout"
+            },
+            {
+              "value": "cloud-delete",
+              "label": "Cloud objects deleted"
+            },
+            {
+              "value": "credentials",
+              "label": "Credentials copied to another location"
+            },
+            {
+              "value": "database",
+              "label": "Database changed outside the checkout"
+            },
+            {
+              "value": "delete",
+              "label": "Checkout or ignored files deleted"
+            },
+            {
+              "value": "disk-image",
+              "label": "Disk image or volume detached or changed"
+            },
+            {
+              "value": "local-history",
+              "label": "Shared Git work discarded"
+            },
+            {
+              "value": "permissions",
+              "label": "Permissions broadened"
+            },
+            {
+              "value": "process",
+              "label": "Every instance of a program stopped"
+            },
+            {
+              "value": "publication",
+              "label": "Published release deleted or replaced"
+            },
+            {
+              "value": "remote-history",
+              "label": "Published Git history rewritten"
+            },
+            {
+              "value": "system",
+              "label": "System or disk changed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "danger",
+      "label": "Danger",
+      "type": "enum",
+      "group": "Notice",
+      "bindings": {
+        "postgres": {
+          "expr": "danger",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"danger\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "high",
+              "label": "Dangerous"
+            },
+            {
+              "value": "medium",
+              "label": "Risky"
+            },
+            {
+              "value": "low",
+              "label": "Low"
+            }
+          ]
+        }
+      },
+      "sort": {
+        "field": "danger_rank"
+      },
+      "description": "How likely a notice of this check is to need you. Dangerous: credentials, published history, cloud and disk changes. Risky: deletions, databases, permissions, releases.",
+      "render": "option_label"
+    },
+    {
+      "name": "danger_rank",
+      "label": "Danger rank",
+      "type": "number",
+      "group": "Notice",
+      "bindings": {
+        "postgres": {
+          "expr": "danger_rank",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"danger_rank\"",
+          "expressionNumeric": true
+        }
+      },
+      "description": "3 high, 2 medium, 1 low; sorting by Danger uses it.",
+      "select": {
+        "enabled": false
+      },
+      "filter": {
+        "enabled": false
+      }
+    },
+    {
       "name": "subject",
       "label": "Selected resource",
       "type": "text",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "subject",
@@ -150,10 +299,28 @@
       "render": "truncate"
     },
     {
+      "name": "target",
+      "label": "Location ID",
+      "type": "text",
+      "group": "Notice",
+      "bindings": {
+        "postgres": {
+          "expr": "target",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"target\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
       "name": "target_label",
       "label": "Location",
       "type": "text",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "target_label",
@@ -168,6 +335,44 @@
           "source": "distinct"
         }
       }
+    },
+    {
+      "name": "command",
+      "label": "Latest command",
+      "type": "text",
+      "group": "Notice",
+      "bindings": {
+        "postgres": {
+          "expr": "command",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"command\""
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "cwd",
+      "label": "Working directory",
+      "type": "text",
+      "group": "Notice",
+      "bindings": {
+        "postgres": {
+          "expr": "cwd",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"cwd\""
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "truncate"
     },
     {
       "name": "calls",
@@ -193,7 +398,7 @@
       "name": "material_change",
       "label": "New execution evidence",
       "type": "bool",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "material_change",
@@ -208,7 +413,7 @@
       "name": "in_prompt",
       "label": "In a prompt",
       "type": "bool",
-      "group": "Review",
+      "group": "Notice",
       "bindings": {
         "postgres": {
           "expr": "in_prompt",
@@ -281,7 +486,7 @@
     },
     {
       "name": "review_count",
-      "label": "Reviews",
+      "label": "Notices",
       "type": "number",
       "group": "Activity",
       "bindings": {
@@ -301,7 +506,7 @@
       "select": {
         "default": false
       },
-      "description": "One per review. Sum to count reviews when grouping."
+      "description": "One per notice. Sum to count notices when grouping."
     }
   ]
 }

@@ -21,7 +21,7 @@ export const dataSources = {
   mcp_calls: { label: "Individual Calls to Pharos MCP", entity: "tool_calls", grain: "One request to Pharos’s MCP server" },
   skill_usages: { label: "Skill Invocations & Loads in Messages", entity: "messages", grain: "One piece of message evidence for a named skill invocation or load" },
   parallelism: { label: "Workspace Parallel Activity by Hour", entity: "workspaces", grain: "Active time for one workspace in one local hour, split when machine-wide or repository concurrency changes" },
-  safety: { label: "Risky Action Reviews", entity: "tool_calls", grain: "One risky action review of selected archived tool calls" },
+  safety: { label: "Risky Action Notices", entity: "tool_calls", grain: "One risky action notice about selected archived tool calls" },
   findings: { label: "Findings from Archived Work", entity: "workspaces", grain: "One finding" },
   tl1_attempts: { label: "Individual Agent Attempts (TL1)", entity: "agents", grain: "One TL1 attempt" },
   agent_events: { label: "Events in Agent Replies & Thinking", entity: "messages", grain: "One sentence judged to express one kind of event (experimental)" },
