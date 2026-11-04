@@ -97,6 +97,7 @@ type statisticsRequest struct {
 	Flavor             string              `json:"flavor,omitempty"`
 	Version            string              `json:"version,omitempty"`
 	Outcome            string              `json:"outcome,omitempty"`
+	OutcomeLabel       string              `json:"outcome_label,omitempty"`
 	Error              string              `json:"error,omitempty"`
 	Source             string              `json:"source,omitempty"`
 	Channel            string              `json:"channel,omitempty"`
@@ -120,7 +121,7 @@ type statisticsRequest struct {
 }
 
 func metricCall(args map[string]any) bool {
-	for _, key := range []string{"metric_filters", "metric_scope", "metric_quality", "order_by", "select", "result_mode", "cursor", "snapshot_id", "retain_snapshot", "workspace_ids", "channel", "machine_id", "execution_machine_id"} {
+	for _, key := range []string{"metric_filters", "metric_scope", "metric_quality", "order_by", "select", "result_mode", "cursor", "snapshot_id", "retain_snapshot", "workspace_ids", "channel", "machine_id", "execution_machine_id", "outcome_label"} {
 		if _, ok := args[key]; ok {
 			return true
 		}
@@ -179,6 +180,9 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	}
 	if r.Entity != "conversation" && r.Entity != "workspace" {
 		return r, fmt.Errorf("entity must be conversation or workspace")
+	}
+	if r.OutcomeLabel != "" && !slices.Contains(outcomeLabels, r.OutcomeLabel) {
+		return r, fmt.Errorf("outcome_label must be one of %s", strings.Join(outcomeLabels, ", "))
 	}
 	if r.Scope == "" {
 		r.Scope = r.Entity
@@ -320,7 +324,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 			continue
 		}
 		switch field {
-		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "project", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
+		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "project", "outcome_label", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
 			if r.Entity == "workspace" && slices.Contains(originFields, field) {
 				return r, fmt.Errorf("field %s requires conversation entities; workspace membership is available as channels/machines", field)
 			}
@@ -366,7 +370,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	}
 	groups := map[string]bool{}
 	for _, g := range r.GroupBy {
-		if !slices.Contains([]string{"project", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
+		if !slices.Contains([]string{"project", "outcome_label", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
 			return r, fmt.Errorf("group_by requires unique supported dimensions")
 		}
 		if r.Entity == "workspace" && slices.Contains([]string{"provider", "channel", "machine_id", "execution_machine_id"}, g) {

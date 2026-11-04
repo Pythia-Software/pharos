@@ -142,6 +142,29 @@ func TestBranchUsageRows(t *testing.T) {
 		t.Fatal("the switching session is not in the Library")
 	}
 
+	// Agents read the same numbers through get_branch_spend: per branch, and
+	// a coverage split adding up to the repository sessions' whole spend.
+	spend := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": "app"})
+	branches := map[string]string{}
+	for _, item := range spend["items"].([]any) {
+		row := item.(map[string]any)
+		branches[firstString(row["branch"])] = fmt.Sprintf("%v %v %v", row["tokens"], row["sessions"], row["recorded"])
+	}
+	if branches["feature/a"] != "3000 1 [turn]" || branches["feature/b"] != "2000 1 [turn]" || len(branches) != 2 {
+		t.Fatalf("get_branch_spend branches: %#v", spend)
+	}
+	coverage := spend["coverage"].(map[string]any)
+	if integer(coverage["on_branch"].(map[string]any)["tokens"]) != 5000 || integer(coverage["unknown"].(map[string]any)["tokens"]) != 1000 ||
+		integer(coverage["no_branch_data"].(map[string]any)["tokens"]) != 500 {
+		t.Fatalf("get_branch_spend coverage: %#v", coverage)
+	}
+	if narrowed := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": "app", "branch": "feature/b", "from": "2026-09-02T11:00:00Z"}); len(narrowed["items"].([]any)) != 1 {
+		t.Fatalf("get_branch_spend narrowed: %#v", narrowed)
+	}
+	if folder := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": library.folders["notes"]}); integer(folder["total"]) != 0 || len(folder["coverage"].(map[string]any)) != 0 {
+		t.Fatalf("a folder has spend by branch: %#v", folder)
+	}
+
 	// Read once, the conversation is not read again until its usage changes.
 	var scans int
 	if err := library.catalog.DB.QueryRow(`SELECT COUNT(*) FROM branch_usage_scans`).Scan(&scans); err != nil || scans == 0 {

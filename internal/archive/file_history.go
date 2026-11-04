@@ -82,6 +82,25 @@ func fileHistoryNote(files []map[string]any, found fileHistoryKeys, project stri
 	return note
 }
 
+// fileFilterSQL matches workspace w when it changed a file whose path
+// contains the pattern's text: a change set's file (change_files), or a file
+// a session edited through its tool calls (session_files), which every
+// harness with file tools records. Use fileFilterArgs for its arguments.
+func fileFilterSQL(w string) string {
+	return `(EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=` + w + `.id AND cf.path LIKE ?)
+		OR EXISTS(SELECT 1 FROM session_files sf WHERE sf.workspace_id=` + w + `.id AND (sf.path LIKE ? OR sf.file_key LIKE ?)))`
+}
+
+// fileFilterArgs are fileFilterSQL's arguments for a file filter: text a
+// path contains, or a LIKE pattern when it has %.
+func fileFilterArgs(file string) []any {
+	pattern := file
+	if !strings.Contains(pattern, "%") {
+		pattern = "%" + pattern + "%"
+	}
+	return []any{pattern, pattern, pattern}
+}
+
 // findFileHistoryKeys finds the session_files keys a query names. An exact
 // match wins: the path itself, a folder path (~/… or absolute), or an
 // absolute path in a checkout this Mac recorded, which maps to its

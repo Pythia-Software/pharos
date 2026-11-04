@@ -9,12 +9,22 @@ import (
 )
 
 var workDetailSections = map[string]string{
-	"identity":               `SELECT w.*,r.display_name repository_name,r.canonical_remote FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id WHERE w.id=?`,
-	"conversations":          `SELECT c.*,(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count FROM conversations c WHERE c.workspace_id=? ORDER BY c.started_at,c.id`,
-	"lineage":                `SELECT c.id conversation_id,c.native_id,c.parent_id,c.agent_depth,c.agent_path,c.agent_nickname,c.origin,p.native_id parent_native_id,p.workspace_id parent_workspace_id FROM conversations c LEFT JOIN conversations p ON p.id=c.parent_id WHERE c.workspace_id=? ORDER BY c.agent_depth,c.started_at,c.id`,
-	"agent_sessions":         `SELECT a.* FROM agent_sessions a WHERE a.workspace_id=? ORDER BY a.depth,a.started_at,a.id`,
-	"changes":                `SELECT cs.*,cf.path,cf.old_path,cf.status,cf.tracked,cf.bytes,cf.evidence_locator FROM change_sets cs LEFT JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=? ORDER BY cs.id,cf.path`,
-	"outcomes":               `SELECT * FROM summaries WHERE workspace_id=?`,
+	"identity":       `SELECT w.*,r.display_name repository_name,r.canonical_remote FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id WHERE w.id=?`,
+	"conversations":  `SELECT c.*,(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count FROM conversations c WHERE c.workspace_id=? ORDER BY c.started_at,c.id`,
+	"lineage":        `SELECT c.id conversation_id,c.native_id,c.parent_id,c.agent_depth,c.agent_path,c.agent_nickname,c.origin,p.native_id parent_native_id,p.workspace_id parent_workspace_id FROM conversations c LEFT JOIN conversations p ON p.id=c.parent_id WHERE c.workspace_id=? ORDER BY c.agent_depth,c.started_at,c.id`,
+	"agent_sessions": `SELECT a.* FROM agent_sessions a WHERE a.workspace_id=? ORDER BY a.depth,a.started_at,a.id`,
+	"changes":        `SELECT cs.*,cf.path,cf.old_path,cf.status,cf.tracked,cf.bytes,cf.evidence_locator FROM change_sets cs LEFT JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=? ORDER BY cs.id,cf.path`,
+	"outcomes":       `SELECT * FROM summaries WHERE workspace_id=?`,
+	// What became of the session's changes (docs/projects-and-outcomes.md);
+	// "outcomes" above is what its source reported.
+	"session_outcome": `SELECT ` + outcomeLabelSQL("w") + ` outcome_label,` + outcomeWhySQL("w") + ` outcome_why,` + outcomeEvidenceTierSQL("w") + ` evidence_tier,
+		` + gitCheckSQL("w") + ` git_check,` + gitCheckReasonSQL("w") + ` git_check_reason,` + projectNameSQL("w") + ` project,` + projectKindSQL("w") + ` project_kind,
+		so.tool_calls_recorded,so.files_changed,so.lines_added,so.lines_removed,so.kept_lines,so.rework_removed_lines,so.verification,so.first_edit_at,so.last_edit_at,
+		` + gitFactSQL("w", "sg.linked_commits") + ` linked_commits,` + gitFactSQL("w", "sg.landed_commits") + ` landed_commits,` + gitFactSQL("w", "sg.reverted_commits") + ` reverted_commits
+		FROM workspaces w` + projectJoin("w") + ` LEFT JOIN session_outcomes so ON so.workspace_id=w.id WHERE w.id=?`,
+	"edited_files": `SELECT path,repository_id,file_key,edits,lines_added,lines_removed,rewrote,first_edit_at,last_edit_at FROM session_files WHERE workspace_id=? ORDER BY last_edit_at DESC,file_key`,
+	"commit_links": `SELECT l.hash,l.repository_id,l.method,l.confidence,l.confidence>=` + fmt.Sprint(outcomeGitCounted) + ` counted,l.evidence_json,g.author_at,g.on_mainline,g.reverted_by
+		FROM session_commit_links l LEFT JOIN git_commits g ON g.repository_id=l.repository_id AND g.hash=l.hash WHERE l.workspace_id=? ORDER BY g.author_at,l.hash`,
 	"receipts":               `SELECT * FROM receipts WHERE workspace_id=? ORDER BY created_at DESC,id`,
 	"metrics":                `SELECT * FROM metrics WHERE workspace_id=? ORDER BY name,id`,
 	"metric_ledger":          `SELECT * FROM metric_ledger WHERE workspace_id=? ORDER BY sequence`,
@@ -28,7 +38,7 @@ var workDetailSections = map[string]string{
 
 func workDetailTool() map[string]any {
 	sections := workSectionNames()
-	return map[string]any{"name": "get_work_detail", "description": "Read one bounded workspace section at a time. Defaults to identity. Page each section with next_offset; truncated_fields names long fields that can be read losslessly with field, the item's offset, and text_offset. Conversations and agent sessions carry structured parent lineage. Does not read transcripts or inspect live Git state.",
+	return map[string]any{"name": "get_work_detail", "description": "Read one bounded workspace section at a time. Defaults to identity. Page each section with next_offset; truncated_fields names long fields that can be read losslessly with field, the item's offset, and text_offset. Conversations and agent sessions carry structured parent lineage. Does not read transcripts or inspect live Git state. session_outcome, edited_files and commit_links say what became of the session's changes: its outcome label with the evidence, every file it edited through its tool calls, and the commits linked to it with method and confidence. outcomes is what its source reported.",
 		"inputSchema": map[string]any{"type": "object", "required": []string{"workspace_id"}, "properties": map[string]any{
 			"workspace_id":      map[string]any{"type": "string"},
 			"section":           map[string]any{"type": "string", "enum": sections, "default": "identity"},
