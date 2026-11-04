@@ -1394,6 +1394,115 @@ WHEN (old.native_id,old.conversation_id) IS NOT (new.native_id,new.conversation_
  INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
 
+-- Session shape (session_shape.go): each conversation's shape and forensic
+-- facts, derived from its messages, authorship, tool calls and requests, and
+-- the messages that triggered each signal. A change to any of those marks the
+-- conversation dirty with a fresh token; a build clears only the token it
+-- read, so a change made during the build is derived again.
+CREATE TABLE IF NOT EXISTS session_shape_facts (
+  conversation_id TEXT PRIMARY KEY,
+  facts TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_shape_evidence (
+  conversation_id TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  message_ids TEXT NOT NULL,
+  PRIMARY KEY(conversation_id, signal)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_shape_dirty (
+  conversation_id TEXT PRIMARY KEY,
+  revision TEXT NOT NULL) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS session_shape_messages_insert AFTER INSERT ON messages
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_messages_delete AFTER DELETE ON messages
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at,content_hash ON messages
+WHEN (old.conversation_id,old.role,old.kind,old.created_at,old.content_hash) IS NOT (new.conversation_id,new.role,new.kind,new.created_at,new.content_hash) BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_insert AFTER INSERT ON message_authorship
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_delete AFTER DELETE ON message_authorship
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_update AFTER UPDATE ON message_authorship
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- Spans are published after their message_authorship rows, in their own
+-- transactions; corrections read them, so they mark the session too.
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_insert AFTER INSERT ON message_authorship_spans
+BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=new.message_id ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_delete AFTER DELETE ON message_authorship_spans
+BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=old.message_id ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_update AFTER UPDATE OF message_id,category,start_byte,end_byte ON message_authorship_spans
+WHEN (old.message_id,old.category,old.start_byte,old.end_byte) IS NOT (new.message_id,new.category,new.start_byte,new.end_byte) BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id IN (old.message_id,new.message_id) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_insert AFTER INSERT ON tool_calls
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_delete AFTER DELETE ON tool_calls
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_update AFTER UPDATE OF conversation_id,call_message_id,sequence,tool_name,tool_category,command_category,status,error_type,interrupted,file_path ON tool_calls
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_requests_insert AFTER INSERT ON model_requests
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_requests_delete AFTER DELETE ON model_requests
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_requests_update AFTER UPDATE OF conversation_id,agent_session_id,requested_at,model,input_tokens ON model_requests
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_conversations_update AFTER UPDATE OF model ON conversations
+WHEN old.model IS NOT new.model BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_conversations_delete AFTER DELETE ON conversations
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_sessions_update AFTER UPDATE OF native_id,conversation_id ON agent_sessions
+WHEN (old.native_id,old.conversation_id) IS NOT (new.native_id,new.conversation_id) BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- Messages owned by an embedded sub-agent are not the conversation's own.
+CREATE TRIGGER IF NOT EXISTS session_shape_session_messages_insert AFTER INSERT ON agent_session_messages
+WHEN NOT EXISTS(SELECT 1 FROM agent_sessions WHERE id=new.agent_session_id AND native_id='main') BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=new.message_id
+ ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_session_messages_delete AFTER DELETE ON agent_session_messages
+WHEN NOT EXISTS(SELECT 1 FROM agent_sessions WHERE id=old.agent_session_id AND native_id='main') BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=old.message_id
+ ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+
 -- Exact substring membership for Usage queries. Normalize with the same Unicode
 -- lowercase function as the query compiler, then preserve those codepoints in
 -- a case-sensitive trigram tokenizer. Backfill readiness is tracked in meta.

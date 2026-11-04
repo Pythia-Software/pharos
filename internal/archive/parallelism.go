@@ -887,9 +887,10 @@ func (c *Catalog) parallelismQueryRows(ctx context.Context, fields libraryFields
 }
 
 // mapRowsWhere is the row filter a map dataset may pre-select with, resolved
-// against the request's clock: only parallelism's started_at window uses it.
+// against the request's clock: the started_at window of parallelism, rhythm
+// and session_shape.
 func (s *Server) mapRowsWhere(dataset string, where []querytable.WhereTerm, clock time.Time) [][]querytable.WhereTerm {
-	if dataset != "parallelism" && dataset != "rhythm" || len(where) == 0 {
+	if dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" || len(where) == 0 {
 		return nil
 	}
 	schema, err := s.queryTableSchema(dataset)
