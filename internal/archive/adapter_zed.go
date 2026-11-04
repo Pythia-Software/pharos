@@ -250,11 +250,30 @@ func (a *zedAdapter) planParts() (*sourceWorkPlan, error) {
 				signal: fmt.Sprintf("%s:%s:%d:%s", member.updated, member.dataType, member.size, member.parent)})
 		}
 		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
-			record, err := a.read(database, top, members)
+			record, damaged, err := a.read(database, top, members)
 			if err != nil {
 				return fmt.Errorf("Zed thread %s: %w", top, err)
 			}
-			return emit(record, parts)
+			// A thread that can't be read leaves the others in its group:
+			// they are indexed, and it is reported and read again next time.
+			read := parts
+			if len(damaged) > 0 {
+				read = slices.DeleteFunc(slices.Clone(parts), func(part sourcePart) bool {
+					return damaged[strings.TrimPrefix(part.item, a.original(database)+"#")] != nil
+				})
+			}
+			if record != nil {
+				if err := emit(record, read); err != nil {
+					return err
+				}
+			}
+			failures := []error{}
+			for _, member := range members {
+				if err := damaged[member.id]; err != nil {
+					failures = append(failures, fmt.Errorf("Zed thread %s: %w", member.id, err))
+				}
+			}
+			return errors.Join(failures...)
 		}})
 	}
 	return plan, nil
@@ -330,11 +349,11 @@ func zedThreadData(dataType string, data []byte) (map[string]any, error) {
 }
 
 // read reads a group's threads in one transaction: the work its top thread
-// started.
-func (a *zedAdapter) read(database, top string, members []zedThread) (*WorkspaceRecord, error) {
+// started, and the error of each thread that can't be read.
+func (a *zedAdapter) read(database, top string, members []zedThread) (*WorkspaceRecord, map[string]error, error) {
 	db, tx, err := a.open(database)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer db.Close()
 	defer tx.Rollback()
@@ -344,10 +363,14 @@ func (a *zedAdapter) read(database, top string, members []zedThread) (*Workspace
 	origin := a.original(database)
 	var record *WorkspaceRecord
 	depth := map[string]int{}
+	damaged := map[string]error{}
 	for _, member := range members {
+		if member.parent != "" {
+			depth[member.id] = depth[member.parent] + 1
+		}
 		found, err := queryMapsContext(a.context(), tx, `SELECT * FROM threads WHERE id=?`, member.id)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(found) == 0 {
 			continue
@@ -359,11 +382,11 @@ func (a *zedAdapter) read(database, top string, members []zedThread) (*Workspace
 		}
 		thread, err := zedThreadData(firstString(row["data_type"]), data)
 		if err != nil {
-			return nil, fmt.Errorf("thread %s: %w", member.id, err)
+			damaged[member.id] = err
+			continue
 		}
 		conversation := a.conversation(origin, member.id, row, thread)
 		if member.parent != "" {
-			depth[member.id] = depth[member.parent] + 1
 			conversation.ParentNativeID, conversation.AgentDepth = member.parent, max(depth[member.id], 1)
 			conversation.AgentNickname = firstString(thread["title"], row["summary"])
 			// A subagent's prompts are its parent's.
@@ -399,10 +422,10 @@ func (a *zedAdapter) read(database, top string, members []zedThread) (*Workspace
 		record.Conversations = append(record.Conversations, conversation)
 	}
 	if record == nil {
-		return nil, nil
+		return nil, damaged, nil
 	}
 	observe(record, version)
-	return record, nil
+	return record, damaged, nil
 }
 
 // zedLocation is the folder a thread was run in: the first of the folders the

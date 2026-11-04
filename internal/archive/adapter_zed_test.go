@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -276,18 +277,52 @@ func TestZedReadsOnlyTheThreadThatChanged(t *testing.T) {
 // A thread that cannot be decoded is reported, and the others are read.
 func TestZedDamagedThreadLeavesTheOthers(t *testing.T) {
 	root := zedFixture(t)
-	zedWrite(t, root, func(db *sql.DB) error {
-		_, err := db.Exec(`UPDATE threads SET data=X'28B52FFD00' WHERE id=?`, zedThreadID)
-		return err
-	})
+	damage := func(id string) {
+		zedWrite(t, root, func(db *sql.DB) error {
+			_, err := db.Exec(`UPDATE threads SET data=X'28B52FFD00' WHERE id=?`, id)
+			return err
+		})
+	}
+	damage(zedThreadID)
 	adapter, err := MakeAdapter(zedSource(root))
 	if err != nil {
 		t.Fatal(err)
 	}
-	records := map[string]bool{}
-	err = adapter.Discover(func(record WorkspaceRecord) error { records[record.SourceID] = true; return nil })
-	if err == nil || records[zedThreadID] || !records[zedLegacyID] {
+	records := map[string][]string{}
+	err = adapter.Discover(func(record WorkspaceRecord) error {
+		for _, conversation := range record.Conversations {
+			records[record.SourceID] = append(records[record.SourceID], conversation.NativeID)
+		}
+		return nil
+	})
+	// Its subagent is still read, in its workspace.
+	if err == nil || len(records[zedLegacyID]) != 1 || !slices.Equal(records[zedThreadID], []string{zedSubagentID}) {
 		t.Fatalf("read %v, error %v", records, err)
+	}
+
+	// A subagent that can't be read leaves the thread that started it, and
+	// the one it started, at its depth, and is reported each time until it
+	// can be read.
+	root = zedFixture(t)
+	grandchild := zedRows()[1]
+	grandchild.id, grandchild.parent = "d0000000-0000-4000-8000-000000000009", zedSubagentID
+	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, grandchild); return nil })
+	damage(zedSubagentID)
+	c, _ := testCatalog(t)
+	indexed := func(id string) int {
+		return countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE provider='zed' AND native_id=?`, id)
+	}
+	for range 2 {
+		adapter, err := MakeAdapter(zedSource(root))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := c.Ingest(adapter, nil); result.Error == nil || indexed(zedThreadID) != 1 || indexed(zedSubagentID) != 0 {
+			t.Fatalf("with its subagent damaged: error %v, thread %d, subagent %d", result.Error, indexed(zedThreadID), indexed(zedSubagentID))
+		}
+	}
+	if depth := countRows(t, c, `SELECT agent_depth FROM conversations WHERE native_id=?`, grandchild.id); depth != 2 {
+		t.Fatalf("the subagent's own subagent is at depth %d", depth)
 	}
 }
 
@@ -342,14 +377,19 @@ func TestZedCaptureHoldsOnlyTheThreads(t *testing.T) {
 		t.Fatalf("captured %d messages, live %d", captured, live)
 	}
 
-	// With rows exported from each snapshot as well.
+	// With rows exported from each snapshot as well, and copied before
+	// indexing: the two read the same, so the capture indexes on its own
+	// host.
 	useHost(t, "host-a")
-	_, recordedConfig := testCatalog(t)
+	recorded, recordedConfig := testCatalog(t)
 	source.Options = map[string]any{"sqlite_record_capture": true}
 	recordedConfig.Sources = []SourceConfig{source}
+	ingestSource(t, recorded, source)
 	if result := runCapture(t, recordedConfig); !result.OK {
 		t.Fatalf("capture = %+v", result)
 	}
+	ingestSource(t, recorded, source)
+	indexCaptures(t, recorded, recordedConfig.CaptureRoot, "host-a")
 	if strings.Contains(capturedText(t, recordedConfig.CaptureRoot), zedSecret) {
 		t.Fatal("the rows exported from a capture hold what Zed keeps beside its threads")
 	}

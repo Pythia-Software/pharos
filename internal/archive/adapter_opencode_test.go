@@ -258,6 +258,12 @@ func TestOpenCodeCaptureHoldsOnlyTheSessions(t *testing.T) {
 	if strings.Contains(capturedText(t, recorded.captureRootPath()), opencodeSecret) {
 		t.Fatal("the rows copied before indexing hold OpenCode's credentials")
 	}
+	// They read the same as the capture's own, so it indexes on its host.
+	if result := runCapture(t, recordedConfig); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	ingestSource(t, recorded, source)
+	indexCaptures(t, recorded, recordedConfig.CaptureRoot, "host-a")
 }
 
 func TestOpenCodeReadsOnlyTheSessionThatChanged(t *testing.T) {
