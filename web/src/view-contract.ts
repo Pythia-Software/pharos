@@ -76,6 +76,7 @@ export const viewFields: Record<string, ViewField> = {
   habits_weeks: field("habits_weeks", ["analyze/habits"], "enum", "Weeks the Habits activity calendar shows, ending with today's week.", ["13", "26", "53"], "53"),
   habits_punchcard: field("habits_punchcard", ["analyze/habits"], "enum", "Whose time the Habits weekday × hour punchcard shows: you, agents you started (with you or unattended), agents you started while you're away (unattended), automatic agent runs, or agents you started minus you.", ["you", "agents", "unattended", "automated", "difference"], "you"),
   habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
+  habits_shape_days: field("habits_shape_days", ["analyze/habits"], "enum", "Number of recent days shown in the Habits Your days chart.", ["7", "14", "28", "56", "90"], "28"),
   habits_day: field("habits_day", ["analyze/habits"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };

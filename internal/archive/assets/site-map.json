@@ -70,6 +70,7 @@
    "habits_weeks": {"param":"habits_weeks","pages":["analyze/habits"],"kind":"enum","description":"Weeks the Habits activity calendar shows, ending with today's week.","values":["13","26","53"],"default":"53"},
    "habits_punchcard": {"param":"habits_punchcard","pages":["analyze/habits"],"kind":"enum","description":"Whose time the Habits weekday × hour punchcard shows: you, agents you started (with you or unattended), agents you started while you're away (unattended), automatic agent runs, or agents you started minus you.","values":["you","agents","unattended","automated","difference"],"default":"you"},
    "habits_punchcard_days": {"param":"habits_punchcard_days","pages":["analyze/habits"],"kind":"enum","description":"Days the Habits punchcard and automation table cover, through today, or all for every day captured.","values":["7","30","90","365","all"],"default":"90"},
+   "habits_shape_days": {"param":"habits_shape_days","pages":["analyze/habits"],"kind":"enum","description":"Number of recent days shown in the Habits Your days chart.","values":["7","14","28","56","90"],"default":"28"},
    "habits_day": {"param":"habits_day","pages":["analyze/habits"],"kind":"text","description":"The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."},
    "record_keyword": {"param":"record_{dataset}","pages":["analyze/query/*"],"kind":"json","description":"Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.","details":{"field":"Source text field ID from the dataset columns","draft":{"template":{"editor":"visual","match":"rules","root":{"id":"group-1","kind":"group","join":"all","children":[],"exclude":false},"text":"","mode":"advanced","scope":{"surface":"prose","roles":[],"kinds":[],"repository":"","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":false,"separators":false},"rule_template":{"id":"rule-1","kind":"words","text":"","other":"","distance":"8","exclude":false},"rule_kinds":["words","anyWords","phrase","prefix","near","pre"],"editor":["visual","syntax"],"match":["rules","literal","regex"],"mode":["advanced","terms","phrase","literal","regex"],"groups":"{id,kind:group,join:all|any,exclude:boolean,children:(rule|group)[]}; root is not excluded. At most 32 conditions, depth 4.","dates":"scope.from/to are ISO bounds or dates. For last N days retain dateWindow:{duration:7d,from:<same bound as scope.from>} and an empty scope.to. Today also retains to. Omit dateWindow for fixed custom dates.","literal_example":{"editor":"visual","match":"literal","root":{"id":"group-1","kind":"group","join":"all","children":[],"exclude":false},"text":"failure","mode":"advanced","scope":{"surface":"prose","roles":[],"kinds":[],"repository":"","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":false,"separators":false}},"note":"Record keywords do not support fuzzy matching or message scope filters."}}
   },
@@ -104,7 +105,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 845
+   "controls": 846
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],

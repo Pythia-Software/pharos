@@ -169,6 +169,14 @@
     },
     {
       "file": "web/src/habits-card.ts",
+      "field": "habits_shape_days"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_shape_days"
+    },
+    {
+      "file": "web/src/habits-card.ts",
       "field": "habits_streak"
     },
     {
@@ -5751,6 +5759,15 @@
       "control": "value={view} onChange={onView}",
       "contract": "view.habits_punchcard",
       "reason": "Writes habits_punchcard through useViewState."
+    },
+    {
+      "key": "bdac7b450f1fa738:0",
+      "file": "web/src/habits.tsx",
+      "owner": "WorkdayShape",
+      "tag": "ChartSelect",
+      "control": "value={String(days)} onChange={onDays}",
+      "contract": "view.habits_shape_days",
+      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanel's useViewState binding."
     },
     {
       "key": "0cc6b34321064cd2:0",
