@@ -153,6 +153,8 @@ test("the sampled card links rebuild from the site map and open their dashboards
     if(isThinkingTopic(readUsageWorkspace(params(item.url)).topic)) {
       const opened=initialThinking(params(item.url));assert.equal(opened.range,item.days===null?"all":({180:"6m",365:"1y"}[item.days]??item.days+"d"),name);assert.ok(card.page.startsWith("analyze/thinking-"));continue;
     }
+    // A Habits section card is the page at its selectors, with no chart.
+    if (card.page === "analyze/habits") { assert.equal(readUsageWorkspace(params(item.url)).topic, "habits", name); continue; }
     const opened = openDashboard(item.url);
     assert.equal(`analyze/${opened.workspace.topic}`, card.page, name);
     assert.equal(opened.error, "", name);

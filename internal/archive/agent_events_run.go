@@ -94,6 +94,8 @@ type AgentEventSettings struct {
 	// Days is how far back the pass reads (0: everything). Scoring is the
 	// cost, and the dashboard's windows are weeks and months.
 	Days int
+	// Threads per worker (agent_events_threads); 0 uses labels_threads.
+	Threads int
 }
 
 func agentEventSettingsFrom(root map[string]any, base string) AgentEventSettings {
@@ -102,7 +104,30 @@ func agentEventSettingsFrom(root map[string]any, base string) AgentEventSettings
 		dir = resolvePath(base, stringValue(root, "agent_events_model_dir", ""))
 	}
 	return AgentEventSettings{Enabled: boolValue(root, "agent_events_enabled", false), ModelDir: dir, Variant: stringValue(root, "agent_events_variant", "int8"),
-		Days: intValue(root, "agent_events_days", 90)}
+		Days: intValue(root, "agent_events_days", 90), Threads: intValue(root, "agent_events_threads", 0)}
+}
+
+// labeler is the labeler settings the pass runs with: the labeler's worker,
+// runtime and budget, with its own threads per worker.
+func (settings AgentEventSettings) labeler(labels LabelerSettings) LabelerSettings {
+	events := labels
+	events.Threads = settings.threads(labels)
+	events.PeerThreads = max(1, labels.Workers) * max(1, labels.Threads)
+	return events
+}
+
+// threads is the pass's threads per worker.
+func (settings AgentEventSettings) threads(labels LabelerSettings) int {
+	if settings.Threads > 0 {
+		return settings.Threads
+	}
+	return labels.Threads
+}
+
+// withPeer is labels with the pass's workers counted beside them.
+func (settings AgentEventSettings) withPeer(labels LabelerSettings) LabelerSettings {
+	labels.PeerThreads = max(1, labels.Workers) * max(1, settings.threads(labels))
+	return labels
 }
 
 // since is the horizon Days sets (zero: none).
@@ -466,13 +491,7 @@ func (c *Catalog) agentEventsWork(ctx context.Context, builder *labelsItemBuilde
 		ids = slices.DeleteFunc(slices.Clone(opts.Conversations), func(id string) bool { return p.conversations[id] == nil })
 		all = true
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		a, b := p.conversations[ids[i]], p.conversations[ids[j]]
-		if a.started != b.started {
-			return a.started > b.started
-		}
-		return ids[i] < ids[j]
-	})
+	newestFirst(p, ids)
 	structures := map[string]string{}
 	for _, id := range ids {
 		structures[id] = labelsStructure(p, builder.sessions, id)
@@ -736,7 +755,7 @@ func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, convers
 }
 
 // agentEventsFlag is the Settings switch for the Agent Experience preview
-// (App preferences): it lists the dashboard and turns the pass on, as
+// (Background Processing, beside message labels): it lists the dashboard and turns the pass on, as
 // agent_events_enabled does in the configuration.
 const agentEventsFlag = "pharos-agent-events-v1"
 
@@ -771,7 +790,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 			return err
 		}
 	}
-	labels, bulk := labelsForPower(labels, s.cachedPower(ctx))
+	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
 	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since()})
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
@@ -789,6 +808,8 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		ctx = withWorkProgress(ctx, op.mirrorWork)
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		// Stop ends it between batches; the next run resumes it.
+		op.setStopper(cancel)
 		var unplugged atomic.Bool
 		go func() {
 			ticker := time.NewTicker(labelsPowerCheck)

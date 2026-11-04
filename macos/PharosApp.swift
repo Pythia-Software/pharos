@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 // The app icon's palette. `masthead` matches the top of the web header so the
@@ -144,6 +145,10 @@ final class ArchiveService: ObservableObject {
     private var pageWatch = 0
     /// The page that failed, which the web view loads when it comes back.
     private var pageTarget: URL?
+    /// Failures the page itself cannot see (its web process ended, a load
+    /// failed), kept here rather than in a web view, which the recovery screen
+    /// replaces. The next page that loads records them in Settings → Logs.
+    var unreportedPageFailures: [[String: Any]] = []
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
@@ -174,13 +179,16 @@ final class ArchiveService: ObservableObject {
     private var managedLibraryMonitors: [String: LibraryVolumeMonitor] = [:]
     private var managedLibraryStateTask: URLSessionDataTask?
     private var brokerOperationsTask: URLSessionDataTask?
-    private let releaseService: (URL, String) -> ServiceClient.Release
+    /// Releases a service or the broker: (URL, token, before an update).
+    private let releaseService: (URL, String, Bool) -> ServiceClient.Release
     var deferUpdate: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
     var resumeUpdates: () -> Void = {}
     private(set) var menuBar: MenuBarController!
 
     init(plan: LaunchPlan? = nil,
-         releaseService: @escaping (URL, String) -> ServiceClient.Release = { ServiceClient.release($0, token: $1) }) {
+         releaseService: @escaping (URL, String, Bool) -> ServiceClient.Release = {
+             $2 ? ServiceClient.releaseForUpdate($0, token: $1) : ServiceClient.release($0, token: $1)
+         }) {
         self.releaseService = releaseService
         defer { menuBar = MenuBarController(service: self) }
         // Here rather than on a view: with its window closed, Pharos keeps
@@ -238,7 +246,7 @@ final class ArchiveService: ObservableObject {
         var environment = ProcessInfo.processInfo.environment
         environment["PHAROS_PARENT_PID"] = String(getpid())
         task.environment = environment
-        let log = ServiceLog()
+        let log = ServiceLog(file: ServiceLog.appLogFile())
         task.standardError = log.pipe
         serviceLog = log
         task.terminationHandler = { [weak self] process in
@@ -584,7 +592,7 @@ final class ArchiveService: ObservableObject {
             return (self.endpoint, self.service)
         }
         guard let endpoint else { return .approve }
-        let answer = releaseService(endpoint.url, endpoint.token)
+        let answer = releaseService(endpoint.url, endpoint.token, false)
         let (state, verdict) = ReleaseState.after(answer)
         lock.withLock { release = state }
         switch answer {
@@ -911,10 +919,14 @@ final class ArchiveService: ObservableObject {
 
     /// Stop only this app's service, wait for catalog closure, and (for an
     /// update) exclude every bundled CLI until the new app has launched.
-    func prepareToTerminate(installing: Bool, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
+    /// `unlessBusy` (an explicit Install and Relaunch) first asks the service
+    /// to stop the way an eject does, and refuses, stopping nothing, while
+    /// its work cannot reach a safe point in time. Install on quit does not:
+    /// quitting stops that work anyway.
+    func prepareToTerminate(installing: Bool, unlessBusy: Bool = false, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
         flushWebSession { [weak self] error in
             if let error { completion(error); return }
-            self?.prepareAfterSessionSave(installing: installing, timeout: timeout, completion: completion)
+            self?.prepareAfterSessionSave(installing: installing, unlessBusy: installing && unlessBusy, timeout: timeout, completion: completion)
         }
     }
 
@@ -938,7 +950,7 @@ final class ArchiveService: ObservableObject {
         }
     }
 
-    private func prepareAfterSessionSave(installing: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
+    private func prepareAfterSessionSave(installing: Bool, unlessBusy: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
         shuttingDown = true
         let child = process
         let endpoint = lock.withLock { self.endpoint }
@@ -952,15 +964,20 @@ final class ArchiveService: ObservableObject {
                 try lease?.begin(version: version)
                 let stopService = {
                     if let child, child.isRunning {
-                        if self?.managedApplication == true { child.terminate(); return }
+                        // The broker stops its libraries itself on SIGTERM.
+                        // Before an explicit update it first releases them,
+                        // refusing while their work cannot stop in time.
+                        let managed = self?.managedApplication == true
+                        if managed && !unlessBusy { child.terminate(); return }
                         if let endpoint {
-                            switch releaseService(endpoint.url, endpoint.token) {
-                            case .released: break
+                            switch releaseService(endpoint.url, endpoint.token, unlessBusy) {
+                            case .released: if managed { child.terminate() }
                             case .notRunning:
                                 // The owned child may still be initializing,
                                 // before its HTTP listener has opened.
                                 if child.isRunning { child.terminate() }
-                            case .stopping: throw UpdateFailure(message: "Pharos is finishing a write. Wait a moment, then quit or install again.")
+                            case .stopping(let body):
+                                throw UpdateFailure(message: ServiceClient.reason(body) ?? "Pharos is finishing a write. Wait a moment, then quit or install again.")
                             case .failed(let reason): throw UpdateFailure(message: "Could not close Pharos's catalog: \(reason)")
                             }
                         } else { child.terminate() }
@@ -1065,6 +1082,192 @@ final class ArchiveWKWebView: WKWebView {
         }
         return super.performKeyEquivalent(with: event)
     }
+
+    /// The page's attention target under the last right-click, which the
+    /// page reports (`contextTarget` in `windowChromeScript`) before WebKit
+    /// opens the menu.
+    struct ContextTarget {
+        let reference: String
+        let noun: String
+        let highlighted: Bool
+
+        init?(_ body: Any?) {
+            guard let object = body as? [String: Any], let reference = object["reference"] as? String, !reference.isEmpty else { return nil }
+            self.reference = reference
+            noun = object["noun"] as? String ?? "Element"
+            highlighted = object["highlighted"] as? Bool == true
+        }
+
+        var title: String { highlighted ? "Remove Highlight" : "Highlight \(noun)" }
+    }
+    var contextTarget: ContextTarget?
+
+    /// The local file a right-clicked Markdown link names, once the service
+    /// has found it (`data-file-path` on the link). `launchable` is the
+    /// service's verdict that opening it would run something.
+    struct ContextFile {
+        let url: URL
+        let launchable: Bool
+
+        init?(_ body: Any?) {
+            guard let object = body as? [String: Any], let path = object["path"] as? String, path.hasPrefix("/") else { return nil }
+            url = URL(fileURLWithPath: path)
+            launchable = object["launchable"] as? Bool != false
+        }
+    }
+    var contextFile: ContextFile?
+    /// Whether the page offers `window.pharosPageAction` (the main page does;
+    /// setup windows do not).
+    var pageActions = false
+
+    /// The page's link without the launch token, which the service already
+    /// trades for a cookie on arrival.
+    static func shareableLink(_ url: URL?) -> String? {
+        guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.queryItems = components.queryItems?.filter { $0.name != "token" }
+        if components.queryItems?.isEmpty == true { components.queryItems = nil }
+        return components.string
+    }
+
+    /// Every page menu gets Copy Page Link and Highlight, then Open Logs, Send
+    /// Feedback and Annotate, after WebKit's own Back/Forward/Reload or at the
+    /// end of a menu without them. Highlight adds the target to the URL's
+    /// `highlight`/`reveal`, so the copied link brings attention to it.
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        if let file = contextFile, FileManager.default.fileExists(atPath: file.url.path) { insertFileItems(file, into: menu) }
+        let copy = NSMenuItem(title: "Copy Page Link", action: #selector(copyPageLink(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.isEnabled = Self.shareableLink(url) != nil
+        let highlight = NSMenuItem(title: contextTarget?.title ?? "Highlight", action: contextTarget == nil ? nil : #selector(toggleHighlight(_:)), keyEquivalent: "")
+        highlight.target = self
+        var index = menu.items.firstIndex { $0.identifier?.rawValue == "WKMenuItemIdentifierReload" }.map { $0 + 1 } ?? menu.items.count
+        let actions = [("Open Logs", "logs"), ("Send Feedback…", "feedback"), ("Annotate…", "annotate")].map { title, action in
+            let item = NSMenuItem(title: title, action: pageActions ? #selector(runPageAction(_:)) : nil, keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            return item
+        }
+        var items = [copy, highlight, .separator()] + actions
+        if index > 0 { items.insert(.separator(), at: 0) }
+        if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
+        for item in items { menu.insertItem(item, at: index); index += 1 }
+    }
+
+    /// WebKit's link items would load or download the service's copy of the
+    /// file, so a file link gets Finder's items in their place.
+    static let fileLinkReplacedItems: Set<String> = ["WKMenuItemIdentifierOpenLink", "WKMenuItemIdentifierOpenLinkInNewWindow", "WKMenuItemIdentifierDownloadLinkedFile", "WKMenuItemIdentifierCopyLink"]
+
+    private func insertFileItems(_ file: ContextFile, into menu: NSMenu) {
+        let replaced = { (item: NSMenuItem) in Self.fileLinkReplacedItems.contains(item.identifier?.rawValue ?? "") }
+        var index = menu.items.firstIndex(where: replaced) ?? 0
+        for item in menu.items where replaced(item) { menu.removeItem(item) }
+        func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = file.url
+            return item
+        }
+        let openWith = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+        openWith.submenu = openWithMenu(file.url)
+        // A click never runs a script or installer; choosing an app is explicit.
+        var items = (file.launchable ? [] : [item("Open", #selector(openContextFile(_:)))]) + [openWith, item("Show in Finder", #selector(revealContextFile(_:))), item("Copy Path", #selector(copyContextFilePath(_:)))]
+        index = min(index, menu.items.count)
+        if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
+        if index > 0, !menu.items[index - 1].isSeparatorItem { items.insert(.separator(), at: 0) }
+        for item in items { menu.insertItem(item, at: index); index += 1 }
+    }
+
+    /// Finder's Open With: the default app first, then the others that
+    /// claim the file's type, then Other… to choose any app.
+    private func openWithMenu(_ file: URL) -> NSMenu {
+        let menu = NSMenu()
+        let workspace = NSWorkspace.shared
+        let name = { (app: URL) in app.deletingPathExtension().lastPathComponent }
+        let preferred = workspace.urlForApplication(toOpen: file)
+        let others = workspace.urlsForApplications(toOpen: file).filter { $0 != preferred }
+            .sorted { name($0).localizedStandardCompare(name($1)) == .orderedAscending }
+        func item(_ app: URL, _ title: String) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(openContextFileWith(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = [file, app]
+            let icon = workspace.icon(forFile: app.path)
+            icon.size = NSSize(width: 16, height: 16)
+            item.image = icon
+            return item
+        }
+        if let preferred {
+            menu.addItem(item(preferred, "\(name(preferred)) (default)"))
+            if !others.isEmpty { menu.addItem(.separator()) }
+        }
+        for app in others { menu.addItem(item(app, name(app))) }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let other = NSMenuItem(title: "Other…", action: #selector(chooseContextFileApp(_:)), keyEquivalent: "")
+        other.target = self
+        other.representedObject = file
+        menu.addItem(other)
+        return menu
+    }
+
+    @objc private func openContextFile(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(file)
+    }
+
+    @objc private func openContextFileWith(_ sender: NSMenuItem) {
+        guard let urls = sender.representedObject as? [URL], urls.count == 2 else { return }
+        NSWorkspace.shared.open([urls[0]], withApplicationAt: urls[1], configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    @objc private func chooseContextFileApp(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        let picker = NSOpenPanel()
+        picker.directoryURL = URL(fileURLWithPath: "/Applications")
+        picker.allowedContentTypes = [.application]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Open"
+        picker.message = "Choose an application to open \"\(file.lastPathComponent)\"."
+        picker.begin { response in
+            guard response == .OK, let app = picker.url else { return }
+            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+
+    @objc private func revealContextFile(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    @objc private func copyContextFilePath(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(file.path, forType: .string)
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        contextTarget = nil
+        contextFile = nil
+        pageActions = false
+    }
+
+    @objc private func runPageAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? String else { return }
+        evaluateJavaScript("window.pharosPageAction?.('\(action)')")
+    }
+
+    @objc private func copyPageLink(_ sender: Any?) {
+        guard let link = Self.shareableLink(url) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
+    }
+
+    @objc private func toggleHighlight(_ sender: Any?) {
+        guard let reference = contextTarget?.reference,
+              let data = try? JSONSerialization.data(withJSONObject: [reference]),
+              let json = String(data: data, encoding: .utf8) else { return }
+        evaluateJavaScript("window.pharosView?.toggleAttention(\(json)[0])")
+    }
 }
 
 /// The page zoom levels View → Zoom In and Zoom Out step through, as in Safari.
@@ -1155,6 +1358,15 @@ struct ArchiveWebView: NSViewRepresentable {
       new MutationObserver(reportBackground).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
       matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportBackground);
       reportBackground();
+      // The native context menu offers to highlight what was right-clicked,
+      // and Open With for a link to a local file.
+      document.addEventListener('contextmenu', event => {
+        const element = event.target instanceof Element ? event.target : null;
+        const target = element ? window.pharosView?.contextTarget?.(element) : null;
+        const link = element?.closest('.markdown-link[data-file-path]');
+        const file = link ? {path: link.dataset.filePath, launchable: link.dataset.fileLaunchable !== 'false'} : false;
+        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextFile: file, pageActions: typeof window.pharosPageAction === 'function'});
+      }, true);
     })();
     """
     static let windowMessageName = "pharosWindow"
@@ -1244,7 +1456,20 @@ struct ArchiveWebView: NSViewRepresentable {
             loadFailed(webView, error: error)
         }
 
+        private func noteFailure(_ message: String, page: URL?) {
+            guard let service else { return }
+            service.unreportedPageFailures = Array((service.unreportedPageFailures + [["kind": "webkit", "message": message, "page": page?.path ?? ""]]).suffix(10))
+        }
+
+        private func reportFailures(_ webView: WKWebView) {
+            guard let service, !service.unreportedPageFailures.isEmpty, let data = try? JSONSerialization.data(withJSONObject: service.unreportedPageFailures),
+                  let events = String(data: data, encoding: .utf8) else { return }
+            service.unreportedPageFailures = []
+            webView.evaluateJavaScript("window.pharosReportEvents?.(\(events))")
+        }
+
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            noteFailure("The page's web process stopped unexpectedly (WebKit web content process terminated).", page: webView.url)
             if repeatedFailure(webView, reason: "The page stopped unexpectedly.") { return }
             loadFailed(webView, error: nil)
         }
@@ -1296,6 +1521,7 @@ struct ArchiveWebView: NSViewRepresentable {
                 return url
             }
             let target = servicePage(nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? servicePage(webView.url) ?? origin
+            if let nsError { noteFailure("The page did not load: \(nsError.localizedDescription) (\(nsError.domain) \(nsError.code)).", page: target) }
             failedLoads += 1
             let attempt = failedLoads
             let navigation = navigations
@@ -1318,6 +1544,7 @@ struct ArchiveWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             failedLoads = 0
             service?.pageLoading = false
+            reportFailures(webView)
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
             service?.menuBar.navigationFinished()
             publishedUpdateState = nil
@@ -1342,6 +1569,15 @@ struct ArchiveWebView: NSViewRepresentable {
                       let settings = message.body as? [String: Any] else { return }
                 if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
                 service?.menuBar.applyPreferences(settings)
+                return
+            }
+            if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
+                webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
+                // Only the service's own page may offer to open files on this Mac.
+                let page = message.frameInfo.request.url
+                let ownPage = message.frameInfo.isMainFrame && page?.scheme == origin.scheme && page?.host == origin.host && page?.port == origin.port
+                webView.contextFile = ownPage ? ArchiveWKWebView.ContextFile(body["contextFile"]) : nil
+                webView.pageActions = body["pageActions"] as? Bool == true
                 return
             }
             if let center = (message.body as? [String: Any])?["headerCenter"] as? Double {

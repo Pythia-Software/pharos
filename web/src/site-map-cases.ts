@@ -11,6 +11,7 @@ import { findingDetailURL } from "./findings-route";
 import { conversationRowURL } from "./usage-row-model";
 import { delegationRouteValues } from "./delegation-route";
 export { buildSiteMap, formatJSON, settingsPages, viewTitles } from "./site-map";
+export { buildAskSuggestions } from "./ask-suggestions";
 
 // The cross-language cases for the site map (testdata/site-map-cases.json):
 // a deterministic sample of Analyze dashboard charts with the page's verdict
@@ -101,7 +102,8 @@ function chartCases(map: SiteMap): ChartCase[] {
       const chart = { ...current, ...switchView(catalog, current, to as AnalysisView) } as Record<string, unknown>;
       cases.push({ topic, view: to, written: `switchView ${from} to ${to}`, chart, verdict: chartVerdict(topic, chart) });
     }
-    for (const card of map.cards.items.filter(card => card.page === `analyze/${topic}`)) {
+    // (Habits section cards carry the page's selectors, not a chart.)
+    for (const card of map.cards.items.filter(card => card.page === `analyze/${topic}` && card.chart)) {
       const chart = card.chart as Record<string, unknown>;
       cases.push({ topic, view: String(chart.view ?? merge.view ?? "trend"), written: `card ${card.id}`, chart, verdict: chartVerdict(topic, chart) });
     }
@@ -154,6 +156,7 @@ function nodeCases(map: SiteMap) {
   const cases: Array<{ path: string; url: string; state?: unknown; decoded?: Record<string, unknown> }> = [];
   const add = (path: string, url: string, state?: unknown) => cases.push({ path, url, ...state === undefined ? {} : { state }, ...Object.keys(decoded(url)).length ? { decoded: decoded(url) } : {} });
   add("home", "/");
+  add("ask", "/ask");
   const cardsParams = (values: Record<string, string>) => `/cards?${new URLSearchParams(cardLibraryParams.filter(key => values[key]).map(key => [key, values[key]]))}`;
   add("cards", "/cards");
   add("cards", cardsParams({ card_search: "tokens", card_topic: "usage", card_sort: "title" }), { card_search: "tokens", card_topic: "usage", card_sort: "title" });

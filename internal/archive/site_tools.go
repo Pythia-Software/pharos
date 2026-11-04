@@ -545,7 +545,7 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 	var err error
 	cold := warmOnly(ctx)
 	switch dataset {
-	case "usage", "conversation_activity", "tl1_attempts", "parallelism":
+	case "usage", "conversation_activity", "tl1_attempts", "parallelism", "rhythm":
 		rows, _, err = c.datasetRows(cold, dataset, libraryFields{field: true})
 	case "writing":
 		// Without ensureAuthorship, which may start a rebuild.

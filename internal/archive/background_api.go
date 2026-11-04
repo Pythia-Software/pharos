@@ -57,6 +57,20 @@ func runningItems(views []opView) (map[string]bool, []string) {
 	return items, order
 }
 
+// stoppableItems is the operation that Stop ends for each item a stoppable
+// operation is working on: a top-level one, as the snapshot offers Stop.
+func stoppableItems(views []opView) map[string]OpID {
+	stops := map[string]OpID{}
+	for _, view := range views {
+		if view.Kind != nil && view.Kind.Stop != "" && view.Parent == "" && !view.Foreign && (view.State == opRunning || view.State == opBlocked) {
+			if item := itemOfView(view); item != "" {
+				stops[item] = view.ID
+			}
+		}
+	}
+	return stops
+}
+
 // durationWords is a typical duration: "a few seconds", "about 40 s",
 // "about 6 min", "about 1 h 20 min".
 func durationWords(seconds float64) string {
@@ -229,6 +243,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		rows[row.Domain] = row
 	}
 	live, order := runningItems(views)
+	stops := stoppableItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
 	unscheduled := []string{}
@@ -274,6 +289,11 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			"state": state, "state_label": stateLabels[state], "as_of": nullable(asOf), "next_at": nullableTime(plan.Next), "error": nullable(problem),
 			"choices": itemChoices(item, settings), "cost": nil, "note": nil}
 		entry["cadence_moves"] = itemCadenceMoves(item, settings)
+		// The running operation Stop ends, where it can be stopped.
+		entry["stop"] = nil
+		if id, ok := stops[item.ID]; ok {
+			entry["stop"] = map[string]any{"id": id}
+		}
 		entry["temporary_cadence"] = nil
 		if temporary, ok := settings.Temporary[item.ID]; ok {
 			entry["temporary_cadence"] = temporary
@@ -613,7 +633,8 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
-		"labels": s.labelsSettings(),
+		"labels":       s.labelsSettings(),
+		"agent_events": s.agentEventsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
 			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "temporary_cadences": settings.Temporary, "battery": settings.Battery,
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
@@ -837,6 +858,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 			// Labels are off here (the broker asks every library after a
 			// download).
 		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
+		case item.requiresAsk && !s.askEnabled(r.Context()):
 		default:
 			run = append(run, id)
 		}

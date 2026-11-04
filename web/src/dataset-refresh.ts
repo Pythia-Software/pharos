@@ -20,6 +20,6 @@ export function findingsDiscoveryChanged(previous: DiscoveryStatus | undefined, 
 
 // The datasets a saved preference rebuilds on the service: Carbon
 // assumptions re-estimate usage, Parallelism settings rebuild its records.
-const settingDatasets: Record<string, string> = { "pharos-carbon-v1": "usage", "pharos-concurrency-v1": "parallelism" };
+const settingDatasets: Record<string, string> = { "pharos-carbon-v1": "usage", "pharos-concurrency-v1": "parallelism", "pharos-habits-v1": "rhythm" };
 export const datasetsForSavedPreferences = (saved: { set?: Record<string, unknown>; delete?: string[] } | undefined) =>
   [...new Set([...Object.keys(saved?.set ?? {}), ...saved?.delete ?? []].flatMap(key => settingDatasets[key] ? [settingDatasets[key]] : []))];

@@ -33,6 +33,29 @@ export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).m
 const datasets = queryFixtureDatasets;
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
+// Habits: four months of days, with streaks, a vacation, a punchcard and
+// one automation with a long name.
+function habitsSummary() {
+  const count = 120, first = new Date(summaryDay - (count - 1) * day), zero = () => Array.from({ length: 7 }, () => Array(24).fill(0));
+  const days = Array.from({ length: count }, (_, index) => {
+    const date = new Date(+first + index * day), name = date.toISOString().slice(0, 10), weekday = (date.getUTCDay() + 6) % 7, active = index % 9 !== 4 && weekday < 6;
+    const actor = minutes => ({ elapsed_ms: minutes * 60000, active_ms: minutes * 90000, turns: minutes ? 3 : 0 });
+    return { day: name, weekday, vacation: index === count - 20, excused: index === count - 20,
+      you: { engaged_ms: active ? (60 + index % 5 * 40) * 60000 : 0, messages: active ? 12 : 0, typed_words: active ? 800 : 0, ...(active ? { first: +date + 9 * 3600000, last: +date + (17 + index % 4) * 3600000 } : {}), focus_blocks: active ? 2 : 0, focus_ms: active ? 3600000 : 0, ...(active ? { blocks: [[+date + 9 * 3600000, +date + 12 * 3600000], [+date + 14 * 3600000, +date + (17 + index % 4) * 3600000]] } : {}) },
+      with_you: actor(active ? 90 : 0), unattended: actor(index % 3 ? 120 : 0), automated: actor(index % 2 ? 20 : 0), agents_ms: (active ? 90 : 0) * 60000 + (index % 3 ? 120 : 0) * 60000, parallel_ms: 1800000, peak_agents: 3,
+      qualifies: { you: active, agents: active || index % 3 > 0, automated: index % 2 > 0 } };
+  });
+  const cells = { you: zero(), with_you: zero(), unattended: zero(), automated: zero() };
+  for (let weekday = 0; weekday < 5; weekday++) for (let hour = 9; hour < 18; hour++) { cells.you[weekday][hour] = 30 * 60000 * 13; cells.unattended[weekday][(hour + 8) % 24] = 50 * 60000 * 13; }
+  const streak = { current: 4, current_from: days.at(-5).day, longest: 21, longest_from: days[10].day, longest_to: days[30].day, today: "pending" };
+  return { generated_at: iso(0), timezone: "UTC", today: days.at(-1).day, period_start: days[0].day, mode: "all", settings: { vacations: [days[count - 20].day], youMessages: 1, agentMinutes: 10, engagedGap: 15, dayStart: 0 },
+    days, streaks: { you: streak, agents: { ...streak, today: "done" }, automated: { ...streak, current: 0 } },
+    windows: [7, 30, 90, 365].map(length => ({ days: length, considered: Math.min(length, count), active: { you: Math.round(Math.min(length, count) * .7), agents: Math.min(length, count), automated: Math.round(Math.min(length, count) / 2) } })),
+    punchcard: { from: days.at(-90).day, to: days.at(-1).day, weeks: [13, 13, 13, 13, 13, 13, 12].map(count => Array(24).fill(count)), cells },
+    automations: [{ initiator: "scheduled", label: "corpus-overnight-quota-and-progress-with-an-unusually-long-automation-name", runs: 140, active_days: 60, agent_hours: 32.5, first_run: +first, last_run: now - 3600000, median_gap_ms: 3600000, missed: 3, daily: Object.fromEntries(days.filter((_, index) => index % 2).map(item => [item.day, 2])) },
+      { initiator: "scripted", label: "claude -p", runs: 12, active_days: 6, agent_hours: 1.2, first_run: +first, last_run: now - day, median_gap_ms: 2 * day, missed: 0, daily: {} }],
+    coverage: { turns: 3000, unmatched_turns: 40, typed_messages: 900, messages: 5000 } };
+}
 // The service assigns every usage record a carbon factor tier.
 datasets.usage.forEach((row, index) => { row.carbon_tier = ["small", "medium", "large"][index % 3]; });
 // Usage trends consume the calendar keys of their source records.
@@ -466,7 +489,8 @@ const busyBackground = backgroundView([
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
-  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.' },
+  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', threads: 4, thread_choices: [1, 2, 4, 8, 16, 28] },
+  agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
   settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
     battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
     battery_slower_minutes: 15, low_battery_percent: 20 },
@@ -499,7 +523,7 @@ const statusOperation = (id, changes) => ({
 });
 export const busyStatus = {
   ...idleStatus, revision: 2,
-  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject in a moment", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
     blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
   operations: [
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
@@ -510,6 +534,7 @@ export const busyStatus = {
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
   freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
+  library: {...idleStatus.library, wal_bytes: 64e6},
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -562,6 +587,20 @@ export function thinkingFixture(query) {
   return response;
 }
 
+const askSuggestionTexts = [
+  ["verification-latency", "Find the causes of testing latency in the pharos repository."],
+  ["context-crowding", "What's crowding my agents' context?"],
+  ["spend-change", "How has my token use changed this week?"],
+  ["writing-improve", "How could I steer my agents with less back-and-forth in the query-table repository?"],
+  ["risk-review", "Is there anything risky in what my agents have been doing lately?"],
+  ["recall-similar", "Help me find a past conversation where we solved something similar."],
+  ["models-fit", "Am I using the right models for the right work?"],
+  ["findings-best", "What's the single best change I could make to how I work with agents?"],
+  ["parallel-pattern", "What happens when I run several agents at the same time?"],
+];
+// A seeded rotation, as the service varies its slate for Refresh.
+const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
+
 export const defaultApi = {
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
@@ -572,6 +611,8 @@ export const defaultApi = {
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
+  // Suggestions the library chose; Refresh asks for the next seed.
+  "GET /api/ask/suggestions": ({ query }) => ({ suggestions: askSuggestionFixture(Number(query.get("seed") || 0)) }),
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},
   "POST /api/ask/remove-visit": {ok:true},
@@ -621,6 +662,7 @@ export const defaultApi = {
     })),
     coverage: { conversations: 2, mirrors_removed: 0, unexplained_waits_excluded: 0, timing: "Captured timing", catalog: "Test catalog" },
   },
+  "GET /api/habits": () => habitsSummary(),
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day), active_conversations: { 1: 4, 7: 18, 30: 60, 90: 140, 180: 200, 365: 200, all: 200 } },
   "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
@@ -638,6 +680,9 @@ export const defaultApi = {
 
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/logs/page": ({ body }) => ({ recorded: body?.events?.length ?? 0 }),
+  "GET /api/logs/summary": () => logsSummary,
+  "GET /api/logs/source": ({ query }) => logsSource(query.get("id")),
   "POST /api/feedback/submit": ({ body }) => ({ id: body.id, received: true }),
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
@@ -660,13 +705,18 @@ export const defaultApi = {
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
   "GET /api/sync/status": syncStatus,
+  "GET /api/operations": { journal: { recent: [
+    { id: "op-index-history", root_id: "op-index-history", kind: "index.changes.manual", label: "Index changes", trigger: "user", process: "service", state: "succeeded", started_at: iso(145000), updated_at: iso(120000), ended_at: iso(120000), legacy_ref: "run-0" },
+    { id: "op-findings-history", root_id: "op-findings-history", kind: "analysis.findings", label: "Update findings", trigger: "schedule", process: "service", state: "succeeded", started_at: iso(360000), updated_at: iso(300000), ended_at: iso(300000) },
+    { id: "op-backup-history", root_id: "op-backup-history", kind: "backup.local", label: "Back up", trigger: "user", process: "service", state: "failed", error: "Destination unavailable", started_at: iso(600000), updated_at: iso(540000), ended_at: iso(540000) },
+  ] } },
   "GET /api/sync/issues": { issues: [] },
   "GET /api/sync/settings": syncSettings,
   "GET /api/sync/history": { history: syncHistory },
   "GET /api/sync/recovery": { jobs: [] },
   "GET /api/background": backgroundDocument,
   "POST /api/background/settings": backgroundDocument,
-  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { enabled: body.enabled, can_change: true, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
+  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { ...backgroundDocument.labels, enabled: body.enabled, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
@@ -697,3 +747,29 @@ export const defaultApi = {
   "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
 };
+
+// Settings → Logs: a crash in the service's last run and a page error. As
+// the API does, a quiet source omits its empty collection.
+const logsSources = [
+  { id: "page", title: "Page errors", attention: "warning", count: 2, latest_at: iso(120000), headline: "GET /api/query/usage/rows had not answered after 15 s", files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/page-errors.jsonl"] },
+  { id: "requests", title: "Slow & failed requests", count: 0, files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/requests.jsonl"] },
+  { id: "service", title: "Service output", attention: "error", count: 3, latest_at: iso(600000), headline: "A run ended in a crash: panic: runtime error: index out of range [3] with length 3", files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/service.log"] },
+  { id: "app", title: "App output", count: 0 },
+  { id: "background", title: "Background work", count: 0 },
+  { id: "crashes", title: "Crash reports", count: 0, files: ["/Users/me/Library/Logs/DiagnosticReports"] },
+];
+export const logsSummary = { generated_at: iso(0), folder: "/Users/me/Library/Application Support/Pharos/logs", sources: logsSources };
+export function logsSource(id) {
+  const summary = logsSources.find(source => source.id === id);
+  if (!summary) return undefined;
+  const long = "pharos/internal/archive.(*Server).serveQueryWithAVeryLongFunctionNameThatMustWrapAtNarrowWidths(0x14000a2c000, {0x105f0c2a8, 0x14000b3e0f0}, 0x14000c81200) /Users/me/src/pharos/internal/archive/query_api.go:412 +0x1f4";
+  return {
+    summary,
+    ...id === "page" ? { events: [{ id: "a1", at: iso(120000), level: "warning", kind: "stalled", message: summary.headline, page: "/analyze", path: "/api/query/usage/rows", count: 2 }, { id: "a2", at: iso(900000), level: "error", kind: "render", message: "TypeError: undefined is not an object (evaluating 'rows.length')", detail: long, page: "/library" }] } : {},
+
+    ...id === "service" || id === "app" ? { runs: [
+      { started_at: iso(60000), running: true, crashed: false, problems: 0, lines: ["listening on 127.0.0.1:18765"] },
+      { started_at: iso(600000), ended_at: iso(300000), exit: "exit status 2", running: false, crashed: true, problems: 3, crash: "panic: runtime error: index out of range [3] with length 3", lines: ["listening on 127.0.0.1:18765", "panic: runtime error: index out of range [3] with length 3", "", "goroutine 1234 [running]:", long] },
+    ] } : {},
+  };
+}

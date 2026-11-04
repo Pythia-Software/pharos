@@ -438,6 +438,10 @@ type concurrencyData struct {
 		Catalog         string `json:"catalog"`
 	} `json:"coverage"`
 	start, end int64
+	// canonical names the conversation each mirror alias stands for
+	// (usageConversationAttribution.canonical), so evidence recorded on a
+	// mirror, such as authorship, finds the thread it belongs to.
+	canonical map[string]string
 }
 
 // parallelismData is the period's threads, kept until the catalog changes.
@@ -503,6 +507,7 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		data.Days = append(data.Days, day.Format("2006-01-02"))
 	}
 	data.Coverage.Timing, data.Coverage.Catalog = "estimated", "pharos"
+	data.canonical = lineage.canonical
 	for _, conversation := range conversations {
 		id, workspaceID := firstString(conversation["id"]), firstString(conversation["workspace_id"])
 		if _, ok := mirrors[workspaceID]; !ok || lineage.canonical[id] != id {
@@ -884,7 +889,7 @@ func (c *Catalog) parallelismQueryRows(ctx context.Context, fields libraryFields
 // mapRowsWhere is the row filter a map dataset may pre-select with, resolved
 // against the request's clock: only parallelism's started_at window uses it.
 func (s *Server) mapRowsWhere(dataset string, where []querytable.WhereTerm, clock time.Time) [][]querytable.WhereTerm {
-	if dataset != "parallelism" || len(where) == 0 {
+	if dataset != "parallelism" && dataset != "rhythm" || len(where) == 0 {
 		return nil
 	}
 	schema, err := s.queryTableSchema(dataset)

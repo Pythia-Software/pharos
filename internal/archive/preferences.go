@@ -122,6 +122,15 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 	// catalog path or API token to the page.
 	scope := sha256.Sum256([]byte(s.Catalog.Path + "\x00" + s.config.APIToken))
 	_, _ = fmt.Fprintf(w, "window.pharosPreviewScope=%q;", fmt.Sprintf("%x", scope))
+	// Feature flags the library's configuration turns on, which no
+	// preference records: agent_events_enabled lists Agent Experience as
+	// its Settings switch does.
+	configured := map[string]bool{}
+	if s.Config().AgentEvents.Enabled {
+		configured[agentEventsFlag] = true
+	}
+	flags, _ := json.Marshal(configured)
+	_, _ = w.Write(append(append([]byte("window.pharosConfiguredFlags="), flags...), ';'))
 }
 
 func (s *Server) postPreferences(w http.ResponseWriter, r *http.Request, body map[string]any) {

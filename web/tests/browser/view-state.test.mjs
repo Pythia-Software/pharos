@@ -73,7 +73,7 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
  let scrolls=await page.evaluate(()=>{window.__attentionScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__attentionScrolls++;return original.apply(this,args)};return window.__attentionScrolls});
  const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/rows-v2');
- await page.evaluate(()=>window.pharosQueryTables.refresh('mcp_calls'));await refreshed;await app.settled();
+ await page.getByRole('button',{name:'Run Now'}).first().click();await refreshed;await app.settled();
  assert.equal(await page.evaluate(()=>window.__attentionScrolls),scrolls);
  const state=fixture.read(page);assert.equal(state.offset,fixture.query.offset);assert.deepEqual(state.where,fixture.query.where);
  // A missing JSON path reports unavailable without changing the query population.

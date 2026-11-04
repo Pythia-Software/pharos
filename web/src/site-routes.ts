@@ -16,6 +16,7 @@ export const siteSections = [
   { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
   { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action notices, in separate prompt baskets." },
+  { path: "ask", route: "/ask", description: "Ask Pharos full screen: a new chat on its own page, without the rest of the app." },
   { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },
 ] as const;

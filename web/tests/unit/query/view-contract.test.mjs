@@ -2,7 +2,7 @@ import searchCases from '../../../../testdata/search-draft-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
 import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
 import {findingsRank} from '../../../src/findings-route';
-import {createDetailLanding,nativeDetailsReady,attentionMutationMatters} from '../../../src/view-attention-model';
+import {createDetailLanding,nativeDetailsReady,attentionMutationMatters,attentionReferenceAt,attentionTargetNoun,toggleAttentionTarget} from '../../../src/view-attention-model';
 import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/query-table-core';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -392,6 +392,32 @@ test("attention ignores its own status UI and class changes but follows the page
  const cleared=element('card');
  assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set()),false,'unmarking an element');
  assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set([cleared])),true,'a re-render dropped the mark from a target');
+});
+
+test('a right-click names the innermost target that resolves back to it, and highlighting toggles the link',()=>{
+ const node=(tagName,attributes={},parentElement=null,inner=null)=>({tagName,parentElement,getAttribute:name=>attributes[name]??null,querySelector:()=>inner});
+ const card=node('ARTICLE',{'data-pharos-target':'card:tool-failures'});
+ const disclosure=node('DETAILS',{'data-pharos-target':'section:help','data-view-field':'disclosures'},card);
+ const text=node('P',{},disclosure);
+ const owners=new Map([['card:tool-failures',card],['section:help',disclosure]]);
+ const resolvesTo=(reference,element)=>owners.get(reference)===element;
+ assert.equal(attentionReferenceAt(text,resolvesTo),'section:help');
+ owners.delete('section:help');
+ assert.equal(attentionReferenceAt(text,resolvesTo),'card:tool-failures','a reference naming another element is skipped');
+ const row=node('TR',{},null,node('SPAN',{'data-pharos-target':'row:42'}));
+ owners.set('row:42',row);
+ assert.equal(attentionReferenceAt(node('TD',{},row),resolvesTo),'row:42','a cell names its row');
+ assert.equal(attentionReferenceAt(node('DIV'),resolvesTo),null);
+ assert.equal(attentionTargetNoun('call:toolu_1'),'Tool Call');
+ assert.equal(attentionTargetNoun('unknown:x'),'Element');
+ const step=(search,reference)=>'?'+toggleAttentionTarget(search,reference).toString();
+ let search=step('?tab=1','card:a');
+ assert.deepEqual([...new URLSearchParams(search)],[['tab','1'],['reveal','card:a']],'the first target is the landing');
+ search=step(search,'card:b');
+ assert.deepEqual(new URLSearchParams(search).getAll('highlight'),['card:b']);
+ search=step(search,'card:a');
+ assert.deepEqual([...new URLSearchParams(search)],[['tab','1'],['reveal','card:b']],'removing the landing promotes a highlight');
+ assert.equal(step(search,'card:b'),'?tab=1');
 });
 
 test('a linked Findings rank applies without saving; a manual choice saves the default a new unlinked view uses',()=>{

@@ -60,3 +60,45 @@ export function attentionMutationMatters(record: MutationRecord, marked: Readonl
   // Attention's own classes are not a change, unless a marked element lost them.
   return ordinaryClasses(record.oldValue ?? "") !== ordinaryClasses(element.getAttribute("class") ?? "") || marked.has(element) && !element.matches(".pharos-highlight,.pharos-reveal");
 }
+
+// The Mac app's context menu highlights what was right-clicked: the innermost
+// element with a semantic identity whose reference resolves back to it (so a
+// shared `data-view-field` or a repeated ID never names a different element).
+// A table row is named by the marker in its trailing cell.
+export interface AttentionNode { tagName: string; parentElement: AttentionNode | null; getAttribute(name: string): string | null; querySelector(selector: string): AttentionNode | null }
+const identityAttributes: [string, string][] = [["data-card-definition", "card"], ["data-message-id", "message"], ["data-call-id", "call"], ["data-session-id", "session"], ["data-view-field", "control"]];
+function referencesOf(node: AttentionNode): string[] {
+  const references: string[] = [];
+  const literal = node.getAttribute("data-pharos-target");
+  if (literal) references.push(literal);
+  for (const [attribute, kind] of identityAttributes) { const id = node.getAttribute(attribute); if (id) references.push(`${kind}:${id}`); }
+  if (node.tagName === "TR") { const row = node.querySelector('[data-pharos-target^="row:"]')?.getAttribute("data-pharos-target"); if (row) references.push(row); }
+  return references;
+}
+export function attentionReferenceAt<T extends AttentionNode>(start: T | null, resolvesTo: (reference: string, node: T) => boolean): string | null {
+  for (let node = start; node; node = node.parentElement as T | null) {
+    const reference = referencesOf(node).find(reference => resolvesTo(reference, node!));
+    if (reference) return reference;
+  }
+  return null;
+}
+
+const targetNouns: Record<string, string> = { card: "Card", message: "Message", call: "Tool Call", session: "Conversation", row: "Row", section: "Section", control: "Control", safety: "Review" };
+export function attentionTargetNoun(reference: string): string { return targetNouns[reference.slice(0, reference.indexOf(":"))] ?? "Element"; }
+
+// Highlighting adds the target as the link's landing (`reveal`) when it has
+// none, and as another `highlight` otherwise. Highlighting it again removes it;
+// removing the landing promotes the first remaining highlight.
+export function toggleAttentionTarget(search: string, reference: string): URLSearchParams {
+  const params = new URLSearchParams(search);
+  let highlights = [...new Set(params.getAll("highlight"))], reveal = params.get("reveal") ?? "";
+  if (reveal === reference || highlights.includes(reference)) {
+    highlights = highlights.filter(item => item !== reference);
+    if (reveal === reference) reveal = highlights.shift() ?? "";
+  } else if (reveal) highlights.push(reference);
+  else reveal = reference;
+  params.delete("highlight"); params.delete("reveal");
+  for (const item of highlights) params.append("highlight", item);
+  if (reveal) params.set("reveal", reveal);
+  return params;
+}

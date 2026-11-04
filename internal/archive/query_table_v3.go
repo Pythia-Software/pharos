@@ -111,6 +111,13 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			return qt.QueryResultV3{}, nil, err
 		}
 	}
+	if dataset == "rhythm" {
+		var err error
+		ctx, err = withHabitsPreferences(ctx, params.Get("habits_settings"))
+		if err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))

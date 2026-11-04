@@ -76,22 +76,29 @@
 @keyframes bg-pulse{50%{opacity:.45}}
 @media(prefers-reduced-motion:reduce){.bg-dot.busy{animation:none}}
 .bg-rule{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:14px;padding-top:10px;border-top:1px dashed var(--line);font-size:var(--fs-sm);color:var(--muted)}
-.bg-stack{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--line);margin:12px 0 6px}
-.bg-stack i{display:block;height:100%}
-.bg-legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:var(--fs-sm);color:var(--muted)}
-.bg-legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;background:var(--swatch)}
+.bg-busy{display:inline-flex;align-items:center;gap:9px;font-size:var(--fs-sm);cursor:pointer}
+.bg-busy input{appearance:none;position:relative;width:34px;height:20px;margin:0;border:1px solid var(--line);border-radius:20px;background:var(--line);cursor:pointer;flex:none}
+.bg-busy input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--ink);transition:transform .15s ease}
+.bg-busy input:checked{background:var(--accent);border-color:var(--accent)}
+.bg-busy input:checked::after{background:var(--bg);transform:translateX(14px)}
+.bg-busy input:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:2px}
+.bg-busy-row{margin:8px 0 2px}
 .bg-check{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:var(--fs-sm)}
 .bg-battery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
 .bg-battery-row{display:grid;gap:4px;font-size:var(--fs-sm);font-weight:600;min-width:0}
 .bg-battery-row select{font:inherit;font-weight:400;border:1px solid var(--line);border-radius:5px;padding:5px 6px;background:var(--bg);color:var(--ink);min-width:0}
 .bg-check input{margin-top:3px;accent-color:var(--accent)}
+.bg-card .optional-behavior{padding:14px 0 0;border-bottom:0}
+.bg-card .optional-behavior h4{margin:0;font-size:var(--fs-md)}
+.bg-card .optional-behavior p{margin:4px 0 0}
+.bg-threads{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--fs-sm);color:var(--muted)}
+.bg-threads select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
 @media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
 @container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
 
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
   const CADENCE_LABELS = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
   const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
-  const SWATCHES = {frequent: '#8cc6a0', hourly: 'var(--accent)', daily: '#9db1d6'};
 
   // ---- times and durations (the only words this file makes)
   const parse = value => { const time = Date.parse(value); return Number.isFinite(time) ? time : null; };
@@ -166,7 +173,8 @@
     const mode = document.settings?.mode || view.mode;
     return {mode, pause: mode === 'paused' ? pauseLength(document.settings?.paused_until || view.paused_until, now) : '',
       settings: document.settings || {}, columns, unscheduled, unscheduledRunnable, everything: view.everything?.text || '',
-      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null};
+      rule: document.rule || null, headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null,
+      agentEvents: document.agent_events || null};
   }
 
   // Which pause choice a pause is: one that ends within the hour is the
@@ -202,7 +210,7 @@
       adaptive: Boolean(item.adaptive), column: item.cadence === 'manual' ? 'manual' : item.column || '', usual: item.usual_cadence || '',
       cost: item.cost ? {class: item.cost.class || '', text: item.cost.text || ''} : null,
       choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed),
-      moves: item.cadence_moves || [], temporary: item.temporary_cadence || null,
+      moves: item.cadence_moves || [], temporary: item.temporary_cadence || null, stop: item.stop?.id ? {id: item.stop.id} : null,
       sources: Array.isArray(item.sources) ? item.sources.map(source => ({name: source.name, selected: Boolean(source.selected)})) : null};
   }
 
@@ -214,17 +222,9 @@
     return item.temporary && cadence === item.usual ? '' : cadence;
   }
 
-  // The day's cost: each cadence's share of the total, measured or
-  // projected.
-  function costModel(cost) {
-    if (!cost || !Array.isArray(cost.cadences)) return null;
-    const total = cost.cadences.reduce((sum, entry) => sum + (Number(entry.seconds) || 0), 0);
-    return {total: duration(total), peakBytes: Number(cost.peak_bytes) || 0,
-      segments: cost.cadences.map(entry => ({id: entry.id, label: entry.label, measured: Boolean(entry.measured), text: entry.text || '',
-        duration: duration(entry.seconds), share: total > 0 ? (Number(entry.seconds) || 0) / total : 0}))};
-  }
-
   // ---- rendering
+  // The Agent Experience switch (web/src/agent-events-flag.ts).
+  const AGENT_EVENTS_KEY = 'pharos-agent-events-v1';
   let document_ = null, dragging = null, inFlight = false, fetchedAt = 0, sheet = null, labelsSaving = false, labelsRevision = 0;
   const node = (tag, className = '', text) => {
     const element = document.createElement(tag);
@@ -253,7 +253,6 @@
     document_ = await call('/api/background/settings', body);
     render();
   }
-  const sizeText = bytes => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
 
   function select(options, value, onchange, label) {
     const element = node('select');
@@ -342,7 +341,30 @@
       } else {
         when.textContent = column.description;
       }
-      section.append(head, when);
+      section.append(head);
+      if (column.id === 'hourly' || column.id === 'daily') {
+        const hold = node('label', 'bg-busy');
+        hold.title = 'Shared by Hourly and Daily';
+        const box = node('input');
+        box.type = 'checkbox';
+        box.setAttribute('role', 'switch');
+        box.dataset.focusKey = 'busy:' + column.id;
+        box.checked = model.settings.hold_when_busy !== false;
+        box.onchange = async () => {
+          const checked = box.checked;
+          host()?.querySelectorAll('.bg-busy input').forEach(input => { input.checked = checked; });
+          try { await save({hold_when_busy: checked}); }
+          catch (error) {
+            host()?.querySelectorAll('.bg-busy input').forEach(input => { input.checked = !checked; });
+            toast(error.message);
+          }
+        };
+        hold.append(box, 'Hold while busy');
+        const row = node('div', 'bg-busy-row');
+        row.append(hold);
+        section.append(row);
+      }
+      section.append(when);
       for (const item of column.items) section.append(renderItem(item));
       columns.append(section);
     }
@@ -419,7 +441,13 @@
       label.append(select(item.choices.map(choice => [choice.value, choice.label]), item.override, value => save({overrides: {[item.id]: value}}), `When ${item.label} runs`));
       row.append(label);
     }
-    row.append(button('Run now', async () => {
+    // A running item that can stop offers Stop instead: it ends at its next
+    // safe point, keeping what it finished, and its next run resumes it.
+    row.append(item.stop ? button('Stop', async () => {
+      await call('/api/operations/stop', {id: item.stop.id});
+      toast(`Stopping ${item.label}. What it finished is kept; its next run resumes it.`);
+      refresh(true);
+    }) : button('Run now', async () => {
       await call('/api/background/run', {item: item.id});
       toast(`${item.label} runs next.`);
       refresh(true);
@@ -472,11 +500,10 @@
     // The focused run button or item keeps focus across the redraw.
     const focusKey = document.activeElement?.dataset?.focusKey;
     const focused = document.activeElement?.closest?.('[data-item]')?.dataset.item;
-    const labelsFocused = document.activeElement?.id === 'labelsEnabled';
+    const labelsFocused = ['labelsEnabled', 'agentEventsEnabled'].includes(document.activeElement?.id) && document.activeElement.id;
     const model = scheduleModel(document_);
     if (!model) return;
     const content = node('div');
-    if (model.labels) content.append(renderLabels(model.labels));
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
@@ -509,26 +536,7 @@
       card.append(rule);
     }
     content.append(card);
-    if (model.cost) {
-      const cost = node('section', 'bg-card');
-      cost.append(node('h3', '', 'What it costs'),
-        node('p', 'muted', `Background work on this Mac in the last 24 hours: about ${model.cost.total} of work${model.cost.peakBytes ? `, with memory peaking at ${sizeText(model.cost.peakBytes)}` : ''}. Hourly and Daily are projected from their measured runs until they have run here.`));
-      const stack = node('div', 'bg-stack');
-      stack.setAttribute('role', 'img');
-      stack.setAttribute('aria-label', model.cost.segments.map(segment => `${segment.label} ${segment.duration}`).join(', '));
-      const legend = node('div', 'bg-legend');
-      for (const segment of model.cost.segments) {
-        const bar = node('i');
-        bar.style.width = `${(segment.share * 100).toFixed(1)}%`;
-        bar.style.background = SWATCHES[segment.id];
-        stack.append(bar);
-        const key = node('span', '', `${segment.label} ${segment.duration}${segment.text ? ` · ${segment.text}` : ''}`);
-        key.style.setProperty('--swatch', SWATCHES[segment.id]);
-        legend.append(key);
-      }
-      cost.append(stack, legend);
-      content.append(cost);
-    }
+    if (model.labels) content.append(renderLabels(model.labels, model.agentEvents));
     if (model.battery) {
       const battery = node('section', 'bg-card');
       battery.dataset.card = 'battery';
@@ -548,61 +556,93 @@
       battery.append(rows, low);
       content.append(battery);
     }
-    const considerate = node('section', 'bg-card');
-    const hold = node('label', 'bg-check');
-    const box = node('input');
-    box.type = 'checkbox';
-    box.checked = model.settings.hold_when_busy !== false;
-    box.onchange = () => save({hold_when_busy: box.checked}).catch(error => toast(error.message));
-    hold.append(box, 'Hold Hourly and Daily work while this Mac is busy (other apps using most of the CPU)');
-    considerate.append(node('h3', '', 'Be considerate'), hold,
-      node('p', 'muted', 'Background work stops as soon as you eject the library or quit Pharos, and carries on where it left off.'));
-    content.append(considerate);
     target.replaceChildren(...content.childNodes);
-    if (labelsFocused) target.querySelector('#labelsEnabled')?.focus({preventScroll: true});
+    if (labelsFocused) target.querySelector(`#${labelsFocused}`)?.focus({preventScroll: true});
     const keyed = focusKey && target.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`);
     if (keyed) keyed.focus({preventScroll: true});
     else if (focused) target.querySelector(`[data-item="${window.CSS.escape(focused)}"] .bg-item-head`)?.focus({preventScroll: true});
   }
 
-  function renderLabels(settings) {
+  // Message labels and agent events: both small models run on this Mac
+  // through the labeling worker, so they share a card. Labels save to the
+  // library's configuration; agent events are the agentEventsFlag preference
+  // (agent_events_run.go), so Analyze lists Agent Experience as it changes.
+  function renderLabels(labels, events) {
     const card = node('section', 'bg-card');
-    const description = node('p', 'muted', 'Label messages locally and highlight requests, replies and feedback in the conversation reader. This setting follows the library. Turning it off keeps existing labels; a run in progress finishes.');
-    description.id = 'messageLabelsDescription';
-    const label = node('label', 'bg-check');
-    const box = node('input');
-    box.id = 'labelsEnabled';
-    box.type = 'checkbox';
-    box.setAttribute('role', 'switch');
-    box.setAttribute('aria-describedby', 'messageLabelsDescription messageLabelsStatus');
-    box.checked = settings.enabled;
-    box.disabled = !settings.can_change;
+    card.append(node('h3', '', 'Labeling on this Mac'),
+      node('p', 'muted', 'Small models label your library in the background and the reader highlights what they find. These settings follow the library. Turning one off keeps what it found; a run in progress finishes. Cores apply from each model\'s next run; on battery each uses at most 2.'));
+    card.append(labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
+      'Label each message by what it does: requests, replies, feedback and more.', labels,
+      enabled => call('/api/labels/settings', {enabled}),
+      threads => call('/api/labels/settings', {threads}), labels.can_change));
+    if (events) card.append(labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
+      'Find sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more, and list Analyze → Agent Experience. Reads the last 90 days after a one-time 140 MB download; a backlog catches up only while plugged in.', events,
+      async enabled => {
+        window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
+        await window.pharosPrefs.flush?.();
+        if (enabled) await call('/api/background/run', {item: 'agent_events'}).catch(() => {});
+        return call('/api/background');
+      },
+      threads => call('/api/labels/settings', {agent_events_threads: threads}), events.threads_can_change));
+    return card;
+  }
+
+  // One switch of the labeling card, the App preferences toggle, with its
+  // model's cores: each save returns the next document.
+  function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads, threadsCanChange) {
+    const row = node('div', 'optional-behavior');
+    const copy = node('div');
+    const title = node('h4', '', text);
+    title.id = `${prefix}Title`;
+    const description = node('p', 'muted', about);
+    description.id = `${prefix}Description`;
     const status = node('p', 'muted', settings.status);
-    status.id = 'messageLabelsStatus';
+    status.id = `${prefix}Status`;
     status.setAttribute('role', 'status');
-    box.onchange = async () => {
-      const focused = document.activeElement === box;
+    const toggle = node('button', 'toggle');
+    toggle.id = id;
+    toggle.type = 'button';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-labelledby', title.id);
+    toggle.setAttribute('aria-describedby', `${description.id} ${status.id}`);
+    const show = on => { toggle.classList.toggle('on', on); toggle.setAttribute('aria-checked', String(on)); };
+    show(settings.enabled);
+    toggle.disabled = !settings.can_change;
+    toggle.onclick = async () => {
+      const focused = document.activeElement === toggle;
+      const enabled = toggle.getAttribute('aria-checked') !== 'true';
+      show(enabled);
       labelsSaving = true;
       labelsRevision++;
-      box.disabled = true;
+      toggle.disabled = true;
       let saved = false;
       try {
-        document_ = await call('/api/labels/settings', {enabled: box.checked});
+        document_ = await saveSwitch(enabled);
         saved = true;
       } catch (error) {
-        box.checked = settings.enabled;
+        show(settings.enabled);
         status.textContent = error.message;
         toast(error.message);
       } finally {
         labelsSaving = false;
-        box.disabled = !settings.can_change;
+        toggle.disabled = !settings.can_change;
       }
       if (saved) render();
-      if (focused && (document.activeElement === box || document.activeElement === document.body)) host()?.querySelector('#labelsEnabled')?.focus({preventScroll: true});
+      if (focused && (document.activeElement === toggle || document.activeElement === document.body)) host()?.querySelector(`#${id}`)?.focus({preventScroll: true});
     };
-    label.append(box, 'Enable message labels');
-    card.append(node('h3', '', 'Message labels'), description, label, status);
-    return card;
+    copy.append(title, description, status);
+    if (settings.thread_choices?.length) {
+      const cores = node('label', 'bg-threads', 'Cores ');
+      const choice = select(settings.thread_choices.map(threads => [threads, String(threads)]), settings.threads, async value => {
+        document_ = await saveThreads(Number(value));
+        render();
+      }, `${text} cores`);
+      choice.disabled = !threadsCanChange;
+      cores.append(choice);
+      copy.append(cores);
+    }
+    row.append(copy, toggle);
+    return row;
   }
 
   async function refresh(force = false) {
@@ -635,6 +675,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, costModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
+    scheduleModel, itemModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

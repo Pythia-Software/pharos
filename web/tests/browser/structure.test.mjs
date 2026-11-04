@@ -34,10 +34,11 @@ const markdownLinkAPI = {
   ]},
   "GET /api/markdown-link": ({query}) => {
     const href=query.get("href");
-    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12"};
+    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12",path:"/workspace/internal/archive/api.go",launchable:false};
     if(href==="http://localhost:5173/")return {status:"server",detail:"Local server returned HTTP 200"};
     return {status:"unavailable",detail:href.startsWith('http')?"Local server unavailable on this Mac":"File unavailable on this Mac"};
   },
+  "POST /api/markdown-link": ({query}) => ({opened:"/workspace/"+query.get("href").split(":")[0],revealed:false}),
 };
 const work = `/work/${workID}`;
 // The root session's last reply, which the card previews as its latest response.
@@ -80,7 +81,9 @@ const authoredTurnMessages = [authoredPrompt,
   ]).flat(),
   {id:"nested-review",native_id:"nested-review",role:"assistant",kind:"delegation",call_id:"nested-reviewer",parent_native_id:"reviewer-0",text:JSON.stringify({name:"Task",input:{subagent_type:"Nested reviewer",prompt:"Check the child branch under Reviewer 1"}})},
   {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
-  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1."},
+  {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1.",
+    labels:{segment:"AR",ids:["C","C.report","C.report.completion"],probs:{"C.report.completion":0.93}},
+    agent_events:[{kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[],response:[]}]},
   classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
   {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
 ];
@@ -91,7 +94,8 @@ const authoredTurnAPI = {
     return !result?.rows?result:{...result,rows:result.rows.map(row=>({...row,title:"Review the conversation reader",first_input:authoredPrompt.text,last_response:"All five reviews are complete.",turn_count:2,subagent_count:6}))};
   },
   "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request),title:"Review the conversation reader",conversations:[{id:rootConversation,provider:"codex",title:"Keep reviews inside the parent turn"}]}),
-  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages},
+  "GET /api/work/:id/conversations/:conversation": {id:rootConversation,workspace_id:workID,provider:"codex",messages:authoredTurnMessages,
+    labels:{labeled:true,pending:false,taxonomy:[{id:"C.report.completion",name:"Completion",definition:"Reports finished work."}]},agent_events:{messages_read:8}},
 };
 
 async function publishAppUpdate(page, state) {
@@ -133,6 +137,15 @@ const overTimeReady = 'section[aria-label="Over time"][aria-busy="false"] .usage
 const storageBreakdown = defaultApi["GET /api/health/storage/breakdown"];
 const compactableBreakdown = { ...storageBreakdown, catalog_free_bytes: 31e9, compact_needs_bytes: 70e9,
   parts: storageBreakdown.parts.flatMap(part => part.key === "catalog_database" ? [{ ...part, bytes: 63e9 }, { key: "catalog_free", label: "Free space in the catalog", bytes: 31e9 }] : [part]) };
+const backgroundTaskStatus = { ...busyStatus,
+  operations: [{ ...busyStatus.operations[0], kind: 'background.update', variant: 'frequent', label: 'Frequent update', priority: 'background',
+    step: { index: 2, count: 2, name: 'Repositories & merges', unit: null, done: 0, total: null } }],
+  background: { ...idleStatus.background,
+    items: idleStatus.background.items.map(item => item.id === 'repositories' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
+    cadences: idleStatus.background.cadences.map(cadence => cadence.id === 'frequent' ? { ...cadence, state: 'running', state_label: 'Updating now' } : cadence),
+  },
+  attention: [],
+};
 const ROUTES = [
   {name:"Waiting and Compaction",url:"/analyze?analyze_topic=thinking-overview&analyze_data=model_requests",ready:'.thinking-dashboard[aria-busy="false"] .thinking-overview-stats'},
   ...['time','heatmap','histogram','reasoning','wait-box','calendar'].map(view=>({name:'Thinking '+view,url:'/analyze?'+new URLSearchParams({analyze_topic:'thinking-detail',analyze_data:'model_requests',thinking:JSON.stringify({view,groupBy:'model_effort'})}),ready:'.thinking-dashboard[aria-busy="false"] .thinking-population'})),
@@ -206,6 +219,7 @@ const ROUTES = [
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
+  {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
@@ -252,6 +266,10 @@ const ROUTES = [
       while (await closed.count()) await closed.first().click();
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
+  { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
+    api: {'GET /api/status/stream': eventStream(backgroundTaskStatus), 'GET /api/status': backgroundTaskStatus},
+    open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosStatusPanel .pharos-status-position-track',
+  },
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
@@ -353,6 +371,7 @@ const ROUTES = [
   // cycle) not drawn above.
   { name: "MCP dashboard weekday cycle", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }))}`, ready: `.usage-mcp-dashboard ${analysisReady}`,
     check: async page => assert.deepEqual(await page.locator(".usage-mcp-dashboard [role=alert], .usage-mcp-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
@@ -400,6 +419,9 @@ const ROUTES = [
   { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },
   { name: "MCP legacy link", url: "/mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
+  { name: "Logs overview", url: "/settings/logs", ready: "#logsPage .logs-cards" },
+  { name: "Logs service output", url: "/settings/logs?log_source=service", ready: "#logsPage .logs-run pre" },
+  { name: "Logs empty source", url: "/settings/logs?log_source=background", ready: "#logsOperations" },
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
   // In the app, a catalog with much free space offers to compact it.
   { name: "Library health compact catalog", url: "/settings", ready: ".storage-compact button", managedLibrary: { id: "local", name: "Pending history", config: "/Users/test/Libraries/Pending/library.toml" },
@@ -447,9 +469,10 @@ const ROUTES = [
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
   { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#labelsEnabled", api: {
+  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#agentEventsEnabled", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
-      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." } },
+      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." },
+      agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled)." } },
   } },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
@@ -730,7 +753,6 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     ...askAPI,
     'POST /api/ask/session':({body,state})=>state.suggestionDraft={...askSession,...body,conversation:[]},
     'GET /api/ask/session':({query,state})=>state.suggestionDraft||{...askSession,id:query.get('id'),conversation:[]},
-    'GET /api/query/library/distinct':({query})=>query.get('field')==='repository_name'?{values:['pharos','query-table'],hasMore:false}:undefined,
   }});
   const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
   const viewport=page.getByRole('region',{name:'Browse prompt suggestions',exact:true});
@@ -754,6 +776,8 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     await readable();
   }
   await suggestions.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.pharos-idea-announcement')?.textContent==='Prompt suggestions refreshed.');
+  assert.ok(calls.some(call=>call.path==='/api/ask/suggestions'&&call.query.get('seed')==='1'),'Refresh asks the library for another slate');
   await readable();
   const card=viewport.locator('[data-reading]').filter({hasText:'repository'}).first();
   const prompt=await card.locator('.pharos-idea-text').textContent();
@@ -791,6 +815,38 @@ test("Background Processing items drag to another schedule for a week", { skip }
   await page.getByRole('button', { name: 'Run Findings now', exact: true }).focus();
   await page.evaluate(() => window.pharosBackground.render());
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Run Findings now');
+});
+
+test("Background Processing shares the busy switch across Hourly and Daily and shows work history", { skip }, async t => {
+  let holdWhenBusy = true;
+  const { page, calls, settled, shot } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row', api: {
+    'POST /api/background/settings': ({ body }) => {
+      holdWhenBusy = body.hold_when_busy;
+      return { ...defaultApi['GET /api/background'], settings: { ...defaultApi['GET /api/background'].settings, hold_when_busy: holdWhenBusy } };
+    },
+  } });
+  const schedule = page.locator('#backgroundSchedule');
+  assert.equal(await schedule.getByText('What it costs').count(), 0);
+  assert.equal(await schedule.getByText('Be considerate').count(), 0);
+  const hourly = schedule.locator('.bg-col[data-cadence="hourly"]').getByRole('switch', { name: 'Hold while busy' });
+  const daily = schedule.locator('.bg-col[data-cadence="daily"]').getByRole('switch', { name: 'Hold while busy' });
+  assert.ok(await hourly.isVisible());
+  assert.ok(await daily.isVisible());
+  assert.equal(await schedule.locator('.bg-mode').getByRole('switch').count(), 0);
+  await hourly.uncheck();
+  await settled();
+  assert.equal(await daily.isChecked(), false);
+  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings' && call.body?.hold_when_busy === false));
+  await daily.check();
+  await settled();
+  assert.equal(await hourly.isChecked(), true);
+  assert.equal(calls.filter(call => call.method === 'POST' && call.path === '/api/background/settings' && 'hold_when_busy' in call.body).length, 2);
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
+  assert.equal(await page.getByLabel('Last run cost').count(), 0);
+  await shot('background-processing');
+  await history.scrollIntoViewIfNeeded();
+  await shot('work-history');
 });
 
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
@@ -1110,6 +1166,13 @@ test("Markdown local destinations become navigable only after availability is co
   const source=page.getByRole("link",{name:"Source file",exact:true});
   assert.ok(await source.getAttribute("href"));
   assert.equal(await source.getAttribute("aria-disabled"),null);
+  // The Mac app's context menu reads the resolved path for Open With.
+  assert.equal(await source.getAttribute("data-file-path"),"/workspace/internal/archive/api.go");
+  // A confirmed file opens in its Mac app instead of loading in the browser.
+  await source.click();
+  await page.waitForFunction(()=>document.querySelector('#feedbackToast.visible'));
+  assert.ok(app.calls.some(call=>call.method==='POST'&&call.path==='/api/markdown-link'&&call.query.get('href')==='internal/archive/api.go:12'));
+  assert.equal(page.context().pages().length,1);
   assert.equal(await page.getByRole("link",{name:"Running dev server",exact:true}).getAttribute("href"),"http://localhost:5173/");
   for(const name of ["Missing file","Stopped dev server"]){
     const link=page.getByRole("link",{name,exact:true});

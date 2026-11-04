@@ -5,8 +5,10 @@ docs, surprises, confusion, discoveries, their own mistakes, workarounds, unchec
 getting around an instruction or safeguard, and more. Each event is one sentence in an agent's visible reply or its
 thinking, with what it was about and what the agent did about it, linked to the message in the reader.
 
-It is a preview. Settings → App preferences → **Agent Experience (preview)** turns it on for a library: it lists the
-pages in Analyze and starts the pass that finds events on this Mac (below). Direct links work either way.
+It is a preview. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it on for a library: it lists the
+pages in Analyze and starts the pass that finds events on this Mac (below). `agent_events_enabled = true` in the
+library's configuration does both too, and locks the switch on; `/assets/preferences.js` tells the page so
+(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way.
 
 ## How events are found
 
@@ -49,14 +51,14 @@ split only additive measures, so this panel computes the rate from two grouped c
 
 ### In the reader
 
-A conversation the pass has read has an **Events** toggle beside Show and Labels (view field `reader_events`; the
-dashboard's example links turn it on). It marks each event's sentence in its kind group's hue and underlines what the
+A conversation the pass has read offers **Agent events** in the reader's Highlight row, beside Human writing and
+Message labels (view field `reader_events`; the dashboard's example links turn it on). It marks each event's sentence in its kind group's hue and underlines what the
 event was about and what the agent did; hovering a marked sentence names its events, with probability and those
 sentences. Thinking is marked inside its Reasoning row, which shows a count of its events.
 
 - `agentEventsAttacher` (`agent_events.go`) attaches each agent message's events at or above the threshold to the
   live reader's conversation, with ranges converted from UTF-8 bytes to UTF-16 code units (JavaScript's string
-  indexes) in one pass per message, and a summary for the toggle. An event whose stored sentence is not where it was
+  indexes) in one pass per message, and a summary for the checkbox's note. An event whose stored sentence is not where it was
   found is left out.
 - `messageEventView`, `eventMask` and `eventsAtMark` (`reader-model.js`) turn them into marks and pick the events
   under a hovered mark: each marked sentence is a mark of its own whose class names its span (`event-at-N`). Events
@@ -69,9 +71,15 @@ sentences. Thinking is marked inside its Reasoning row, which shows a count of i
 With the Settings switch on (preference `pharos-agent-events-v1`, read as a feature flag, `agentEventsFlag`) or
 `agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
-Runtime and budget (`labels_worker`, `labels_runtime`, `labels_threads`, …), and the same power rules: each chain pass
-scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
+Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
+`agent_events_threads` (Settings → Agent events → Cores; unset, `labels_threads`), and the same power rules: each chain
+pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
 `backlog` run when plugged in and stops if this Mac goes onto battery.
+
+Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
+status panel, cancels it (`Op.setStopper`), and it ends between chunks with what it scored stored. Its next run
+resumes from the conversations still unread; a chunk in flight, about 512 candidates, is scored again. Cores apply
+from the next run: a running one keeps its workers, so stop it and choose Run now to apply them sooner.
 
 - **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
   (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into

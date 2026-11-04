@@ -2,7 +2,7 @@ import { libraryHostParameters } from "./host-query-state";
 import { readViewState, readClassicViewState, writeViewState, writeViewStates, installClassicDisclosures } from "./view-state";
 import { attentionTargets, viewContract, viewFields, retainPageView, viewPageForURL } from "./view-contract";
 import { adoptTextTargets, installPageFind } from "./page-find";
-import { attentionMutationMatters, createDetailLanding } from "./view-attention-model";
+import { attentionMutationMatters, attentionReferenceAt, attentionTargetNoun, createDetailLanding, toggleAttentionTarget, type AttentionNode } from "./view-attention-model";
 import "./view-attention.css";
 
 type Resolver = (target: string, initial: boolean) => HTMLElement | null;
@@ -15,8 +15,9 @@ export function targetReference(kind: string, id: string): string {
   if (!attentionTargets.some(target => target.pattern.startsWith(`${kind}:<`)) || !id || id.length > 4000) throw new Error("Unknown attention target.");
   return `${kind}:${id}`;
 }
-declare global { interface Window { pharosView: { read: typeof readViewState; write: typeof writeViewState; writeAll: typeof writeViewStates; register: typeof registerAttentionResolver; contract: typeof viewContract; refresh: () => void; restoreDisclosures: ReturnType<typeof installClassicDisclosures>; globalParameters: () => string[]; retainPage: (params: URLSearchParams, path: string) => void }; } }
-let frame = 0, navigation = "", landed = false;
+declare global { interface Window { pharosView: { read: typeof readViewState; write: typeof writeViewState; writeAll: typeof writeViewStates; register: typeof registerAttentionResolver; contract: typeof viewContract; refresh: () => void; restoreDisclosures: ReturnType<typeof installClassicDisclosures>; globalParameters: () => string[]; retainPage: (params: URLSearchParams, path: string) => void; contextTarget: (element: Element) => ContextTarget | null; toggleAttention: (reference: string) => void }; } }
+type ContextTarget = { reference: string; noun: string; highlighted: boolean };
+let frame = 0, navigation = "", landed = false, stayPut = false;
 const opened = new Set<string>();
 let marked = new Set<HTMLElement>();
 let status:HTMLElement|undefined,statusText:HTMLElement|undefined;
@@ -26,8 +27,8 @@ function currentAttention() {
   const params = new URLSearchParams(location.search);
   return { highlights: [...new Set(params.getAll("highlight"))], reveal: params.get("reveal") ?? "" };
 }
-function resolve(reference: string): HTMLElement | null {
-  for (const resolver of resolvers) { const element = resolver(reference, !opened.has(reference)); if (element && available(element)) return element; }
+function resolve(reference: string, initial = !opened.has(reference)): HTMLElement | null {
+  for (const resolver of resolvers) { const element = resolver(reference, initial); if (element && available(element)) return element; }
   if (reference === "page") return document.querySelector<HTMLElement>("main");
   const colon = reference.indexOf(":"), kind = reference.slice(0, colon), id = reference.slice(colon + 1);
   if (colon < 0 || !id) return null;
@@ -54,13 +55,28 @@ function clearAttention() {
   const url = new URL(location.href); url.searchParams.delete("highlight"); url.searchParams.delete("reveal");
   history.replaceState(history.state,"",url); window.dispatchEvent(new Event("pharos:attention-cleared")); window.dispatchEvent(new Event("pharos:uri-changed"));
 }
+// The attention target under a right-click, for the Mac app's context menu.
+function contextTarget(element: Element): ContextTarget | null {
+  const reference = attentionReferenceAt(element as unknown as AttentionNode, (reference, node) => resolve(reference, false) === node as unknown as HTMLElement);
+  if (!reference) return null;
+  const { highlights, reveal } = currentAttention();
+  return { reference, noun: attentionTargetNoun(reference), highlighted: reveal === reference || highlights.includes(reference) };
+}
+// The target is on screen already (it was just right-clicked), so marking it
+// does not scroll.
+function toggleAttention(reference: string) {
+  const url = new URL(location.href); url.search = toggleAttentionTarget(url.search, reference).toString();
+  stayPut = true;
+  history.replaceState(history.state, "", url); window.dispatchEvent(new Event("pharos:uri-changed"));
+}
 function update() {
   frame=0;
   // text: targets are an alias for page Find, which owns its own landing.
   if(adoptTextTargets())return schedule();
   const { highlights,reveal }=currentAttention();
   const key=JSON.stringify([location.pathname,new URLSearchParams(location.search).get("conversation"),highlights,reveal]);
-  if(key!==navigation) {navigation=key;landed=false;opened.clear();}
+  if(key!==navigation) {navigation=key;landed=stayPut;opened.clear();}
+  stayPut=false;
   const next=new Set<HTMLElement>();const missing:string[]=[];
   if (!reveal.startsWith("detail:")) cancelDetailLanding();
   for(const reference of [...highlights,...(reveal?[reveal]:[])]) {
@@ -88,7 +104,7 @@ function update() {
 function schedule(){if(!frame) frame=requestAnimationFrame(update);}
 export function installViewAttention() {
   const restoreDisclosures=installClassicDisclosures();
-  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,writeAll:writeViewStates,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[])};
+  window.pharosView={restoreDisclosures,read:readClassicViewState,write:writeViewState,writeAll:writeViewStates,register:registerAttentionResolver,contract:viewContract,refresh:schedule,globalParameters:()=>Object.values(viewFields).filter(field=>field.pages.includes("*")).map(field=>field.param),retainPage:(params,path)=>retainPageView(params,viewPageForURL(new URL(path,location.origin)),path.startsWith("/work/")?libraryHostParameters:[]),contextTarget,toggleAttention};
   for(const event of ["popstate","pharos:route","pharos:view"])window.addEventListener(event,()=>{navigation="";cancelDetailLanding();schedule();});
   window.addEventListener("pharos:uri-changed",schedule);
   const observer=new MutationObserver(records=>{

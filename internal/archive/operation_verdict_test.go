@@ -90,6 +90,30 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 	}
 }
 
+// An update stops this process's work, as an eject does, but leaves the
+// drive mounted: another process's work does not hold it, and work that
+// stops at its next safe point lets it go ahead.
+func TestUpdateRefusesOnlyWorkItWouldInterrupt(t *testing.T) {
+	terminal := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w"))}}
+	foreign := runningView("index.captures", func(view *opView) { view.Foreign, view.SafePoint, view.SafePointSet = true, time.Minute, true })
+	for _, test := range []struct {
+		name, refusal string
+		in            verdictInput
+	}{
+		{"nothing", "", verdictInput{}},
+		{"a batch writer", "", verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
+		{"another process", "", verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
+		{"a step-latency writer", "waits for prepare the catalog", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
+		{"a broker operation", "waits for copy library", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
+		{"unregistered work", "waits for indexing sources", verdictInput{unregistered: []string{"Indexing sources"}}},
+	} {
+		got := updateRefusal(computeEjectVerdict(updateInputs(test.in)))
+		if test.refusal == "" && got != "" || test.refusal != "" && !strings.Contains(got, test.refusal) {
+			t.Errorf("%s: %q; want %q", test.name, got, test.refusal)
+		}
+	}
+}
+
 // An operation holds a capture or index lock from when it takes it until
 // it closes the file.
 func TestOperationHoldsTheLocksItTook(t *testing.T) {
@@ -482,6 +506,25 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 	}
 	if refused := serveTestBody(server, http.MethodPost, "/api/operations/stop", `{"id":"nope"}`); refused.Code != http.StatusNotFound {
 		t.Fatalf("stopping an unknown operation: %d", refused.Code)
+	}
+	// Work with its own stopper (a labels backlog): refused until the work
+	// has registered it, then it cancels the work's context.
+	workCtx, stopWork := context.WithCancel(context.Background())
+	defer stopWork()
+	_, backlog := server.begin(workCtx, OperationSpec{Kind: "analysis.labels", Variant: "backlog", Trigger: triggerChained, Priority: priorityBackground})
+	stop := func() int {
+		return serveTestBody(server, http.MethodPost, "/api/operations/stop", fmt.Sprintf(`{"id":%q}`, backlog.ID())).Code
+	}
+	if code := stop(); code != http.StatusConflict || backlog.State() != opRunning {
+		t.Fatalf("a stop before the work can stop: %d, state %q", code, backlog.State())
+	}
+	backlog.setStopper(stopWork)
+	if code := stop(); code != http.StatusOK || workCtx.Err() == nil || backlog.State() != opStopping {
+		t.Fatalf("the work's stopper did not run: %d, ctx %v, state %q", code, workCtx.Err(), backlog.State())
+	}
+	backlog.Finish(workCtx.Err())
+	if backlog.State() != opCancelled {
+		t.Fatalf("a stopped backlog ended %q", backlog.State())
 	}
 }
 

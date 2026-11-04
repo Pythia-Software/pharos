@@ -10,13 +10,14 @@ in [shipping-encoder.md](labeler-research/shipping-encoder.md)).
 
 **Status: prototype, off by default.** Labels are stored in the catalog,
 shown by `pharos labels status` and `pharos labels explain`, and highlighted
-in the conversation reader when its **Labels** toggle is on
+in the conversation reader when its **Message labels** highlight is on
 ([In the reader](#in-the-reader)). No query table or MCP tool reads them yet.
 
 ## Turning it on
 
-In **Settings → Background Updates → Message labels**, turn on **Enable
-message labels**. This saves `labels_enabled` in the library's configuration
+In **Settings → Background Processing → Labeling on this Mac** (below the
+schedule), turn on **Message labels** (beside it, **Agent events (preview)**
+turns on [agent events](agent-events.md)). This saves `labels_enabled` in the library's configuration
 and applies it immediately, without restarting Pharos. The control stays
 visible while off, reports missing downloads or workers while on, and
 queues earlier messages for the background schedule. In the app, enabling
@@ -38,10 +39,10 @@ runtime instead, and comes first:
 | `labels_variant` | — | `int8` (default) or `fp32` |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | intra-op threads per worker (default 4) |
+| `labels_threads` | — | intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → Cores |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
-| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
+| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
 | `labels_idle_seconds` | — | how long finished workers stay warm for the next run (default 120) |
 
 Relative paths resolve against the configuration file's folder. To build the
@@ -266,12 +267,19 @@ run` apart. A second run reports that labeling is already running.
   time. A larger backlog (the first run on a library) continues as a
   background `analysis.labels` run (variant `backlog`) when this Mac is
   plugged in ([Scheduling and power](#scheduling-and-power)).
+- Every run takes conversations newest first (by start time), as agent
+  events do, so a backlog labels recent conversations before older history.
 - No page read starts labeling. Pages read whatever ledger exists.
 
 ## In the reader
 
-A conversation whose messages have labels gets a **Labels** toggle beside
-Show (`transcriptLabelsControl` in `ui.py`):
+The reader's **Highlight** row, under Show, has a checkbox per kind of mark:
+**Human writing** (on by default), **Agent events** ([agent
+events](agent-events.md#in-the-reader)) and **Message labels**. Each is
+switched on its own (`transcriptHighlightControl` in `ui.py`, with the options
+from `readerHighlightOptions` in `reader-model.js`), in the full reader and in
+a library card's Browse preview. A library that has labeling on offers
+Message labels on every conversation:
 
 - **On**, each labeled message's text is highlighted in its family's hue:
   Report, Control, Deliberation, Input, Feedback, Request, Frame, Difficulty
@@ -279,19 +287,21 @@ Show (`transcriptLabelsControl` in `ui.py`):
   eight hues in that order, stepped for each theme). A message labeled only at
   a root (asks or steers, responds or reports) is grey. The family is that
   of the message's likeliest specific label; a legend lists the families the
-  conversation uses.
+  conversation uses. Where labels and human writing cover the same text, the
+  label's hue wins; an agent event's sentence keeps its event hue.
 - **What is highlighted** is the text the labels describe: a person's typed
   pieces when authorship finds them, otherwise the whole message
   (`labelMask`). Pasted or quoted context in a typed message stays plain.
 - **Hovering** highlighted text shows the item's segment in words (typed
   text, agent reply…) and its most specific labels, each with its family,
   the model's probability and the taxonomy's definition (`messageLabelView`).
-- **The setting** is view state, `reader_labels` in the URL, so a copied link
-  keeps it; the last choice is saved as the fallback for links without it.
-  The toggle only shows or hides the highlight; nothing re-renders.
+- **The setting** is view state, `reader_labels` in the URL (beside
+  `reader_writing` and `reader_events`), so a copied link keeps it; the last
+  choice is saved as the fallback for links without it. A checkbox only
+  shows or hides the highlight; nothing re-renders.
 - A conversation with a dirty mark, or never built, says "Still labeling
-  this conversation" or "Not labeled yet" (the toggle is disabled until it
-  has labels).
+  this conversation" or "Not labeled yet" (the checkbox is disabled until
+  it has labels).
 - **Only prose messages** are highlighted. Thinking and delegations render as
   activity rows and are labeled but not shown yet.
 

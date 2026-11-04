@@ -12,7 +12,7 @@ import (
 
 const menuBarPreferenceKey = "pharos-menu-bar"
 
-var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "settings", "eject", "quit"}
+var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"}
 var menuBarRequired = []string{"open", "status", "settings", "quit"}
 var menuBarSeparatorPattern = regexp.MustCompile(`^separator:[1-9][0-9]*$`)
 
@@ -22,11 +22,13 @@ func menuBarGroup(id string) string {
 		return "status"
 	case "words", "tokens", "cost", "carbon":
 		return "usage"
+	case "streak", "agent_streak":
+		return "habits"
 	case "backup", "space":
 		return "library"
 	case "search", "analyze", "optimize":
 		return "navigation"
-	case "capture", "health", "sources", "finder":
+	case "capture", "health", "sources", "finder", "logs":
 		return "manage"
 	case "eject", "quit":
 		return "quit"
@@ -95,9 +97,9 @@ func menuBarOrder(values map[string]json.RawMessage, settings map[string]bool) [
 
 func menuBarSettings(values map[string]json.RawMessage) map[string]bool {
 	settings := map[string]bool{"enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
-		"cost": false, "backup": false, "space": false, "index": false, "eject": false,
+		"cost": false, "streak": false, "agent_streak": false, "backup": false, "space": false, "index": false, "eject": false,
 		"open": true, "status": true, "settings": true, "quit": true,
-		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false}
+		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false}
 	var saved map[string]any
 	_ = json.Unmarshal(values[menuBarPreferenceKey], &saved)
 	for key := range settings {
@@ -252,6 +254,9 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 		status["error_path"] = "/settings/backups"
 	}
 	status["error"] = problem
+	if settings["logs"] {
+		status["logs"] = s.logsAttention(ctx)
+	}
 	if settings["backup"] {
 		for _, backup := range loadBackupHistory(s.Config()).Backups {
 			if !backup.Partial {
@@ -311,9 +316,20 @@ func (s *Server) menuBarUsage(ctx context.Context, requestedPeriod ...string) (m
 				}
 				links[key] = "/analyze?" + params.Encode()
 			}
-			return map[string]any{"period": period, "from": window.From, "until": window.Until, "timezone": summary["timezone"], "local_day": summary["local_day"], "links": links, "generated_at": summary["generated_at"], "human_words": window.HumanWords,
+			result := map[string]any{"period": period, "from": window.From, "until": window.Until, "timezone": summary["timezone"], "local_day": summary["local_day"], "links": links, "generated_at": summary["generated_at"], "human_words": window.HumanWords,
 				"tokens": window.Tokens, "cost_usd": window.CostUSD,
-				"co2e_g": menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, prefs)}, nil
+				"co2e_g": menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, prefs)}
+			// Streaks are read only when shown: the first read of a day
+			// builds the day's rhythm records.
+			if settings := menuBarSettings(values); settings["streak"] || settings["agent_streak"] {
+				habits, err := s.Catalog.Habits(ctx, habitsModeAll, 7)
+				if err != nil {
+					return nil, err
+				}
+				result["streaks"] = map[string]string{"you": habitsMenuValue(habits.Streaks[actorYou]), "agents": habitsMenuValue(habits.Streaks["agents"])}
+				links["streak"], links["agent_streak"] = "/analyze?analyze_topic=habits", "/analyze?analyze_topic=habits"
+			}
+			return result, nil
 		}
 	}
 	return nil, nil

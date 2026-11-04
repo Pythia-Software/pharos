@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -264,15 +265,20 @@ func TestLabelsRunsInLimitedStepsAndOneAtATime(t *testing.T) {
 	if err != nil || first.MessagesLabeled != 3 || first.Complete {
 		t.Fatalf("limited run: %+v %v", first, err)
 	}
+	// The newest conversation comes first, so recent labels appear soonest.
+	var newest int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels WHERE conversation_id='c-late'`).Scan(&newest); err != nil || newest == 0 {
+		t.Fatalf("the limited run skipped the newest conversation (%v)", err)
+	}
 	rest, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{OneAtATime: true})
 	if err != nil || !rest.Complete || rest.MessagesLabeled == 0 || rest.Batches != rest.ItemsLabeled {
 		t.Fatalf("one at a time: %+v %v", rest, err)
 	}
-	// A fork that sorts after its parent follows the parent's change. A run
-	// cut short once the parent is stored must not lose the fork: the next
-	// run still rebuilds it.
+	// A fork that sorts after its parent (started with it, so by id) follows
+	// the parent's change. A run cut short once the parent is stored must not
+	// lose the fork: the next run still rebuilds it.
 	execTx(t, catalog.DB,
-		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-zz-fork','ws-main','codex','local','c-zz-fork','c-root',0,'2026-09-02T13:00:00.000Z')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at) VALUES('c-zz-fork','ws-main','codex','local','c-zz-fork','c-root',0,'2026-09-01T12:00:00.000Z')`,
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,source_order) VALUES('m-zz1','c-zz-fork','m-zz1','user','message','Now make the toolbar sticky on tablets as well','hash-m-zz1','2026-09-02T13:00:00.000Z',1100)`)
 	if _, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil {
 		t.Fatal(err)
@@ -325,8 +331,14 @@ func TestLabelsBuilderWaitsForTheWorkers(t *testing.T) {
 	if err != nil || !stats.Complete {
 		t.Fatalf("run: %+v %v", stats, err)
 	}
-	// A window of 4 × 1 × 2 items, a few packed batches, one conversation.
-	if stats.PeakPending > 16 || stats.PeakPending >= stats.ItemsLabeled {
+	// A window of 4 × 1 × 2 items, the packed batches that wait or run
+	// (2 × 2 + 1 of one item), and the largest conversation, which is
+	// taken whole while the window has room.
+	var largest int
+	if err := catalog.DB.QueryRow(`SELECT MAX(n) FROM (SELECT SUM(chunks) n FROM message_labels GROUP BY conversation_id)`).Scan(&largest); err != nil {
+		t.Fatal(err)
+	}
+	if stats.PeakPending > 8+5+largest || stats.PeakPending >= stats.ItemsLabeled {
 		t.Fatalf("%d items were pending at once, of %d", stats.PeakPending, stats.ItemsLabeled)
 	}
 }
@@ -471,8 +483,36 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The thinking tag's first token appears in the one thinking item only.
-	poison := model.Tokenizer.Encode("thinking assistant :")[0]
+	// Both thinking items have the same tag. Pick a token from m-think's
+	// text that no other framed item contains, so only that message crashes.
+	items := liveItems(t, catalog)
+	otherTokens := map[int32]bool{}
+	for _, item := range items {
+		if item.MessageID == "m-think" {
+			continue
+		}
+		ids, _, _ := labelsFrame(model, item)
+		for _, id := range ids {
+			otherTokens[id] = true
+		}
+	}
+	var poison int32
+	found := false
+	for _, item := range items {
+		if item.MessageID != "m-think" {
+			continue
+		}
+		ids, spans, _ := labelsFrame(model, item)
+		for _, id := range ids[spans.Text.Start:spans.Text.End] {
+			if !otherTokens[id] {
+				poison, found = id, true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("m-think has no token unique among the framed items")
+	}
 	settings = labelsTestSettings(t, fmt.Sprintf("crash-on-id:%d", poison))
 	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
 	if err != nil || stats.MessagesFailed != 1 || stats.Complete || labelCount(t, catalog, "WHERE message_id='m-think'") != 0 || labelCount(t, catalog, "") < 20 {
@@ -502,6 +542,32 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	}
 	if row := stage(); row.generation == 0 || row.generation > row.completed {
 		t.Fatalf("the labels stage did not complete once nothing failed: %+v", row)
+	}
+}
+
+func TestLabelsRetrySingleWorkerCrashInIsolation(t *testing.T) {
+	message := &labelsMessage{seqs: [][]int32{{1}}}
+	job := &labelsJob{remaining: 1}
+	message.job = job
+	batch := labelsBatch{seqs: []labelsSeq{{message: message}}}
+	run := &labelsRun{stats: &LabelsRunStats{}, progress: func(string, ...any) {}}
+	crash := labelsBatchResult{batch: batch, err: &labelrt.WorkerExitError{Status: "exit status 4"}}
+	ready := []labelsBatch{{seqs: []labelsSeq{{message: &labelsMessage{}}}}}
+	finished := false
+	finish := func(*labelsJob) { finished = true }
+	if err := run.apply(crash, &ready, finish); err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 2 || !ready[0].isolated || ready[0].seqs[0].message != message || message.failed || message.done != 0 || finished {
+		t.Fatalf("single crash was not retried first and alone: ready=%+v message=%+v", ready, message)
+	}
+	crash.batch = ready[0]
+	ready = nil
+	if err := run.apply(crash, &ready, finish); err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 0 || !message.failed || message.done != 1 || !finished {
+		t.Fatalf("isolated crash did not fail only its message: ready=%+v message=%+v", ready, message)
 	}
 }
 
@@ -642,6 +708,25 @@ func TestLabelsForPower(t *testing.T) {
 	settings.ThreadBudget = 6
 	if got, bulk := labelsForPower(settings, powerState{Battery: true, OnBattery: true}); got != settings || bulk {
 		t.Fatalf("on battery with labels_thread_budget: %+v %v", got, bulk)
+	}
+}
+
+// The default budget fits both models at the threads Settings chose for
+// each: agent events run with their own threads beside labels'.
+func TestLabelerBudgetFitsBothModels(t *testing.T) {
+	labels := AgentEventSettings{Threads: runtime.NumCPU()}.withPeer(LabelerSettings{Threads: 4, Workers: 1})
+	if got, want := labelsBudget(labels).Threads, 4+runtime.NumCPU(); got != want {
+		t.Fatalf("labels' budget %d, want %d", got, want)
+	}
+	events := AgentEventSettings{Threads: 2}.labeler(LabelerSettings{Threads: 4, Workers: 1})
+	if events.Threads != 2 || events.PeerThreads != 4 {
+		t.Fatalf("agent events' settings: %+v", events)
+	}
+	if inherited := (AgentEventSettings{}).labeler(LabelerSettings{Threads: 3, Workers: 1}); inherited.Threads != 3 {
+		t.Fatalf("without agent_events_threads, agent events use labels_threads: %+v", inherited)
+	}
+	if got := labelsBudget(events).Threads; got != max(6, runtime.NumCPU()/2) {
+		t.Fatalf("agent events' budget %d", got)
 	}
 }
 

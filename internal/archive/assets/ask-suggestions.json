@@ -1,0 +1,457 @@
+{
+ "version": 1,
+ "forms": [
+  "understand",
+  "compare",
+  "change",
+  "find",
+  "improve",
+  "check",
+  "learn"
+ ],
+ "areas": [
+  {
+   "id": "verification",
+   "label": "Tests and builds",
+   "pages": ["analyze/calls","analyze/time"],
+   "signals": ["verification.failures","verification.time"]
+  },
+  {
+   "id": "tool-failures",
+   "label": "Failing tool calls",
+   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools"],
+   "signals": ["tools.failures"]
+  },
+  {
+   "id": "machine-time",
+   "label": "Where agent time goes",
+   "pages": ["analyze/time","analyze/tools"],
+   "signals": ["tools.time"]
+  },
+  {
+   "id": "thinking",
+   "label": "Reasoning and waiting",
+   "pages": ["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],
+   "signals": ["thinking.reasoning"]
+  },
+  {
+   "id": "context",
+   "label": "Context pressure",
+   "pages": ["analyze/tools","analyze/thinking-detail","analyze/query/model_requests"],
+   "signals": ["context.compaction","context.output"]
+  },
+  {
+   "id": "spend",
+   "label": "Tokens and cost",
+   "pages": ["analyze/tokens","analyze/query/usage","cards"],
+   "signals": ["spend.tokens","spend.change"]
+  },
+  {
+   "id": "models",
+   "label": "Model choice",
+   "pages": ["analyze/tokens","analyze/query/usage"],
+   "signals": ["models.mix"]
+  },
+  {
+   "id": "caching",
+   "label": "Cache reuse",
+   "pages": ["analyze/tokens","analyze/query/usage"],
+   "signals": ["spend.cache"]
+  },
+  {
+   "id": "delegation",
+   "label": "Subagents and delegation",
+   "pages": ["work","analyze/tokens"],
+   "signals": ["delegation.agents"]
+  },
+  {
+   "id": "parallelism",
+   "label": "Agents side by side",
+   "pages": ["analyze/parallelism","analyze/query/parallelism"],
+   "signals": ["activity.parallel"]
+  },
+  {
+   "id": "rhythm",
+   "label": "Working patterns",
+   "pages": ["analyze/activity","analyze/query/conversation_activity","analyze/habits","analyze/query/rhythm"],
+   "signals": ["activity.days"]
+  },
+  {
+   "id": "repositories",
+   "label": "Repositories and activity",
+   "pages": ["home","library","analyze/activity"],
+   "signals": ["activity.repos"]
+  },
+  {
+   "id": "writing",
+   "label": "My writing and steering",
+   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages"],
+   "signals": ["writing.volume","writing.back_and_forth"]
+  },
+  {
+   "id": "supplied-context",
+   "label": "Context I supply",
+   "pages": ["analyze/human","analyze/query/writing_messages"],
+   "signals": ["writing.supplied"]
+  },
+  {
+   "id": "agent-experience",
+   "label": "What agents run into",
+   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages"],
+   "signals": ["agent.friction","agent.reactions"]
+  },
+  {
+   "id": "web",
+   "label": "Sites agents visit",
+   "pages": ["analyze/tools","analyze/query/tool_calls"],
+   "signals": ["web.hosts","web.new_hosts"]
+  },
+  {
+   "id": "risk",
+   "label": "Risky actions",
+   "pages": ["findings/safety","findings/safety/table","findings/safety/settings"],
+   "signals": ["risk.safety"]
+  },
+  {
+   "id": "findings",
+   "label": "Recommended changes",
+   "pages": ["findings","findings/table","findings/settings"],
+   "signals": ["improve.findings","improve.watching"]
+  },
+  {
+   "id": "skills",
+   "label": "Skills and instructions",
+   "pages": ["analyze/skills","analyze/query/skill_usages"],
+   "signals": ["skills.usage"]
+  },
+  {
+   "id": "mcp",
+   "label": "MCP servers",
+   "pages": ["analyze/mcp","analyze/query/mcp_calls","settings/mcp"],
+   "signals": ["mcp.calls"]
+  },
+  {
+   "id": "carbon",
+   "label": "Carbon impact",
+   "pages": ["analyze/carbon"],
+   "signals": ["carbon.usage"]
+  },
+  {
+   "id": "recall",
+   "label": "Past work",
+   "pages": ["library","work"],
+   "signals": ["recall.history"]
+  },
+  {
+   "id": "ask-history",
+   "label": "Earlier Ask chats",
+   "pages": ["settings/ask"],
+   "signals": ["pharos.ask_history"]
+  },
+  {
+   "id": "library-health",
+   "label": "Library health",
+   "pages": ["settings","settings/sync","settings/sources","settings/logs","settings/libraries"],
+   "signals": ["pharos.freshness"]
+  },
+  {
+   "id": "backups",
+   "label": "Backups",
+   "pages": ["settings/backups"],
+   "signals": ["pharos.backups"]
+  },
+  {
+   "id": "discovery",
+   "label": "Pharos views",
+   "pages": ["analyze","analyze/query"],
+   "signals": ["pharos.unseen"]
+  }
+ ],
+ "families": [
+  {
+   "id": "verification-latency",
+   "area": "verification",
+   "form": "understand",
+   "prior": 1,
+   "variants": ["Find the causes of testing latency{scope}.","Where do tests and builds slow my agents down{scope}?"],
+   "signals": ["verification.time"]
+  },
+  {
+   "id": "verification-reliability",
+   "area": "verification",
+   "form": "understand",
+   "prior": 1,
+   "variants": ["What makes my tests and builds unreliable{scope}?","Why do my agents struggle to get tests passing{scope}?"],
+   "signals": ["verification.failures"]
+  },
+  {
+   "id": "verification-improve",
+   "area": "verification",
+   "form": "improve",
+   "prior": 0.9,
+   "variants": ["How could my agents spend less time verifying their work{scope}?"]
+  },
+  {
+   "id": "failures-causes",
+   "area": "tool-failures",
+   "form": "understand",
+   "prior": 1,
+   "variants": ["What keeps going wrong when my agents run commands{scope}?","Why do my agents' tool calls fail{scope}?"]
+  },
+  {
+   "id": "failures-change",
+   "area": "tool-failures",
+   "form": "change",
+   "prior": 0.8,
+   "variants": ["How have my agents' errors changed {period}?"]
+  },
+  {
+   "id": "time-where",
+   "area": "machine-time",
+   "form": "understand",
+   "prior": 0.9,
+   "variants": ["Where does my agents' time go{scope}?","Which kinds of work take my agents the longest{scope}?"]
+  },
+  {
+   "id": "time-improve",
+   "area": "machine-time",
+   "form": "improve",
+   "prior": 0.8,
+   "variants": ["What could make my agents finish work faster{scope}?"]
+  },
+  {
+   "id": "thinking-payoff",
+   "area": "thinking",
+   "form": "understand",
+   "prior": 0.8,
+   "variants": ["How much do my agents reason, and when does it pay off?","Which work makes my models think the longest?"]
+  },
+  {
+   "id": "context-crowding",
+   "area": "context",
+   "form": "understand",
+   "prior": 1,
+   "variants": ["What's crowding my agents' context{scope}?","Why do my long conversations run out of room{scope}?"]
+  },
+  {
+   "id": "context-improve",
+   "area": "context",
+   "form": "improve",
+   "prior": 0.9,
+   "variants": ["How could I keep long conversations from compacting{scope}?"],
+   "signals": ["context.compaction"]
+  },
+  {
+   "id": "spend-where",
+   "area": "spend",
+   "form": "understand",
+   "prior": 0.9,
+   "variants": ["Where do my tokens go{scope}?","What's driving my API cost equivalent{scope}?"],
+   "signals": ["spend.tokens"]
+  },
+  {
+   "id": "spend-change",
+   "area": "spend",
+   "form": "change",
+   "prior": 1,
+   "variants": ["How has my token use changed {period}?","What changed in my agent spending {period}?"],
+   "signals": ["spend.change"]
+  },
+  {
+   "id": "models-fit",
+   "area": "models",
+   "form": "compare",
+   "prior": 1,
+   "variants": ["Am I using the right models for the right work?","How do the models I use compare on cost and results?"]
+  },
+  {
+   "id": "caching-reuse",
+   "area": "caching",
+   "form": "improve",
+   "prior": 0.8,
+   "variants": ["How well do my agents reuse cached context?","Where could better caching save me tokens?"]
+  },
+  {
+   "id": "delegation-value",
+   "area": "delegation",
+   "form": "understand",
+   "prior": 0.9,
+   "variants": ["How much of my work do subagents do, and does it help?","When do my agents delegate, and what does it cost?"]
+  },
+  {
+   "id": "parallel-pattern",
+   "area": "parallelism",
+   "form": "understand",
+   "prior": 0.9,
+   "variants": ["How many agents do I usually run at once?","What happens when I run several agents at the same time?"]
+  },
+  {
+   "id": "rhythm-week",
+   "area": "rhythm",
+   "form": "understand",
+   "prior": 0.7,
+   "variants": ["When during the week do I get the most done with agents?","What does a typical day of agent work look like for me?"]
+  },
+  {
+   "id": "repositories-recent",
+   "area": "repositories",
+   "form": "change",
+   "prior": 0.9,
+   "variants": ["What have I been working on {period}?","What stood out in my work {period}?"]
+  },
+  {
+   "id": "repositories-spread",
+   "area": "repositories",
+   "form": "compare",
+   "prior": 0.7,
+   "variants": ["How is my agent work spread across repositories?"]
+  },
+  {
+   "id": "writing-steering",
+   "area": "writing",
+   "form": "understand",
+   "prior": 0.9,
+   "variants": ["How do I usually steer my agents?","Which phrases do I lean on most when I write to agents?"],
+   "signals": ["writing.volume"]
+  },
+  {
+   "id": "writing-improve",
+   "area": "writing",
+   "form": "improve",
+   "prior": 1,
+   "variants": ["How could I steer my agents with less back-and-forth{scope}?","Where do I end up repeating myself to agents{scope}?"],
+   "signals": ["writing.back_and_forth"]
+  },
+  {
+   "id": "supplied-context",
+   "area": "supplied-context",
+   "form": "understand",
+   "prior": 0.7,
+   "variants": ["What context do I hand my agents, and how?","How much of what I send agents is pasted or attached?"]
+  },
+  {
+   "id": "experience-friction",
+   "area": "agent-experience",
+   "form": "understand",
+   "prior": 1,
+   "variants": ["Where do my agents struggle to understand the project{scope}?","What do my agents keep running into{scope}?"],
+   "signals": ["agent.friction"]
+  },
+  {
+   "id": "experience-reactions",
+   "area": "agent-experience",
+   "form": "understand",
+   "prior": 0.8,
+   "variants": ["What surprises my agents most often?","What have my agents learned the hard way{scope}?"],
+   "signals": ["agent.reactions"]
+  },
+  {
+   "id": "web-reliance",
+   "area": "web",
+   "form": "understand",
+   "prior": 0.7,
+   "variants": ["Which sites do my agents rely on?","What do my agents look up on the web?"],
+   "signals": ["web.hosts"]
+  },
+  {
+   "id": "web-new",
+   "area": "web",
+   "form": "check",
+   "prior": 1,
+   "variants": ["Have my agents been visiting any new or unusual sites {period}?"],
+   "signals": ["web.new_hosts"]
+  },
+  {
+   "id": "risk-review",
+   "area": "risk",
+   "form": "check",
+   "prior": 1.1,
+   "variants": ["Is there anything risky in what my agents have been doing lately?","Which agent actions should I double-check?"]
+  },
+  {
+   "id": "findings-best",
+   "area": "findings",
+   "form": "improve",
+   "prior": 1.1,
+   "variants": ["What's the single best change I could make to how I work with agents?","Which of Pharos's recommendations would help me most?"],
+   "signals": ["improve.findings"]
+  },
+  {
+   "id": "findings-payoff",
+   "area": "findings",
+   "form": "check",
+   "prior": 1,
+   "variants": ["Are the changes I've made to my workflow paying off?"],
+   "signals": ["improve.watching"]
+  },
+  {
+   "id": "skills-use",
+   "area": "skills",
+   "form": "understand",
+   "prior": 0.8,
+   "variants": ["Which skills do my agents actually use?","Are my skills and instructions pulling their weight?"]
+  },
+  {
+   "id": "mcp-use",
+   "area": "mcp",
+   "form": "understand",
+   "prior": 0.7,
+   "variants": ["How do my agents use MCP servers?","Which MCP tools do my agents depend on?"]
+  },
+  {
+   "id": "carbon-footprint",
+   "area": "carbon",
+   "form": "understand",
+   "prior": 0.6,
+   "variants": ["What's the carbon footprint of my agent work?","How could I reduce the carbon impact of my agent work?"]
+  },
+  {
+   "id": "recall-similar",
+   "area": "recall",
+   "form": "find",
+   "prior": 0.9,
+   "variants": ["Help me find a past conversation where we solved something similar.","Find earlier work I could build on{scope}."]
+  },
+  {
+   "id": "recall-forgotten",
+   "area": "recall",
+   "form": "find",
+   "prior": 0.7,
+   "variants": ["What did I work on last month that I might have forgotten?"]
+  },
+  {
+   "id": "ask-history",
+   "area": "ask-history",
+   "form": "find",
+   "prior": 0.5,
+   "variants": ["What have I asked Pharos before, and what did I learn?"]
+  },
+  {
+   "id": "library-current",
+   "area": "library-health",
+   "form": "check",
+   "prior": 0.9,
+   "variants": ["Is my library up to date, and is anything holding it back?"]
+  },
+  {
+   "id": "backups-safety",
+   "area": "backups",
+   "form": "check",
+   "prior": 0.8,
+   "variants": ["How is my library backed up, and what would I lose without a backup?"]
+  },
+  {
+   "id": "discovery-unseen",
+   "area": "discovery",
+   "form": "learn",
+   "prior": 0.9,
+   "variants": ["What could Pharos show me that I haven't looked at yet?","Which Pharos views would be most useful for how I work?"]
+  }
+ ],
+ "excluded": {
+  "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
+  "settings/layout": "Header and navigation layout preferences.",
+  "settings/preferences": "Display preferences.",
+  "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted."
+ }
+}

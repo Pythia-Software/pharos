@@ -49,11 +49,13 @@ test("one column per cadence, each with its state, its description and its items
   assert.equal(background.scheduleModel({}, at), null);
 });
 
-test("label settings remain available when no labeling work is scheduled", () => {
+test("label and agent event settings remain available when no labeling work is scheduled", () => {
   for (const enabled of [false, true]) {
     const labels = { enabled, can_change: true, status: enabled ? 'Waiting for model' : 'Off' };
-    const model = plain(background.scheduleModel({ ...document, labels }, at));
+    const agentEvents = { ...labels, can_change: !enabled };
+    const model = plain(background.scheduleModel({ ...document, labels, agent_events: agentEvents }, at));
     assert.deepEqual(model.labels, labels);
+    assert.deepEqual(model.agentEvents, agentEvents);
     assert.ok(!model.columns.some(column => column.items.some(item => item.id === 'labels')));
   }
 });
@@ -67,6 +69,8 @@ test("an item carries its cost class, its choices and its state line", () => {
   const fixed = plain(background.scheduleModel(document, at)).columns[0].items[0];
   assert.deepEqual(fixed.choices, [], "a fixed item has no choices");
   assert.equal(fixed.sources, null);
+  assert.equal(fixed.stop, null, "an item nothing stoppable runs for offers Run now");
+  assert.deepEqual(plain(background.itemModel({ ...document.view.items[0], state: "running", stop: { id: "op-1" } }, at)).stop, { id: "op-1" }, "a stoppable run offers Stop");
   const filtered = plain(background.itemModel({ ...document.view.items[0], sources: [{ name: "claude", selected: true }, { name: "codex", selected: false }] }, at));
   assert.deepEqual(filtered.sources, [{ name: "claude", selected: true }, { name: "codex", selected: false }], "the sources scheduled indexing reads, to choose from");
   assert.equal(plain(background.scheduleModel(document, at)).columns[2].items[0].cost, null);
@@ -134,14 +138,6 @@ test("state lines: an age and the next time when current, the retry when failed,
   assert.equal(background.stateText({ state: "missed", state_label: "Missed", next_at: minutesAgo(-5) }, at), "Missed · runs in 5 min");
   assert.equal(background.stateText({ state: "running", state_label: "Updating now", as_of: minutesAgo(5) }, at), "Updating now");
   assert.equal(background.stateText(null, at), "");
-});
-
-test("the day's cost is each cadence's share of the total", () => {
-  const cost = plain(background.costModel(document.cost));
-  assert.equal(cost.total, "4.0 h");
-  assert.deepEqual(cost.segments.map(segment => [segment.id, Number(segment.share.toFixed(2)), segment.measured]), [["frequent", 0.75, true], ["hourly", 0.25, false], ["daily", 0, false]]);
-  assert.equal(cost.peakBytes, 9.5e9);
-  assert.equal(background.costModel(null), null);
 });
 
 test("durations and times", () => {

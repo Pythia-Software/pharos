@@ -357,6 +357,9 @@ func (c *Catalog) Initialize() error {
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
 		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
+		// Ask Pharos's compaction signal reads only requests after a
+		// compaction, a few in a thousand.
+		"CREATE INDEX IF NOT EXISTS model_requests_compacted_idx ON model_requests(requested_at) WHERE compacted_before>0",
 
 		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
 		"DROP INDEX IF EXISTS messages_conversation_effort_idx",

@@ -3,6 +3,7 @@ import carbonFactors from "../../carbon/co2_factors.json";
 import { defaultConcurrencySettings, concurrencyRangePresets } from "./concurrency-settings";
 import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-search-model";
 import { safetyRanks } from "./safety-dashboard-model";
+import { logSourceIds } from "./logs-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
@@ -16,7 +17,7 @@ export const viewFields: Record<string, ViewField> = {
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","findings","safety"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
@@ -51,6 +52,7 @@ export const viewFields: Record<string, ViewField> = {
   safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
   safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
   safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
+  log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
   delegation_tint: field("delegation_tint", ["work"], "enum", "Tint session metric cells.", ["all", "sort", "off"]),
@@ -60,13 +62,22 @@ export const viewFields: Record<string, ViewField> = {
   reader_filter: field("reader_filter", ["work"], "strings", "Visible transcript category IDs (reader-model TRANSCRIPT_CATEGORIES)."),
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
   reader_expanded: field("reader_expanded", ["work"], "strings", "Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."),
-  reader_labels: field("reader_labels", ["work"], "boolean", "Highlight message text by its local labels (Message labels); hovering highlighted text names the message's labels."),
-  reader_events: field("reader_events", ["work"], "boolean", "Highlight agent events (Agent Experience) in the conversation: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events."),
+  reader_writing: field("reader_writing", ["work","library"], "boolean", "Highlight human-written text (typed or dictated, not pasted, quoted or templated) in the conversation reader and a library card's Browse. Default on; one of the reader's Highlight checkboxes.", undefined, true),
+  reader_events: field("reader_events", ["work","library"], "boolean", "Highlight agent events (Agent Experience, the sentence classifier) in the conversation reader and a library card's Browse: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events. Default off; one of the reader's Highlight checkboxes."),
+  reader_labels: field("reader_labels", ["work","library"], "boolean", "Highlight message text by its local labels (Message labels, the message classifier) in the conversation reader and a library card's Browse; hovering highlighted text names the message's labels. Default off; one of the reader's Highlight checkboxes."),
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),
   carbon: field("analyze_carbon", ["analyze/carbon","analyze/query/*"], "json", "View-scoped Carbon assumptions; same shape as the Carbon controls."),
   parallelism: field("analyze_parallelism", ["analyze/parallelism","analyze/query/parallelism"], "json", "Ribbon mode, counting, gap, repository, range/custom bounds, selected workspace/agent, zoom and smoothingMinutes."),
+  habits_streak: field("habits_streak", ["analyze/habits"], "enum", "Which days a Habits streak runs over: every day (all), or weekdays only (weekdays), where Saturdays and Sundays neither break nor extend it. Vacation days never do.", ["all", "weekdays"], "all"),
+  habits_calendar: field("habits_calendar", ["analyze/habits"], "enum", "Whose days the Habits activity calendar shows: you (typed messages), agents you started (answering a message you sent), or automatic agent runs (started by a schedule, script, orchestrator or another agent).", ["you", "agents", "automated"], "you"),
+  habits_weekends: field("habits_weekends", ["analyze/habits"], "enum", "Whether the Habits activity calendar shows Saturdays and Sundays (show) or weekdays only (hide).", ["show", "hide"], "show"),
+  habits_weeks: field("habits_weeks", ["analyze/habits"], "enum", "Weeks the Habits activity calendar shows, ending with today's week.", ["13", "26", "53"], "53"),
+  habits_punchcard: field("habits_punchcard", ["analyze/habits"], "enum", "Whose time the Habits weekday × hour punchcard shows: you, agents you started (with you or unattended), agents you started while you're away (unattended), automatic agent runs, or agents you started minus you.", ["you", "agents", "unattended", "automated", "difference"], "you"),
+  habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
+  habits_shape_days: field("habits_shape_days", ["analyze/habits"], "enum", "Number of recent days shown in the Habits Your days chart.", ["7", "14", "28", "56", "90"], "28"),
+  habits_day: field("habits_day", ["analyze/habits"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };
 // These maps have viewer-dependent initial choices. Capture effective entries

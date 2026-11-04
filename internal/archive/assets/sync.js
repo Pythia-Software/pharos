@@ -1,5 +1,6 @@
 (() => {
-  let status = null;
+  // The live status, and the snapshot the Settings query tables show.
+  let status = null, tableStatus = null;
   let busy = false;
   let timer = null;
   let activeRun = null;
@@ -89,10 +90,6 @@
     .sync-controls select,.sync-controls input[type=number]{font:inherit;border:1px solid var(--line);border-radius:5px;padding:5px 8px;background-color:var(--bg);color:var(--ink)}
     .sync-controls select{padding-right:30px}
     .sync-controls>button{border:1px solid var(--line);padding:6px 12px;background:var(--bg)}
-    .sync-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:18px}
-    .sync-metric{background:var(--panel);padding:14px 16px;min-width:0}
-    .sync-metric span{display:block;color:var(--muted);font-size:var(--fs-sm)}
-    .sync-metric strong{display:block;font-size:var(--fs-2xl);font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
     .sync-result{display:inline-block;max-width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
     .sync-result.attention{color:var(--warn);border-color:var(--warn)}
     .sync-disclosure>summary{cursor:pointer;font-weight:600;font-size:var(--fs-md)}
@@ -106,7 +103,7 @@
     .sync-dialog::backdrop{background:#0008}
     .header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}
     #syncDashboard [hidden]{display:none}
-    @media(max-width:760px){.sync-panel{padding:14px}.sync-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-metric{padding:12px}}
+    @media(max-width:760px){.sync-panel{padding:14px}}
     @keyframes sync-spin{to{transform:rotate(360deg)}}
   `);
   document.head.append(style);
@@ -246,9 +243,15 @@
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
         const latest = await call('/api/sync/status');
-        // Keep history still while it is being reviewed. Page visits, Refresh
-        // and actions replace it; activity, source status and alerts stay live.
-        status = automatic && status?.settings ? {...latest, history: status.history} : latest;
+        if (!automatic || !tableStatus?.settings) {
+          try { latest.operation_history = (await call('/api/operations')).journal?.recent || []; }
+          catch (error) { latest.operation_history_error = error.message; }
+        }
+        // Query tables stay still while they are being reviewed: page visits,
+        // their Run Now and auto-refresh, and actions replace them; activity
+        // and alerts stay live.
+        status = latest;
+        if (!automatic || !tableStatus?.settings) tableStatus = latest;
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
@@ -263,7 +266,7 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
   }
   window.addEventListener('pharos:route', () => refresh());
-  window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};
   refresh();

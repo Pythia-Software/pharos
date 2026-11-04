@@ -114,6 +114,9 @@ func TestMachineOperationFamilies(t *testing.T) {
 	if machineOperationKey("search", "github", "", "") == machineOperationKey("search", "linear", "", "") {
 		t.Fatal("different MCP servers must retain separate tool identities")
 	}
+	if machineActivity("command", "list", "Bash", "", "ls") != "read" || machineActivity("command", "run", "Bash", "", "python3") != "command:python3" {
+		t.Fatal("listings read; other commands keep their program")
+	}
 	if machineActivity("mcp", "", "search", "github", "") != "tool:github / search" || machineActivity("mcp", "", "query", "pharos", "") != "tool:pharos / query" {
 		t.Fatal("unclassified tools must remain individually named")
 	}

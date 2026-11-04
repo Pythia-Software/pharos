@@ -49,6 +49,7 @@ import { useLocationRevision } from "./nested-pages";
 import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
+import { LogsPage } from "./logs-page";
 import { installAppNavigation } from "./app-navigation";
 import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, predicatesOf, httpComputedColumnStore, inspectBucketQuery, encodeQuery, loadSchema, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type HostQueryOptions, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
@@ -80,6 +81,7 @@ import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
+import rhythmDocument from "../../schemas/rhythm.schema.json";
 import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
@@ -92,6 +94,8 @@ import { Icon } from "./icons";
 import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
+import { HabitsPanel } from "./habits";
+import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
@@ -114,7 +118,7 @@ import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
-import { datasetsForSavedPreferences, onDatasetRefresh, onSafetyChange } from "./dataset-refresh";
+import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -122,7 +126,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -172,7 +176,7 @@ declare global {
     pharosCopyText?: (text: string) => Promise<void>;
     pharosQueryTables?: {
       createLink: () => Promise<{ url: string; query?: QueryState; dataset?: Dataset }>;
-      refresh: (dataset: Dataset) => void;
+      refreshDashboards: (dataset: Dataset) => void;
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
       summaryURL: typeof usageSummaryURL;
@@ -193,6 +197,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   skill_usages: loadSchema<Row>(skillUsagesDocument),
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
   parallelism: loadSchema<Row>(parallelismDocument),
+  rhythm: loadSchema<Row>(rhythmDocument),
   findings: loadSchema<Row>(findingsDocument),
   safety: loadSchema<Row>(safetyDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
@@ -401,6 +406,7 @@ const emptyMessages: Record<Dataset, string> = {
   skill_usages: "No skill usage evidence matches this query.",
   tl1_attempts: "No TL1 runs match this query.",
   parallelism: "No agent activity matches this query.",
+  rhythm: "No activity matches this query.",
   findings: "No findings match this query.",
   safety: "No risky action notices match this query.",
   agent_events: "No agent events match this query.",
@@ -595,7 +601,6 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [detailsReady, attentionSchema, attention, nativeDetailSurface]);
   const apiRef = useRef(api);
   apiRef.current = api;
-  useEffect(() => dataset === "safety" ? onSafetyChange(() => apiRef.current.refresh()) : undefined, [dataset]);
   // A new search starts from its first page.
   const searched = useRef(find);
   useEffect(() => {
@@ -646,15 +651,6 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     }
   }, [dataset, api.query, visible, api.restoration.ready, api.error]);
 
-  useEffect(() => {
-    const refresh = () => {
-      const selected = readRollingWindow(new URLSearchParams(location.search), dataset);
-      const current = apiRef.current;
-      if (selected?.mode === "today" || refreshTodayHost(current.query.hostState) !== current.query.hostState) current.setQuery(previous => ({ ...resolveRollingQuery(previous, selected?.mode === "today" ? selected : undefined), hostState: refreshTodayHost(previous.hostState), offset: 0 }));
-    };
-    window.addEventListener("pharos:day-change", refresh);
-    return () => window.removeEventListener("pharos:day-change", refresh);
-  }, [dataset]);
   // Where a page opts in, Back and Forward step through its query edits.
   const steps = useMemo(() => queryHistory ? createQueryHistory(dataset, window.history) : null, [queryHistory, dataset]);
   useEffect(() => {
@@ -1121,6 +1117,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "tokens") return <TokenUsageDashboard />;
   if (topic === "human") return <HumanUsageDashboard />;
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
+  if (topic === "habits") return <HabitsDashboard />;
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonDashboard />;
@@ -1139,6 +1136,16 @@ function CarbonDashboard() {
   const carbon = useCarbonCatalog();
   return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={dashboardDefaults.carbon}
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
+}
+
+// Habits: the panel titles the page; the catalog chart below keeps its own title.
+function HabitsDashboard() {
+  const headline = useDashboardHeadline();
+  return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
+    frame={views => <>
+      {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
+      <HabitsPanel analysis={views(habitsAnalysisCatalog)} />
+    </>} />;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the
@@ -1335,7 +1342,7 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
   const loading = events.loading || read.loading, error = events.error || read.error;
   const messages = value(events, "messages"), scanned = value(read, "read"), total = value(events, "events");
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{loading ? "Loading…" : error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
-  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once Agent Experience is turned on in Settings → App preferences; the first run downloads a small model.</p>;
+  if (!loading && !error && !scanned) return <p className="usage-dashboard-note" role="status">No agent messages have been read for events yet. They are read in the background once agent events are turned on in Settings → Background Processing; the first run downloads a small model.</p>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Agent Experience summary" aria-busy={loading}>
     {card("Events", total.toLocaleString(), "matching sentences in agents' replies and thinking")}
     {card("Messages with an event", scanned ? `${(100 * messages / scanned).toFixed(1)}%` : "—", `${messages.toLocaleString()} of ${scanned.toLocaleString()} agent messages read`)}
@@ -1522,7 +1529,7 @@ function ToolLedgerBanner() {
   const running = status?.backfill.running ?? false;
   const wasRunning = useRef(false);
   useEffect(() => {
-    if (wasRunning.current && !running) { tableApis.get("tools")?.refresh(); tableApis.get("tool_calls")?.refresh(); tableApis.get("skill_usages")?.refresh(); window.dispatchEvent(new Event("pharos:usage-refresh")); }
+    if (wasRunning.current && !running) window.dispatchEvent(new Event("pharos:usage-refresh"));
     wasRunning.current = running;
   }, [running]);
   async function build() {
@@ -1533,7 +1540,7 @@ function ToolLedgerBanner() {
   if (!status || (!running && status.pending_conversations === 0 && !status.backfill.error)) return null;
   const percent = status.backfill.total ? Math.round(status.backfill.done / status.backfill.total * 100) : 0;
   return <div className="tool-ledger-banner" role="status">
-    {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%). Tables refresh as it goes.</span>
+    {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%).</span>
       : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need a tool ledger rebuild. Building it re-reads their retained messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
     {running ? null : <button type="button" onClick={() => void build()}>Build tool ledger</button>}
   </div>;
@@ -1562,6 +1569,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
+  ["logsPage", <LogsPage copy={copyText} />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />} />],
 ];
 
@@ -1593,9 +1601,10 @@ if (concurrencyPrototypeEnabled) {
 }
 startConcurrencySummary();
 // Carbon and Parallelism settings shape Usage and parallelism values on the
-// server. Refresh their tables and cards once the saved settings have landed.
+// server. Refresh their cards once the saved settings have landed; query
+// tables rerun only through their own Run Now and auto-refresh.
 window.addEventListener("pharos:preferences-saved", event => {
-  for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refresh(dataset as Dataset);
+  for (const dataset of datasetsForSavedPreferences((event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail)) window.pharosQueryTables?.refreshDashboards(dataset as Dataset);
 });
 window.pharosQueryTables = {
   summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
@@ -1606,14 +1615,9 @@ window.pharosQueryTables = {
     const link = await api.links.create(query);
     return { url: link.url, query, dataset };
   },
-  refresh(dataset) {
+  refreshDashboards(dataset) {
     window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));
-    tableApis.get(dataset)?.refresh();
-    if (dataset === "usage") {
-      tableApis.get("writing")?.refresh();
-      tableApis.get("writing_messages")?.refresh();
-      window.dispatchEvent(new Event("pharos:usage-refresh"));
-    }
+    if (dataset === "usage") window.dispatchEvent(new Event("pharos:usage-refresh"));
   },
   filterRepository(repository) {
     filterLibrary([{ field: "repository_name", op: "=", value: repository }]);
