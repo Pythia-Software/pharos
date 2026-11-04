@@ -60,7 +60,7 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Query ideas, layouts and retained row payloads | `query:<dataset>:ideas`, `query:<dataset>:layout`, and `row:<dataset>:<row ID>:<field>` |
 | Workspace and conversation content | `work:<work ID>:archive`, `work:<work ID>:files`; the reader's existing `reader_expanded`, `reader_collapsed` and `reader_content` codecs cover turns, source details, tools, structured payloads and prose |
 | Other host content | `machine:methodology`, `authored:message:<message ID>`, `feedback:logs:<submission ID>`, and the existing Findings/Delegation disclosures |
-| Sidebar branches and Parallelism conversation list | Existing `nav_expanded` and `analyze_parallelism.showConversations` owners remain authoritative |
+| Sidebar branches and Parallelism conversation list | Existing `nav_expanded` and `analyze_parallelism.showConversations` owners remain authoritative. Top-level navigation groups default open; deeper groups default open along the current page's path. Explicit branch choices override those defaults. |
 
 Draft controls are explicitly classified as editing: source/library onboarding; create/open/restore/copy/move library forms; the unapplied cloud setup/download wizard; and editable feedback attachments/Ask activity within the chat editor. Their drafts and action steps are not reconstructed from a disclosure URL. Transient pickers, tooltips, overflow menus and chart popovers retain their explicit transient classification. Query Table owns its published native state; its existing documented dependency gaps remain blockers.
 
