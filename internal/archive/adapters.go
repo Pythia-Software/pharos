@@ -47,6 +47,11 @@ type ConversationRecord struct {
 	// Instructions are the instruction files and skills the transcript
 	// recorded as loaded (see instructions.go).
 	Instructions []InstructionRecord `json:"Instructions,omitempty"`
+	// Unread, on a partial conversation, names the messages its source lists
+	// but could not read; what was indexed from them is kept (see
+	// keepStoredMessages). A partial conversation without it keeps every
+	// indexed message it lacks.
+	Unread []string `json:"Unread,omitempty"`
 	// Observed is the version of the source this copy was read from (see
 	// sourceVersion); not part of the record's digest.
 	Observed int64 `json:"-"`

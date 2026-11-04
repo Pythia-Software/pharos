@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -29,8 +30,8 @@ import (
 // encryption keys, which are neither read nor captured (cursorCaptureTables).
 type cursorAdapter struct {
 	baseAdapter
-	// selected, when set, limits reading to these composers, each group
-	// those of them that started its work (snapshotSessions).
+	// selected, when set, limits reading to the groups holding these
+	// composers (snapshotSessions).
 	selected map[string]bool
 	// database, when set, is the global database to read in place of the
 	// user folder's: an older snapshot of it, whose composers are still
@@ -405,11 +406,6 @@ func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
 	if err != nil {
 		failures = append(failures, err)
 	}
-	// A selection is planned as if it were all there is: a selected
-	// subagent whose composer is not selected starts its own group.
-	if a.selected != nil {
-		composers = slices.DeleteFunc(composers, func(composer cursorComposer) bool { return !a.selected[composer.id] })
-	}
 	byID := map[string]cursorComposer{}
 	for _, composer := range composers {
 		byID[composer.id] = composer
@@ -437,6 +433,13 @@ func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
 	origin := a.original(database)
 	for _, top := range roots {
 		members := groups[top]
+		// A selection reads each group holding one of its composers whole:
+		// a fork's copy and a subagent's are known only beside the composers
+		// they copied, and the group's workspace and each composer's indexed
+		// version keep an older snapshot from rolling back what is newer.
+		if a.selected != nil && !slices.ContainsFunc(members, func(member cursorComposer) bool { return a.selected[member.id] }) {
+			continue
+		}
 		// The root first, then its subagents a level at a time, each level by
 		// ID, so a subagent follows the one that started it.
 		levels := map[string]int{}
@@ -751,6 +754,10 @@ func (a *cursorAdapter) conversation(origin string, thread *cursorThread, spawne
 	conversation := &ConversationRecord{NativeID: id, Provider: "cursor", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cursor", Model: model, StartedAt: started}
 	if !thread.complete() {
 		conversation.Coverage = "partial"
+		// Headers lost with a chunk name messages no one can list.
+		if !thread.short {
+			conversation.Unread = slices.Sorted(maps.Keys(thread.missing))
+		}
 	}
 	context := map[string]any{}
 	for key, field := range map[string]string{"context_tokens_used": "contextTokensUsed", "context_token_limit": "contextTokenLimit"} {

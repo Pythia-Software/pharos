@@ -872,6 +872,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	conversationIDs := make([]string, len(record.Conversations))
 	merged := map[string]bool{}
 	written := 0
+	kept := false
 	for index, conversation := range record.Conversations {
 		if err := ctx.Err(); err != nil {
 			return 0, 0, err
@@ -910,10 +911,17 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := recordOriginObservation(tx, conversationID, host, record.SourceKind, conversation); err != nil {
 			return 0, 0, err
 		}
+		// What the source gave is what a delivery checkpoint matches.
+		delivered := conversation
 		if conversation.Coverage == "partial" {
-			if conversation.Messages, err = keepStoredMessages(ctx, tx, conversationID, conversation.Messages); err != nil {
+			if conversation.Messages, err = keepStoredMessages(ctx, tx, conversationID, conversation); err != nil {
 				return 0, 0, err
 			}
+			// The workspace's own counts and token metrics include them too.
+			if !kept {
+				record.Conversations, kept = slices.Clone(record.Conversations), true
+			}
+			record.Conversations[index].Messages = conversation.Messages
 		}
 		var searchCurrent bool
 		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
@@ -974,7 +982,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := linkAliases(tx, conversationID, conversation.Aliases); err != nil {
 			return 0, 0, err
 		}
-		input := conversationDeliveryDigest(workspaceID, conversation)
+		input := conversationDeliveryDigest(workspaceID, delivered)
 		var priorInput string
 		inputErr := tx.QueryRow("SELECT fingerprint FROM conversation_derivation_inputs WHERE conversation_id=?", conversationID).Scan(&priorInput)
 		if inputErr != nil && inputErr != sql.ErrNoRows {
@@ -1646,11 +1654,13 @@ func replaceMetrics(tx *sql.Tx, workspaceID string, values []map[string]any) err
 }
 
 // keepStoredMessages returns a partial read's messages with the indexed ones
-// it lacks, each after the stored message it followed. A partial read holds
-// less than its source once did (Cursor keeps the headers of messages it no
-// longer holds), so it removes nothing that was indexed, nor the usage and
-// tool calls derived from it.
-func keepStoredMessages(ctx context.Context, tx *sql.Tx, conversationID string, messages []MessageRecord) ([]MessageRecord, error) {
+// from its unread messages (ConversationRecord.Unread), each after the stored
+// message it followed. A partial read holds less than its source once did
+// (Cursor keeps the headers of messages it no longer holds), so it removes
+// nothing indexed from what it could not read, nor the usage and tool calls
+// derived from it; what it read replaces what was indexed from it.
+func keepStoredMessages(ctx context.Context, tx *sql.Tx, conversationID string, conversation ConversationRecord) ([]MessageRecord, error) {
+	messages := conversation.Messages
 	stored, err := storedMessages(ctx, tx, conversationID)
 	if err != nil {
 		return nil, err
@@ -1659,10 +1669,25 @@ func keepStoredMessages(ctx context.Context, tx *sql.Tx, conversationID string, 
 	for _, message := range messages {
 		read[message.NativeID] = true
 	}
+	unread := make(map[string]bool, len(conversation.Unread))
+	for _, id := range conversation.Unread {
+		unread[id] = true
+	}
+	// A message's own records are "<id>:<part>".
+	fromUnread := func(id string) bool {
+		if conversation.Unread == nil || unread[id] {
+			return true
+		}
+		at := strings.LastIndexByte(id, ':')
+		return at > 0 && unread[id[:at]]
+	}
 	after, previous, missing := map[string][]MessageRecord{}, "", 0
 	for _, message := range stored {
 		if read[message.NativeID] {
 			previous = message.NativeID
+			continue
+		}
+		if !fromUnread(message.NativeID) {
 			continue
 		}
 		after[previous] = append(after[previous], message)

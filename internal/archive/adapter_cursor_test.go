@@ -494,19 +494,23 @@ func TestCursorReadsOnlyTheComposerThatChanged(t *testing.T) {
 }
 
 // A message Cursor no longer holds, though the composer's headers name it,
-// stays as it was indexed.
+// stays as it was indexed; the others are read as they are now.
 func TestCursorMessageCursorDroppedStaysIndexed(t *testing.T) {
 	c, _ := testCatalog(t)
 	root := cursorFixture(t)
 	source := SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true}
 	ingestSource(t, c, source)
 	before := countRows(t, c, `SELECT COUNT(*) FROM messages`)
+	// o4 is gone; o2, read again, is a reply with usage of its own.
 	cursorWrite(t, root, func(db *sql.DB) error {
-		_, err := db.Exec(`UPDATE cursorDiskKV SET value=NULL WHERE key=?`, "bubbleId:"+cursorOld+":o4")
+		if _, err := db.Exec(`UPDATE cursorDiskKV SET value=NULL WHERE key=?`, "bubbleId:"+cursorOld+":o4"); err != nil {
+			return err
+		}
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=? WHERE key=?`, `{"_v":2,"type":2,"bubbleId":"o2","text":"Run make first.","tokenCount":{"inputTokens":60,"outputTokens":40}}`, "bubbleId:"+cursorOld+":o2")
 		return err
 	})
 	ingestSource(t, c, source)
-	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before || countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`) != 4300 {
+	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before+1 || countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`) != 4400 {
 		t.Fatalf("messages %d, before %d", after, before)
 	}
 	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=? AND coverage='partial'`, cursorOld); n != 1 {
@@ -515,6 +519,21 @@ func TestCursorMessageCursorDroppedStaysIndexed(t *testing.T) {
 	if n := countRows(t, c, `SELECT COUNT(*) FROM messages a JOIN messages b ON b.conversation_id=a.conversation_id
 		WHERE a.native_id='o4' AND b.native_id LIKE 'o5%' AND a.source_order>=b.source_order`); n != 0 {
 		t.Fatalf("the dropped message moved after %d later ones", n)
+	}
+	// What a message read again no longer holds is removed.
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='o2:thinking'`); n != 0 {
+		t.Fatalf("o2's old thinking is kept")
+	}
+	if n := countRows(t, c, `SELECT COALESCE(SUM(m.value),0) FROM metrics m JOIN workspaces w ON w.id=m.workspace_id WHERE w.source_id=? AND m.unit='tokens' AND m.name='total_tokens'`, cursorOld); n != 4400 {
+		t.Fatalf("the workspace counts %d tokens", n)
+	}
+	// A delivery checkpoint matches the conversation as Cursor gives it.
+	var workspace, fingerprint string
+	if err := c.DB.QueryRow(`SELECT v.workspace_id, i.fingerprint FROM conversations v JOIN conversation_derivation_inputs i ON i.conversation_id=v.id WHERE v.native_id=?`, cursorOld).Scan(&workspace, &fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if read := cursorRecords(t, root)[cursorOld].Conversations[0]; fingerprint != conversationDeliveryDigest(workspace, read) {
+		t.Fatalf("the delivery fingerprint is not the read's")
 	}
 }
 
@@ -572,19 +591,32 @@ func TestCursorComposerDeletedBeforeIndexingIsKept(t *testing.T) {
 	source := SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true}
 	config := captureTestConfig(t, source)
 	runCapture(t, config)
+	// A composer, a subagent whose composer remains, and a fork with the
+	// copy of a subagent it re-created.
 	cursorWrite(t, root, func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=? OR key GLOB ? OR key GLOB ?`,
-			"bubbleId:"+cursorOld+":*", "composerData:"+cursorOld, "*:"+cursorSide+":*", "composerData:"+cursorSide)
-		return err
+		for _, id := range []string{cursorOld, cursorSide, cursorFork, cursorEcho} {
+			if _, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+id+":*", "composerData:"+id); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	runCapture(t, config)
 	useHost(t, "host-b")
 	c, _ := testCatalog(t)
 	indexCaptures(t, c, config.CaptureRoot, "host-a")
-	for _, id := range []string{cursorOld, cursorNew, cursorChild, cursorSide} {
-		if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=?`, id); n != 1 {
-			t.Fatalf("%s: %d conversations", id, n)
+	// Each is read as it was, with what it copied left to its composer.
+	live, _ := testCatalog(t)
+	ingestSource(t, live, SourceConfig{Name: "cursor", Kind: "cursor", Path: cursorFixture(t), Account: "local", Enabled: true})
+	shape := `SELECT group_concat(native_id||'='||n, ' ') FROM (SELECT v.native_id, COUNT(m.id) n FROM conversations v LEFT JOIN messages m ON m.conversation_id=v.id GROUP BY 1 ORDER BY 1)`
+	read := func(catalog *Catalog) (text string) {
+		if err := catalog.DB.QueryRow(shape).Scan(&text); err != nil {
+			t.Fatal(err)
 		}
+		return text
+	}
+	if got, want := read(c), read(live); got != want {
+		t.Fatalf("salvaged %s, read live %s", got, want)
 	}
 	// Placed as it was, by its window, and the side chat by its composer.
 	if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE source_id=? AND location='/work/old'`, cursorOld); n != 1 {
@@ -592,6 +624,31 @@ func TestCursorComposerDeletedBeforeIndexingIsKept(t *testing.T) {
 	}
 	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=? AND parent_id IS NOT NULL`, cursorSide); n != 1 {
 		t.Fatalf("the side chat lost its composer")
+	}
+}
+
+// A composer deleted once its newer copy was indexed is not rolled back to
+// the copy an older capture holds.
+func TestCursorSalvageLeavesANewerCopy(t *testing.T) {
+	useHost(t, "host-a")
+	root := cursorFixture(t)
+	source := SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true}
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, 'Looks fine.', 'Looks fine now.') WHERE key=?`, "bubbleId:"+cursorChild+":s2")
+		return err
+	})
+	c, _ := testCatalog(t)
+	ingestSource(t, c, source)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorChild+":*", "composerData:"+cursorChild)
+		return err
+	})
+	runCapture(t, config)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=? AND m.text LIKE '%Looks fine now.'`, cursorChild); n != 1 {
+		t.Fatalf("the subagent was rolled back: %d", n)
 	}
 }
 
