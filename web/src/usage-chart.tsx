@@ -207,8 +207,11 @@ export function ScaleControl({ value, onChange, percent = false }: { value: Char
     title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
 }
 
-export function DisplayControl({ value = "interval", onChange, disabled }: { value?: ChartDisplay; onChange: (next: ChartDisplay) => void; disabled?: string }) {
-  return <ChartSelect label="Display" value={value} options={[["interval", "Per interval"], ["cumulative", "Cumulative", disabled]]} onChange={onChange} />;
+// heatmap offers the engine's heatmap (dashboard-heatmap-model.ts), with the
+// reason it is unavailable, if it is.
+export function DisplayControl<T extends ChartDisplay | "heatmap">({ value = "interval" as T, onChange, disabled, heatmap }: { value?: T; onChange: (next: T) => void; disabled?: string; heatmap?: { disabled?: string } }) {
+  const options = [["interval", "Per interval"], ["cumulative", "Cumulative", disabled], ...heatmap ? [["heatmap", "Heatmap", heatmap.disabled]] : []] as Array<[T, string, string?]>;
+  return <ChartSelect label="Display" value={value} options={options} onChange={onChange} />;
 }
 
 export function SmoothingControl({ value, unit, onChange, disabled = false, note = "Trailing average · includes preceding history" }: { value: number; unit: string; onChange: (next: number) => void; disabled?: boolean; note?: string }) {
@@ -230,7 +233,7 @@ export function SmoothingControl({ value, unit, onChange, disabled = false, note
   </div>;
 }
 
-export function RollingControl({ value, period, count = 1, onChange, disabled, note, display }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void; disabled?: boolean; note?: string; display?: ChartDisplay }) {
+export function RollingControl({ value, period, count = 1, onChange, disabled, note, display }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void; disabled?: boolean; note?: string; display?: ChartDisplay | "heatmap" }) {
   const cumulative = display === "cumulative";
   return <SmoothingControl value={cumulative ? 0 : value} unit={`${count > 1 ? `× ${count} ` : ""}${chartPeriods[period].unit}s`} onChange={onChange} disabled={disabled || cumulative} note={cumulative ? "Cumulative values use original amounts. Smoothing applies per interval." : note} />;
 }

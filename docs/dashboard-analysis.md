@@ -258,7 +258,7 @@ fields:
 | `cycle` | `hour` or `weekday` |
 | `period`, `hours`, `days` | the trend's time bucket, and how many hours or days a custom bucket holds |
 | `rollingPeriods`, `rollingOp` | the trend's trailing window in buckets, and whether each point is its `mean` (default) or `sum` |
-| `display` | `interval` or `cumulative` |
+| `display` | `interval`, `cumulative` or `heatmap` |
 | `share` | each trend series as a share of its bucket's total |
 | `nonzero` | values without zeroes: buckets with nothing drawn are left out, and lines pass over a series' zeroes; ignored with `share` |
 | `completePeriods` | whole periods only |
@@ -538,6 +538,31 @@ no sum, cumulative or share.
   the trend adds Show as (values or shares), Display, Time bucket,
   Smoothing with its Window (average or total), Periods (whole periods
   only) and Norm.
+- **Heatmap.** Display = Heatmap draws a distribution over time: one column
+  per period, one row per group of an ordered breakdown (one with `order`,
+  such as Session Shape's bands and archetype), each cell the period's
+  share of the measure in that group. For Session Shape's autonomy, choose
+  Sessions by autonomy band. It reads the trend's own query and prepared
+  buckets, so filters, smoothing (each column then averages its window),
+  whole periods and Refresh apply as they do to columns.
+  - Rows follow the breakdown's order, the highest at the top; groups
+    outside the order (Other, an unknown value) come after it, and a group
+    without a value last.
+  - One hue, shaded relative to the largest share drawn, which the key
+    names. A period with no records is hatched, never a zero share.
+  - Hover a cell for its share and the count behind it out of the period's
+    total.
+  - A legend selection limits the rows, and shares are then of the
+    selected groups.
+  - It needs an additive measure (shares) and an ordered breakdown
+    (`trendLimits.heatmap`); otherwise it falls back to per interval and
+    says why. Show as, Scale and Norm do not apply and are hidden.
+  - The model is `dashboard-heatmap-model.ts` (`trendHeatmap`) and the
+    component `dashboard-heatmap.tsx`. A card made from a heatmap draws the
+    same shares as columns, and opens the heatmap.
+  - Why not bin a measure's per-record value by period on the server: Query
+    Table's histograms bin each group with its own edges, so rows would not
+    line up across columns. Catalogs give such values fixed bands instead.
 
 ### Queries
 

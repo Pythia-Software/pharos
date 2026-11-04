@@ -11,7 +11,7 @@ import { analysisCycles, analysisDefaults, analysisReductions, analysisVersion, 
 import { dashboardDefaults } from "./dashboard-defaults";
 import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
-import { chartDisplays } from "./chart-series";
+import { analysisDisplays } from "./dashboard-analysis-model";
 import { chartScales } from "./chart-scale";
 import { chartRanges, rangeDays, withTimeRange } from "./chart-range";
 import { queryRecipes, instantiateRecipe, describeRecipeText, type QueryRecipe } from "./curiosity-data";
@@ -151,7 +151,7 @@ type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[
 type Shape = { option: string; constraints: string[][]; fallback: string[] };
 const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
 const drawShapes: Record<AnalysisView, Shape[]> = {
-  trend: [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric"]]),
+  trend: [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("display", [["metric"], ["split"]]), shape("share", [["metric"], ["split"], ["display"]]),
     shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])],
   compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
   distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
@@ -175,7 +175,7 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "compareAs": return [...compareModes];
     case "cycle": return [...analysisCycles];
     case "period": return Object.keys(chartPeriods);
-    case "display": return [...chartDisplays];
+    case "display": return [...analysisDisplays];
     case "rollingOp": return [...rollingOps];
     case "scale": case "scaleY": return [...chartScales];
     case "share": case "nonzero": case "norm": case "completePeriods": return [false, true];
@@ -765,7 +765,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     windows: { days: rollingWindowDays, dashboard: dashboardWindows, analyze_days: analyzeDays, analyze_days_default: readUsageWorkspace(new URLSearchParams()).days, labels: optionLabels.window, tables: windowTables, ...windowTemplates() },
     analyze: {
       version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce },
-      options: { period: Object.keys(chartPeriods), display: chartDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
+      options: { period: Object.keys(chartPeriods), display: analysisDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
       dashboards,
     },
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),

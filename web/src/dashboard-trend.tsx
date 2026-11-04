@@ -14,6 +14,8 @@ import { useUsageChartPalette } from "./usage-chart-colors";
 import { isOriginDimension, originLabel, useOriginMetadata } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
 import { CreateDashboardCard } from "./create-dashboard-card";
+import { TrendHeatmap } from "./dashboard-heatmap";
+import { trendHeatmap } from "./dashboard-heatmap-model";
 
 export type AmountFormat = (value: number, measure: AnalysisMeasure) => string;
 const percent = (value: number) => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
@@ -40,7 +42,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const result = useAnalysisResult(dataset, schema, trend.query, catalog.request?.params);
   const labels = useMemo(() => optionLabels(schema.fields), [schema]);
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(String(value)) ?? String(value);
-  const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { label }),
+  // A heatmap keeps every period, so an empty one is drawn as empty.
+  const built = useMemo(() => trendSeries(catalog, view.display === "heatmap" ? { ...view, nonzero: false } : view, trend, result.results, { label }),
     [catalog, result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
   useUsageChartPalette(trend.slice ?? null, built.series);
   // Save what was asked for; only drawing and querying normalize, so a
@@ -84,6 +87,14 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const bounds = timeBounds(where, catalog.time);
   const title = trendTitle(catalog, view);
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
+  const action = onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined;
+  if (view.display === "heatmap") return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
+    <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, breakdown?.order ?? [])}
+      period={view.period} noun={measure.unit} rollingPeriods={view.rollingPeriods} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
+    {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
+    {children}
+    {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
+  </section>;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}

@@ -2126,8 +2126,11 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 		if value("share") == true {
 			phrase += ", as a share of the total"
 		}
-		if text("display") == "cumulative" {
+		switch text("display") {
+		case "cumulative":
 			phrase += ", cumulative"
+		case "heatmap":
+			phrase += ", as a heatmap of each period's shares"
 		}
 		if rolling := int(jsNumber(value("rollingPeriods"))); rolling > 0 {
 			span := singular

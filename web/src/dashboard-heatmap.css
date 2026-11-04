@@ -1,0 +1,8 @@
+/* The trend's heatmap display (dashboard-heatmap.tsx). */
+.dashboard-heatmap-grid{display:grid;gap:2px;align-items:stretch;margin-top:12px;min-width:0}
+.dashboard-heatmap-label{font-size:var(--fs-xs);color:var(--muted);padding-right:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;align-self:center;max-width:12rem}
+.dashboard-heatmap-cell{min-height:28px;border-radius:2px;outline:1px solid color-mix(in srgb,var(--line) 60%,transparent);outline-offset:-1px}
+.dashboard-heatmap-cell.is-empty{background:repeating-linear-gradient(135deg,transparent 0 4px,color-mix(in srgb,var(--line) 70%,transparent) 4px 5px)}
+.dashboard-heatmap-axis{grid-column:2/-1}
+.dashboard-heatmap-key{display:flex;align-items:center;gap:8px}
+.dashboard-heatmap-ramp{flex:none;width:64px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in srgb,var(--heat-1) 6%,transparent),var(--heat-1))}

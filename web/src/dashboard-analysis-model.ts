@@ -1,7 +1,7 @@
 import { EMPTY_QUERY, MAX_WHERE_CLAUSES, coerceValue, groupKeyFields, predicatesOf, type GroupKey, type MetricDateGrouping, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
 import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
+import { chartDisplays, validRollingPeriods } from "./chart-series";
 import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
 import { timeBounds, withEnd } from "./chart-range";
 import { cycleBoxes, cycleFrame, cycleGroups, cycleRangeError, cycleSamples, hoursOfDay, idleIsZero, maxCycleSlots, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
@@ -143,13 +143,18 @@ export const analysisCycles: readonly CalendarCycle[] = ["weekday", "hour"];
 // (selection) and leaves where to the population; an unversioned link may
 // hold the selection as a filter (readAnalysisLink).
 export const analysisVersion = 2;
+// The trend draws per interval, cumulative, or as a heatmap: each period's
+// share of records in each group of an ordered breakdown (a band), rows in
+// that order (dashboard-heatmap-model.ts).
+export const analysisDisplays = [...chartDisplays, "heatmap"] as const;
+export type AnalysisDisplay = typeof analysisDisplays[number];
 export type AnalysisState = {
   v?: number;
   view?: AnalysisView; unit?: string; metric: string; metricY?: string; split: string;
   reduce?: AnalysisReduce; compareAs?: "bars" | "share"; minSamples?: number;
   scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle;
   // The trend's own settings.
-  period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: ChartDisplay;
+  period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: AnalysisDisplay;
   share?: boolean; nonzero?: boolean; completePeriods?: boolean; norm?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
 };
 export type ResolvedAnalysis = AnalysisState & Required<Pick<AnalysisState, "view" | "unit" | "metricY" | "reduce" | "compareAs" | "minSamples" | "scaleY" | "cycle"
@@ -235,7 +240,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
   const trendFields = (state.period === undefined || Object.hasOwn(chartPeriods, state.period))
     && [state.hours, state.days].every(value => value === undefined || validPeriodCount(value))
     && (state.rollingPeriods === undefined || validRollingPeriods(state.rollingPeriods))
-    && validChartDisplay(state.display) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
+    && (state.display === undefined || oneOf(state.display, analysisDisplays)) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
     && (state.rollingOp === undefined || oneOf(state.rollingOp, rollingOps))
     && [state.share, state.nonzero, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
     && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000);
@@ -356,7 +361,9 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
-    norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
+    heatmap: !measure.additive ? `${measure.label} does not add up across groups, so a heatmap has no shares`
+      : state.split === noSplit || !catalog.breakdowns[state.split]?.order ? "A heatmap needs an ordered breakdown, such as a band" : undefined,
+    norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.display === "heatmap" ? "A heatmap shades shares, which have no norm" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
     component, name,
   };
 }
@@ -378,6 +385,9 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   let limits = trendLimits(catalog, next);
   if (next.share && limits.share) next.share = false;
   if (next.display === "cumulative" && limits.cumulative) next.display = "interval";
+  if (next.display === "heatmap" && limits.heatmap) next.display = "interval";
+  // A heatmap shades each period's share itself, from the period's values.
+  if (next.display === "heatmap") next.share = false;
   if (next.rollingOp === "sum" && limits.rollingSum) next.rollingOp = "mean";
   if (multiplePeriods(next) && limits.multiple) next.period = baseUnit(next.period);
   if (limits.period(next.period)) next.period = "day";
@@ -397,8 +407,9 @@ export function trendAdjustments(catalog: AnalysisCatalog, input: AnalysisState)
   if (has(catalog.measures, asked.metric) && notTrended(catalog.measures[asked.metric])) notes.push(`${notTrended(catalog.measures[asked.metric])}; ${measure.label.toLowerCase()} is shown instead.`);
   const component = catalog.components?.[asked.split];
   if (has(catalog.measures, asked.metric) && component && state.split !== asked.split) notes.push(`${limits.component(asked.split)}; ${measure.label} is shown ${state.split === noSplit ? "as one total" : `by ${catalog.breakdowns[state.split].label.toLowerCase()}`}.`);
-  if (asked.share === true && !state.share) notes.push(`${limits.share}; values are shown instead.`);
+  if (asked.share === true && !state.share && state.display !== "heatmap") notes.push(`${limits.share}; values are shown instead.`);
   if (asked.display === "cumulative" && state.display !== "cumulative") notes.push(`${limits.cumulative}; values are shown per ${chartPeriodUnit(state.period)}.`);
+  if (asked.display === "heatmap" && state.display !== "heatmap") notes.push(`${limits.heatmap}; values are shown per ${chartPeriodUnit(state.period)}.`);
   if (asked.rollingOp === "sum" && state.rollingOp !== "sum") notes.push(`${limits.rollingSum}; the window is pooled instead.`);
   if (asked.period !== state.period) notes.push(`${limits.period(asked.period) ?? limits.multiple}; each bucket is one ${chartPeriodUnit(state.period)}.`);
   if (asked.norm === true && !state.norm) notes.push(`${trendLimits(catalog, state).norm}.`);

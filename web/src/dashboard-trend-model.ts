@@ -271,6 +271,6 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
 export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric];
   const split = catalog.breakdowns[state.split]?.label ?? catalog.components?.[state.split]?.label;
-  const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
+  const cumulative = state.display === "cumulative", name = state.share || state.display === "heatmap" ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
   return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
 }

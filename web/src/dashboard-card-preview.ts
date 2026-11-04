@@ -63,19 +63,21 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const request = { ...catalog.request?.params, ...topic === "parallelism" ? { parallelism_settings: JSON.stringify({ counting: parallelism.counting, gap: parallelism.gap }) } : {} };
   const run = (query: Parameters<typeof runAnalysisQuery>[2]) => runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
   if (state.view === "trend") {
-    const trend = trendQuery(catalog, state, where, { now, zone });
-    const built = trendSeries(catalog, state, trend, await run(trend.query), { now, label });
+    // A card cannot draw a heatmap; it draws the same shares as columns.
+    const drawn = state.display === "heatmap" ? { ...state, display: "interval" as const, share: true } : state;
+    const trend = trendQuery(catalog, drawn, where, { now, zone });
+    const built = trendSeries(catalog, drawn, trend, await run(trend.query), { now, label });
     if (built.error) throw new Error(built.error);
-    const percent = state.share || catalog.measures[state.metric].format.kind === "percent";
+    const percent = drawn.share || catalog.measures[drawn.metric].format.kind === "percent";
     // The engine has already applied smoothing, cumulative totals and shares.
     // Retain only the selected series and never smooth these amounts twice.
     const series = built.series.filter(item => !built.selected.length || built.selected.includes(item.key) !== built.excluded);
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
-    return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: DASHBOARD_CARD_ACTION,
-      buckets: built.buckets, series, note: analysisNote(catalog, state),
-      dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
-        unit: percent ? "percent" : catalog.measures[state.metric].format.kind === "duration" ? "ms" : catalog.measures[state.metric].unit,
-        xLabel: state.period, yLabel: trendTitle(catalog, state) } };
+    return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION,
+      buckets: built.buckets, series, note: analysisNote(catalog, drawn),
+      dashboardTrend: { prepared: true, lines: built.lines || drawn.display === "cumulative", percent: drawn.share, nonzero: drawn.nonzero && !drawn.share, scale: drawn.scale, reference: built.norm,
+        unit: percent ? "percent" : catalog.measures[drawn.metric].format.kind === "duration" ? "ms" : catalog.measures[drawn.metric].unit,
+        xLabel: drawn.period, yLabel: trendTitle(catalog, drawn) } };
   }
   const analysis = analysisQuery(catalog, state, where, { now, zone });
   if (analysis.problem) throw new Error(analysis.problem);
