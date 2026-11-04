@@ -351,7 +351,7 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 func TestSessionGitContestedCommits(t *testing.T) {
 	f := newGitFixture(t)
 	repo := f.repo
-	for _, id := range []string{"writer", "bystander", "worktree", "main", "neither", "near"} {
+	for _, id := range []string{"writer", "bystander", "worktree", "main", "most", "some", "neither", "near"} {
 		f.session(id, "")
 	}
 	edit := func(session, name string, days float64, content string) {
@@ -369,6 +369,11 @@ func TestSessionGitContestedCommits(t *testing.T) {
 	edit("worktree", "tree.go", 8.02, code("tree", 0, 2))
 	edit("main", "tree.go", 8, code("main", 0, 2))
 	byCheckout := (&gitRepository{t, tree}).commit(7.99, "Tree", map[string]string{"tree.go": "package tree\n"})
+	// Lines that do not clearly favour one session (three to two) decide
+	// nothing: the nearest, as a candidate.
+	edit("most", "close.go", 5.02, code("most", 0, 3))
+	edit("some", "close.go", 5, code("some", 0, 2))
+	close := repo.commit(4.99, "Close", map[string]string{"close.go": code("most", 0, 3) + "\n" + code("some", 0, 2) + "\n"})
 	// No signal: the nearest, as a candidate.
 	edit("neither", "plain.go", 4.02, code("neither", 0, 2))
 	edit("near", "plain.go", 4, code("near", 0, 2))
@@ -387,6 +392,7 @@ func TestSessionGitContestedCommits(t *testing.T) {
 		"writer":   byLines[:7] + " 0.8 lines",
 		"worktree": byCheckout[:7] + " 0.9 checkout",
 		"near":     nearest[:7] + " 0.5 nearest",
+		"some":     close[:7] + " 0.5 nearest",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("contested links:\n got %v\nwant %v", got, want)

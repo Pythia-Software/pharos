@@ -120,47 +120,62 @@ func readAddedLines(output string) map[string]map[string]lineSet {
 	return added
 }
 
+// lineMargin is how many times the runner-up's matching lines the session
+// with the most must have for the lines to decide a contested commit. On a
+// real library, any lead was right 92.3% of the time, deciding 96% of
+// contested commits; twice the runner-up 93.6%, deciding 92%; five times
+// 95.8%, deciding 83%.
+var lineMargin = 2.0
+
 // picks is the one candidate each signal points to, or "" when it points to
-// none or to several: by checkout, and by the most of its lines.
+// none or to several: by checkout, and by the most of its lines, by
+// lineMargin over the runner-up.
 func (signals *gitSignals) picks(hash, repository string, sessions map[string]*gitSession, candidates []string) (checkout, lines string) {
 	if signals == nil {
 		return "", ""
 	}
-	only := func(matches []string) string {
-		if len(matches) == 1 {
-			return matches[0]
-		}
-		return ""
-	}
 	made := []string{}
-	best, bestLines := []string{}, 0
 	for _, id := range candidates {
-		session := sessions[id]
-		if slices.ContainsFunc(session.Locations, func(location string) bool { return slices.Contains(signals.MadeIn[hash], location) }) {
+		if slices.ContainsFunc(sessions[id].Locations, func(location string) bool { return slices.Contains(signals.MadeIn[hash], location) }) {
 			made = append(made, id)
 		}
-		matched := 0
-		for path, lines := range signals.Added[hash] {
-			kept := session.Kept[repository][path]
-			for line := range lines {
-				if hasLine(kept, line) {
-					matched++
-				}
-			}
-		}
-		switch {
+	}
+	if len(made) == 1 {
+		checkout = made[0]
+	}
+	best, bestLines, second := "", 0, 0
+	for _, id := range candidates {
+		switch matched := signals.matchedLines(hash, repository, sessions[id]); {
 		case matched > bestLines:
-			best, bestLines = []string{id}, matched
-		case matched == bestLines && matched > 0:
-			best = append(best, id)
+			best, bestLines, second = id, matched, bestLines
+		case matched > second:
+			second = matched
 		}
 	}
-	return only(made), only(best)
+	if bestLines > 0 && bestLines > second && float64(bestLines) >= lineMargin*float64(second) {
+		lines = best
+	}
+	return checkout, lines
+}
+
+// matchedLines counts the lines a commit adds that a session kept.
+func (signals *gitSignals) matchedLines(hash, repository string, session *gitSession) int {
+	matched := 0
+	for path, lines := range signals.Added[hash] {
+		kept := session.Kept[repository][path]
+		for line := range lines {
+			if hasLine(kept, line) {
+				matched++
+			}
+		}
+	}
+	return matched
 }
 
 // linkTieBreaks are how a contested commit's session is chosen, most
 // reliable first, and the confidence each gives: on a real library the
-// checkout was right 13 times of 13 it decided, the lines 512 of 555.
+// checkout was right 13 times of 13 it decided, the lines (by lineMargin)
+// 498 of 532.
 var linkTieBreaks = []struct {
 	name       string
 	confidence float64

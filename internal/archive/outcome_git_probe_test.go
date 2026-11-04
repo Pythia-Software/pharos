@@ -223,6 +223,38 @@ func TestSessionGitProbe(t *testing.T) {
 					}
 				}
 				signal["contested"]++
+				// The lines rule at several margins over the runner-up.
+				best, bestLines, second := "", 0, 0
+				for _, id := range ids {
+					switch matched := signals.matchedLines(link.Hash, repository, blind[id]); {
+					case matched > bestLines:
+						best, bestLines, second = id, matched, bestLines
+					case matched > second:
+						second = matched
+					}
+				}
+				for _, margin := range []float64{1, 1.5, 2, 3, 5} {
+					name := fmt.Sprintf("lines at margin %.1f", margin)
+					switch {
+					case bestLines == 0 || bestLines <= second || float64(bestLines) < margin*float64(second):
+						signal[name+" abstains"]++
+					case best == link.Session:
+						signal[name+" right"]++
+					default:
+						signal[name+" wrong"]++
+					}
+				}
+				for _, least := range []int{1, 2, 3, 5} {
+					name := fmt.Sprintf("lines at margin 2.0 and at least %d", least)
+					switch {
+					case bestLines < least || bestLines <= second || bestLines < 2*second:
+						signal[name+" abstains"]++
+					case best == link.Session:
+						signal[name+" right"]++
+					default:
+						signal[name+" wrong"]++
+					}
+				}
 			}
 			switch got := inferred[link.Hash]; {
 			case len(got) == 0:
