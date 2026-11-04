@@ -29,7 +29,7 @@ import (
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
 	// Changing it marks every conversation for recomputation.
-	sessionShapeVersion = "4"
+	sessionShapeVersion = "5"
 	sessionShapeBatch   = 200
 	// A gap between consecutive messages longer than this is idle time.
 	sessionShapeActiveGap = 300.0
@@ -63,6 +63,7 @@ type shapeMessage struct {
 	// User prose with authorship: whether it holds typed text, and whether
 	// that typed text has a correction cue.
 	authored, typed, correction bool
+	typedWords                  int64
 }
 
 // shapeCall is one of a session's own tool calls, in ledger order.
@@ -105,8 +106,10 @@ type shapeCompaction struct {
 // without enough evidence, never zero.
 type sessionShapeFacts struct {
 	StartedAt              string   `json:"started_at,omitempty"`
+	LastMessageAt          string   `json:"last_message_at,omitempty"`
 	Messages               int64    `json:"messages"`
 	TypedHumanMessages     *int64   `json:"typed_human_messages"`
+	TypedWords             *int64   `json:"typed_words"`
 	ToolCalls              *int64   `json:"tool_calls"`
 	WallSeconds            *float64 `json:"wall_seconds"`
 	ActiveSeconds          *float64 `json:"active_seconds"`
@@ -218,6 +221,7 @@ func deriveSessionShape(in sessionShapeInput) (sessionShapeFacts, sessionShapeEv
 	if len(timed) > 0 {
 		facts.HasTimestamps = true
 		facts.StartedAt = time.UnixMilli(timed[0].at).UTC().Format(timeLayout)
+		facts.LastMessageAt = time.UnixMilli(timed[len(timed)-1].at).UTC().Format(timeLayout)
 		active := 0.0
 		for i := 1; i < len(timed); i++ {
 			if gap := float64(timed[i].at-timed[i-1].at) / 1000; gap > 0 && gap <= sessionShapeActiveGap {
@@ -243,6 +247,11 @@ func deriveSessionShape(in sessionShapeInput) (sessionShapeFacts, sessionShapeEv
 	}
 	if facts.HasAuthorship {
 		facts.TypedHumanMessages = shapeCount(len(typedAt))
+		words := int64(0)
+		for _, i := range typedAt {
+			words += in.messages[i].typedWords
+		}
+		facts.TypedWords = &words
 		corrections := 0
 		for _, i := range typedAt {
 			if in.messages[i].correction {
@@ -613,7 +622,7 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 		positions[messageID] = len(in.messages)
 		in.messages = append(in.messages, message)
 	}
-	rows, err = queryMapsContext(ctx, q, `SELECT ma.message_id,ma.typed_words>0 typed,`+authoredCueSQL(correctionCuePhrases)+` correction
+	rows, err = queryMapsContext(ctx, q, `SELECT ma.message_id,ma.typed_words>0 typed,COALESCE(ma.typed_words,0) typed_words,`+authoredCueSQL(correctionCuePhrases)+` correction
  FROM message_authorship ma JOIN messages m ON m.id=ma.message_id WHERE ma.conversation_id=?`, id)
 	if err != nil {
 		return in, false, err
@@ -622,6 +631,7 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 		if at, ok := positions[firstString(row["message_id"])]; ok {
 			message := &in.messages[at]
 			message.authored, message.typed, message.correction = true, integer(row["typed"]) != 0, integer(row["correction"]) != 0
+			message.typedWords = integer(row["typed_words"])
 		}
 	}
 	rows, err = queryMapsContext(ctx, q, `SELECT t.call_message_id,t.tool_name,t.tool_category,COALESCE(t.command_category,'') command_category,t.status,
@@ -1098,6 +1108,7 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]ses
 			local := at.In(time.Local)
 			midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.Local)
 			row["started_at"], row["day"], row["month"] = shape.StartedAt, midnight.Format("2006-01-02"), midnight.Format("2006-01")
+			row["last_message_at"] = nilIfEmpty(shape.LastMessageAt)
 			row["week"] = midnight.AddDate(0, 0, -((int(midnight.Weekday()) + 6) % 7)).Format("2006-01-02")
 		}
 		copyOrigin(row, origins[id])
@@ -1115,7 +1126,7 @@ func sessionShapeRow(shape sessionShapeFacts) map[string]any {
 		"active_band": nil, "tool_band": nil, "autonomy_band": nil, "archetype": nil, "autonomy": nil, "autonomy_prompts": nil,
 		"idle_seconds": nil, "active_hours": nil, "unverified_handbacks": nil, "forensic_events": nil}
 	for field, value := range map[string]any{
-		"typed_human_messages": pointerValue(shape.TypedHumanMessages), "tool_calls": pointerValue(shape.ToolCalls),
+		"typed_human_messages": pointerValue(shape.TypedHumanMessages), "typed_words": pointerValue(shape.TypedWords), "tool_calls": pointerValue(shape.ToolCalls),
 		"wall_seconds": pointerValue(shape.WallSeconds), "active_seconds": pointerValue(shape.ActiveSeconds),
 		"turn_cycles": pointerValue(shape.TurnCycles), "turn_cycle_p50_seconds": pointerValue(shape.TurnCycleP50),
 		"turn_cycle_p90_seconds": pointerValue(shape.TurnCycleP90), "first_response_seconds": pointerValue(shape.FirstResponse),
