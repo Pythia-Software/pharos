@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cursorCLISecret stands for each chat's encryption key and the CLI's
@@ -214,6 +215,10 @@ func TestCursorCLIChatKeepsItsTurnsAndTools(t *testing.T) {
 	messages := conversation.Messages
 	if messages[0].Text != "Fix the build" || messages[0].CreatedAt != "2026-11-04T16:18:00.000Z" {
 		t.Fatalf("prompt = %+v", messages[0])
+	}
+	// A prompt quoting the CLI's own tags is read whole.
+	if prompt, _ := cursorCLIPrompt("<user_query>Explain <user_query>x</user_query> and fix it</user_query>"); prompt != "Explain <user_query>x</user_query> and fix it" {
+		t.Fatalf("prompt quoting the tags = %q", prompt)
 	}
 	if !strings.Contains(messages[1].Text, "encrypted") {
 		t.Fatalf("thinking = %+v", messages[1])
@@ -503,6 +508,27 @@ func TestCursorCLIChatDeletedBeforeIndexingIsKept(t *testing.T) {
 	indexCaptures(t, c, config.CaptureRoot, "host-a")
 	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Also ran the tests.'`); n != 1 {
 		t.Fatalf("the chat was rolled back: %d", n)
+	}
+
+	// Nor is a chat renamed in meta.json alone, under the CLI's default name.
+	root = filepath.Join(t.TempDir(), ".cursor")
+	chat = cursorCLIConversation()
+	chat.meta["name"] = "New Agent"
+	dir = cursorCLIWriteChat(t, root, chat)
+	source = cursorCLISource(root)
+	config = captureTestConfig(t, source)
+	runCapture(t, config)
+	chat.metaJSON["title"] = "Fix the build and tests"
+	writeSourceFile(t, filepath.Join(dir, "meta.json"), jsonText(chat.metaJSON))
+	// After the database last changed, as a rename is.
+	if renamed := time.Now().Add(time.Minute); os.Chtimes(filepath.Join(dir, "meta.json"), renamed, renamed) != nil {
+		t.Fatal("meta.json")
+	}
+	c, _ = testCatalog(t)
+	ingestSource(t, c, source)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE title='Fix the build and tests'`); n != 1 {
+		t.Fatalf("the rename was rolled back: %d", n)
 	}
 }
 

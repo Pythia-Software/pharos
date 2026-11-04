@@ -214,7 +214,7 @@ func (a *cursorCLIAdapter) planParts() (*sourceWorkPlan, error) {
 				signal += fmt.Sprintf(":%d:%d", info.Size(), info.ModTime().UnixNano())
 			}
 		}
-		parts := []sourcePart{{item: a.original(chat.store), size: size, version: a.databaseVersion(chat.store), signal: signal}}
+		parts := []sourcePart{{item: a.original(chat.store), size: size, version: a.version(chat), signal: signal}}
 		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
 			record, err := a.read(chat)
 			if err != nil {
@@ -225,6 +225,17 @@ func (a *cursorCLIAdapter) planParts() (*sourceWorkPlan, error) {
 	}
 	plan.discoveryError = errors.Join(failures...)
 	return plan, nil
+}
+
+// version is when a chat last changed: its database or its meta.json.
+func (a *cursorCLIAdapter) version(chat cursorCLIChat) int64 {
+	version := a.databaseVersion(chat.store)
+	if chat.meta != "" {
+		if info, err := a.files().Stat(chat.meta); err == nil {
+			version = max(version, info.ModTime().UnixNano())
+		}
+	}
+	return version
 }
 
 // signal is a chat's latest root.
@@ -318,7 +329,7 @@ func (a *cursorCLIAdapter) read(chat cursorCLIChat) (*WorkspaceRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	version := a.databaseVersion(chat.store)
+	version := a.version(chat)
 	blobs, damaged := map[string][]byte{}, false
 	rows, err := tx.QueryContext(a.context(), `SELECT id, data FROM blobs`)
 	if err != nil {
@@ -622,7 +633,7 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 // cursorCLIPrompt is a prompt's text without what the CLI wraps it in, and
 // when it was sent, to the minute, from the time the CLI adds.
 var cursorCLIStamp = regexp.MustCompile(`(?s)^\s*<timestamp>(.*?)</timestamp>\s*`)
-var cursorCLIQuery = regexp.MustCompile(`(?s)<user_query>\s*(.*?)\s*</user_query>`)
+var cursorCLIQuery = regexp.MustCompile(`(?s)<user_query>\s*(.*)\s*</user_query>`)
 var cursorCLIZone = regexp.MustCompile(`^(.*?)\s*\(UTC(?:([+-])(\d{1,2})(?::(\d{2}))?)?\)$`)
 
 func cursorCLIPrompt(text string) (prompt, sent string) {
@@ -644,7 +655,7 @@ func cursorCLIPrompt(text string) (prompt, sent string) {
 		}
 	}
 	if match := cursorCLIQuery.FindStringSubmatch(text); match != nil {
-		return match[1], sent
+		return strings.TrimSpace(match[1]), sent
 	}
 	return strings.TrimSpace(text), sent
 }
