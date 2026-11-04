@@ -190,6 +190,8 @@ func (a *copilotAdapter) parseSession(session copilotSession) (*WorkspaceRecord,
 		}
 	}
 	// The flat log first, then the folder's events it does not already hold.
+	// An event without an ID is known by its content, which moving its log
+	// leaves alone; a log repeating one counts its repeats.
 	events, seen, version := []map[string]any{}, map[string]bool{}, int64(0)
 	logs := []sourcePart{}
 	for _, path := range []string{session.flat, session.events} {
@@ -204,16 +206,30 @@ func (a *copilotAdapter) parseSession(session copilotSession) (*WorkspaceRecord,
 		}
 		logs = append(logs, part)
 		version = max(version, part.version)
+		repeats, held := map[string]int{}, map[string]bool{}
 		for _, event := range read {
-			if id := firstString(event["id"]); id != "" {
-				if seen[id] {
-					continue
+			id := firstString(event["id"])
+			if id == "" {
+				content := map[string]any{}
+				for key, value := range event {
+					if !strings.HasPrefix(key, "_") {
+						content[key] = value
+					}
 				}
-				seen[id] = true
+				id = "event-" + hashBytes([]byte(jsonText(content)))[:16]
+				if repeats[id]++; repeats[id] > 1 {
+					id += fmt.Sprintf(":%d", repeats[id])
+				}
+				event["_id"] = id
 			}
+			if seen[id] || held[id] {
+				continue
+			}
+			held[id] = true
 			event["_origin"] = part.item
 			events = append(events, event)
 		}
+		maps.Copy(seen, held)
 	}
 	if len(logs) == 0 {
 		return nil, read, nil
@@ -348,8 +364,10 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		request  string
 		usage    map[string]any
 		totalled bool
+		// The last report, and the last to name the model.
+		updated, named int
 	}
-	receipts, byRequest := []*receipt{}, map[string]*receipt{}
+	receipts, byRequest, reports := []*receipt{}, map[string]*receipt{}, 0
 	// Records of receipts found to be one request, by conversation.
 	merged := map[*copilotAgent]map[int]bool{}
 	var lastShutdown map[string]any
@@ -374,15 +392,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			order = append(order, agentID)
 		}
 		line, log := integer(event["_line"]), defaultString(firstString(event["_origin"]), origin)
-		eventID := firstString(event["id"])
-		if eventID == "" {
-			// Both of a session's logs have a line 2. A flat log's IDs stay
-			// as they were before the session had a folder.
-			eventID = fmt.Sprintf("line-%d", line)
-			if log == origin && filepath.Base(filepath.Dir(session.events)) == session.id {
-				eventID = "events:" + eventID
-			}
-		}
+		eventID := firstString(event["id"], event["_id"])
 		// The event's type and ID stand in for its raw text, so text quoting
 		// usage JSON is never read as token usage.
 		base := MessageRecord{NativeID: eventID, Model: agent.model, Effort: agent.effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", log, line), Selected: true,
@@ -531,13 +541,23 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 					continue
 				}
 				// Reports under each ID alone, then under both: the earlier
-				// receipt keeps the request, the later one's fields superseding.
+				// receipt keeps the request, and the later reports' fields
+				// supersede.
 				first, later := r, found
 				if later.index < first.index {
 					first, later = later, first
 				}
-				maps.Copy(first.usage, later.usage)
-				first.model, first.request, first.totalled = later.model, firstString(first.request, later.request), first.totalled || later.totalled
+				older, newer := first, later
+				if older.updated > newer.updated {
+					older, newer = newer, older
+				}
+				usage := maps.Clone(older.usage)
+				maps.Copy(usage, newer.usage)
+				first.usage, first.updated = usage, newer.updated
+				if later.named > first.named {
+					first.model, first.named = later.model, later.named
+				}
+				first.request, first.totalled = firstString(first.request, later.request), first.totalled || later.totalled
 				if merged[agent] == nil {
 					merged[agent] = map[int]bool{}
 				}
@@ -567,9 +587,12 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				stored.NativeID = message + ":usage"
 			}
 			r.request = firstString(api, r.request, usage["providerCallId"])
+			reports++
+			r.updated = reports
 			if model := firstString(usage["model"]); model != "" {
-				r.model, stored.Model = model, model
+				r.model, r.named = model, reports
 			}
+			stored.Model = r.model
 			maps.Copy(r.usage, copilotTokenUsage(usage))
 			stored.Text = jsonText(map[string]any{"type": "token_usage", "usage": r.usage, "usage_message_id": defaultString(r.request, eventID)})
 		case "session.shutdown":

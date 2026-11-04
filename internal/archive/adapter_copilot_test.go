@@ -195,9 +195,10 @@ func TestCopilotUsageCountsEachRequestOnce(t *testing.T) {
 
 // copilotUpgraded is a session begun by a release that wrote no receipts and
 // resumed by one that does: each shutdown totals the whole session. Its
-// requests are reported more than once, first in part: under the provider's
-// ID, then the API's, then both, and once without the model until after the
-// shutdown. A prompt quotes usage JSON.
+// requests are reported more than once, first in part. One is reported under
+// the provider's ID, then the API's with its model, then corrected under the
+// provider's, then joined by a report of both. Another's model is corrected
+// after the shutdown. A prompt quotes usage JSON.
 const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","copilotVersion":"0.0.330"},"id":"m1","timestamp":"2026-01-02T10:00:00.000Z"}
 {"type":"user.message","data":{"content":"Hello"},"id":"m2","timestamp":"2026-01-02T10:00:01.000Z"}
 {"type":"assistant.message","data":{"messageId":"b1","content":"Hi","model":"claude-sonnet-4.5"},"id":"m3","timestamp":"2026-01-02T10:00:02.000Z"}
@@ -207,11 +208,13 @@ const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","c
 {"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"cacheReadTokens":80,"providerCallId":"p-9"}},"id":"m7a","timestamp":"2026-01-03T10:00:01.500Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"outputTokens":10,"cacheReadTokens":80,"cacheWriteTokens":0,"apiCallId":"api-9","providerCallId":"p-9"}},"id":"m7","timestamp":"2026-01-03T10:00:02.000Z"}
 {"type":"assistant.message","data":{"messageId":"b2","content":"Hi again","model":"claude-sonnet-4.5","apiCallId":"api-9"},"id":"m8","timestamp":"2026-01-03T10:00:02.100Z"}
-{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"providerCallId":"p-10"}},"id":"m10a","timestamp":"2026-01-03T10:00:02.500Z"}
-{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"apiCallId":"api-10"}},"id":"m10b","timestamp":"2026-01-03T10:00:02.550Z"}
-{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"outputTokens":5,"apiCallId":"api-10","providerCallId":"p-10"}},"id":"m10c","timestamp":"2026-01-03T10:00:02.600Z"}
-{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390,"outputTokens":30,"cacheReadTokens":180,"cacheWriteTokens":0}},"gpt-5-mini":{"usage":{"inputTokens":50,"outputTokens":5}}}},"id":"m9","timestamp":"2026-01-03T10:00:03.000Z"}
-{"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":50,"outputTokens":5,"apiCallId":"api-10"}},"id":"m10","timestamp":"2026-01-03T10:00:03.100Z"}
+{"type":"session.usage_record","data":{"usage":{"inputTokens":40,"providerCallId":"p-10"}},"id":"m10a","timestamp":"2026-01-03T10:00:02.500Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":40,"apiCallId":"api-10"}},"id":"m10b","timestamp":"2026-01-03T10:00:02.550Z"}
+{"type":"session.usage_record","data":{"usage":{"inputTokens":50,"providerCallId":"p-10"}},"id":"m10c","timestamp":"2026-01-03T10:00:02.560Z"}
+{"type":"session.usage_record","data":{"usage":{"outputTokens":5,"apiCallId":"api-10","providerCallId":"p-10"}},"id":"m10d","timestamp":"2026-01-03T10:00:02.600Z"}
+{"type":"session.usage_record","data":{"usage":{"inputTokens":20,"apiCallId":"api-11"}},"id":"m11a","timestamp":"2026-01-03T10:00:02.700Z"}
+{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390,"outputTokens":30,"cacheReadTokens":180,"cacheWriteTokens":0}},"gpt-5-mini":{"usage":{"inputTokens":70,"outputTokens":5}}}},"id":"m9","timestamp":"2026-01-03T10:00:03.000Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":20,"apiCallId":"api-11"}},"id":"m11","timestamp":"2026-01-03T10:00:03.100Z"}
 `
 
 func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
@@ -221,22 +224,22 @@ func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
 	total := func() int {
 		return countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`)
 	}
-	// The receiptless leg's 320 plus the receipts' 100 and 55, and nothing
-	// from the quoted JSON: while the session is open, and once its last
-	// shutdown totals it.
+	// The receiptless leg's 320 plus the receipts' 100, 55 and 20, and
+	// nothing from the quoted JSON: while the session is open, and once its
+	// last shutdown totals it.
 	log := filepath.Join(root, "session-state", "sess-3", "events.jsonl")
 	writeSourceFile(t, log, copilotUpgraded[:strings.Index(copilotUpgraded, `{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390`)])
 	ingestSource(t, c, source)
-	if got := total(); got != 475 {
-		t.Fatalf("open session: %d tokens, want 475", got)
+	if got := total(); got != 495 {
+		t.Fatalf("open session: %d tokens, want 495", got)
 	}
 	writeSourceFile(t, log, copilotUpgraded)
 	ingestSource(t, c, source)
-	if got := total(); got != 475 {
-		t.Fatalf("upgraded session: %d tokens, want 475", got)
+	if got := total(); got != 495 {
+		t.Fatalf("upgraded session: %d tokens, want 495", got)
 	}
 	// A receipt takes its request's message and model from the later report.
-	for id, model := range map[string]string{"b2:usage": "claude-sonnet-4.5", "m10a": "gpt-5-mini"} {
+	for id, model := range map[string]string{"b2:usage": "claude-sonnet-4.5", "m10a": "gpt-5-mini", "m11a": "gpt-5-mini"} {
 		if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id=? AND model=?`, id, model); n != 1 {
 			t.Fatalf("receipt %s under %s: %d", id, model, n)
 		}
@@ -247,8 +250,8 @@ func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
 	flat := filepath.Join(root, "session-state", "sess-0.jsonl")
 	writeSourceFile(t, flat, copilotLegacy)
 	ingestSource(t, c, source)
-	if got := total(); got != 475+320 {
-		t.Fatalf("flat session: %d tokens, want %d", got, 475+320)
+	if got := total(); got != 495+320 {
+		t.Fatalf("flat session: %d tokens, want %d", got, 495+320)
 	}
 	resumed := copilotLegacy + strings.ReplaceAll(strings.ReplaceAll(copilotLegacy, `"id":"l`, `"id":"r`), `"inputTokens":300,"outputTokens":20`, `"inputTokens":600,"outputTokens":40`)
 	writeSourceFile(t, filepath.Join(root, "session-state", "sess-0", "events.jsonl"), resumed)
@@ -305,16 +308,24 @@ func TestCopilotFlatAndFolderLogsOfOneSessionAreReadTogether(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "session-state")
 	writeSourceFile(t, filepath.Join(sessions, "sess-5.jsonl"), strings.ReplaceAll(strings.ReplaceAll(copilotLegacy, "sess-0", "sess-5"), `,"id":"l2"`, ""))
-	// The flat log is indexed alone first, then with the folder a later
-	// release starts: its records keep their IDs.
+	// Another flat log is moved into a folder rather than joined by one.
+	moved := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(copilotLegacy, "sess-0", "sess-6"), `,"id":"l2"`, ""), "Hello", "Moved")
+	writeSourceFile(t, filepath.Join(sessions, "sess-6.jsonl"), moved)
+	// The flat logs are indexed alone first, then with the folders a later
+	// release starts: their records keep their IDs.
 	c, _ := testCatalog(t)
 	source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true}
 	ingestSource(t, c, source)
 	writeSourceFile(t, filepath.Join(sessions, "sess-5", "events.jsonl"), `{"type":"session.resume","data":{},"id":"r1","timestamp":"2026-01-03T10:00:00.000Z"}
 {"type":"user.message","data":{"content":"Again"},"timestamp":"2026-01-03T10:00:01.000Z"}
 `)
+	writeSourceFile(t, filepath.Join(sessions, "sess-6", "events.jsonl"), moved+`{"type":"user.message","data":{"content":"Moved again"},"timestamp":"2026-01-03T10:00:01.000Z"}
+`)
+	if err := os.Remove(filepath.Join(sessions, "sess-6.jsonl")); err != nil {
+		t.Fatal(err)
+	}
 	ingestSource(t, c, source)
-	for _, text := range []string{"Hello", "Again"} {
+	for _, text := range []string{"Hello", "Again", "Moved", "Moved again"} {
 		if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE role='user' AND text=?`, text); n != 1 {
 			t.Fatalf("%d prompts %q", n, text)
 		}
