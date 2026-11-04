@@ -120,7 +120,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			writeError(w, err, 400)
 			return
 		}
-		if state == "complete" {
+		if state == "complete" || state == "superseded" {
 			writeJSON(w, map[string]any{"complete": true, "job_id": resume}, 200)
 			return
 		}
@@ -226,6 +226,11 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			}
 			workMeter.release(state == "complete")
 			op.finish(state)
+			if state == "complete" {
+				// Before this job reads as complete, so none it covers is
+				// still offered once it does.
+				s.Catalog.supersedeRecoveryJobs(ctx, job, mode, names)
+			}
 			s.Catalog.DB.Exec("UPDATE sync_recovery_jobs SET state=?,updated_at=?,error=?,progress_json=? WHERE id=?", state, now(), nilIfEmpty(errorString(failure)), jsonText(results), job)
 			s.updateRun(run.ID, func(run *SyncRun) {
 				run.State, run.Phase = state, state
@@ -563,6 +568,56 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		s.Catalog.storeUpgradeCount(ctx)
 	}
 	return nil
+}
+
+// recoveryCovers is the modes a completed recovery of each mode redoes: a
+// full recovery recaptures and force-reindexes, so it also does what an
+// update or a retained rebuild left unfinished.
+var recoveryCovers = map[string][]string{"full": {"full", "update", "retained"}, "update": {"update"}, "retained": {"retained"}}
+
+// supersedeRecoveryJobs marks the unfinished recoveries that the completed
+// job covers, so Repair & maintenance stops offering to resume them. A job
+// is covered when it was started before the completed one, its mode is one
+// the completed mode redoes, and its sources are within the completed
+// job's (no sources is every source, covered only by another such job).
+func (c *Catalog) supersedeRecoveryJobs(ctx context.Context, job, mode string, names []string) {
+	var started string
+	if err := c.DB.QueryRowContext(ctx, "SELECT created_at FROM sync_recovery_jobs WHERE id=?", job).Scan(&started); err != nil {
+		return
+	}
+	completedAt, ok := parseTime(started)
+	if !ok {
+		return
+	}
+	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,mode,scope_json,created_at FROM sync_recovery_jobs WHERE state NOT IN ('complete','superseded') AND id<>?", job)
+	if err != nil {
+		return
+	}
+	covered := []string{}
+	for _, row := range rows {
+		created, ok := parseTime(firstString(row["created_at"]))
+		if !ok || !created.Before(completedAt) || !slices.Contains(recoveryCovers[mode], firstString(row["mode"])) {
+			continue
+		}
+		var scope []string
+		if json.Unmarshal([]byte(asString(row["scope_json"])), &scope) != nil {
+			continue
+		}
+		if len(names) == 0 || len(scope) > 0 && !slices.ContainsFunc(scope, func(name string) bool { return !slices.Contains(names, name) }) {
+			covered = append(covered, firstString(row["id"]))
+		}
+	}
+	if len(covered) == 0 {
+		return
+	}
+	c.writeTransaction(ctx, "supersede recovery jobs", func(tx *sql.Tx) error {
+		for _, id := range covered {
+			if _, err := tx.Exec("UPDATE sync_recovery_jobs SET state='superseded',updated_at=? WHERE id=?", now(), id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (c *Catalog) repairRetained(ctx context.Context, job string, names []string, progress func(int, int)) error {
