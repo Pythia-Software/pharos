@@ -4,7 +4,7 @@
 // at it) across every ribbon on the page and dims the rest.
 import React,{useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import {PageLink} from './nested-pages';
-import {eventColor,eventGroup,glyphPath,layoutEventArcs,linkedTarget,targetDescription,targetEvidence,weakTarget,type AgentEventLink,type LayoutEvent} from './event-link-layout';
+import {EVENT_GROUPS,eventColor,eventGroup,glyphPath,layoutEventArcs,linkedTarget,targetDescription,targetEvidence,weakTarget,type AgentEventLink,type LayoutEvent} from './event-link-layout';
 import type {useRibbonInspector} from './label-ribbon-inspector';
 import './event-link-overlay.css';
 
@@ -16,6 +16,13 @@ export const useEventLinkFocus=()=>useSyncExternalStore(fn=>{listeners.add(fn);r
 const clip=(text:string,n:number)=>text.length>n?text.slice(0,n-1)+'…':text;
 export function EventGlyph({group,hollow=false,size=10}:{group:string;hollow?:boolean;size?:number}){
  return <svg className="event-link-glyph" width={size} height={size} viewBox="-6 -6 12 12" aria-hidden="true"><path d={glyphPath(eventGroup(group).shape,0,0,4.6)} fill={hollow?'none':eventColor(group)} stroke={eventColor(group)} strokeWidth={hollow?1.4:0}/></svg>;
+}
+/** Legend: the groups present (shape and colour), and what an arc means. */
+export function EventLinkLegend({events}:{events:AgentEventLink[]}){
+ if(!events.length)return null;const groups=new Set(events.map(e=>e.group)),linked=events.some(e=>linkedTarget(e)),open=events.some(e=>!linkedTarget(e));
+ return <div className="lt-legend-line event-link-legend"><strong>Agent events</strong>{EVENT_GROUPS.filter(g=>groups.has(g.name)).map(g=><span key={g.key}><EventGlyph group={g.name}/>{g.short}</span>)}
+  {linked?<span><svg width="26" height="12" aria-hidden="true"><path d="M2 10C8 2 16 3 24 3" fill="none" stroke="var(--event-link)" strokeWidth="1.2"/><path d="M2 7V11" stroke="var(--event-link)" strokeWidth="2"/></svg>Arc back to the earlier text it is about</span>:null}
+  {open?<span><EventGlyph group={events.find(e=>!linkedTarget(e))!.group} hollow/>On the axis: no target found</span>:null}</div>;
 }
 export function EventLinkCard({events,href,close}:{events:AgentEventLink[];href?:(e:AgentEventLink)=>string|null;close?:()=>void}){
  const shown=events.slice(0,4);
