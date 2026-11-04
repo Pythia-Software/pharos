@@ -88,6 +88,8 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 				value.harness = "opencode"
 			case "cline":
 				value.harness = "cline"
+			case "vscode-copilot":
+				value.harness = "vscode-copilot"
 			case "tl1", "tl1-export":
 				value.harness = "tl1"
 			case "canonical":

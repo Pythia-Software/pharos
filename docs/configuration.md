@@ -425,6 +425,7 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | Copilot CLI | `~/.copilot`, or `COPILOT_HOME`, when it has a `session-state` folder; each `session-state/<id>/events.jsonl` (or an older release's `session-state/<id>.jsonl`) is a session |
 | OpenCode | `~/.local/share/opencode`, or `$XDG_DATA_HOME/opencode`; each session in its `opencode*.db` databases is a session |
 | Cline | `~/.cline/data`, `CLINE_DATA_DIR`, or `$CLINE_DIR/data`, when it has a `sessions` folder; each `sessions/<id>/<id>.messages.json` is a session |
+| VS Code Copilot | the `User` folder of VS Code, VS Code Insiders, VSCodium or Positron under `~/Library/Application Support`; each chat session (`workspaceStorage/<hash>/chatSessions/<id>.jsonl`, an older release's `.json`, or a window without a folder's in `globalStorage/emptyWindowChatSessions`) is a session |
 | ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
 | Claude.ai | nothing on disk: export your data from Claude.ai and add a `claude-ai` source for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
@@ -798,6 +799,7 @@ upload permissions keep their existing behavior.
 | `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
 | `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so every other table is dropped from the snapshot and it is vacuumed before it is kept. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
 | `cline` | each session's `<id>.json` and `<id>.messages.json` under `sessions`; not its compacted context (`<id>.compaction.json`), nor Cline's settings (which hold provider credentials), index database or checkpoints |
+| `vscode-copilot` | each chat session's file under `workspaceStorage/<hash>/chatSessions` or `globalStorage/emptyWindowChatSessions`, and its window's `workspace.json`; not a session's older `.json` beside its journal, nor the rest of the user folder: settings, `state.vscdb` databases and extension storage, which can hold other extensions' secrets |
 
 **Incremental and interruption-safe.** A file whose size and mtime match the
 manifest, and whose captured copy is still intact, is skipped. Anything else is
