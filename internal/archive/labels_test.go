@@ -483,8 +483,36 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The thinking tag's first token appears in the one thinking item only.
-	poison := model.Tokenizer.Encode("thinking assistant :")[0]
+	// Both thinking items have the same tag. Pick a token from m-think's
+	// text that no other framed item contains, so only that message crashes.
+	items := liveItems(t, catalog)
+	otherTokens := map[int32]bool{}
+	for _, item := range items {
+		if item.MessageID == "m-think" {
+			continue
+		}
+		ids, _, _ := labelsFrame(model, item)
+		for _, id := range ids {
+			otherTokens[id] = true
+		}
+	}
+	var poison int32
+	found := false
+	for _, item := range items {
+		if item.MessageID != "m-think" {
+			continue
+		}
+		ids, spans, _ := labelsFrame(model, item)
+		for _, id := range ids[spans.Text.Start:spans.Text.End] {
+			if !otherTokens[id] {
+				poison, found = id, true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("m-think has no token unique among the framed items")
+	}
 	settings = labelsTestSettings(t, fmt.Sprintf("crash-on-id:%d", poison))
 	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
 	if err != nil || stats.MessagesFailed != 1 || stats.Complete || labelCount(t, catalog, "WHERE message_id='m-think'") != 0 || labelCount(t, catalog, "") < 20 {
@@ -514,6 +542,32 @@ func TestLabelsIsolateAnItemThatCrashesTheWorker(t *testing.T) {
 	}
 	if row := stage(); row.generation == 0 || row.generation > row.completed {
 		t.Fatalf("the labels stage did not complete once nothing failed: %+v", row)
+	}
+}
+
+func TestLabelsRetrySingleWorkerCrashInIsolation(t *testing.T) {
+	message := &labelsMessage{seqs: [][]int32{{1}}}
+	job := &labelsJob{remaining: 1}
+	message.job = job
+	batch := labelsBatch{seqs: []labelsSeq{{message: message}}}
+	run := &labelsRun{stats: &LabelsRunStats{}, progress: func(string, ...any) {}}
+	crash := labelsBatchResult{batch: batch, err: &labelrt.WorkerExitError{Status: "exit status 4"}}
+	ready := []labelsBatch{{seqs: []labelsSeq{{message: &labelsMessage{}}}}}
+	finished := false
+	finish := func(*labelsJob) { finished = true }
+	if err := run.apply(crash, &ready, finish); err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 2 || !ready[0].isolated || ready[0].seqs[0].message != message || message.failed || message.done != 0 || finished {
+		t.Fatalf("single crash was not retried first and alone: ready=%+v message=%+v", ready, message)
+	}
+	crash.batch = ready[0]
+	ready = nil
+	if err := run.apply(crash, &ready, finish); err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 0 || !message.failed || message.done != 1 || !finished {
+		t.Fatalf("isolated crash did not fail only its message: ready=%+v message=%+v", ready, message)
 	}
 }
 
