@@ -552,6 +552,9 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 	origin := a.original(database)
 	threads := []*cursorThread{}
 	byID := map[string]*cursorThread{}
+	// copies are the parents Cursor deleted, as their forks' copies hold them,
+	// and copiedAt when those forks copied them.
+	copies, copiedAt := map[string]*cursorThread{}, map[string]int64{}
 	for _, member := range members {
 		thread, err := a.thread(tx, member)
 		if err != nil {
@@ -562,19 +565,34 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		}
 		info := mapValueDefault(thread.data["subagentInfo"])
 		// A fork starts with a copy of its parent's messages, as its parent's
-		// headers name them, which are the parent's. Once Cursor deletes the
-		// parent, the copy is known by its length alone.
+		// headers name them, which are the parent's. A parent read elsewhere
+		// holds them; once Cursor deletes the parent, the copy is all that is
+		// left of it, and is read as the parent (copies).
 		copied := map[string]bool{}
-		if forked := firstString(info["forkedFromComposerId"]); forked != "" {
-			parent := byID[forked]
-			if inherited, ok := number(info["conversationLengthAtSpawn"]); ok && inherited > 0 {
-				n := int(inherited)
-				if n <= len(thread.ids) && (parent == nil || n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n])) {
-					for _, id := range thread.ids[:n] {
-						copied[id] = true
-						delete(thread.missing, id)
-					}
+		forked := firstString(info["forkedFromComposerId"])
+		inherited, _ := number(info["conversationLengthAtSpawn"])
+		if n := int(inherited); forked != "" && n > 0 && n <= len(thread.ids) {
+			parent, gone := byID[forked], false
+			if parent == nil {
+				var held int
+				err := tx.QueryRowContext(a.context(), `SELECT COUNT(*) FROM cursorDiskKV WHERE key=? AND value IS NOT NULL`, "composerData:"+forked).Scan(&held)
+				if err != nil {
+					return nil, err
 				}
+				gone = held == 0
+			}
+			if parent == nil || n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n]) {
+				for _, id := range thread.ids[:n] {
+					copied[id] = true
+					delete(thread.missing, id)
+				}
+			}
+			if copy := copies[forked]; gone && (copy == nil || len(copy.ids) < n) {
+				// Partial: Cursor held more of it than a fork copied.
+				copies[forked] = &cursorThread{member: cursorComposer{id: forked, place: member.place}, data: map[string]any{}, ids: thread.ids[:n], missing: map[string]bool{}, short: true,
+					bubbles: slices.DeleteFunc(slices.Clone(thread.bubbles), func(bubble map[string]any) bool { return !copied[firstString(bubble["bubbleId"])] })}
+				at, _ := number(thread.data["createdAt"])
+				copiedAt[forked] = max(int64(at)*1e6, 1)
 			}
 		}
 		thread.calls, thread.copiedCalls = map[string]bool{}, map[string]bool{}
@@ -592,6 +610,17 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		threads = append(threads, thread)
 		byID[member.id] = thread
 	}
+	for _, id := range slices.Sorted(maps.Keys(copies)) {
+		copy := copies[id]
+		copy.calls, copy.copiedCalls = map[string]bool{}, map[string]bool{}
+		for _, bubble := range copy.bubbles {
+			if call, _ := mapValueDefault(bubble["toolFormerData"])["toolCallId"].(string); call != "" {
+				copy.calls[call] = true
+			}
+		}
+		threads = append([]*cursorThread{copy}, threads...)
+		byID[id] = copy
+	}
 	var record *WorkspaceRecord
 	depth := map[string]int{}
 	echoes := map[string]bool{}
@@ -607,12 +636,14 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 			// A fork's copy of its parent's messages starts its own copies of
 			// the subagents those messages started: a subagent started by a
 			// copied call, or by a call that is not its parent's, is one of
-			// these.
-			owned := false
+			// these, left out while the subagent it copies is read whole.
+			owned, original := false, false
 			for _, other := range threads {
 				owned = owned || other.member.id != member.parent && other.calls[spawn]
+				original = original || other != thread && !echoes[other.member.id] && other.complete() &&
+					firstString(mapValueDefault(other.data["subagentInfo"])["toolCallId"]) == spawn
 			}
-			if spawn != "" && (byID[member.parent].copiedCalls[spawn] || !byID[member.parent].calls[spawn] && owned) {
+			if spawn != "" && original && (byID[member.parent].copiedCalls[spawn] || !byID[member.parent].calls[spawn] && owned) {
 				echoes[member.id] = true
 				continue
 			}
@@ -663,6 +694,13 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		return nil, nil
 	}
 	observe(record, version)
+	// A copy is as old as the fork that made it, so any read of the parent
+	// itself, as an older capture holds it, replaces it.
+	for index, conversation := range record.Conversations {
+		if at := copiedAt[conversation.NativeID]; at > 0 {
+			record.Conversations[index].Observed = min(at, version)
+		}
+	}
 	return record, nil
 }
 

@@ -738,6 +738,74 @@ func TestCursorSalvageLeavesANewerCopy(t *testing.T) {
 	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=?`, cursorSide); n != 1 {
 		t.Fatalf("the deleted side chat was not kept: %d", n)
 	}
+	// Its workspace counts only the side chat, which it holds.
+	if n := countRows(t, c, `SELECT COALESCE(SUM(m.value),0) FROM metrics m JOIN workspaces w ON w.id=m.workspace_id WHERE w.source_id=? AND m.name='tool_calls'`, cursorNew); n != 0 {
+		t.Fatalf("the side chat's workspace counts %d tool calls", n)
+	}
+
+	// A newer capture still replaces a conversation another host moved
+	// after its host indexed it.
+	root = cursorFixture(t)
+	source.Path = root
+	config = captureTestConfig(t, source)
+	useHost(t, "host-a")
+	runCapture(t, config)
+	useHost(t, "host-b")
+	c, _ = testCatalog(t)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if _, err := c.DB.Exec(`UPDATE conversations SET workspace_id=(SELECT id FROM workspaces WHERE source_id=?) WHERE native_id=?`, cursorOld, cursorChild); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`UPDATE conversation_sightings SET last_seen_at='2100-01-01T00:00:00Z' WHERE conversation_id=(SELECT id FROM conversations WHERE native_id=?)`, cursorChild); err != nil {
+		t.Fatal(err)
+	}
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, 'Looks fine.', 'Looks fine now.') WHERE key=?`, "bubbleId:"+cursorChild+":s2")
+		return err
+	})
+	useHost(t, "host-a")
+	runCapture(t, config)
+	useHost(t, "host-b")
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=? AND m.text LIKE '%Looks fine now.'`, cursorChild); n != 1 {
+		t.Fatalf("a moved subagent's newer capture was refused: %d", n)
+	}
+}
+
+// A fork's copy of a parent Cursor no longer holds is that parent's only
+// copy, and a re-created subagent is the only copy of one Cursor deleted.
+func TestCursorForkKeepsWhatOnlyItHolds(t *testing.T) {
+	root := cursorFixture(t)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorNew+":*", "composerData:"+cursorNew)
+		return err
+	})
+	conversations := map[string]ConversationRecord{}
+	for _, conversation := range cursorRecords(t, root)[cursorNew].Conversations {
+		conversations[conversation.NativeID] = conversation
+	}
+	if parent := conversations[cursorNew]; parent.Coverage != "partial" || len(parent.Messages) == 0 || parent.Messages[0].NativeID != cursorPrompt {
+		t.Fatalf("the deleted parent = %+v", parent)
+	}
+	if fork := conversations[cursorFork]; cursorKinds(fork.Messages) != "agent:message assistant:message" {
+		t.Fatalf("the fork holds %s", cursorKinds(fork.Messages))
+	}
+	if _, ok := conversations[cursorEcho]; ok {
+		t.Fatal("the copy of a subagent Cursor still holds is read")
+	}
+
+	root = cursorFixture(t)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorChild+":*", "composerData:"+cursorChild)
+		return err
+	})
+	found := false
+	for _, conversation := range cursorRecords(t, root)[cursorNew].Conversations {
+		found = found || conversation.NativeID == cursorEcho && conversation.ParentNativeID == cursorFork
+	}
+	if !found {
+		t.Fatal("the only copy of a deleted subagent is not read")
+	}
 }
 
 // Verification reads a composer as indexing does.

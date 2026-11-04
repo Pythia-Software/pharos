@@ -785,6 +785,17 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
 			return 0, 0, err
 		}
+		// A new workspace is this copy's alone: what it leaves alone, held in
+		// another workspace, is neither written nor counted in it.
+		if workspaceID == "" && slices.ContainsFunc(authority.conversations, func(claim conversationAuthority) bool { return claim.older }) {
+			conversations, claims := []ConversationRecord{}, []conversationAuthority{}
+			for index, claim := range authority.conversations {
+				if !claim.older {
+					conversations, claims = append(conversations, record.Conversations[index]), append(claims, claim)
+				}
+			}
+			record.Conversations, authority.conversations = conversations, claims
+		}
 	}
 	if (record.SourceKind == "conductor" || record.SourceKind == "tl1") && workspaceID != "" {
 		for _, conversation := range record.Conversations {
@@ -1117,9 +1128,9 @@ var errOlderCopy = errors.New("the capture is older than what its host already i
 // stored is left alone, and then so are the workspace's own fields: only a copy
 // no older in any part may replace them, and prune, as a live sync does. A
 // record with nothing newer is rejected with errOlderCopy. Equal versions are
-// the same content, so they pass. A conversation is checked in the workspace
-// that holds it, which a source that regroups its sessions may have changed;
-// a new workspace has nothing of its own to roll back.
+// the same content, so they pass. A conversation is checked wherever it is
+// stored, which a source that regroups its sessions may have changed; a new
+// workspace has nothing of its own to roll back.
 func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, authority *copyAuthority) error {
 	older := 0
 	for index, conversation := range record.Conversations {
@@ -1127,13 +1138,29 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 		if claim.id == "" {
 			continue
 		}
+		// The newer copy this host wrote where the conversation is now or
+		// where this record keeps it: another host, or a source regrouping
+		// its sessions, may have moved it since.
 		var holder string
 		if err := tx.QueryRow("SELECT workspace_id FROM conversations WHERE id=?", claim.id).Scan(&holder); err != nil {
 			return err
 		}
-		stored, known, err := storedCopyVersion(tx, host, holder, claim.id, conversation.Origin)
-		if err != nil {
-			return err
+		var stored int64
+		known := false
+		for _, workspace := range []string{holder, workspaceID} {
+			var version int64
+			err := tx.QueryRow("SELECT version FROM copy_versions WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=?", host, workspace, claim.id, conversation.Origin).Scan(&version)
+			if err == nil && (!known || version > stored) {
+				holder, stored, known = workspace, version, true
+			} else if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+		}
+		if !known {
+			var err error
+			if stored, known, err = storedCopyVersion(tx, host, holder, claim.id, conversation.Origin); err != nil {
+				return err
+			}
 		}
 		rejected, err := evidenceVersionRejected(tx, host, holder, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
 		if err != nil {
