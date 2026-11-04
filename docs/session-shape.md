@@ -236,6 +236,13 @@ The chart above is the dashboard's only chart: its view, measure, breakdown
 and unit controls reach every band, distribution and rate. Starting points
 for the common views are cards (below).
 
+**Population.** Beside Range, the Population control shows which sessions
+count, as chips: "All sessions", or "Harness is not antigravity-cli" and the
+like. A legend value's menu adds one ("Count only this value", "Leave this
+value out"), Edit writes any condition, and the chart's title names what is
+left out. The chart, the signal table and Sessions to read all follow it. See
+[dashboard analysis](dashboard-analysis.md#population).
+
 **Forensics.**
 
 - *Signals against your own range* compares the seven days ending at the

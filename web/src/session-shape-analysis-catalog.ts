@@ -97,4 +97,5 @@ export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
   trend: { metric: "sessions", split: "length_band" },
   scatter: ["active_time", "tool_calls"],
+  population: true,
 };

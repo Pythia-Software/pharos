@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { changeState, noSplit, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, type LegendAction } from "./chart-selection";
@@ -14,6 +14,8 @@ import { useUsageChartPalette } from "./usage-chart-colors";
 import { isOriginDimension, originLabel, useOriginMetadata } from "./origin-dimensions";
 import { optionLabels } from "./option-labels";
 import { CreateDashboardCard } from "./create-dashboard-card";
+import { PopulationControl, usePopulation } from "./dashboard-population-control";
+import { withPopulationGroup, type PopulationAction } from "./dashboard-population";
 
 export type AmountFormat = (value: number, measure: AnalysisMeasure) => string;
 const percent = (value: number) => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
@@ -82,8 +84,19 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
     : "No earlier point has a value, so there is no norm yet.");
   const bounds = timeBounds(where, catalog.time);
-  const title = trendTitle(catalog, view);
-  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
+  const population = usePopulation(catalog, schema, where);
+  const title = `${trendTitle(catalog, view)}${population.suffix}`;
+  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
+    population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
+  // The legend's population actions filter on the series' group; a series
+  // with no single group (Other, a component) has none.
+  const populate = catalog.population && !catalog.components?.[view.split] && view.split !== noSplit ? (key: string, action: PopulationAction) => {
+    const value = built.series.find(item => item.key === key)?.value;
+    if (value === undefined) return;
+    onFilter(current => withPopulationGroup(catalog, current, view.split, value, action));
+    // A selection on the same breakdown would hide what the population keeps.
+    if (view.selection?.values.length) set({ selection: { values: [], excluded: false } });
+  } : undefined;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
@@ -91,7 +104,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
-      selected={built.selected} excluded={built.excluded} onSelect={select} onExpand={() => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
+      selected={built.selected} excluded={built.excluded} onSelect={select} onPopulation={populate} onExpand={() => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
       onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {children}

@@ -105,7 +105,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 860
+   "controls": 871
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -351,7 +351,7 @@
    "fixed": {"analyze_mode":"dashboards","analyze_topic":"session_shape","analyze_data":"session_shape"},
    "dataset": "session_shape",
    "dashboard": "session_shape",
-   "options": [{"name":"chart","param":"analyze_chart","kind":"dashboard_chart","description":"The chart: dashboards.session_shape.views lists each view's options and valid combinations."},{"name":"filters","param":"analyze_filters","kind":"where","description":"Where terms on session_shape's filterable fields (datasets.session_shape.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field."},{"name":"days","param":"analyze_filters","kind":"window","values":[{"value":1,"label":"1 day"},{"value":7,"label":"7 days"},{"value":30,"label":"30 days"},{"value":90,"label":"90 days"},{"value":180,"label":"180 days"},{"value":365,"label":"365 days"}],"description":"The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."}]
+   "options": [{"name":"chart","param":"analyze_chart","kind":"dashboard_chart","description":"The chart: dashboards.session_shape.views lists each view's options and valid combinations."},{"name":"filters","param":"analyze_filters","kind":"where","description":"The population every view, breakdown and panel counts, shown as Population chips. Leave a breakdown value out with {any: [{field, op: \"!=\", value}, {field, op: \"is_null\"}]}, or count only it with {field, op: \"=\", value}, as the legend does. Where terms on session_shape's filterable fields (datasets.session_shape.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field."},{"name":"days","param":"analyze_filters","kind":"window","values":[{"value":1,"label":"1 day"},{"value":7,"label":"7 days"},{"value":30,"label":"30 days"},{"value":90,"label":"90 days"},{"value":180,"label":"180 days"},{"value":365,"label":"365 days"}],"description":"The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."}]
   },
   "analyze/query": {
    "path": "analyze/query",

@@ -1,8 +1,12 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ChartSeries } from "./chart-series";
 import type { LegendAction } from "./chart-selection";
+import type { PopulationAction } from "./dashboard-population";
 
-export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void }) {
+// A legend value's menu. The selection only chooses what is drawn; where the
+// dashboard has a population (onPopulation), the last two items filter every
+// view and breakdown instead.
+export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, onPopulation }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; onPopulation?: (action: PopulationAction) => void }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const firstFocus = useRef(0);
@@ -55,6 +59,10 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
     close(true);
     onAction(action);
   }
+  function filter(action: PopulationAction) {
+    close(true);
+    onPopulation!(action);
+  }
   const remove = selectionActive && active;
   return <span className="usage-legend-chip">
     <button ref={trigger} type="button" className={`usage-legend-item${dimmed ? " dimmed" : ""}`} aria-label={item.label} aria-pressed={active} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
@@ -80,6 +88,10 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>Show all except this value</span><small>Include every other value, even in Other</small></button>
       <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose("clear")}>Show all values</button>
+      {onPopulation ? <>
+        <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-population" onClick={() => filter("keep")}><span>Count only this value</span><small>Population filter: every view and breakdown</small></button>
+        <button type="button" role="menuitem" tabIndex={-1} onClick={() => filter("drop")}><span>Leave this value out</span><small>Population filter: every view and breakdown</small></button>
+      </> : null}
     </div> : null}
   </span>;
 }
