@@ -48,7 +48,7 @@ export const optionalSettingsPages: Record<string, string> = { "/settings/librar
 // Which Pharos MCP tool yields each ID a link needs, and the field holding it.
 // The test checks every tool is registered in internal/archive.
 export const idSources: Record<string, Array<{ tool: string; field: string }>> = {
-  work_id: [{ tool: "search_work", field: "items[].workspace_id" }, { tool: "search_conversations", field: "items[].workspace_id" }, { tool: "search_text", field: "items[].workspace_id" }],
+  work_id: [{ tool: "search_work", field: "items[].workspace_id" }, { tool: "search_conversations", field: "items[].workspace_id" }, { tool: "search_text", field: "items[].workspace_id" }, { tool: "list_outcomes", field: "items[].workspace_id" }, { tool: "get_file_history", field: "files[].sessions[].workspace_id" }],
   conversation_id: [{ tool: "search_conversations", field: "items[].conversation_id" }, { tool: "get_work_detail", field: "conversations.items[].conversation_id" }, { tool: "search_messages", field: "items[].conversation_id" }],
   message_id: [{ tool: "search_messages", field: "items[].message_id" }, { tool: "search_conversation_passages", field: "items[].message_id" }, { tool: "get_conversation_messages", field: "items[].message_id" }],
   finding_id: [{ tool: "list_findings", field: "items[].id" }],

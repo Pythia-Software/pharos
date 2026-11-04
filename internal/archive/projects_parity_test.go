@@ -213,6 +213,22 @@ func TestProjectParityWithoutGit(t *testing.T) {
 		!strings.Contains(firstString(session["url"]), "call=") || strings.Contains(firstString(history["note"]), "No session") {
 		t.Fatalf("file history without Git: %#v", history)
 	}
+	// An agent working below the folder finds its project, and the session's
+	// outcome and edited file as work sections.
+	if found := projectItems(callProjectTool(t, library.catalog, "list_projects", map[string]any{"path": filepath.Join(library.folders["notes"], "drafts")})); len(found) != 1 || found[notes] == nil {
+		t.Fatalf("list_projects by working directory without Git: %#v", found)
+	}
+	for section, field := range map[string]string{"session_outcome": "outcome_why", "edited_files": "path"} {
+		detail := callProjectTool(t, library.catalog, "get_work_detail", map[string]any{"workspace_id": session["workspace_id"], "section": section})
+		if items := detail["items"].([]any); len(items) != 1 || firstString(items[0].(map[string]any)[field]) == "" {
+			t.Fatalf("get_work_detail %s without Git: %#v", section, detail)
+		}
+	}
+	// Spend by branch is for repositories: a folder has none, and says so
+	// by an empty split, not an error.
+	if spend := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{}); integer(spend["total"]) != 0 || len(spend["coverage"].(map[string]any)) != 0 || !strings.Contains(firstString(spend["note"]), "query_statistics") {
+		t.Fatalf("get_branch_spend without Git: %#v", spend)
+	}
 	// The page and its endpoint answer the same, with no error.
 	for _, target := range []string{"/files?file=plan.md", "/api/file-history?path=plan.md&project=" + url.QueryEscape(notes)} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)

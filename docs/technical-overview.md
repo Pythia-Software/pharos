@@ -340,8 +340,12 @@ filter that matches nothing is an error that points to `list_projects`.
 
 `list_outcomes` lists sessions with their outcome label, its evidence and
 tier, and the local Git state with its reason (`mcp_outcomes.go`);
-`get_file_history` returns the file timeline. Both take `project` and
-answer for folders from transcripts alone.
+`get_file_history` returns the file timeline, and `get_branch_spend` sums
+the spend-by-branch rows per branch. All three take `project` and answer for
+folders from transcripts alone. `list_projects` resolves a working directory
+(`path`) to its project. File filters read `session_files` as well as
+change sets (`fileFilterSQL`), and `query_statistics` filters and groups by
+`outcome_label`.
 
 `list_findings` and `get_finding` read findings: compact cards, then one
 finding's extracted facts kept apart from its evidence handles, which are

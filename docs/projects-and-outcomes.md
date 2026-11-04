@@ -673,8 +673,33 @@ A budget too small for one session, or one file with one session and one
 commit, is an error naming `max_output_tokens`, never an empty page whose
 `next_offset` does not advance.
 
-Both read stored facts only and answer as fully for folders as for
-repositories. The no-git parity test calls both on the folder fixture.
+- `get_branch_spend`: cost, tokens and sessions per branch, with the
+  coverage split (on a branch per turn or per session, unknown, no branch
+  data), from the same rows as Analyze → Spend by Branch. Where no repository
+  session has spend, it says so and points to `query_statistics` per project.
+
+Every other tool takes the new facts too:
+
+- `list_projects` takes `path`, an agent's working directory, and returns the
+  project it is in: the nearest repository checked out at or above it, else
+  the nearest folder project, even below where any session ran.
+- A `file` filter (`search_conversations`, `search_work`, `trace`,
+  `query_statistics`) matches files sessions edited through their tool
+  calls (`session_files`), not only change sets, so it finds Claude Code,
+  Codex and Antigravity work.
+- `query_statistics`, `search_work` and `search_conversations` take
+  `outcome_label` as a filter; `query_statistics` also selects it and groups
+  by it, with `project`. The older `outcome` filter is reported text.
+- `get_work_detail` has `session_outcome` (label, evidence, tier, local Git
+  state and facts), `edited_files` and `commit_links` sections.
+- The bundled skill (`assets/skills/search-prior-coding-sessions`) starts
+  from `list_projects` with the working directory, and leads to the file,
+  outcome and spend tools; a test keeps every tool it names registered. Ask
+  Pharos's instructions do the same.
+
+These read stored facts only and answer as fully for folders as for
+repositories. The no-git parity test calls each of them on the folder
+fixture.
 
 ## What Pharos never does with git
 
