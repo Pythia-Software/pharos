@@ -4537,6 +4537,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "1eebb9f108766619:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ChartSelect",
+      "control": "value={view.cycleOn ?? \"\"} onChange={cycleOn => set({ cycleOn: cycleOn || undefined })}",
+      "contract": "dashboard",
+      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
       "key": "24395342a1df0a30:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",

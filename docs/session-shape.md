@@ -50,12 +50,14 @@ All times come from message timestamps.
 |---|---|
 | `messages` | The session's own messages: prompts, responses, reasoning, tool calls and tool results. Metadata events (usage, compaction markers) are left out. Pharos stores each tool call and each result as its own message. |
 | `typed_human_messages` | User messages holding typed text (`typed_words > 0`, the Human Words `typed_message`). Pasted, quoted, re-sent, template, harness and automated text does not count. |
+| `typed_words` | The typed words (Human Words `typed_words`) of those messages, summed. Null without authorship. |
 | `tool_calls` | The session's own ledger calls. |
+| `last_message_at` | The session's last timed message, yours or the agent's: when the session was last worked in. `started_at` is its first. |
 | `wall_seconds` | Last message time minus first. |
 | `active_seconds` | The sum of gaps between consecutive messages, counting only gaps of 300 s or less. A longer gap counts as zero. |
 | `idle_seconds` | `wall_seconds − active_seconds`. |
 | `active_hours` | `active_seconds / 3600`, for sums. |
-| `autonomy`, `autonomy_prompts` | `tool_calls / max(1, typed_human_messages)`, and its denominator, so the catalog pools Σ tool calls ÷ Σ prompts. |
+| `autonomy`, `autonomy_prompts` | Tool calls per typed message: `tool_calls / max(1, typed_human_messages)`, and its denominator, so the catalog pools Σ tool calls ÷ Σ prompts. The field keeps its old name; the dashboard calls it *Tool calls per typed message*, and pools *Tool calls per 100 typed words* from `tool_calls` and `typed_words`. |
 | `turn_cycles`, `turn_cycle_p50_seconds`, `turn_cycle_p90_seconds` | For each typed human message, the gap to the next assistant message (any assistant kind: prose, reasoning or a tool call). A user prompt in between voids that turn. Gaps over 1,800 s, and gaps of zero or less, are excluded. Percentiles are nearest-rank. Null when no turn qualifies. |
 | `first_response_seconds` | The same gap for the first typed human message only. |
 | `max_unprompted_tool_calls` | The longest run of tool calls with no typed human message between them. |
@@ -73,12 +75,19 @@ is comparable from week to week.
 | `length_band` | messages 1–5, 6–15, 16–30, 31–60, 61–120, 121+ | AgentsView `LengthBucket` |
 | `active_band` | active time <5 m, 5–15 m, 15–30 m, 30–60 m, 1–2 h, 2 h+ | AgentsView `DurationBucket` |
 | `tool_band` | tool calls 0, 1–5, 6–20, 21–50, 51–100, 101+ | Splitrail `SESSION_SHAPES.toolCalls` |
-| `autonomy_band` | autonomy <0.5, 0.5–1, 1–2, 2–5, 5–10, 10+ | AgentsView `AutonomyBucket` |
+| `autonomy_band` | tool calls per typed message <0.5, 0.5–1, 1–2, 2–5, 5–10, 10+ | AgentsView `AutonomyBucket` |
 | `archetype` | Automated (no typed human message); otherwise by typed human messages: Quick ≤5, Standard ≤15, Deep ≤50, Marathon >50 | this document |
 
 AgentsView's autonomy is assistant messages with a tool use per user
 message. Pharos's is tool calls per *typed* message, which runs higher, but
-the edges are kept so the bands read the same way. A session with no
+the edges are kept so the bands read the same way. It is named for what it
+counts rather than "autonomy", since it says nothing of who decided what.
+
+The bands and archetypes are ordered, so their colours are too: each band
+takes a step of one blue ramp, lightest for the lowest, and the archetypes
+run grey for Automated, then light to dark violet from Quick to Marathon
+(`session-shape-bands.ts`, `chartSeriesStyle`). Legends, stacks and slices
+follow that order, by value or label. No band is red or green. A session with no
 messages of its own (metadata only) has no row.
 
 ### Forensic signals
@@ -257,7 +266,7 @@ The main chart's catalog is described in
 [dashboard analysis](dashboard-analysis.md#the-catalogs).
 
 **Cards.** The Card Library's Session Shape category
-(`session-shape-card-recipes.ts`) has thirteen cards, each opening the
+(`session-shape-card-recipes.ts`) has nineteen cards, each opening the
 dashboard on the state its cover draws. Automated sessions are most of
 them, so most cards count only the sessions a person typed in
 (`archetype != automated`), which arrives as a dashboard filter.
@@ -265,14 +274,24 @@ them, so most cards count only the sessions a person typed in
 - Usage: where sessions come from (by harness), your sessions by kind each
   day, how long your sessions are (length band shares), and where your
   active hours go (by repository).
-- Shape: active time by session kind, turn cycle and autonomy by provider,
-  each a box on a log axis, and peak context by model.
+- Shape: active time by session kind, turn cycle and tool calls per typed
+  message by provider, each a box on a log axis, and peak context by model.
 - Failures: failure rate by model (synthetic turns left out) and by session
   kind, and the failure rate over time.
-- Verified handbacks by repository, and when you start sessions (weekday).
+- Verified handbacks by repository, when you start sessions, and when you
+  last interact (each by weekday). The second places each session by its
+  last message: the dashboard's cycle with *Placed by: Last message*
+  (`cycleOn`). Both still pick sessions by their start.
+- Sparklines of your sessions, without a breakdown: sessions a day, active
+  hours a day, tool calls per typed message, turn cycle and peak context.
+  Each point pools a trailing seven complete days, as the dashboard's Over
+  time view does with a 7-day window and its norm, and states its sample.
 
-A log axis cannot place zero, so the active time and autonomy cards leave
-out sessions with none. Steering load has no card: correction cues are
+A log axis cannot place zero, so the active time and tool calls per typed
+message cards leave out sessions with none. Sparklines of one-shot edit
+turns, verified handbacks and active share were left out: on real data a
+week holds as few as two edit turns or handbacks, and wall time swings the
+active share, so their lines were noise. Steering load has no card: correction cues are
 rare enough that nearly every group reads 0%.
 
 The dashboard counts each session or root conversation as a group, so

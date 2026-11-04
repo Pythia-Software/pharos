@@ -408,6 +408,10 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	if facts, _, err = c.sessionShapeOf(t.Context(), "cv-2"); err != nil || !facts.HasAuthorship || shapeValue(facts.TypedHumanMessages) != int64(2) {
 		t.Fatal("classified prompts were not counted", err)
 	}
+	// Typed words sum the typed messages; the last message is the agent's.
+	if got := []any{shapeValue(facts.TypedWords), facts.LastMessageAt}; !reflect.DeepEqual(got, []any{int64(6), time.UnixMilli(shapeStart).Add(65 * time.Second).UTC().Format(timeLayout)}) {
+		t.Fatalf("got %#v", got)
+	}
 
 	// A checkpoint that reports no input still marks the request rows as
 	// cumulative: the session has no context peak.
