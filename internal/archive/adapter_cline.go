@@ -193,6 +193,11 @@ func (a *clineAdapter) parseSession(session clineSession) (*WorkspaceRecord, []s
 		return nil, nil, err
 	}
 	read = append([]sourcePart{part}, read...)
+	// A file without its list of messages, as one cut short or from
+	// another release, would replace the session with nothing.
+	if _, ok := transcript["messages"].([]any); !ok {
+		return nil, nil, errors.New("no list of messages")
+	}
 	record := a.record(session, manifest, transcript)
 	if record == nil {
 		return nil, read, nil
@@ -315,7 +320,8 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 			}
 		}
 	}
-	if len(messages) == 0 {
+	// The system prompt alone is no session to keep.
+	if len(messages) == 0 || len(messages) == 1 && messages[0].NativeID == "system_prompt" {
 		return nil
 	}
 	purpose, outcome := agentPurposeOutcome(messages)

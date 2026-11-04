@@ -139,6 +139,31 @@ func TestClineUsageCountsEachRequestOnce(t *testing.T) {
 	}
 }
 
+// A messages file without its list, as one cut short or from another
+// release, never replaces what was indexed; nor does an empty list.
+func TestClineSessionWithoutMessagesLeavesWhatWasIndexed(t *testing.T) {
+	for name, replacement := range map[string]string{"no list": `null`, "not a list": `{}`, "empty list": `[]`} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			root := clineFixture(t)
+			source := SourceConfig{Name: "cline", Kind: "cline", Path: root, Account: "local", Enabled: true}
+			ingestSource(t, c, source)
+			before := countRows(t, c, `SELECT COUNT(*) FROM messages`)
+			messages := filepath.Join(root, "sessions", clineSessionID, clineSessionID+".messages.json")
+			writeSourceFile(t, messages, `{"version":1,"sessionId":"`+clineSessionID+`","system_prompt":"You are Cline.","messages":`+replacement+`}`)
+			later := time.Now().Add(time.Hour)
+			if err := os.Chtimes(messages, later, later); err != nil {
+				t.Fatal(err)
+			}
+			adapter, _ := MakeAdapter(source)
+			c.Ingest(adapter, nil)
+			if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before {
+				t.Fatalf("messages %d, before %d", after, before)
+			}
+		})
+	}
+}
+
 // A capture holds the sessions' manifests and messages alone: not Cline's
 // provider settings, which hold credentials, nor its index, checkpoints or
 // compacted context. Another Mac indexes the same messages from it.
