@@ -323,7 +323,7 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 	}
 	if status.HostFileExists && (kinds == nil || kinds["cursor-cli"]) {
 		dir := filepath.Join(home, ".cursor")
-		if chats, err := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).chats(); err == nil && len(chats) > 0 {
+		if chats, _ := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).chats(); len(chats) > 0 {
 			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cursor-cli", resolved) == nil {
 				status.NewSources++
 			}

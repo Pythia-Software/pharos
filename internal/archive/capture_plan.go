@@ -194,8 +194,12 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		// and its meta.json: not the rest of ~/.cursor, which holds the
 		// CLI's sign-in and settings.
 		databases, files, err := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: source}}).captureInputs()
-		if err != nil {
+		if err != nil && databases == nil {
 			return plan, fmt.Errorf("Cursor CLI chats are unavailable: %w", err)
+		} else if err != nil {
+			// A folder of chats that cannot be listed leaves the others.
+			plan.complete = false
+			plan.warnings = append(plan.warnings, captureError{Path: filepath.Join(source.Path, "chats"), Error: err.Error()})
 		}
 		for _, database := range databases {
 			rel, _ := filepath.Rel(source.Path, database)

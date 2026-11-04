@@ -62,7 +62,8 @@ func cursorCLIMetaColumns() string {
 // it ("" when absent).
 type cursorCLIChat struct{ store, meta string }
 
-// chats lists the chats in the folder's chats directory.
+// chats lists the chats in the folder's chats directory. A folder of chats
+// that cannot be listed is reported with the chats of the others.
 func (a *cursorCLIAdapter) chats() ([]cursorCLIChat, error) {
 	root := filepath.Join(a.config.Path, "chats")
 	folders, err := os.ReadDir(root)
@@ -74,14 +75,15 @@ func (a *cursorCLIAdapter) chats() ([]cursorCLIChat, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	chats := []cursorCLIChat{}
+	chats, failures := []cursorCLIChat{}, []error{}
 	for _, folder := range folders {
 		if !folder.IsDir() {
 			continue
 		}
 		entries, err := os.ReadDir(filepath.Join(root, folder.Name()))
 		if err != nil {
-			return nil, err
+			failures = append(failures, err)
+			continue
 		}
 		for _, entry := range entries {
 			dir := filepath.Join(root, folder.Name(), entry.Name())
@@ -96,11 +98,11 @@ func (a *cursorCLIAdapter) chats() ([]cursorCLIChat, error) {
 		}
 	}
 	sort.Slice(chats, func(i, j int) bool { return chats[i].store < chats[j].store })
-	return chats, nil
+	return chats, errors.Join(failures...)
 }
 
 // captureInputs are what a capture copies: each chat's database (see
-// cursorCLICaptureTables) and its meta.json.
+// cursorCLICaptureTables) and its meta.json; and what could not be listed.
 func (a *cursorCLIAdapter) captureInputs() (databases, files []string, err error) {
 	chats, err := a.chats()
 	for _, chat := range chats {
@@ -114,7 +116,7 @@ func (a *cursorCLIAdapter) captureInputs() (databases, files []string, err error
 
 func (a *cursorCLIAdapter) Fingerprint() (string, error) {
 	databases, files, err := a.captureInputs()
-	if err != nil {
+	if err != nil && databases == nil {
 		return "", err
 	}
 	rows := []string{}
@@ -186,11 +188,11 @@ func cursorCLIMeta(tx *sql.Tx) (map[string]any, error) {
 // to the chat, so the latest root's ID is the change signal.
 func (a *cursorCLIAdapter) planParts() (*sourceWorkPlan, error) {
 	chats, err := a.chats()
-	if err != nil {
+	if err != nil && chats == nil {
 		return nil, err
 	}
 	plan := &sourceWorkPlan{continueOnError: true}
-	var failures []error
+	failures := []error{err}
 	for _, chat := range chats {
 		signal, err := a.signal(chat.store)
 		if err != nil {
@@ -311,7 +313,7 @@ func (a *cursorCLIAdapter) read(chat cursorCLIChat) (*WorkspaceRecord, error) {
 		return nil, err
 	}
 	version := a.databaseVersion(chat.store)
-	blobs := map[string][]byte{}
+	blobs, damaged := map[string][]byte{}, false
 	rows, err := tx.QueryContext(a.context(), `SELECT id, data FROM blobs`)
 	if err != nil {
 		return nil, err
@@ -324,9 +326,11 @@ func (a *cursorCLIAdapter) read(chat cursorCLIChat) (*WorkspaceRecord, error) {
 			return nil, err
 		}
 		// A blob that is not what its ID names, as one cut short, is read
-		// as gone.
+		// as gone; if it is not a message, it may have been a root.
 		if strings.EqualFold(id, cursorCLIBlobID(data)) {
 			blobs[strings.ToLower(id)] = data
+		} else if len(data) == 0 || data[0] != '{' {
+			damaged = true
 		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
@@ -340,7 +344,7 @@ func (a *cursorCLIAdapter) read(chat cursorCLIChat) (*WorkspaceRecord, error) {
 			return nil, err
 		}
 	}
-	return a.record(chat, meta, extra, blobs, version), nil
+	return a.record(chat, meta, extra, blobs, damaged, version), nil
 }
 
 // cursorCLIMessage is a message as a chat's roots place it.
@@ -348,10 +352,27 @@ type cursorCLIMessage struct {
 	id       string // its native ID: its blob's, with which occurrence of it
 	blob     string
 	selected bool
+	at       string // when the last prompt before it in its root was sent
 }
 
-// record builds a chat's record from its metadata, its meta.json and blobs.
-func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any, blobs map[string][]byte, version int64) *WorkspaceRecord {
+// cursorCLIUserText is the text of a user message.
+func cursorCLIUserText(value map[string]any) string {
+	if text, ok := value["content"].(string); ok {
+		return text
+	}
+	texts := []string{}
+	parts, _ := sliceValue(value["content"])
+	for _, part := range parts {
+		if text := firstString(mapValueDefault(part)["text"]); strings.TrimSpace(text) != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.Join(texts, "\n\n")
+}
+
+// record builds a chat's record from its metadata, its meta.json and blobs;
+// damaged is whether a blob that was not a message could not be read.
+func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any, blobs map[string][]byte, damaged bool, version int64) *WorkspaceRecord {
 	isMessage := func(id string) bool { data := blobs[id]; return len(data) > 0 && data[0] == '{' }
 	latest := strings.ToLower(firstString(meta["latestRootBlobId"]))
 	root := cursorCLIParseRoot(blobs[latest])
@@ -370,43 +391,60 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 		}
 		return strings.Join(older[i].messages, "") < strings.Join(older[j].messages, "")
 	})
-	// Without its latest root, a chat's newest messages are unknown: what was
-	// indexed of it is kept, and the longest root left stands for the latest.
-	lost := latest != "" && root == nil
-	if lost && len(older) > 0 {
+	// Without its latest root, or a root it may have had, a chat's messages
+	// are not all known: what was indexed of it is kept, and the longest root
+	// left stands for the latest.
+	lost := latest != "" && root == nil || damaged
+	if root == nil && latest != "" && len(older) > 0 {
 		root, older = older[len(older)-1], older[:len(older)-1]
 	} else if root == nil {
 		root = &cursorCLIRoot{}
 	}
+	// When each prompt was sent, from the time the CLI stamps on it.
+	started := cursorCLITime(firstNonNil(meta["createdAt"], extra["createdAtMs"]))
+	sent := map[string]string{}
+	sentAt := func(blob string) string {
+		if at, ok := sent[blob]; ok {
+			return at
+		}
+		var value map[string]any
+		if isMessage(blob) && json.Unmarshal(blobs[blob], &value) == nil && firstString(value["role"]) == "user" {
+			_, sent[blob] = cursorCLIPrompt(cursorCLIUserText(value))
+		}
+		return sent[blob]
+	}
 	// The latest root's messages, in order; a message repeated in it is told
 	// apart by its occurrence. Then those only older roots hold, from the
-	// shortest root: rewound or compacted away, so no longer selected.
+	// shortest root: rewound or compacted away, so no longer selected. Each
+	// is timed by the prompts before it in its own root.
 	messages, held := []cursorCLIMessage{}, map[string]int{}
-	place := func(blob string, occurrence int, selected bool) {
+	place := func(blob string, occurrence int, selected bool, at string) {
 		held[blob] = occurrence
 		id := blob[:min(16, len(blob))]
 		if occurrence > 1 {
 			id += "#" + strconv.Itoa(occurrence)
 		}
-		messages = append(messages, cursorCLIMessage{id: id, blob: blob, selected: selected})
+		messages = append(messages, cursorCLIMessage{id: id, blob: blob, selected: selected, at: at})
 	}
+	latestAt := started
 	for _, blob := range root.messages {
-		place(blob, held[blob]+1, true)
+		latestAt = max(latestAt, sentAt(blob))
+		place(blob, held[blob]+1, true, latestAt)
 	}
 	// An older root's message whose blob is gone or unreadable is unread, as
 	// one the latest root lists is.
 	for _, candidate := range older {
-		occurrences := map[string]int{}
+		occurrences, at := map[string]int{}, started
 		for _, blob := range candidate.messages {
+			at = max(at, sentAt(blob))
 			if occurrences[blob]++; occurrences[blob] > held[blob] {
-				place(blob, occurrences[blob], false)
+				place(blob, occurrences[blob], false, at)
 			}
 		}
 	}
 
 	agent := defaultString(meta["agentId"], filepath.Base(filepath.Dir(chat.store)))
 	origin := a.original(chat.store)
-	started := cursorCLITime(firstNonNil(meta["createdAt"], extra["createdAtMs"]))
 	conversation := ConversationRecord{NativeID: agent, Provider: "cursor", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cursor-cli", StartedAt: started}
 	context := map[string]any{}
 	if root.contextUsed > 0 {
@@ -433,7 +471,10 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 			conversation.Unread = append(conversation.Unread, message.id)
 			continue
 		}
-		base := MessageRecord{NativeID: message.id, CreatedAt: at, EvidenceLocator: origin + "#" + message.blob, Selected: message.selected,
+		if message.selected {
+			at = max(at, message.at)
+		}
+		base := MessageRecord{NativeID: message.id, CreatedAt: message.at, EvidenceLocator: origin + "#" + message.blob, Selected: message.selected,
 			// The blob's ID stands in for its raw text, so text quoting usage
 			// JSON is never read as token usage.
 			RawText: jsonText(map[string]any{"type": "cursor_cli_message", "id": message.blob})}
@@ -445,19 +486,12 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 		case "user":
 			// The CLI's own context (the system, folder and shell) is sent
 			// as a user message.
-			texts := []string{}
-			for _, part := range parts {
-				if text := firstString(mapValueDefault(part)["text"]); strings.TrimSpace(text) != "" {
-					texts = append(texts, text)
-				}
-			}
-			text := strings.Join(texts, "\n\n")
+			text := cursorCLIUserText(value)
 			if strings.HasPrefix(strings.TrimSpace(text), "<user_info>") || strings.TrimSpace(text) == "" {
 				continue
 			}
 			prompt, sent := cursorCLIPrompt(text)
 			if sent != "" {
-				at = max(at, sent)
 				base.CreatedAt = sent
 			}
 			item := base

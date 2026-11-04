@@ -89,6 +89,15 @@ func cursorCLIRootBlob(ids []string, folder string) []byte {
 	return out
 }
 
+// cursorCLIRootIDs are the blob IDs of the messages a chat's root lists.
+func cursorCLIRootIDs(chat cursorCLIChatSpec, root int) []string {
+	ids := []string{}
+	for _, index := range chat.roots[root] {
+		ids = append(ids, cursorCLIBlobID([]byte(jsonText(chat.messages[index]))))
+	}
+	return ids
+}
+
 // cursorCLIWriteChat writes a chat under the CLI's folder root.
 func cursorCLIWriteChat(t *testing.T, root string, chat cursorCLIChatSpec) string {
 	t.Helper()
@@ -113,12 +122,8 @@ func cursorCLIWriteChat(t *testing.T, root string, chat cursorCLIChatSpec) strin
 		}
 	}
 	latest := ""
-	for _, indexes := range chat.roots {
-		listed := []string{}
-		for _, index := range indexes {
-			listed = append(listed, ids[index])
-		}
-		data := cursorCLIRootBlob(listed, chat.folder)
+	for index := range chat.roots {
+		data := cursorCLIRootBlob(cursorCLIRootIDs(chat, index), chat.folder)
 		latest = cursorCLIBlobID(data)
 		if _, err := db.Exec(`INSERT OR IGNORE INTO blobs VALUES(?, ?)`, latest, data); err != nil {
 			t.Fatal(err)
@@ -312,6 +317,24 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 	ingestSource(t, c, source)
 	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before {
 		t.Fatalf("with the latest root cut short: messages %d, before %d", after, before)
+	}
+
+	// An older root cut short: what it listed is not known, so is kept.
+	c, _ = testCatalog(t)
+	root = filepath.Join(t.TempDir(), ".cursor")
+	dir = cursorCLIWriteChat(t, root, cursorCLIConversation())
+	source = cursorCLISource(root)
+	ingestSource(t, c, source)
+	cursorCLIStore(t, dir, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE blobs SET data=substr(data, 1, 50) WHERE id=?`, cursorCLIBlobID(cursorCLIRootBlob(cursorCLIRootIDs(cursorCLIConversation(), 0), "/work/app")))
+		return err
+	})
+	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" || record.Unread != nil {
+		t.Fatalf("with an older root cut short: coverage %s, unread %v", record.Coverage, record.Unread)
+	}
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Abandoned reply.'`); n != 1 {
+		t.Fatalf("with an older root cut short: %d rewound replies", n)
 	}
 
 	// A prompt sent twice, then rewound to before the second.
@@ -516,5 +539,71 @@ func TestCursorCLIIsFoundAndSetUp(t *testing.T) {
 	}
 	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["cursor-cli"],"accept":["cursor-cli"]}`); code != 200 || jsonText(result["added"]) != `["cursor-cli"]` {
 		t.Fatalf("accept the CLI = %d %v", code, result)
+	}
+}
+
+// What a rewind left behind is timed by its own prompts, and is neither the
+// work's outcome nor its evidence, even when the latest turn has no reply.
+func TestCursorCLIRewoundRepliesAreNotTheOutcome(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := filepath.Join(t.TempDir(), ".cursor")
+	chat := cursorCLIConversation()
+	chat.messages = append(chat.messages, map[string]any{"role": "user", "id": "u2", "content": []any{map[string]any{"type": "text",
+		"text": "<timestamp>Wednesday, Nov 4, 2026, 2:05 PM (UTC-5)</timestamp>\n<user_query>Now the docs</user_query>"}}})
+	chat.roots = append(chat.roots, []int{0, 1, 2, 3, 4, 5, 6, 7, 9})
+	cursorCLIWriteChat(t, root, chat)
+	conversation := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]
+	rewound := conversation.Messages[len(conversation.Messages)-1]
+	if rewound.Text != "Abandoned reply." || rewound.CreatedAt != "2026-11-04T16:18:00.000Z" || conversation.EndedAt != "2026-11-04T19:05:00.000Z" {
+		t.Fatalf("rewound reply at %s, conversation ended %s", rewound.CreatedAt, conversation.EndedAt)
+	}
+	ingestSource(t, c, cursorCLISource(root))
+	var outcome, evidence string
+	if err := c.DB.QueryRow(`SELECT COALESCE(outcome, ''), evidence_json FROM summaries`).Scan(&outcome, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if fixed := cursorCLIBlobID([]byte(jsonText(chat.messages[7]))); outcome != "Fixed." || !strings.Contains(evidence, fixed) {
+		t.Fatalf("outcome %q, evidence %s", outcome, evidence)
+	}
+
+	// Rewound to the prompt alone.
+	c, _ = testCatalog(t)
+	root = filepath.Join(t.TempDir(), ".cursor")
+	chat = cursorCLIConversation()
+	chat.roots = [][]int{{0, 1, 2, 8}, {0, 1, 2}}
+	cursorCLIWriteChat(t, root, chat)
+	ingestSource(t, c, cursorCLISource(root))
+	if err := c.DB.QueryRow(`SELECT COALESCE(outcome, ''), evidence_json FROM summaries`).Scan(&outcome, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "" || strings.Contains(evidence, cursorCLIBlobID([]byte(jsonText(chat.messages[8])))) {
+		t.Fatalf("with only a rewound reply: outcome %q, evidence %s", outcome, evidence)
+	}
+}
+
+// A folder of chats that cannot be listed leaves the others to be indexed
+// and captured.
+func TestCursorCLIUnreadableFolderLeavesTheOthers(t *testing.T) {
+	useHost(t, "host-a")
+	root := cursorCLIFixture(t)
+	folder := filepath.Join(root, "chats", hashBytes([]byte("/work/docs"))[:32])
+	if err := os.Chmod(folder, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(folder, 0o755) })
+	adapter, err := MakeAdapter(cursorCLISource(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := map[string]bool{}
+	err = adapter.Discover(func(record WorkspaceRecord) error { records[record.SourceID] = true; return nil })
+	if err == nil || !records[cursorCLIChatA] {
+		t.Fatalf("read %v, error %v", records, err)
+	}
+	config := captureTestConfig(t, cursorCLISource(root))
+	runCapture(t, config)
+	store := filepath.Join("files", "chats", hashBytes([]byte("/work/app"))[:32], cursorCLIChatA, "store.db")
+	if _, err := os.Stat(capturedPath(config, "cursor-cli", store)); err != nil {
+		t.Fatalf("the readable chat was not captured: %v", err)
 	}
 }
