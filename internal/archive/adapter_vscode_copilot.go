@@ -200,6 +200,16 @@ func (a *vscodeCopilotAdapter) planParts() (*sourceWorkPlan, error) {
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", session.file, err)
 			}
+			// While a window cannot be listed, the copy read may be older than
+			// one there that was read before; its evidence makes ingest keep
+			// the newer (guardCapture), as it does for a capture.
+			if record != nil && len(failures) > 0 && a.view == nil {
+				values := []string{}
+				for _, part := range read {
+					values = append(values, fmt.Sprintf("%s:%d:%d", part.item, part.size, part.version))
+				}
+				record.EvidenceIdentity = hashBytes([]byte(strings.Join(values, "\n")))
+			}
 			return emit(record, read)
 		}})
 	}

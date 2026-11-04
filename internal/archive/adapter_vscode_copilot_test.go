@@ -160,6 +160,9 @@ func TestVSCodeCopilotSessionReplaysItsJournal(t *testing.T) {
 		strings.Join(kinds, " ") != "agent:message assistant:tool_call tool:tool_result assistant:message" || child.Messages[0].Sender != "agent:"+vscodeSessionID {
 		t.Fatalf("subagent = %+v", child)
 	}
+	if channel, _ := harnessChannel(main.Harness, session.SourceKind); channel != "ide" {
+		t.Fatalf("channel = %q", channel)
+	}
 	if empty := records[vscodeEmptyID]; empty.Location != "" || empty.Title != "Hello" {
 		t.Fatalf("window without a folder = %+v", empty)
 	}
@@ -364,5 +367,37 @@ func TestVSCodeCopilotUnreadableWindowLeavesTheOthers(t *testing.T) {
 	}
 	if _, err := planCapture(SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root}); err == nil {
 		t.Fatal("a capture missing a window's sessions was planned")
+	}
+}
+
+// While the window holding a session's newest copy cannot be listed, an
+// older copy in another window does not replace what was read from it.
+func TestVSCodeCopilotOlderCopyNeverReplacesTheNewer(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := vscodeFixture(t)
+	source := SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root, Account: "local", Enabled: true}
+	older := filepath.Join(root, "workspaceStorage", "d4", "chatSessions", vscodeSessionID+".jsonl")
+	writeSourceFile(t, older, strings.Join(vscodeJournal[:11], "\n")+"\n")
+	newer, err := os.Stat(filepath.Join(root, "workspaceStorage", "a1", "chatSessions", vscodeSessionID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if earlier := newer.ModTime().Add(-time.Hour); os.Chtimes(older, earlier, earlier) != nil {
+		t.Fatal(err)
+	}
+	ingestSource(t, c, source)
+	before := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`)
+	locked := filepath.Join(root, "workspaceStorage", "a1", "chatSessions")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("running with access to every folder")
+	}
+	adapter, _ := MakeAdapter(source)
+	c.Ingest(adapter, nil)
+	if after := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`); after != before || before == 0 {
+		t.Fatalf("the second request's messages: %d, before %d", after, before)
 	}
 }
