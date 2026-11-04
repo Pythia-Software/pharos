@@ -29,7 +29,7 @@ import (
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
 	// Changing it marks every conversation for recomputation.
-	sessionShapeVersion = "2"
+	sessionShapeVersion = "3"
 	sessionShapeBatch   = 200
 	// A gap between consecutive messages longer than this is idle time.
 	sessionShapeActiveGap = 300.0
@@ -655,6 +655,11 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 			continue
 		}
 		request := shapeRequest{input: integer(row["input_tokens"]), model: firstString(row["model"])}
+		if len(checkpoints) > 0 {
+			// Codex request rows, native or not, can hold cumulative usage;
+			// with checkpoints, a row names only its model.
+			request.input = 0
+		}
 		if at, ok := parseTime(firstString(row["requested_at"])); ok {
 			request.at = at.UnixMilli()
 		}

@@ -144,7 +144,7 @@ const ledger = Array.from({ length: 360 }, (_, index) => {
     repository_name: ["pharos", "query-table", null][index % 3 === 2 && index % 2 ? 2 : index % 2], length_band: ["1-5", "6-15", "16-30", "31-60", "61-120", "121+"][index % 6],
     archetype: typed === null ? null : typed ? ["quick", "standard", "deep", "marathon"][index % 4] : "automated", messages: index % 6 * 10 + 2,
     has_tool_data: tools, has_authorship: authored, has_context_window: window, has_timestamps: index % 13 !== 0,
-    active_seconds: index % 13 === 0 ? null : (index % 17 + 1) * 97, wall_seconds: (index % 17 + 1) * 210, turn_cycle_p50_seconds: authored && typed ? index % 8 * 15 + 5 : null,
+    active_seconds: index % 13 === 0 ? null : (index % 17 + 1) * 97, active_hours: index % 13 === 0 ? null : (index % 17 + 1) * 97 / 3600, wall_seconds: (index % 17 + 1) * 210, turn_cycle_p50_seconds: authored && typed ? index % 8 * 15 + 5 : null,
     typed_human_messages: typed, autonomy_prompts: authored ? Math.max(1, typed) : null, autonomy: tools && authored ? calls / Math.max(1, typed) : null,
     tool_calls: calls, failed_calls: tools ? index % 5 : null, corrections: authored ? index % 3 : null, edit_turns: edits, one_shot_edit_turns: edits === null ? null : Math.max(0, edits - index % 2),
     edit_handbacks: handbacks, verified_handbacks: handbacks === null ? null : Math.max(0, handbacks - index % 3), context_peak_ratio: window ? index % 10 / 10 + 0.05 : null,
@@ -170,6 +170,7 @@ function cardPair(id) {
 test("Session Shape cards: every one opens the Session Shape dashboard with its population as the filters", () => {
   const cards = queryRecipes.filter(recipe => recipe.dataset === "session_shape");
   assert.ok(cards.length >= 12, "a collection of cards");
+  assert.equal(new Set(cards.map(recipe => recipe.title)).size, cards.length, "titles are distinct");
   for (const recipe of cards) {
     assert.equal(recipe.category, "sessions", recipe.id);
     assert.equal(recipe.destination.topic, "session_shape", recipe.id);
@@ -179,16 +180,16 @@ test("Session Shape cards: every one opens the Session Shape dashboard with its 
     for (const term of recipe.where ?? []) assert.ok(filters.some(filter => JSON.stringify(filter) === JSON.stringify(term)), `${recipe.id}: ${JSON.stringify(term)} is a dashboard filter`);
   }
   // A partial population is the dashboard's, and its query's.
-  for (const [id, term] of [["session-steered-failure-rates", { field: "archetype", op: "!=", value: "automated" }], ["session-length-without-batch", { field: "harness", op: "!=", value: "antigravity-cli" }]]) {
+  for (const [id, term] of [["session-autonomy", { field: "archetype", op: "!=", value: "automated" }], ["session-model-failure-rates", { field: "model_family", op: "!=", value: "<synthetic>" }]]) {
     const { analysis } = cardPair(id);
     assert.ok(analysis.query.where.some(filter => JSON.stringify(filter) === JSON.stringify(term)), id);
   }
 });
 
-test("Session Shape rate cards: pooled rates by group over the covered sessions, with the same ten-session minimum", () => {
-  for (const id of ["session-model-failure-rates", "session-steered-failure-rates", "session-repository-steering", "session-model-one-shot", "session-repository-verification"]) {
-    const { card, dashboard, state } = cardPair(id);
-    assert.deepEqual([state.view, state.minSamples], ["compare", 10], id);
+test("Session Shape rate cards: pooled rates by group over the covered sessions, with the dashboard's session minimum", () => {
+  for (const id of ["session-model-failure-rates", "session-kind-failure-rates", "session-repository-verification"]) {
+    const { recipe, card, dashboard, state } = cardPair(id);
+    assert.deepEqual([state.view, state.minSamples], ["compare", Number(recipe.exploration.having[0].value)], id);
     assert.deepEqual(shapeKeys(dashboard.buckets), shapeKeys(card.buckets), id);
     assert.ok(card.buckets.some(bucket => bucket.value > 0 && bucket.value < 1), `${id}: rates between zero and one`);
   }
@@ -200,32 +201,21 @@ test("Session Shape rate cards: pooled rates by group over the covered sessions,
   assert.equal(shapeKeys(cardPair("session-model-failure-rates").card.buckets)['["opus"]'], shapeRound(pooled(opus, "failed_calls", "tool_calls")));
 });
 
-test("Session Shape share and distribution cards draw the dashboard's slices, boxes and bins", () => {
-  for (const id of ["session-archetypes", "session-length-without-batch"]) {
-    const { card, dashboard, analysis } = cardPair(id);
-    assert.equal(analysis.clause.display.kind, "pie", id);
+test("Session Shape count and distribution cards draw the dashboard's bars and boxes", () => {
+  for (const id of ["session-sources", "session-repository-hours"]) {
+    const { card, dashboard } = cardPair(id);
+    assert.ok(card.buckets.every(bucket => bucket.value > 0), id);
     assert.deepEqual(shapeKeys(dashboard.buckets), shapeKeys(card.buckets), id);
   }
   const summary = bucket => JSON.stringify(bucket.distribution.summary, (_, value) => shapeRound(value));
-  for (const id of ["session-turn-cycle", "session-autonomy", "session-model-context"]) {
+  for (const id of ["session-active-time", "session-turn-cycle", "session-autonomy", "session-model-context"]) {
     const { recipe, card, dashboard, state } = cardPair(id);
     assert.equal(state.minSamples, recipe.cover.minSamples, id);
     assert.deepEqual(shapeKeys(dashboard.buckets, summary), shapeKeys(filterBoxSamples(card, recipe.cover.minSamples).buckets, summary), id);
   }
-  const { card, dashboard, state } = cardPair("session-active-time");
-  assert.deepEqual([state.view, state.split, state.scale], ["distribution", "none", "logarithmic"]);
-  assert.deepEqual(dashboard.buckets.map(bucket => bucket.distribution), card.buckets.map(bucket => bucket.distribution));
 });
 
-test("Session Shape scatter card: one point per session, active time against tool calls", () => {
-  const { card, dashboard, analysis } = cardPair("session-active-tools");
-  assert.equal(analysis.clause.display.kind, "scatter");
-  const points = buckets => shapeKeys(buckets, bucket => `${shapeRound(bucket.value)},${shapeRound(bucket.y)}`);
-  assert.ok(Object.keys(points(card.buckets)).length > 50);
-  assert.deepEqual(points(dashboard.buckets), points(card.buckets));
-});
-
-test("Session Shape mix cards: the card's 7-day shares are the dashboard's trend, day by day", async t => {
+test("Session Shape daily cards: the card's counts and 7-day shares are the dashboard's trend, day by day", async t => {
   const prior = { fetch: global.fetch, location: global.location };
   global.location = { origin: "http://parity.test" };
   t.mock.timers.enable({ apis: ["Date"], now: cardNow });
@@ -241,7 +231,7 @@ test("Session Shape mix cards: the card's 7-day shares are the dashboard's trend
     const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
     const card = compactTimelineBuckets(preview.buckets, preview.timeline ?? {}), where = dashboardWhere(item);
     const state = normalizeAnalysis(catalog, item.destination.chart), query = trendQuery(catalog, state, where, { now: cardNow });
-    assert.deepEqual([state.view, state.period, state.rollingPeriods, state.share], ["trend", "day", 7, true], id);
+    assert.deepEqual([state.view, state.period, state.rollingPeriods > 1, state.share], ["trend", "day", Boolean(item.cover.timeline?.percent), Boolean(item.cover.timeline?.percent)], id);
     const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
     assert.equal(built.error, undefined, id);
     assert.deepEqual(built.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
@@ -251,7 +241,7 @@ test("Session Shape mix cards: the card's 7-day shares are the dashboard's trend
     const labels = catalog.breakdowns[state.split].values, label = item => labels[item.value] ?? (item.value || "Unspecified");
     const named = (values, series, name) => Object.fromEntries(series.filter(item => values[item.key]).map(item => [name(item), shapeRound(values[item.key])]));
     card.forEach((bucket, index) => assert.deepEqual(named(built.buckets[index].values, built.series, label), named(bucket.values, preview.series, item => item.value ?? item.key), `${id} ${bucket.key}`));
-    assert.ok(card.some(bucket => Object.values(bucket.values).some(share => share > 0 && share < 1)), `${id}: shares`);
+    if (item.cover.timeline?.percent) assert.ok(card.some(bucket => Object.values(bucket.values).some(share => share > 0 && share < 1)), `${id}: shares`);
   }
 });
 

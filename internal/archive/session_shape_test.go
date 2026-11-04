@@ -387,14 +387,16 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	}
 
 	// A legacy Codex checkpoint's request row holds a delta of cumulative
-	// usage; its last_token_usage is the context. A prompt Human Words has not
+	// usage, and a native one can hold the cumulative total; its
+	// last_token_usage is the context. A prompt Human Words has not
 	// classified yet leaves authorship unknown.
 	ids = seedShapeConversation(t, c, "cv-2", "ws-2", "codex", "gpt-5",
 		"user message 0 fix the parser", "assistant message 5 ok",
 		`metadata metadata 6 {"payload":{"info":{"last_token_usage":{"cached_input_tokens":0,"input_tokens":100000,"total_tokens":100100},"model_context_window":272000,"total_token_usage":{"input_tokens":500000,"total_tokens":500500}},"type":"token_count"},"type":"event_msg"}`,
 		"user message 60 now the lexer", "assistant message 65 done")
 	authored(t, c, ids[0], "cv-2", "ws-2", "typed", 3)
-	execTx(t, c.DB, `INSERT INTO model_requests(id,conversation_id,sequence,requested_at,input_tokens) VALUES('r2','cv-2',0,'2026-10-20T10:00:06.000Z',500000)`)
+	execTx(t, c.DB, `INSERT INTO model_requests(id,conversation_id,sequence,requested_at,input_tokens) VALUES('r2','cv-2',0,'2026-10-20T10:00:06.000Z',500000)`,
+		`INSERT INTO model_requests(id,conversation_id,sequence,requested_at,input_tokens,native_id) VALUES('r3','cv-2',1,'2026-10-20T10:01:06.000Z',9000000,'turn-1')`)
 	facts, _, err = c.sessionShapeOf(t.Context(), "cv-2")
 	if err != nil {
 		t.Fatal(err)

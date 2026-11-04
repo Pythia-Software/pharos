@@ -151,22 +151,19 @@ const dashboards: Record<string, CardDashboard> = {
   "parallel-weekday": parallel("at_once", "none", { view: "cycle", cycle: "weekday" }),
   // Session Shape: one record per agent session. Rates carry their coverage
   // population as the card's filters.
+  "session-sources": sessions("sessions", "harness", {}),
+  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend" }),
   "session-length-mix": sessions("sessions", "length_band", { view: "trend", rollingPeriods: 7, share: true }),
-  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend", rollingPeriods: 7, share: true }),
-  "session-archetypes": sessions("sessions", "archetype", { compareAs: "share" }),
-  "session-active-time": sessions("active_time", "none", { view: "distribution", scale: "logarithmic" }),
+  "session-active-time": sessions("active_time", "archetype", { view: "distribution", scale: "logarithmic" }),
   "session-turn-cycle": sessions("turn_cycle", "provider", { view: "distribution", scale: "logarithmic" }),
-  "session-autonomy": sessions("autonomy", "provider", { view: "distribution" }),
-  "session-model-failure-rates": sessions("failure_rate", "model_family", { minSamples: 10 }),
-  "session-steered-failure-rates": sessions("failure_rate", "model_family", { minSamples: 10 }),
-  "session-repository-steering": sessions("steering_load", "repository_name", { minSamples: 10 }),
-  "session-model-one-shot": sessions("one_shot_rate", "model_family", { minSamples: 10 }),
-  "session-repository-verification": sessions("verification", "repository_name", { minSamples: 10 }),
-  "session-model-context": sessions("context_peak", "model_family", { view: "distribution" }),
+  "session-autonomy": sessions("autonomy", "provider", { view: "distribution", scale: "logarithmic" }),
+  "session-model-failure-rates": sessions("failure_rate", "model_family", { minSamples: 20 }),
+  "session-kind-failure-rates": sessions("failure_rate", "archetype", { minSamples: 10 }),
   "session-failure-trend": sessions("failure_rate", "none", { view: "trend", ...trailing }),
+  "session-repository-hours": sessions("active_hours", "repository_name", {}),
+  "session-repository-verification": sessions("verification", "repository_name", { minSamples: 20 }),
+  "session-model-context": sessions("context_peak", "model_family", { view: "distribution" }),
   "session-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median" }),
-  "session-active-tools": sessions("active_time", "none", { view: "scatter", unit: "session", metricY: "tool_calls", scale: "logarithmic", scaleY: "logarithmic" }),
-  "session-length-without-batch": sessions("sessions", "length_band", { compareAs: "share" }),
 };
 
 function dashboardFor(recipe: QueryRecipe): CardDashboard {
