@@ -50,7 +50,9 @@ All times come from message timestamps.
 |---|---|
 | `messages` | The session's own messages: prompts, responses, reasoning, tool calls and tool results. Metadata events (usage, compaction markers) are left out. Pharos stores each tool call and each result as its own message. |
 | `typed_human_messages` | User messages holding typed text (`typed_words > 0`, the Human Words `typed_message`). Pasted, quoted, re-sent, template, harness and automated text does not count. |
+| `typed_words` | The typed words (Human Words `typed_words`) of those messages, summed. Null without authorship. |
 | `tool_calls` | The session's own ledger calls. |
+| `last_message_at` | The session's last timed message, yours or the agent's: when the session was last worked in. `started_at` is its first. |
 | `wall_seconds` | Last message time minus first. |
 | `active_seconds` | The sum of gaps between consecutive messages, counting only gaps of 300 s or less. A longer gap counts as zero. |
 | `idle_seconds` | `wall_seconds − active_seconds`. |
