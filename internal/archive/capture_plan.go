@@ -95,15 +95,22 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			return !info.IsDir() || strings.HasSuffix(strings.ToLower(file), ".json")
 		})
 	case "chatgpt", "chatgpt-export":
-		file := (&chatGPTAdapter{baseAdapter{config: source}}).exportFile()
-		if _, err := os.Stat(file); err != nil {
+		// The conversation files, or the ZIP whole; the export's account
+		// files beside them are not read.
+		files, err := (&chatGPTAdapter{baseAdapter{config: source}}).exportFiles()
+		if err != nil {
 			return plan, fmt.Errorf("ChatGPT export is unavailable: %w", err)
 		}
-		rel, _ := filepath.Rel(source.Path, file)
-		if !info.IsDir() {
-			rel = filepath.Base(file)
+		for _, file := range files {
+			if _, err := os.Stat(file); err != nil {
+				return plan, fmt.Errorf("ChatGPT export is unavailable: %w", err)
+			}
+			rel, _ := filepath.Rel(source.Path, file)
+			if !info.IsDir() {
+				rel = filepath.Base(file)
+			}
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
 		}
-		plan.files = []captureItem{{file, filepath.ToSlash(rel)}}
 	case "claude-ai":
 		file := (&claudeAIAdapter{baseAdapter{config: source}}).exportFile()
 		if _, err := os.Stat(file); err != nil {

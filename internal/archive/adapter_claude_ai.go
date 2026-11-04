@@ -1,8 +1,6 @@
 package archive
 
 import (
-	"archive/zip"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -104,20 +102,8 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 }
 
 // claudeAIZipConversations opens conversations.json inside the export's ZIP.
-// A capture may store the ZIP compressed, so it is read whole when the file
-// is not available for random access.
 func claudeAIZipConversations(source *sourceFile, size int64) (io.Reader, error) {
-	var at io.ReaderAt
-	if source.file != nil && source.decoder == nil {
-		at = source.file
-	} else {
-		data, err := io.ReadAll(source)
-		if err != nil {
-			return nil, err
-		}
-		at, size = bytes.NewReader(data), int64(len(data))
-	}
-	archive, err := zip.NewReader(at, size)
+	archive, err := exportZip(source, size)
 	if err != nil {
 		return nil, err
 	}
@@ -283,16 +269,5 @@ func claudeAISelected(conversation claudeAIConversation) map[string]bool {
 			}
 		}
 	}
-	return claudeAIPath(parents, leaf)
-}
-
-func claudeAIPath(parents map[string]string, leaf string) map[string]bool {
-	selected := map[string]bool{}
-	for id := leaf; id != "" && !selected[id]; id = parents[id] {
-		if _, ok := parents[id]; !ok {
-			break
-		}
-		selected[id] = true
-	}
-	return selected
+	return branchPath(parents, leaf)
 }
