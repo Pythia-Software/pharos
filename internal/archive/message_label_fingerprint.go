@@ -43,7 +43,11 @@ func (s *Server) getMessageLabelFingerprint(w http.ResponseWriter, r *http.Reque
 	if truncated {
 		messages = messages[:messageLabelFingerprintLimit]
 	}
-	attach, summary, err := s.Catalog.messageLabelsAttacher(id)
+	messageIDs := make([]string, 0, len(messages))
+	for _, message := range messages {
+		messageIDs = append(messageIDs, firstString(message["id"]))
+	}
+	attach, summary, err := s.Catalog.messageLabelsAttacherContext(r.Context(), id, messageIDs)
 	if err != nil {
 		writeError(w, err, 500)
 		return

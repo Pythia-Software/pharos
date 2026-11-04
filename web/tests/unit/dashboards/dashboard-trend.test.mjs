@@ -618,6 +618,16 @@ test('label line and bar views share amounts and preserve chart settings when sw
  const compare=switchView(messageLabelsCatalog,bar,'compare');
  assert.equal(compare.compareAs,'bars','overlapping labels remain values when comparison cannot form shares');
  assert.equal(switchView(messageLabelsCatalog,compare,'trend_bar').view,'trend_bar');
+ // Saved requests keep unsupported settings so the chart can explain its
+ // daily, non-cumulative rendering without silently rewriting the link.
+ for(const view of ['trend_line','trend_bar']){
+  const requested={...initial,view,display:'cumulative',period:'days',days:3};
+  const drawn=normalizeAnalysis(messageLabelsCatalog,requested);
+  assert.equal(drawn.view,view);assert.equal(drawn.display,'interval');assert.equal(drawn.period,'day');
+  const notes=trendAdjustments(messageLabelsCatalog,requested).join(' ');
+  assert.match(notes,/running count of distinct messages/);assert.match(notes,/each bucket is one day/);
+  assert.equal(requested.display,'cumulative');assert.equal(requested.period,'days');
+ }
 });
 test('label legend groups retain full ancestry, series identity and separate repeated subgroup names',()=>{
  const ids=['P.request.work.implement','P.request.work.refine','P.frame.scope','C.report.finding','?'];

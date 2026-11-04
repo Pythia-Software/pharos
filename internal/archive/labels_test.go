@@ -933,6 +933,63 @@ func TestMessageLabelQueryProjection(t *testing.T) {
 		}
 	}
 	execTx(t, c.DB, messageLabelMessageIndexSQL)
+	// The preview's message cap must also bound label decoding and taxonomy.
+	// A label on the next message must remain visible to the full reader only.
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('outside-preview','["C","C.difficulty","C.difficulty.blocker"]');
+ INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('label-b','label-conv','H-typed',7,x'00000000',1,1,'b','outside-preview','test','2026-01-01');
+ DELETE FROM message_labels_dirty WHERE conversation_id='label-conv'`)
+	attach, summary, err := c.messageLabelsAttacherContext(t.Context(), "label-conv", []string{"label-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := summary()
+	if err != nil || meta["labeled"] != 1 {
+		t.Fatalf("sample label count: %v %v", meta, err)
+	}
+	outside := map[string]any{"id": "label-b"}
+	attach(outside)
+	if outside["labels"] != nil {
+		t.Fatalf("sample decoded an excluded message: %v", outside)
+	}
+	body := ribbon()
+	conversation := body["conversation"].(map[string]any)
+	preview := conversation["messages"].([]any)
+	if len(preview) != 1 || preview[0].(map[string]any)["id"] != "label-a" || len(preview[0].(map[string]any)["labels"].([]any)) != 4 {
+		t.Fatalf("sample lost selected labels: %v", preview)
+	}
+	for _, entry := range body["taxonomy"].([]any) {
+		if strings.HasPrefix(firstString(entry.(map[string]any)["id"]), "C.difficulty") {
+			t.Fatalf("fingerprint decoded excluded taxonomy: %v", entry)
+		}
+	}
+	full, _, err := c.messageLabelsAttacher("label-conv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	full(outside)
+	if outside["labels"] == nil {
+		t.Fatal("full reader lost excluded preview labels")
+	}
+	_, empty, err := c.messageLabelsAttacherContext(t.Context(), "label-conv", []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta, err := empty(); err != nil || meta != nil {
+		t.Fatalf("empty sample read conversation labels: %v %v", meta, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	_, canceledSummary, err := c.messageLabelsAttacherContext(ctx, "label-conv", []string{"label-a"})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	if _, err := canceledSummary(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("label summary ignored cancellation: %v", err)
+	}
+	if _, _, err := c.messageLabelsAttacherContext(ctx, "label-conv", []string{"label-a"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("label read ignored cancellation: %v", err)
+	}
 	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('label-conv','dirty')`)
 	if signal, err := askLabelCoverage(t.Context(), &askSignalRun{c: c}); err != nil || signal.Score != 0 {
 		t.Fatalf("stale label ledger suggested: %+v %v", signal, err)

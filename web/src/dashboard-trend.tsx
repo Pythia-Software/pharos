@@ -32,7 +32,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
 }) {
   const originRevision = useOriginMetadata();
   const headline = useDashboardHeadline();
-  const view = normalizeAnalysis(catalog, { ...state, view: isTrendView(state.view) ? state.view : "trend" });
+  const requested = { ...state, view: isTrendView(state.view) ? state.view : "trend" as const };
+  const view = normalizeAnalysis(catalog, requested);
   const measure = catalog.measures[view.metric], breakdown = catalog.breakdowns[view.split], count = trendPeriodCount(view);
   // Relative bounds resolve to period boundaries, so the query is stable
   // between renders within one period.
@@ -81,7 +82,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     }
     return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, split: trend.slice ?? null, fields, current: new URLSearchParams(location.search), translate });
   };
-  const adjustments = trendAdjustments(catalog, view);
+  const adjustments = trendAdjustments(catalog, requested);
   if (view.norm && !result.loading && built.normPoints !== undefined && built.normPoints < view.normPeriods) adjustments.push(built.normPoints
     ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
     : "No earlier point has a value, so there is no norm yet.");
