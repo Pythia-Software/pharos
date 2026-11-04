@@ -1,4 +1,4 @@
-import {shortLabel,stateColor} from "./label-trajectories-model";
+import {shortLabel,stateColor} from "./conversation-labels";
 import catalog from "../../pricing/model_colors.json";
 import { activities, activityPresentation } from "./machine-activity-data";
 

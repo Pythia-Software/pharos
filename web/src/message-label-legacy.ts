@@ -1,6 +1,21 @@
 import {EMPTY_QUERY,encodeQuery,type WhereTerm} from '@pythia-software/query-table-core';
-import {normalizeLabelChart,normalizeLabelDates} from './label-dashboard-model';
+import {chartPeriods,validPeriodCount,type ChartPeriod} from './chart-period';
+import type {Resolution} from './conversation-labels';
 import {analysisVersion} from './dashboard-analysis-model';
+type LabelDates={from?:string;to?:string;preset?:'today'|'1d'|'7d'|'30d'|'90d'|'6m'|'1y'|'all';omit?:{from:string;to:string}[]};
+type LabelChart={period:ChartPeriod;hours:number;days:number;smoothing:number;measure:'percent'|'count';resolution:Resolution;scale:'linear'|'logarithmic'};
+const defaultLabelChart:LabelChart={period:'day',hours:6,days:3,smoothing:0,measure:'percent',resolution:'family',scale:'linear'};
+function normalizeLabelChart(value:unknown):LabelChart{
+ const v=value&&typeof value==='object'&&!Array.isArray(value)?value as Partial<LabelChart>:{};
+ return {period:typeof v.period==='string'&&Object.hasOwn(chartPeriods,v.period)?v.period:'day',hours:validPeriodCount(v.hours)?v.hours:6,days:validPeriodCount(v.days)?v.days:3,smoothing:typeof v.smoothing==='number'&&Number.isInteger(v.smoothing)&&v.smoothing>=2?Math.min(5000,v.smoothing):0,measure:v.measure==='count'?'count':'percent',resolution:v.resolution==='label'?'label':'family',scale:v.scale==='logarithmic'?'logarithmic':'linear'};
+}
+function normalizeLabelDates(value:unknown):LabelDates{
+ const v=value&&typeof value==='object'&&!Array.isArray(value)?value as LabelDates:{},valid=(date:unknown)=>typeof date==='string'&&Number.isFinite(Date.parse(date))?new Date(date).toISOString():undefined;
+ const omit=Array.isArray(v.omit)?v.omit.flatMap(range=>{const from=valid(range?.from),to=valid(range?.to);return from&&to&&from<to?[{from,to}]:[];}).slice(0,100):[];
+ return {from:valid(v.from),to:valid(v.to),preset:v.preset&&['today','1d','7d','30d','90d','6m','1y','all'].includes(v.preset)?v.preset:undefined,...(omit.length?{omit}:{})};
+}
+
+/** Migrate retired experiment URLs into the production dashboard. */
 export function messageLabelLegacyURL(params:URLSearchParams):string{
  const parse=(name:string)=>{try{return JSON.parse(params.get(name)??'{}');}catch{return {};}};
  const chart=normalizeLabelChart(parse('label_chart')),dates=normalizeLabelDates(parse('label_dates')),where:WhereTerm[]=[];

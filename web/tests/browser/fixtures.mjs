@@ -14,7 +14,7 @@ const schemas = Object.fromEntries(readdirSync(join(repo, "schemas")).filter(fil
   .map(file => [file.replace(".schema.json", ""), core.loadSchema(JSON.parse(readFileSync(join(repo, "schemas", file), "utf8")))]));
 const now = Date.now();
 // Invented strings for structural tests; production exports never enter git.
-export const labelTrajectorySnapshot = {
+export const conversationLabelsFixture = {
   version:1,
   source:{kind:'test fixture',catalog:'fixture.sqlite3',exported_at:'2026-10-31T12:00:00Z',models:['fixture-model/v1'],taxonomy:'candidate-0.3',ledger:{messages:14,conversations:2},candidate_conversations:2,limit:2,minimum_labeled_prose:2,selection:'Synthetic browser-test fixture.'},
   taxonomy:[{id:'P.request.work.implement',name:'Implement',definition:'Request work.'},{id:'C.report.product',name:'Product',definition:'Report a product.'}],
@@ -23,7 +23,7 @@ export const labelTrajectorySnapshot = {
 };
 // Recorded-structure fixture: one child and grandchild, including an async
 // acknowledgement. These invented records never enter the production export.
-for (const c of labelTrajectorySnapshot.conversations) {
+for (const c of conversationLabelsFixture.conversations) {
   c.main_session=c.id+':main';
   c.sessions=[{id:c.main_session,parent_id:null,conversation_id:c.id,work_id:c.work_id,name:'Main agent',kind:'root',depth:0,link_evidence:'sample root',call_message_id:null,result_message_id:null}];
   c.messages.forEach((m,i)=>Object.assign(m,{session_id:c.main_session,conversation_id:c.id,work_id:c.work_id,order:i*10,call_id:null}));
@@ -37,8 +37,8 @@ for (const c of labelTrajectorySnapshot.conversations) {
     event('grandchild-2','message','fixture-grandchild',2,[]),event('grandchild-3','message','fixture-grandchild',3,[['C.report.product',.95]]));
   c.messages.sort((a,b)=>a.order-b.order);
 }
-for(const c of labelTrajectorySnapshot.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
-labelTrajectorySnapshot.version=2;
+for(const c of conversationLabelsFixture.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
+conversationLabelsFixture.version=2;
 export const sourceSetupCandidates = [
   {name:'claude',kind:'claude',path:'/Users/test/.claude/projects',display_path:'~/.claude/projects',count:24,unit:'session',bytes:2400000,status:'found',acceptable:true,recommended:true},
   {name:'claude-work',kind:'claude',path:'/Users/test/.claude-work/projects',display_path:'~/.claude-work/projects',count:8,unit:'session',bytes:800000,status:'found',acceptable:true,recommended:true},
@@ -184,7 +184,7 @@ function workPreview(id, query) {
 }
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
-  return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:labelTrajectorySnapshot.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
+  return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:conversationLabelsFixture.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
     ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false}:{}),
     model_inferred: [{ start: Math.max(from, start + 1000), end: Math.min(to, sessionEnd - 1000) }], episodes: [{ start, end: sessionEnd }], truncated: false,
     marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1", preview: "/repo/README.md", status: "ok" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2", preview: "npm test", status: "error" }] })) };
@@ -594,7 +594,7 @@ export const defaultApi = {
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
-  "GET /api/labels/conversations/:id":({params})=>({conversation:{...labelTrajectorySnapshot.conversations[0],id:params.id},taxonomy:labelTrajectorySnapshot.taxonomy,truncated:false}),
+  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
   // Query Table, on the production transport.
   "POST /api/query/usage/carbon": carbon,
   "POST /api/query/writing/series": ({ body }) => ({ works: 2, ...(body?.hourly ? { hourly: [] } : {}),
@@ -612,7 +612,6 @@ export const defaultApi = {
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
-  "GET /api/usage/label-trajectories": labelTrajectorySnapshot,
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
     days: [iso(day).slice(0, 10), iso(0).slice(0, 10)],

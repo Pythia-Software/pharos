@@ -1,4 +1,4 @@
-import type {LabelMessage} from './label-trajectories-model';
+import type {LabelMessage} from './conversation-labels';
 
 export type AuthorshipPart = {category:string;bytes:number};
 export const callerSources = [

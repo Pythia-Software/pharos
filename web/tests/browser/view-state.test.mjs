@@ -1,118 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,busyStatus,eventStream,labelTrajectorySnapshot} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
 import messageLabelsDocument from '../../../schemas/message_labels.schema.json' with {type:'json'};
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
-
-test('label trajectory filters, hierarchy and source selection restore across browsers and history',{skip},async t=>{
- const app=await open(t,{url:'/analyze?label_lab=path',labelTrajectories:true,ready:'.lt-evidence-message'}),{page}=app;
- await page.getByRole('button',{name:'State path',exact:false}).click();
- await page.getByRole('combobox',{name:'Messages',exact:true}).selectOption('thinking');
- await page.getByRole('combobox',{name:'Inspect conversation',exact:true}).selectOption('fixture-second');
- await page.getByRole('combobox',{name:'Message',exact:true}).selectOption('second-3');
- await page.getByRole('combobox',{name:'State detail',exact:true}).selectOption('label');
- await page.getByRole('combobox',{name:'Path steps',exact:true}).selectOption('messages');
- await page.getByRole('combobox',{name:'Repository',exact:true}).selectOption('example');
- await page.getByRole('combobox',{name:'Provider',exact:true}).selectOption('claude');
- await app.settled();
- const saved=path(page),fresh=await open(t,{url:saved,labelTrajectories:true,ready:'.lt-evidence-message'});
- for(const [label,value] of [['Messages','thinking'],['Inspect conversation','fixture-second'],['Message','second-3'],['State detail','label'],['Path steps','messages'],['Repository','example'],['Provider','claude']])assert.equal(await fresh.page.getByRole('combobox',{name:label,exact:true}).inputValue(),value);
- const reader=await fresh.page.getByRole('link',{name:'Open original message in reader',exact:false}).first().getAttribute('href');
- assert.equal(new URL(reader,'http://localhost').searchParams.get('reveal'),'message:second-3');
- const destination='/analyze?label_lab=replay&label_conversation=fixture-first&label_message=first-5';
- await page.evaluate(url=>window.pharosNavigate(url),destination);
- await page.getByRole('combobox',{name:'Message',exact:true}).selectOption('first-5');
- await app.settled();
- await page.goBack();
- await page.waitForFunction(()=>new URLSearchParams(location.search).get('label_lab')==='path');
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'second-3');
- await page.goForward();
- await page.waitForFunction(()=>new URLSearchParams(location.search).get('label_lab')==='replay');
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'first-5');
- await page.getByRole('link',{name:'Tokens and Cost',exact:true}).click();
- await page.waitForFunction(()=>!new URLSearchParams(location.search).has('label_lab'));
- await app.settled();
-});
-
-test('label trajectory replay, recorded results and branching choices keep their source identities',{skip},async t=>{
- const app=await open(t,{url:'/analyze?label_lab=replay&label_conversation=fixture-first&label_session=fixture-child&label_message=child-0',labelTrajectories:true,ready:'.lt-evidence-message'}),{page}=app;
- await page.getByRole('button',{name:'Next state →',exact:true}).click();
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'child-1');
- assert.equal(await page.getByRole('combobox',{name:'Inspect branch',exact:true}).inputValue(),'fixture-child');
- await page.getByRole('button',{name:'← Previous state',exact:true}).click();
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'child-0');
- await page.getByRole('button',{name:'12 Call / result',exact:true}).click();
- await page.getByRole('button',{name:'Inspect recorded result',exact:false}).click();
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'fixture-receipt');
- assert.equal(await page.getByRole('combobox',{name:'Inspect branch',exact:true}).inputValue(),'fixture-first:main');
- await page.getByRole('button',{name:'Enter branch',exact:false}).first().click();
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'child-0');
- assert.equal(await page.getByRole('combobox',{name:'Inspect branch',exact:true}).inputValue(),'fixture-child');
-
-});
-
-test('label trajectory frequency selection and hierarchy restore as a conversation chooser',{skip},async t=>{
- const app=await open(t,{url:'/analyze?label_lab=flow&label_conversation=fixture-first',labelTrajectories:true,ready:'.lt-conversation-browser'}),{page}=app;
- await page.locator('[data-pharos-target="section:label-frequency:P.request"] > summary .lt-caret').click();
- await page.locator('[data-pharos-target="section:label-frequency:P.request.work"] > summary .lt-caret').click();
- await page.getByRole('button',{name:'Browse Implement in Opening',exact:true}).click();await app.settled();
- const copy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});
- assert.equal(new URL(copy.page.url()).searchParams.get('label_function'),'P.request.work.implement');
- assert.equal(new URL(copy.page.url()).searchParams.get('label_column'),'Opening');
- assert.equal(await copy.page.locator('[data-pharos-target="section:label-frequency:P.request"]').evaluate(e=>e.open),true);
- const link=await copy.page.locator('.lt-result-actions a').first().getAttribute('href');assert.equal(new URL(link,'http://localhost').searchParams.get('reveal'),'message:first-0');
- await page.getByRole('combobox',{name:'Break down by',exact:true}).selectOption('actor');await app.settled();
- const actorCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.equal(await actorCopy.page.getByRole('combobox',{name:'Break down by',exact:true}).inputValue(),'actor');
- await page.getByRole('button',{name:'Label detail',exact:true}).first().click();await app.settled();assert.equal(new URL(page.url()).searchParams.get('label_lab'),'labels');
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'first-0');
-});
-
-test('label detail links migrate into the native Message Labels dashboard with their population',{skip},async t=>{
- const params=new URLSearchParams({label_lab:'labels',label_conversation:'fixture-first',label_session:'fixture-first:main'}),app=await open(t,{url:'/analyze?'+params,labelTrajectories:true,ready:'.lt-evidence-message'}),{page}=app;
- await page.getByRole('link',{name:'Explore Request over time',exact:true}).click();await page.locator('.usage-labels-dashboard').waitFor();await app.settled();
- assert.equal(new URL(page.url()).searchParams.get('analyze_topic'),'labels');assert.equal(new URL(page.url()).searchParams.has('label_lab'),false);
- const filters=decodeQueryStrict(new URL(page.url()).searchParams.get('analyze_filters'));assert.ok(filters.where.some(term=>term.any?.some(clause=>clause.value==='P.request')));
- await page.goBack();await page.locator('.lt-evidence-message').waitFor();
-});
-
-test('label trajectory inclusive tag prefix restores the selected parent path and matching conversations',{skip},async t=>{
- const app=await open(t,{url:'/analyze?label_lab=trie',labelTrajectories:true,ready:'.lt-conversation-browser'}),{page}=app;
- await page.locator('.lt-prefix-column').last().getByRole('button',{name:/Request/}).first().click();
- await page.locator('.lt-prefix-column').last().getByRole('button',{name:/Report/}).first().click();await app.settled();
- const prefix=JSON.parse(new URL(page.url()).searchParams.get('label_prefix'));assert.deepEqual(prefix,['P.request','C.report']);
- const copy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.deepEqual(JSON.parse(new URL(copy.page.url()).searchParams.get('label_prefix')),prefix);
- assert.equal(await copy.page.locator('.lt-prefix-summary').textContent(),await page.locator('.lt-prefix-summary').textContent());
- assert.ok(await copy.page.locator('.lt-result-actions a').first().getAttribute('href'));
-});
-
-test('label trajectory ribbons and the actual workspace timeline label controls restore',{skip},async t=>{
- const app=await open(t,{url:'/analyze?label_lab=fingerprints&label_conversation=fixture-first',labelTrajectories:true,ready:'.lt-conversation-browser'}),{page}=app;
- await page.getByRole('combobox',{name:'Fingerprint treatment',exact:true}).selectOption('threads');await app.settled();
- const copy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.equal(await copy.page.getByRole('combobox',{name:'Fingerprint treatment',exact:true}).inputValue(),'threads');
- await page.getByRole('button',{name:'Hatched overlap',exact:true}).click();await app.settled();
- const parallelCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-conversation-browser'});assert.equal(new URL(parallelCopy.page.url()).searchParams.get('label_parallel'),'steps');
- const before=path(page);await page.locator('.lt-selected-emblem svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();
- await page.keyboard.press('Escape');await page.getByRole('tooltip').waitFor({state:'hidden'});assert.equal(path(page),before);
- await page.getByRole('button',{name:'00 Workspace timeline',exact:true}).click();await page.getByRole('combobox',{name:'Message labels',exact:true}).selectOption('detail');await app.settled();
- const timelineCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.delegation-lane'});assert.equal(await timelineCopy.page.getByRole('combobox',{name:'Message labels',exact:true}).inputValue(),'detail');
- const key='label-timeline:fixture-first:main:';
- for(const id of ['session','labels','labels:P','labels:P:P.request','labels:P:P.request:P.request.work','labels:P:P.request:P.request.work:P.request.work.implement'])await page.locator(`[data-pharos-target="section:${key}${id}"] > summary`).click();
- await app.settled();
- const expandedCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-session-leaf button'});
- await expandedCopy.page.locator('.lt-session-leaf button').first().click();await expandedCopy.settled();
- assert.match(new URL(expandedCopy.page.url()).searchParams.get('label_timeline_event'),/^label:/);
- await page.locator('.lt-session-leaf button').first().click();await app.settled();
- assert.match(new URL(page.url()).searchParams.get('label_timeline_event'),/^label:/);
- assert.equal(await page.getByRole('combobox',{name:'Message',exact:true}).inputValue(),'first-0');
- for(const id of ['activity','activity:read'])await page.locator(`[data-pharos-target="section:${key}${id}"] > summary`).click();
- await page.locator(`[data-pharos-target="section:${key}activity:read"] .lt-session-leaf button`).click();await page.getByRole('dialog',{name:/Activity:/}).waitFor();await app.settled();
- const eventCopy=await open(t,{url:path(page),labelTrajectories:true,ready:'.lt-session-root'});await eventCopy.page.getByRole('dialog',{name:/Activity:/}).waitFor();
-});
 
 test('saved Parallel activity links open the native Timeline and retain the selected range and session',{skip},async t=>{
  const analysis=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
@@ -126,35 +21,8 @@ test('saved Parallel activity links open the native Timeline and retain the sele
  assert.equal(url.searchParams.get('delegation_session'),'s-root');
  assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
  assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('labels')==='1'));
- assert.equal(app.calls.filter(call=>call.path==='/api/usage/label-trajectories').length,0);
  const copy=await open(t,{url:path(page),ready:'.lt-session-root'});
  assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
-});
-
-test('workspace Timeline uses native labels and restores tabs, recursive tracks and message navigation',{skip},async t=>{
- const app=await open(t,{url:`/work/${workID}?explorer=table&delegation_labels=off&sessions=hidden`,labelTrajectories:true,ready:'.delegation-tabs'}),{page}=app;
- assert.equal(await page.locator('.delegation-body').isVisible(),true,'legacy hidden-session URLs still show the workspace content');
- await page.getByRole('tab',{name:'Timeline',exact:true}).click();
- await page.locator('.lt-session-root').first().waitFor();await app.settled();
- assert.equal(new URL(page.url()).searchParams.get('explorer'),'timeline');
- assert.ok(app.calls.some(call=>call.path.endsWith('/parallel')&&call.query.get('labels')==='1'));
- assert.equal(app.calls.filter(call=>call.path==='/api/usage/label-trajectories').length,0);
- for(const id of ['session','labels','labels:P','labels:P:P.request','labels:P:P.request:P.request.work','labels:P:P.request:P.request.work:P.request.work.implement'])await page.locator(`[data-pharos-target="section:delegation-labels:caller:${workID}:${id}"] > summary`).click();
- await page.locator('.lt-session-leaf button').first().waitFor();await app.settled();
- const copy=await open(t,{url:path(page),ready:'.lt-session-leaf button'});
- assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
- await copy.page.locator('.lt-session-leaf button').first().click();
- await copy.page.getByRole('group',{name:'Ribbon segment details',exact:true}).getByRole('link').first().click();await copy.settled();
- assert.equal(new URL(copy.page.url()).searchParams.get('message'),'m-1');
- assert.equal(new URL(copy.page.url()).searchParams.get('conversation'),rootConversation);
- await page.getByRole('tab',{name:'Timeline',exact:true}).press('ArrowLeft');
-
- assert.equal(await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).getAttribute('aria-selected'),'true');
- await page.evaluate(url=>window.pharosNavigate(url),`/work/${workID}?explorer=timeline`);await app.settled();
- await page.goBack();await app.settled();
- assert.equal(await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).getAttribute('aria-selected'),'true');
- await page.goForward();await app.settled();
- assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
 });
 
 for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{
@@ -1061,13 +929,13 @@ test('native Message Labels dashboards and conversation cards share standard nav
 });
 
 test('fingerprint taxonomy inspection supports pointer handoff and scrolling without changing URL selection',{skip},async t=>{
- const snapshot=structuredClone(labelTrajectorySnapshot),ids=['P.request.work.implement','P.request.work.review','P.request.work.verify','P.request.input.information','P.request.input.permission','P.frame.scope','P.frame.constraint','P.control.redirect','C.input.answer','C.input.permission.grant','C.feedback.accept','C.feedback.challenge','C.report.finding','C.report.product','C.report.progress','C.deliberation.plan','C.deliberation.hypothesis','C.difficulty.blocker'];
+ const snapshot=structuredClone(conversationLabelsFixture),ids=['P.request.work.implement','P.request.work.review','P.request.work.verify','P.request.input.information','P.request.input.permission','P.frame.scope','P.frame.constraint','P.control.redirect','C.input.answer','C.input.permission.grant','C.feedback.accept','C.feedback.challenge','C.report.finding','C.report.product','C.report.progress','C.deliberation.plan','C.deliberation.hypothesis','C.difficulty.blocker'];
  snapshot.conversations[0].messages[0].labels=ids.map(id=>[id,.9]);
- const app=await open(t,{url:'/analyze?label_lab=fingerprints&label_conversation=fixture-first',labelTrajectories:true,api:{'/api/usage/label-trajectories':()=>snapshot},ready:'.lt-selected-emblem',viewport:{width:390,height:480}}),{page}=app;
- const before=path(page);await page.locator('.lt-selected-emblem svg g[tabindex]').first().hover();const tooltip=page.getByRole('tooltip');await tooltip.waitFor();await tooltip.hover();
+ const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels',api:{'GET /api/labels/conversations/:id':({params})=>({conversation:{...snapshot.conversations[0],id:params.id},taxonomy:snapshot.taxonomy,truncated:false})},ready:'.message-label-fingerprint svg',viewport:{width:390,height:480}}),{page}=app;
+ const before=path(page);await page.locator('.message-label-result-card svg g[tabindex]').first().hover();const tooltip=page.getByRole('tooltip');await tooltip.waitFor();await tooltip.hover();
  const box=await tooltip.boundingBox(),viewport=page.viewportSize();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=viewport.width&&box.y+box.height<=viewport.height);
  const scroller=tooltip.locator('.lt-ribbon-taxonomy-scroll');await scroller.hover();await page.mouse.wheel(0,420);await page.waitForFunction(()=>document.querySelector('.lt-ribbon-taxonomy-scroll')?.scrollTop>0);
  assert.equal(path(page),before);await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
- await page.locator('.lt-conversation-card svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();assert.equal(path(page),before);await page.keyboard.press('Escape');
+ await page.locator('.message-label-result-card svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();assert.equal(path(page),before);await page.keyboard.press('Escape');
  await app.shot('fingerprint-taxonomy');
 });

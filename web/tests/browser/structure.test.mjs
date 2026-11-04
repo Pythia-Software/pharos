@@ -325,20 +325,12 @@ const ROUTES = [
   { name: "Analyze legacy link", url: '/analyze?analyze_view=carbon&analyze_chart={"metric":"energy"}', ready: ".usage-dashboard #carbonSummary" },
   { name: "Tools legacy link", url: "/tools?tools_view=summary", ready: ".usage-workspace-table .qt-row" },
   { name: "Conversations dashboard", url: "/analyze?analyze_topic=activity", ready: '.dashboard-stats[aria-label="Conversations summary"][aria-busy="false"]' },
-  ...['timeline','fingerprints','flow','transitions','turns','path','motifs','labels','graph','replay','calls','trie','cycles'].map(view=>({name:`Label trajectories ${view}`,labelTrajectories:true,url:`/analyze?label_lab=${view}`,ready:['distribution','fingerprints','flow','trie'].includes(view)?'.lt-conversation-browser':'.lt-evidence-message'})),
-  {name:'Label trajectories expanded session ribbon',labelTrajectories:true,url:'/analyze?'+new URLSearchParams({label_lab:'timeline',label_scope:'thinking',label_timeline_labels:'detail',label_conversation:'fixture-first',disclosures:JSON.stringify({'label-timeline:fixture-first:main:session':true,'label-timeline:fixture-first:main:labels':true,'label-timeline:fixture-first:main:labels:thinking':true})}),ready:'.lt-session-root'},
   {name:'Message Labels dashboard',url:'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels',ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels specific hierarchy',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend',metric:'messages',split:'label'})}),ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels bars',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend_bar',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels comparison',url:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'labels',analyze_data:'message_labels',analyze_chart:JSON.stringify({view:'compare',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard'},
   {name:'Message label conversation cards',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels',ready:'.message-label-result-card'},
   {name:'Message label conversation rows',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels&label_results=table',ready:'.qt-row'},
-  ...['steps','pleats'].map(parallel=>({name:`Label trajectories overlap ${parallel}`,labelTrajectories:true,url:`/analyze?label_lab=fingerprints&label_parallel=${parallel}`,ready:'.lt-conversation-browser'})),
-  ...['volume','threads'].map(treatment=>({name:`Label trajectories fingerprint ${treatment}`,labelTrajectories:true,url:`/analyze?label_lab=fingerprints&label_fingerprint=${treatment}`,ready:'.lt-conversation-browser'})),
-  ...['ensemble','depth'].map(treatment=>({name:`Label trajectories score ${treatment}`,labelTrajectories:true,url:`/analyze?label_lab=path&label_score=${treatment}&label_scope=thinking`,ready:'.lt-evidence-message'})),
-  ...['actor','model','provider','depth'].map(by=>({name:`Label trajectories breakdown ${by}`,labelTrajectories:true,url:`/analyze?label_lab=flow&label_breakdown=${by}`,ready:'.lt-conversation-browser'})),
-  {name:'Label trajectories expanded phase hierarchy',labelTrajectories:true,url:'/analyze?'+new URLSearchParams({label_lab:'flow',disclosures:JSON.stringify({'label-frequency:P.request':true,'label-frequency:P.request.work':true,'label-frequency:C.report':true})}),ready:'.lt-conversation-browser'},
-  {name:'Label trajectories expanded label hierarchy',labelTrajectories:true,url:'/analyze?'+new URLSearchParams({label_lab:'labels',disclosures:JSON.stringify({'label-detail:fixture-first:P.request':true,'label-detail:fixture-first:P.request.work':true,'label-detail:fixture-first:C.report':true})}),ready:'.lt-evidence-message'},
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
   // One route per chart kind and dashboard component; the numbers each
   // topic draws are covered by the dashboard parity and analysis unit tests.
@@ -926,7 +918,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, labelTrajectories: route.labelTrajectories, managedLibrary: route.managedLibrary, api: route.api });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, managedLibrary: route.managedLibrary, api: route.api });
         // Loading a page leaves initial focus to the user, and its title is
         // ordinary text. A dashboard's chart title stands in for its h1.
         const focus = route.open || route.movesFocus ? [] : await app.page.evaluate(() => {

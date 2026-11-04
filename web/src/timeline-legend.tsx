@@ -1,8 +1,8 @@
 import React from 'react';
-import {compareStates,functionStates,labelFamilies,shortLabel,stateColor,type LabelMessage,type Taxonomy} from './label-trajectories-model';
+import {compareStates,functionStates,labelFamilies,shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import {authorshipSegments,callerSources} from './timeline-caller-model';
 import {labelIntervals,type ActivityMark} from './label-session-ribbon-model';
-import type {TimeRange} from './label-timeline-model';
+import type {TimeRange} from './timeline-label-model';
 
 /** Use the same elapsed attribution and text composition as the drawn ribbons. */
 export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[];marks:ActivityMark[];neighbors?:LabelMessage[];caller?:boolean}[],range:TimeRange){

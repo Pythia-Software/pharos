@@ -1,5 +1,5 @@
-import {compareStates,functionRole,functionStates,shortLabel,stateColor,type LabelMessage,type LabelTool,type Taxonomy} from './label-trajectories-model';
-import {eventTime,type TimeRange} from './label-timeline-model';
+import {compareStates,functionRole,functionStates,shortLabel,stateColor,type LabelMessage,type LabelTool,type Taxonomy} from './conversation-labels';
+import {eventTime,type TimeRange} from './timeline-label-model';
 import {authorshipSegments,authorshipExcerpt,callerSource} from './timeline-caller-model';
 
 export type ActivityMark={start:number;end:number;end_known:boolean;category:string;count:number;error:boolean;tool_id?:string;message_id?:string;preview?:string;preview_truncated?:boolean;status?:string;name:string};

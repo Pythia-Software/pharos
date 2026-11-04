@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 process.env.TZ = "America/Denver";
 const { cellTitle, clampRange, formatted, hierarchyFrames, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
 const { readDelegationRoute } = await import("../../../src/delegation-route");
-const { timelineSessionBranches } = await import("../../../src/label-timeline-model");
+const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
 
 const start = Date.parse("2026-09-24T12:00:00Z"), winter = Date.parse("2026-01-24T12:00:00Z");
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });

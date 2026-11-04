@@ -1,7 +1,7 @@
 import React,{useEffect,useState} from 'react';
 import type {QueryTableApi} from '@pythia-software/query-table-react';
 import {CompactFingerprint} from './label-compact-fingerprint';
-import {shortLabel,stateColor,type LabelConversation,type Taxonomy} from './label-trajectories-model';
+import {shortLabel,stateColor,type LabelConversation,type Taxonomy} from './conversation-labels';
 import {conversationRowURL} from './usage-row-model';
 import {labelResultsMode} from './message-label-results-model';
 import {onDatasetRefresh} from './dataset-refresh';

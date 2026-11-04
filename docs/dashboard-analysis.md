@@ -1096,5 +1096,5 @@ Supporting cards and pinned chart keys open the sister native Query Table,
 grouped into conversations. Its Cards/Table presentation is a registered native
 host parameter and uses the same query, sort and pagination. Both presentations
 reuse the Thread Ribbon; Table can drill from a conversation into observations.
-See [the label experience](label-trajectories.md#message-labels-dashboard-and-query-pages)
+See [the label experience](message-labels.md)
 for its observation grain, pending coverage and portable URL contracts.

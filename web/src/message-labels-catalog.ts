@@ -1,5 +1,5 @@
 import type {AnalysisCatalog} from './dashboard-analysis-model';
-import {shortLabel} from './label-trajectories-model';
+import {shortLabel} from './conversation-labels';
 const sourceNames:Record<string,string>={human:'Human input',output:'Agent output',thinking:'Agent thinking',supplied:'Supplied input',tool:'Tool',unknown:'Unknown'};
 const coverageNames:Record<string,string>={matched:'Matched a label',unlabeled:'Not labeled',no_match:'No accepted match'};
 export const messageLabelsCatalog:AnalysisCatalog={

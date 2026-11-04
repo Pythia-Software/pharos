@@ -9,11 +9,11 @@ import { Icon } from "./icons";
 import { delegationRouteValues, delegationTabs, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
 import {RecursiveSessionRibbon} from "./label-session-ribbon";
-import {nativeTimelineLabels,useTimelineLabelSource,type NativeTimelineMessage,type TimelineLabelSource} from "./label-timeline-overlay";
-import type {Taxonomy} from "./label-trajectories-model";
+import {nativeTimelineLabels,type NativeTimelineMessage} from "./label-timeline-overlay";
+import type {Taxonomy} from "./conversation-labels";
 import {splitTimelineCallers} from "./timeline-caller-model";
 import {useTimelineColumns} from "./timeline-columns";
-import {timelineSessionBranches} from "./label-timeline-model";
+import {timelineSessionBranches} from "./timeline-label-model";
 import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
 import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
@@ -1617,10 +1617,10 @@ export function ParallelActivity({
   toggle,
   selected,
   openNode,
-  activityOverride,labelSource,prototype=false,timeline=false,single=false,previewOnly=false,openOverview,
+  timeline=false,single=false,previewOnly=false,openOverview,
 }: {
   previewOnly?:boolean;openOverview?:()=>void;
-  activityOverride?:Activity;labelSource?:TimelineLabelSource;prototype?:boolean;timeline?:boolean;single?:boolean;
+  timeline?:boolean;single?:boolean;
   endpoint: string;
   data: Analysis;
   rows: Session[];
@@ -1632,21 +1632,17 @@ export function ParallelActivity({
   selected: string;
   openNode: (node: Session, message?: string, sourceConversation?: string) => void;
 }) {
-  const [labLabelMode,setLabelMode]=useViewState("label_timeline_labels","functions",prototype);
-  const labelMode=timeline?"detail":labLabelMode;
-  const snapshotLabels=useTimelineLabelSource(prototype&&labelMode!=="off",labelSource);
   const [activity, setActivity] = useState<Activity | null>(null),
     [error, setError] = useState("");
   const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,range[0],range[1]]);
-  const labelData=timeline?nativeLabels:snapshotLabels;
+  const labelData=nativeLabels;
   const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
   const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
-  const recursive=timeline||prototype&&labelMode!=="off";
+  const recursive=timeline;
   const [brush, setBrush] = useState<Range | null>(null);
-  const [workExpanded,setWorkExpanded]=useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/")&&!prototype);
-  const [labExpanded,setLabExpanded]=useViewState<string[]>("label_timeline_expanded",[],prototype);
-  const expandedIDs=prototype?labExpanded:workExpanded,setExpandedIDs=prototype?setLabExpanded:setWorkExpanded;
+  const [workExpanded,setWorkExpanded]=useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/"));
+  const expandedIDs=workExpanded,setExpandedIDs=setWorkExpanded;
   const expanded = useMemo(() => new Set(expandedIDs), [expandedIDs]);
   const setExpanded = (change: (value: Set<string>) => Set<string>) => setExpandedIDs(previous => [...change(new Set(previous))].sort());
   const gesture = useRef<{
@@ -1664,9 +1660,8 @@ export function ParallelActivity({
     mark: Mark;
     anchor: HTMLButtonElement;
   } | null>(null);
-  const [workEvent,setWorkEvent]=useViewState("delegation_event","",location.pathname.startsWith("/work/")&&!prototype);
-  const [labEvent,setLabEvent]=useViewState("label_timeline_event","",prototype);
-  const eventID=prototype?labEvent:workEvent,setEventID=prototype?setLabEvent:setWorkEvent;
+  const [workEvent,setWorkEvent]=useViewState("delegation_event","",location.pathname.startsWith("/work/"));
+  const eventID=workEvent,setEventID=setWorkEvent;
   const closeMark = useCallback(() => {setMark(null);setEventID("");}, [setEventID]);
   const [pending, setPending] = useState(true);
   const track = useRef<HTMLDivElement>(null);
@@ -1701,7 +1696,6 @@ export function ParallelActivity({
     setBrush(null);
   }, [range]);
   useEffect(() => {
-    if(activityOverride){setActivity(activityOverride);setPending(false);return;}
     const controller = new AbortController();
     setPending(true);
     setError("");
@@ -1721,7 +1715,7 @@ export function ParallelActivity({
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, ids, data.snapshot, range, trackWidth,activityOverride,timeline]);
+  }, [endpoint, ids, data.snapshot, range, trackWidth,timeline]);
   const visibleActivity =
     activity?.start === range[0] && activity?.end === range[1]
       ? activity
@@ -1820,7 +1814,6 @@ export function ParallelActivity({
     <div className={`delegation-parallel ${previewOnly?"is-preview":""} ${recursive?"is-recursive":""} ${timeline?"is-timeline":""}`} ref={track} style={timeline?columns.style:undefined}>
       {previewOnly?<button type="button" className="lt-preview-activate" aria-label="Open full-width timeline" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}><span>Open timeline to explore <Icon name="arrow-right"/></span></button>:null}
       <div>
-      {prototype?<label className="lt-timeline-mode">Message labels<select data-view-field="label_timeline_labels" value={labelMode} onChange={e=>setLabelMode(e.target.value)}><option value="off">Off</option><option value="functions">General Labels</option><option value="detail">Specific labels</option></select></label>:null}
       <TimelineOverview
         readOnly={previewOnly}
         label={single ? "Whole conversation" : "Whole workspace"}
@@ -1832,11 +1825,11 @@ export function ParallelActivity({
         pending={pending}
       />
       {timeline?<TimelineLegend messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error}/>:<div className="delegation-legend">
-        {!prototype&&!timeline?<span>
+        {!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred
         </span>:null}
-        {Object.entries(categories).filter(([key])=>!prototype||visibleActivity?.lanes.some(l=>l.marks.some(m=>m.category===key))).map(([key, text]) => (
+        {Object.entries(categories).map(([key, text]) => (
           <span key={key}>
             <i className={key} />
             {text}
@@ -1847,7 +1840,7 @@ export function ParallelActivity({
           Error
         </span>
       </div>}
-      {!prototype&&!timeline?<p className="delegation-evidence-note">
+      {!timeline?<p className="delegation-evidence-note">
         Dark violet is inferred activity between nearby observations. Tools
         punctuate this background; blank time is unclassified. Width is
         call-to-result elapsed time, not CPU time or process lifetime. Wait
@@ -1897,7 +1890,7 @@ export function ParallelActivity({
           </div>
         </div>}
         {timeline?<div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
-          <RecursiveSessionRibbon collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} detail prototype={false} brushHandlers={brushHandlers} preview={brush}
+          <RecursiveSessionRibbon collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} detail brushHandlers={brushHandlers} preview={brush}
             sourceHref={item=>{const owner=rows.find(row=>row.id===item.message?.session_id);return owner?sourceHref(owner,item):null;}}
             foldControl={<Icon name="human"/>} restore={()=>{}}
             select={item=>{if(!item.message)return;const owner=rows.find(row=>row.id===item.message!.session_id);if(owner){setEventID('label:'+item.message.id);openNode(owner,item.message.id,item.message.conversation_id);}}}/>
@@ -1911,7 +1904,7 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={labelMode==="off"?[]:actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} detail={labelMode==="detail"} prototype={prototype} brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
@@ -2007,7 +2000,7 @@ export function ParallelActivity({
                     </small>
                   ))}
                 {lane?.marks.map((m, i) => (
-                  <button data-view-field={prototype?"label_timeline_event":"delegation_event"}
+                  <button data-view-field="delegation_event"
                     key={i}
                     className={`delegation-mark ${m.category} ${m.error ? "failed" : ""}`}
                     style={{
@@ -2059,7 +2052,7 @@ export function ParallelActivity({
           }}
         />
       )}
-      {selected && !prototype && !previewOnly && (
+      {selected && !previewOnly && (
         <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected session · inferred evidence episodes">
           <p>
             Clusters use tool/request timestamps and the first and last session

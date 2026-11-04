@@ -6,11 +6,11 @@ import {useRibbonInspector} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
 import {timelinePreviewText} from './timeline-preview';
 import {ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolTracks,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
-import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './label-trajectories-model';
-import type {TimeRange,TimelineSessionBranch} from './label-timeline-model';
+import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
+import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
 
-type Props={outline?:string;branch?:TimelineSessionBranch;openSession?:()=>void;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;prototype:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
+type Props={outline?:string;branch?:TimelineSessionBranch;openSession?:()=>void;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
 const branchX=(depth:number)=>12+Math.min(depth,8)*12;
 function SessionBranches({props,root}:{props:Props;root:boolean}){
  const branch=props.branch;if(!branch)return null;
@@ -122,7 +122,7 @@ function SessionRibbon({node,range,brushHandlers,preview,caller,inspector,source
  </svg>{inspector.portal}</div>;
 }
 function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
- const viewKey=`${props.prototype?'label-timeline':'delegation-labels'}:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
+ const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
  const inspector=useRibbonInspector();
  const fullName=[props.outline,props.name].filter(Boolean).join(' · ');
  const identityContent=<><SessionBranches props={props} root/><strong>{props.name}</strong><small>{props.outline?<><span className="lt-session-outline">{props.outline}</span><span aria-hidden="true"> · </span></>:null}{props.metadata}</small></>;
@@ -135,7 +135,7 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
  const content=<>{identity}{label}<SessionRibbon node={node} range={props.range} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed}/></>;
  if(props.collapsed)return <div className="lt-session-row lt-session-preview">{content}</div>;
  if(!node.items.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{label}<SessionRibbon node={node} range={props.range} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed}/></div>;
- if(!node.children.length)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field={props.prototype?'label_timeline_event':'delegation_event'} className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
+ if(!node.children.length)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field="delegation_event" className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
  return <ViewDisclosure viewKey={viewKey} className={`lt-session-node ${root?'lt-session-root':''}`} summary={content}>{open?node.children.map(child=><RecursiveRibbonRow key={child.id} node={child} props={props} level={level+1}/>):null}</ViewDisclosure>;
 }
 export function RecursiveSessionRibbon(props:Props){

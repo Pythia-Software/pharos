@@ -122,7 +122,6 @@ import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analy
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
 import { datasetsForSavedPreferences, onDatasetRefresh } from "./dataset-refresh";
-import { LabelTrajectories, labelTrajectoriesEnabled } from "./label-trajectories";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -1389,8 +1388,7 @@ function SkillsDashboard() {
 function UsagePage() {
   useLocationRevision();
   if (location.pathname !== "/analyze") return null;
-  if(new URLSearchParams(location.search).get("label_lab")==="distribution"){history.replaceState(history.state,"",messageLabelLegacyURL(new URLSearchParams(location.search)));}
-  if (labelTrajectoriesEnabled() && new URLSearchParams(location.search).has("label_lab")) return <LabelTrajectories />;
+  if(new URLSearchParams(location.search).has("label_lab")){history.replaceState(history.state,"",messageLabelLegacyURL(new URLSearchParams(location.search)));}
   if (!isUsageWorkspace()) history.replaceState(history.state, "", canonicalAnalyzeURL(location.pathname, new URLSearchParams(location.search)) + location.hash);
   return <UsageChartColorsProvider>
     <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
