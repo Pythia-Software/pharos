@@ -20,9 +20,8 @@ def sparkle_access_command(directory, action, keychain, tools, account):
     """Build a metadata-only ACL helper; no signing secrets enter Python."""
     source = Path(__file__).with_name('sparkle-keychain-access.swift')
     binary = Path(directory) / 'sparkle-keychain-access'
-    sdk = os.environ.get('SDKROOT') or subprocess.check_output(
-        ['xcrun', '--sdk', 'macosx26.5', '--show-sdk-path'], text=True).strip()
-    subprocess.run(['swiftc', '-sdk', sdk, '-suppress-warnings', str(source),
+    subprocess.run(['/bin/sh', str(Path(__file__).with_name('swift-toolchain.sh')),
+                    'compile', '-suppress-warnings', str(source),
                     '-o', str(binary)], check=True)
     return [str(binary), action, str(keychain), account,
             str(tools / 'generate_keys'), str(tools / 'sign_update')]

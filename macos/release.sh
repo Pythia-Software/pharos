@@ -19,6 +19,13 @@ case "${2:-}" in
     *) echo "Usage: $0 major.minor.patch [--developer-id|--adhoc]" >&2; exit 2 ;;
 esac
 TAG="v$VERSION"
+# Select and export the SDK before the keychain wrapper starts any Swift
+# helper. Compile both app architectures before asking to unlock signing keys.
+SDKROOT=$(/bin/sh "$ROOT/macos/swift-toolchain.sh" sdk)
+export SDKROOT
+if [ -z "${PHAROS_RELEASE_KEYCHAIN_SESSION:-}" ]; then
+    /bin/sh "$ROOT/macos/swift-toolchain.sh" preflight
+fi
 if [ "$MODE" = developer-id ]; then
     python3 "$ROOT/macos/release_support.py"
     if [ -z "${PHAROS_RELEASE_KEYCHAIN_SESSION:-}" ]; then
@@ -37,15 +44,9 @@ if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; t
     echo "Use --adhoc to publish an ad hoc signed release instead." >&2
     exit 2
 fi
-for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk python3 curl; do
+for command in git gh go swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk python3 curl; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
-# The standalone macOS 27 SDK references SwiftUIMacros, which is absent from
-# Command Line Tools. Use the installed 26.5 SDK unless explicitly overridden.
-if [ -z "${SDKROOT:-}" ]; then
-    SDKROOT=$(xcrun --sdk macosx26.5 --show-sdk-path)
-fi
-export SDKROOT
 case "$(git remote get-url origin)" in
     https://github.com/$REPO|https://github.com/$REPO.git|git@github.com:$REPO|git@github.com:$REPO.git) ;;
     *) echo "origin must point to github.com/$REPO." >&2; exit 2 ;;

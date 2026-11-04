@@ -61,6 +61,8 @@ func (a *queryTableAggregate) Final(_ *sqlite.FunctionContext) { a.fn = nil }
 
 func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 	switch dataset {
+	case "message_labels":
+		return PharosMessageLabelsSchema(), nil
 	case "library":
 		return PharosLibrarySchema(), nil
 	case "activity":
@@ -107,9 +109,9 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 // fails rather than dropping groups. Tests lower it.
 var queryV2MaxGroups = 2000
 
-// queryV2UsageMaxGroups is Usage's V2 metric group budget. Its compact facts
-// chart by hour, week or month and by repository or model, which over long
-// ranges exceeds the ordinary budget; V3 allows Usage the same.
+// queryV2UsageMaxGroups bounds indexed Usage and message-label metrics.
+// Calendar periods crossed with specific labels, models or repositories exceed
+// the ordinary group budget over long ranges; V3 allows the same budget.
 var queryV2UsageMaxGroups = 100_000
 
 // Daily Tool summaries can have more than 2,000 program or date groups.
@@ -118,7 +120,7 @@ var queryV2ToolMaxGroups = 10_000
 
 func queryV2Dataset(dataset string, schema qt.Schema) qt.SQLiteV2Dataset {
 	groups := queryV2MaxGroups
-	if schema.Name == "pharos_usage" {
+	if schema.Name == "pharos_usage" || schema.Name == "pharos_message_labels" {
 		groups = queryV2UsageMaxGroups
 	}
 	if schema.Name == "pharos_tools" {
@@ -821,7 +823,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	if len(populationLimit) > 0 {
 		d.MaxPopulation = min(d.MaxPopulation, populationLimit[0])
 	}
-	table, sqlBacked := sqlDatasetFor(dataset)
+	table, sqlBacked := s.Catalog.sqlDatasetFor(dataset)
 	var sourceRows, usageHours []map[string]any
 	var sourceNames []string
 	var find *libraryFindSet
@@ -1075,7 +1077,7 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"workspace_id", "conversation_id", "started_at"}
 	case "skill_usages":
 		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
-	case "agent_events", "agent_event_messages":
+	case "agent_events", "agent_event_messages", "message_labels":
 		required = []string{"workspace_id", "conversation_id", "message_id"}
 	}
 	if len(required) == 0 {

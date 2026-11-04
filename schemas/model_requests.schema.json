@@ -466,6 +466,9 @@
       },
       "select": {
         "align": "right"
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {

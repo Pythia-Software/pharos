@@ -11,10 +11,10 @@ export function fieldsFor(document: any) {
   const names = document.fields.map((field: any) => field.name);
   const choose = (candidates: string[]) => candidates.find(field => names.includes(field));
   return {
-    time: choose(["requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
+    time: choose(["occurred_at", "requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
     group: choose(["provider", "root_provider", "tool_name", "repository_name", "root_model_family", "skill_name", "model"]),
     text: choose(["command", "text", "title", "arguments_json", "tool_name", "skill_name", "model", "root_model_family"]),
-    number: choose(["total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
+    number: choose(["label_depth","total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
     nullable: choose(["repository_name", "model", "root_model_family", "program", "error_text", "skill_name", "title"]),
   };
 }
@@ -91,6 +91,7 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     const where = conditions[i % conditions.length];
     const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: topic, analyze_data: dataset, analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }) });
     let view: any;
+    if (topic === "labels") view = { metric: ["messages", "conversations", "labels", "observations"][i % 4], split: ["family", "label", "function_role", "source", "label_status", "repository_name", "model", "provider"][i % 8], view: ["trend", "compare", "distribution", "scatter"][i % 4], period: ["day", "week", "month"][Math.floor(i / 9)], share: i % 4 === 0, scale: scales[i % 3], rollingPeriods: [0, 3, 7][i % 3] };
     if (topic === "tokens") view = { metric: ["tokens", "cost", "percent", "percent_cost"][i % 4], split: tokenSplits[i % tokenSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "human") view = { scope: i % 2 ? "all" : "typed", split: humanSplits[i % humanSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "time" || topic === "skills") view = { metric: i % 2, split: (topic === "time" ? ["activity", "tool_category", "provider", "repository_name"] : ["skill_name", "evidence_type", "provider", "repository_name", "status"])[i % (topic === "time" ? 4 : 5)], period: ["day", "week", "month"][(i + (topic === "time" ? Math.floor(i / conditions.length) : 0)) % 3], scale: scales[i % 3] };

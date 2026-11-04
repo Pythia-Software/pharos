@@ -31,6 +31,9 @@ const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = e
 const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
 const dashboards: Record<string, CardDashboard> = {
+ "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
+ "human-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
+ "thinking-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
   "error-signatures": calls("calls", "error_signature", { minSamples: 2 }),
   "error-reach": calls("repositories", "error_signature"),
   "cross-repo-errors": calls("calls", "repository_error"),

@@ -20,6 +20,9 @@ const date = (name: string, label: string): Column => [name, label, "date", "syn
 const count = (name: string, label: string): Column => [name, label, "number", "number", 120];
 const percent = (name: string, label: string): Column => [name, label, "number", "sync_percent", 140];
 export const syncSchemas = {
+  operations: schema("operations", [date("started_at", "Started"), ["work", "Work", "text", undefined, 210], ["result", "State", "text", "sync_result", 140], ["trigger", "Started by"], duration("seconds", "Elapsed"), ["subject", "Subject", "text", undefined, 170], ["error", "Error", "text", undefined, 240]], "started_at", [
+    ["kind", "Kind"], ["variant", "Variant"], ["parent_id", "Parent operation"], ["step", "Last step"], date("ended_at", "Finished"),
+  ]),
   history: schema("history", [date("finished_at", "When"), ["result", "Result", "text", "sync_result", 140], ["sources", "Sources", "text", undefined, 170], count("conversations", "Conversations"), count("messages_in_changed_groups", "Messages"), duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time"), memory("rss_observed_peak_bytes", "RAM peak")], "finished_at", [
     ["state", "State"], ["trigger", "Trigger"], ["class", "Workload"], count("changed_groups", "Changed groups"), percent("cpu_percent_one_core", "CPU (% of one core)"), memory("rss_baseline_bytes", "RAM at start"), memory("allocated_bytes", "Allocated"), ["verification", "Verification"],
   ]),
@@ -47,6 +50,19 @@ export const runKey = (run: SyncRecord): string => run.run_id || run.finished_at
 const validDate = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
 const measured = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
 const rows = (items: SyncRecord[] | null | undefined, identity: (item: SyncRecord, index: number) => string): SyncRecord[] => (items ?? []).map((item, index) => ({ ...item, id: identity(item, index) }));
+
+export function operationHistoryTable(operations: SyncRecord[] = []): SyncTable {
+  const states: Record<string, string> = {succeeded: "Done", failed: "Failed", cancelled: "Stopped", interrupted: "Interrupted", skipped: "Skipped",
+    running: "Running", queued: "Queued", blocked: "Waiting", stopping: "Stopping"};
+  const state = (row: SyncRecord) => states[String(row.state)] || row.state || "Unknown";
+  return { schema: syncSchemas.operations, rows: operations.map(row => {
+    const start = Date.parse(row.started_at), end = Date.parse(row.ended_at || row.updated_at);
+    const seconds = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, (end - start) / 1000) : null;
+    return { id: row.id, started_at: validDate(row.started_at), ended_at: validDate(row.ended_at), work: row.label || row.kind,
+      result: state(row), trigger: row.trigger || null, seconds, subject: row.subject || null, error: row.error || null,
+      kind: row.kind, variant: row.variant || null, parent_id: row.parent_id || null, step: row.step_name || null };
+  }), empty: "No recorded operations yet. Background work will appear here after it runs." };
+}
 
 export function syncTables(status: SyncRecord): Record<"history" | "sources" | "costs" | "accuracy" | "coverage" | "deferred", SyncTable> {
   const table = (key: keyof typeof syncSchemas, rows: SyncRecord[], empty: string): SyncTable => ({ schema: syncSchemas[key], rows, empty });

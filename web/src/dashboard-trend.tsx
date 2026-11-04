@@ -1,10 +1,10 @@
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
-import { updateSlice, type LegendAction } from "./chart-selection";
+import { updateSlice, updateSliceValues, type LegendAction } from "./chart-selection";
 import { dashboardChartURL } from "./dashboard-chart-links";
 import type { ChartInspectionRange } from "./chart-inspection";
 import type { ChartSeries } from "./chart-series";
@@ -34,7 +34,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
 }) {
   const originRevision = useOriginMetadata();
   const headline = useDashboardHeadline();
-  const view = normalizeAnalysis(catalog, { ...state, view: "trend" as const });
+  const requested = { ...state, view: isTrendView(state.view) ? state.view : "trend" as const };
+  const view = normalizeAnalysis(catalog, requested);
   const measure = catalog.measures[view.metric], breakdown = catalog.breakdowns[view.split], count = trendPeriodCount(view);
   // Relative bounds resolve to period boundaries, so the query is stable
   // between renders within one period.
@@ -55,6 +56,10 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : built.series.find(item => item.key === key)?.value;
     set({ selection: updateSlice(view.selection ?? { values: [], excluded: false }, value ?? "", action) });
+  }
+  function selectGroup(keys: string[], action: LegendAction) {
+    const members = new Set(keys), values = built.series.flatMap(item => members.has(item.key) && item.value !== undefined ? [item.value] : []);
+    set({selection:updateSliceValues(view.selection ?? {values:[],excluded:false},values,action)});
   }
   const share = view.share, ratio = measure.format.kind === "percent";
   const amount = (value: number) => share ? percent(value) : ratio ? percent(100 * value) : format(value, measure);
@@ -80,7 +85,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     }
     return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, split: trend.slice ?? null, fields, current: new URLSearchParams(location.search), translate });
   };
-  const adjustments = trendAdjustments(catalog, { ...state, view: "trend" });
+  const adjustments = trendAdjustments(catalog, requested);
   if (view.norm && !result.loading && built.normPoints !== undefined && built.normPoints < view.normPeriods) adjustments.push(built.normPoints
     ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
     : "No earlier point has a value, so there is no norm yet.");
@@ -98,13 +103,14 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
-      rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} additive={built.additive} nonzero={view.nonzero && !view.share}
+      rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={view.view === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
       reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
-      selected={built.selected} excluded={built.excluded} onSelect={select} onExpand={() => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
+      selected={built.selected} excluded={built.excluded} onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
       onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
+    {measure.populationShare && measure.note ? <p className="usage-dashboard-note">{measure.note}</p> : null}
     {children}
     {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
   </section>;

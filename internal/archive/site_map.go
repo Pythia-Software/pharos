@@ -143,7 +143,8 @@ type siteDashboard struct {
 		First string `json:"first"`
 		Last  string `json:"last"`
 	} `json:"time"`
-	MergeDefaults map[string]any `json:"merge_defaults"`
+	MergeDefaults map[string]any    `json:"merge_defaults"`
+	Series        map[string]string `json:"series,omitempty"`
 	Legacy        []struct {
 		Key   string         `json:"key"`
 		Value any            `json:"value"`

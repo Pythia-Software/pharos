@@ -4,10 +4,10 @@ import { createPortal } from "react-dom";
 import { chartPeriods, isHourly, nextPeriod, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartRanges, rangeStart, rangeInputValue, parseRangeInput, rangeHasTime, withTimeRange, type ChartRange, type FilterChange, type RangeChange, type TimeBounds, type TimeFields } from "./chart-range";
 import { defaultChartScale, type ChartScale } from "./chart-scale";
-import { cumulativeBuckets, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
+import { cumulativeBuckets, legendGroups, legendGroupSeries, rollingAverageBuckets, timelineGeometry, timelinePath, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries, type LegendGroup } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
-import { type LegendAction } from "./chart-selection";
+import { sliceGroupState, type LegendAction } from "./chart-selection";
 import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
@@ -201,7 +201,7 @@ function CustomPeriod({ period, value, onChange }: { period: "hours" | "days"; v
 }
 
 export function ScaleControl({ value, onChange, percent = false }: { value: ChartScale; onChange: (next: ChartScale) => void; percent?: boolean }) {
-  const descriptions = { linear: "Column heights are proportional to their values.", logarithmic: "Compresses large values so smaller values are easier to compare.", half: "Linear for smaller values, logarithmic for peaks." };
+  const descriptions = { linear: "Column heights are proportional to their values.", logarithmic: "Compresses large values so smaller values are easier to compare.", half: "Stays linear unless the peak exceeds 10× the 80th percentile of at least five nonzero values; then compresses peaks logarithmically." };
   return <ChartSelect label="Scale" value={percent ? "linear" : value} disabled={percent}
     options={[["linear", "Linear"], ["logarithmic", "Logarithmic"], ["half", "Linear + log"]]}
     title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
@@ -251,11 +251,11 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // lines with no total, and a reference value draws a labelled level line.
 // Without zeroes (nonzero), prepared buckets hold no zero values, and lines
 // pass over a series' missing points.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, additive = true, nonzero = false, rolling = "average", reference, action, titleSlot, onSelect, onExpand, onRange, seriesHref }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", reference, action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
-  prepared?: boolean; lines?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
+  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
+  prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
   /** Draws the title and action there instead, such as in a page's heading. */
   titleSlot?: HTMLElement | null;
@@ -284,13 +284,14 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     return { ...bucket, values, parts };
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, percent, reference: reference?.value });
+  const grouped = forceBars && (!additive || scale === "logarithmic" && !percent);
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: reference?.value });
   const lineChart = geometry.lines;
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;
   const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
   const averageLabel = !cumulative && rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling ${rolling}` : "";
-  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${percent || scale === "linear" ? "linear" : scale === "logarithmic" ? "logarithmic" : "linear and logarithmic"} scale`;
+  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${split ? "linear and logarithmic" : !percent && scale === "logarithmic" ? "logarithmic" : "linear"} scale`;
   const label = (date: Date) => isHourly(period) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
   const heading = (bucket: ChartBucket) => {
     if (cumulative) {
@@ -380,20 +381,25 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
   const titleText = <>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</>;
+  const hierarchical = series.some(item => item.groupPath);
+  const legendGroup = (group: LegendGroup): React.ReactNode => {
+    const items = group.items.map(item => {
+      const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
+      const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}</>;
+      return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
+        : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} />
+        : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
+    });
+    const children = group.groups.map(child => <React.Fragment key={JSON.stringify(child.path)}>{legendGroup(child)}</React.Fragment>);
+    const members = legendGroupSeries(group).filter(item => item.value !== undefined), keys = members.map(item => item.key);
+    const category = onSelectGroup && keys.length ? <ChartLegendChip item={{key:JSON.stringify(group.path),label:group.label,color:members[0].color}} groupSize={keys.length}
+      {...sliceGroupState({values:selected,excluded},keys)} selectionActive={selected.length > 0} onAction={action => onSelectGroup(keys,action)} /> : <span className="usage-legend-provider">{group.label}</span>;
+    return group.label ? <div className={`usage-legend-group${hierarchical ? ' is-hierarchy' : ''}`} role="group" aria-label={group.label}>{category}{items}{children}</div> : <>{children}{items}</>;
+  };
   return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
     <div className="usage-chart-head">{titleSlot ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{titleText}</h2>{action}</div>, titleSlot) : <div className="usage-chart-title"><h3>{titleText}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
     {series.length > 1 || legend || reference ? <div className="usage-chart-legend">
-      {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {
-        const items = series.filter(item => item.group === group).map(item => {
-          const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
-          const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}</>;
-          return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
-            : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} />
-            : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
-        });
-        return group ? <div key={group} className="usage-legend-group" role="group" aria-label={group}><span className="usage-legend-provider">{group}</span>{items}</div>
-          : <React.Fragment key="ungrouped">{items}</React.Fragment>;
-      }) : null}
+      {series.length > 1 || legend ? legendGroup(legendGroups(series)) : null}
       {reference ? <span className="usage-legend-item usage-legend-reference" title={reference.label}><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
     </div> : null}
@@ -412,7 +418,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
             onClick={event => { if (event.detail === 0) show(index, true, true); }}>
             {lineChart ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
               {drawn.filter(item => additive && !nonzero || bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="usage-chart-line-point" style={{ bottom: `${y(bucket.values[item.key] ?? 0)}%`, background: item.color }} />)}
-            </span> : null}</> : <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />}
+            </span> : null}</> : <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} grouped={grouped} />}
           </button>;
         })}
       </div>

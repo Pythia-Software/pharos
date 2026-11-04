@@ -55,7 +55,8 @@
       // Every Pharos process on this Mac, for the Load row.
       resources: document.resources || null,
       // position and count: "Library Pending history (1/3)".
-      service: selected ? {id: selected.id, name: selected.name, position: document.libraries.indexOf(selected) + 1, count: document.libraries.length, state: selected.service?.state || null, stateLabel: selected.state_label || null, connected: Boolean(selected.connected), error: selected.error || null, eject: selected.eject || null} : null};
+      service: selected ? {id: selected.id, name: selected.name, position: document.libraries.indexOf(selected) + 1, count: document.libraries.length, state: selected.service?.state || null, stateLabel: selected.state_label || null, connected: Boolean(selected.connected), error: selected.error || null, eject: selected.eject || null,
+        resources: selected.resources || null} : null};
   }
 
   // The fresh verdict in the app: the broker's, for the selected library,
@@ -85,12 +86,24 @@
     // streamed counts the stream's accepted events, so a refresh that was in
     // flight when a newer event arrived does not overwrite it.
     let streamed = 0;
+    let lastLibrarySizes = null;
 
     const notify = () => { for (const listener of [...listeners]) { try { listener(state); } catch (error) { console.error(error); } } };
     const set = changes => { state = {...state, ...changes}; notify(); };
     const accept = document => {
       const view = normalize(document, {managed});
       if (!view) return;
+      if (managed) {
+        if (view.library && view.service?.id) {
+          lastLibrarySizes = {id: view.service.id, storage: view.library.library?.storage_bytes ?? null, wal: view.library.library?.wal_bytes ?? null};
+        } else if (view.service?.state === 'running' && lastLibrarySizes?.id === view.service.id) {
+          // The broker can still sample processes when the service's status
+          // request times out. Keep the last sizes, explicitly marked old.
+          view.lastLibrarySizes = lastLibrarySizes;
+        } else {
+          lastLibrarySizes = null;
+        }
+      }
       set({document, view, error: null, receivedAt: now()});
     };
     const clearTimer = () => { if (timer !== null) cancel(timer); timer = null; };

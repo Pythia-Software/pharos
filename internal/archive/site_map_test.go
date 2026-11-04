@@ -631,6 +631,17 @@ func TestSiteLinkTodayWindows(t *testing.T) {
 
 func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	site := testSiteMap(t)
+	for _, mode := range []string{"cards", "table"} {
+		result, err := site.linkTool(map[string]any{"page": "analyze/query/message_labels", "query": map[string]any{"select": []any{map[string]any{"field": "fingerprint"}}, "hostState": map[string]any{"version": 1, "params": map[string]any{"label_results": []string{mode}}}}, "view": map[string]any{"label_results": mode}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		read := roundTrip(t, site, "label result presentation "+mode, result["url"].(string))
+		if read.Query == nil || read.Query.HostState == nil || read.Query.HostState.Params["label_results"][0] != mode {
+			t.Fatalf("lost label presentation: %+v", read)
+		}
+	}
+
 	for _, sample := range []struct{ page, key string }{
 		{"settings/layout", "quickStatsSettings"}, {"settings/layout", "headerSettings"}, {"settings/layout", "menuBarPreferences"},
 		{"settings/sync", "sync:diagnostics"}, {"settings/sync", "sync:forecast:run-1"}, {"settings/sync", "background:writing"},

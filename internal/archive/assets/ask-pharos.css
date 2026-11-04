@@ -92,7 +92,7 @@
 #pharos-ask .pharos-product textarea::placeholder{color:var(--pharos-muted);opacity:1}
 #pharos-ask #pharos-question{display:block;width:100%;min-height:68px;margin:8px 0;overflow-y:auto;border:0;background:transparent;padding:2px 0;font:16px/1.65 "Avenir Next",Avenir,-apple-system,sans-serif;color:var(--pharos-ink);white-space:pre-wrap;overflow-wrap:anywhere;cursor:text}
 #pharos-ask .pharos-ai:not(.pharos-has-thread) #pharos-question::before{content:"";float:right;width:var(--pharos-prompt-controls-space);height:30px}
-#pharos-ask #pharos-question[data-empty="true"]::after{content:attr(data-placeholder);color:var(--pharos-muted);pointer-events:none}
+#pharos-ask #pharos-question[data-empty="true"]:is(:not(:focus-within),[data-measuring-placeholder])::after{content:attr(data-placeholder);color:var(--pharos-muted);pointer-events:none}
 #pharos-ask #pharos-question[aria-disabled="true"]{opacity:.6;cursor:wait}
 @media(pointer:coarse){#pharos-ask .pharos-ai:not(.pharos-has-thread) #pharos-question::before{height:44px}}
 #pharos-ask .pharos-composer-footer{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px}
