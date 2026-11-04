@@ -24,7 +24,7 @@ var queryCacheTables = []string{
 	"declared_native_aliases", "agent_sessions", "agent_session_usage", "agent_session_messages",
 	"agent_session_token_evidence", "usage_attribution_state",
 	"model_requests", "tool_calls", "tool_ledger_state", "tool_commands", "tool_urls",
-	"skill_usages", "conversation_instructions", "tool_usage_daily", "tool_mirror_workspaces",
+	"skill_usages", "conversation_instructions", "tool_usage_daily", "tool_mirror_workspaces", "session_outcomes",
 	"cost_changes", "model_aliases", "summaries", "semantic_documents",
 	"change_sets", "change_files", "pull_requests", "work_pr_links",
 	"metrics", "metric_ledger", "text_search_documents", "reasoning_extraction_state",

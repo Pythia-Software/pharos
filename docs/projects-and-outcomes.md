@@ -146,7 +146,9 @@ a Conductor workspace. Its delegated agents' calls are its own.
 
 - **Files changed.** Each file a successful edit call changed, read from
   `tool_calls` (Claude Code's Edit, Write and MultiEdit, Codex's
-  `apply_patch`, Antigravity's edits). Files in temporary directories and
+  `apply_patch`, Antigravity's edits). The ledger keeps one path per call,
+  so a patch's other files are read from the patch itself and placed the
+  way the ledger places paths. Files in temporary directories and
   the agent's own home (plans, memory) are left out. A file in a repository
   is identified by repository and repository-relative path, so every
   checkout and worktree of a repository shares it; any other file by its
@@ -162,22 +164,29 @@ a Conductor workspace. Its delegated agents' calls are its own.
   of the same files after this session's last edit of it, starting within N
   days of it. N is the library setting `outcome_rework_days`, 14 by default.
   The session is "Reworked" when later sessions removed at least half of
-  those lines. Lines come from each edit's input as the transcript holds it:
-  an Edit's old and new text, a Write's whole file, a patch's `-` and `+`
-  lines. A line removed and added again (moved or reindented) is unchanged,
-  and only lines of 8 or more characters, trimmed, count, so a brace or a
-  blank line says nothing. A later Write removes whatever of the session's
-  lines the new file no longer has. A mirror of another workspace
-  (`tool_mirror_workspaces`, such as a Conductor workspace's copy of its
-  Claude session) repeats that workspace's edits and is never rework. A
-  session whose edits cannot be read line by line (an input the transcript
-  did not keep) is not judged, and its "why" says so. Editing the same files
-  again is not rework: continued work on a file usually adds to it. The
-  calibration is under [Rework calibration](#rework-calibration).
+  those lines.
+  - Lines come from each edit's input as the transcript holds it: an Edit's
+    old and new text, a Write's whole file, a patch's `-` and `+` lines. A
+    patch that deletes a file removes all its lines, and a later Write
+    removes whatever of the session's lines the new file no longer has.
+  - A line removed and added again (moved or reindented) is unchanged, and
+    only lines of 8 or more characters, trimmed, count, so a brace or a
+    blank line says nothing.
+  - A mirror of another workspace (`tool_mirror_workspaces`, such as a
+    Conductor workspace's copy of its Claude session) repeats that
+    workspace's edits and is never rework. When a workspace becomes or stops
+    being a mirror, the sessions sharing its files are judged again.
+  - A session whose edits cannot be read line by line (an input the
+    transcript did not keep) is not judged, and its "why" says so.
+
+  Editing the same files again is not rework: continued work on a file
+  usually adds to it. The calibration is under
+  [Rework calibration](#rework-calibration).
 - **Commit, branch and PR evidence in tool output.** From the output of a
   successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch),
   `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
-  (the pull request URL). Only these commands' output is read. A hash here
+  (the pull request URL), as the model read it, out of the stored result's
+  envelope. Only these commands' output is read. A hash here
   is Tier 1 evidence: it is stored, but "Committed" waits for local Git to
   confirm it (Tier 2).
 
@@ -195,6 +204,8 @@ session again. The label is read
 from the stored facts, so a change stops being too recent to judge with no
 write. The Library shows the label (`outcome_label`, with `outcome_why`),
 files changed, lines, verification, recorded commits and reworked files.
+`session_outcomes` is a query cache dependency, so publishing outcomes
+renews cached Library rows, filters and metrics.
 
 A line fingerprint is the first 6 bytes of the SHA-256 of the trimmed line:
 enough to compare sets of lines without collisions that matter, and not the
@@ -335,15 +346,16 @@ Limits:
 **The shipped code on the same library.** The Go probe
 `outcomes_probe_test.go` (`-tags probe`) derives outcomes from an extract of
 the backup (the command is in its header). Of 53,328 sessions, it labelled
-40,774 "No changes", 6,252 "Changed and kept", 248 "Reworked", 88 "Changed,
-too recent" and 16 "Unknown" (chat exports). That is 3.8% of the 6,588
+40,774 "No changes", 6,257 "Changed and kept", 244 "Reworked", 87 "Changed,
+too recent" and 16 "Unknown" (chat exports). That is 3.7% of the 6,588
 sessions with edits, counting Conductor workspaces and sessions outside
-mirrors that the first measurement left out. 1,883 of them lost at least one
+mirrors that the first measurement left out. 1,888 of them lost at least one
 line to a later session. Every session's edits could be read line by line.
-The fingerprints take 6.0 MB for 52,244 session files.
+The fingerprints take 6.1 MB for 53,533 session files; 1,289 of those
+files come from patches that changed more than one file.
 
 Speed: deriving every session took 27 seconds, and deriving the 10 latest
-sessions again took 36 ms. A first version judged rework inside each batch,
+sessions again took 45 ms. A first version judged rework inside each batch,
 so a file edited by hundreds of sessions was judged again by every batch
 that touched it. Batches grew from 56 ms to over 700 ms, and the full pass
 ran for more than 75 minutes before it was stopped. Facts are now derived

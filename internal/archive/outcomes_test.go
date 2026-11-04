@@ -37,7 +37,7 @@ func TestDeriveSessionFacts(t *testing.T) {
 		command("vcs", "ok", "gh pr create --fill", "https://github.com/acme/app/pull/42\n", "2026-09-01T00:09:00Z"),
 		// A failed commit printed nothing that counts.
 		command("vcs", "error", "git commit -m x", "[main 9999999] x\n", "2026-09-01T00:10:00Z"),
-	})
+	}, nil)
 	if len(facts.Files) != 2 || facts.Files[0].Key != "path:/Users/x/notes/plan.md" || facts.Files[1].Key != "repository:repo:main.go" || facts.Files[1].Edits != 2 {
 		t.Fatalf("files: %+v", facts.Files)
 	}
@@ -59,10 +59,10 @@ func TestDeriveSessionFacts(t *testing.T) {
 		t.Fatalf("push and pull requests: %v %v", facts.Pushed, facts.PullRequests)
 	}
 
-	if facts := deriveSessionFacts([]outcomeCall{edit("/a.go", "", "", "2026-09-01T00:00:00Z", lines(1), lines(0))}); facts.Verification != "not_run" {
+	if facts := deriveSessionFacts([]outcomeCall{edit("/a.go", "", "", "2026-09-01T00:00:00Z", lines(1), lines(0))}, nil); facts.Verification != "not_run" {
 		t.Fatalf("no test after the last edit: %q", facts.Verification)
 	}
-	if facts := deriveSessionFacts([]outcomeCall{command("test", "ok", "go test", "", "")}); facts.Verification != "" || len(facts.Files) != 0 {
+	if facts := deriveSessionFacts([]outcomeCall{command("test", "ok", "go test", "", "")}, nil); facts.Verification != "" || len(facts.Files) != 0 {
 		t.Fatalf("a session without edits has nothing to verify: %+v", facts)
 	}
 }
@@ -127,6 +127,9 @@ func countLines(text string) int {
 	return strings.Count(text, "\n") + 1
 }
 
+// added is lines as a patch adds them.
+func added(lines string) string { return "+" + strings.ReplaceAll(lines, "\n", "\n+") }
+
 // code is n distinct lines of a file, from line start.
 func code(name string, start, n int) string {
 	lines := make([]string, n)
@@ -167,7 +170,7 @@ func (f *outcomeFixture) labels() map[string][3]string {
 func TestSessionOutcomeLabels(t *testing.T) {
 	f := newOutcomeFixture(t)
 	for _, id := range []string{"research", "kept", "recent", "reworked", "reworker", "light", "light-later", "continued", "continuer", "slow", "slow-later",
-		"mirrored", "mirror", "tree-a", "tree-b", "rewritten", "rewriter", "opaque"} {
+		"mirrored", "mirror", "tree-a", "tree-b", "rewritten", "rewriter", "opaque", "patched", "deleted", "deleter"} {
 		f.session(id, "claude")
 	}
 	f.session("chat", "chatgpt-export")
@@ -202,6 +205,12 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	// A later session writes the file whole, keeping 2 of its 10 lines.
 	f.edit("rewritten", "/notes/whole.md", "", "", 60, "", code("whole", 0, 10))
 	f.write("rewriter", "/notes/whole.md", 59, code("whole", 8, 2)+"\n"+code("fresh", 0, 5))
+	// One patch changes two files, the second named relative to the first.
+	f.call("patched", "/notes/p/one.md", "", "", 60, "apply_patch", map[string]any{"patch": "*** Begin Patch\n*** Add File: p/one.md\n" + added(code("one", 0, 3)) +
+		"\n*** Add File: p/two.md\n" + added(code("two", 0, 1)) + "\n*** End Patch"}, 4, 0)
+	// Deleting a file removes every line it had.
+	f.edit("deleted", "/notes/gone.md", "", "", 60, "", code("gone", 0, 10))
+	f.call("deleter", "/notes/gone.md", "", "", 59, "apply_patch", map[string]any{"patch": "*** Begin Patch\n*** Delete File: /notes/gone.md\n*** End Patch"}, 0, 0)
 	// An edit whose input was not recorded cannot be judged.
 	f.call("opaque", "/notes/opaque.md", "", "", 60, "Edit", nil, 3, 0)
 	f.refresh()
@@ -209,7 +218,7 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	for id, want := range map[string]string{
 		"chat": "unknown", "research": "no_changes", "kept": "changed_kept", "recent": "changed_recent", "reworked": "reworked", "reworker": "changed_kept",
 		"light": "changed_kept", "continued": "changed_kept", "slow": "changed_kept", "mirrored": "changed_kept", "tree-a": "reworked", "rewritten": "reworked",
-		"opaque": "changed_kept",
+		"opaque": "changed_kept", "patched": "changed_kept", "deleted": "reworked",
 	} {
 		if labels[id][0] != want {
 			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
@@ -231,6 +240,11 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	}
 	if labels["light"][2] != "1" || labels["continued"][2] != "0" {
 		t.Errorf("reworked files: %v %v", labels["light"], labels["continued"])
+	}
+	var patched string
+	if err := f.catalog.DB.QueryRow("SELECT group_concat(path||':'||lines_added,' ') FROM (SELECT path,lines_added FROM session_files WHERE workspace_id='patched' ORDER BY path)").Scan(&patched); err != nil ||
+		patched != "/notes/p/one.md:3 /notes/p/two.md:1" {
+		t.Errorf("patched files: %q %v", patched, err)
 	}
 }
 
@@ -280,10 +294,18 @@ func TestSessionOutcomesJudgeAgainWhenSessionsChange(t *testing.T) {
 	}
 }
 
-func TestReadEditChange(t *testing.T) {
-	read := func(input any, path string) (editChange, bool) {
+func TestReadEditChanges(t *testing.T) {
+	read := func(input any, path string) []fileEdit {
 		text, _ := json.Marshal(map[string]any{"input": input})
-		return readEditChange(string(text), path)
+		return readEditChanges(string(text), path)
+	}
+	one := func(input any, path string) editChange {
+		t.Helper()
+		edits := read(input, path)
+		if len(edits) != 1 || edits[0].Path != path {
+			t.Fatalf("%v: %+v", input, edits)
+		}
+		return edits[0].Change
 	}
 	fingerprints := func(text string) lineSet {
 		set := lineSet{}
@@ -303,43 +325,50 @@ func TestReadEditChange(t *testing.T) {
 		}
 	}
 	// Short lines say nothing; a line both removed and added only moved.
-	change, ok := read(map[string]any{"file_path": "/a.go", "old_string": "\tif done {\n\t\treturn total\n\t}", "new_string": "\tif done {\n\t\treturn total + 1\n\t}\n// counted twice"}, "/a.go")
-	if !ok || change.Rewrite {
+	change := one(map[string]any{"file_path": "/a.go", "old_string": "\tif done {\n\t\treturn total\n\t}", "new_string": "\tif done {\n\t\treturn total + 1\n\t}\n// counted twice"}, "/a.go")
+	if change.Rewrite {
 		t.Fatalf("edit: %+v", change)
 	}
 	same("edit added", change.Added, "return total + 1\n// counted twice")
 	same("edit removed", change.Removed, "return total")
 
-	change, _ = read(map[string]any{"file_path": "/a.go", "edits": []any{map[string]any{"old_string": "first line here", "new_string": "first line there"}, map[string]any{"old_string": "", "new_string": "another line"}}}, "/a.go")
+	change = one(map[string]any{"file_path": "/a.go", "edits": []any{map[string]any{"old_string": "first line here", "new_string": "first line there"}, map[string]any{"old_string": "", "new_string": "another line"}}}, "/a.go")
 	same("multi-edit added", change.Added, "first line there\nanother line")
-	change, _ = read(map[string]any{"TargetFile": "/a.go", "TargetContent": "the old content", "ReplacementContent": "the new content"}, "/a.go")
+	change = one(map[string]any{"TargetFile": "/a.go", "TargetContent": "the old content", "ReplacementContent": "the new content"}, "/a.go")
 	same("antigravity removed", change.Removed, "the old content")
-	change, _ = read(map[string]any{"file_path": "/a.go", "content": "package main\nfunc main() {}"}, "/a.go")
+	change = one(map[string]any{"file_path": "/a.go", "content": "package main\nfunc main() {}"}, "/a.go")
 	if !change.Rewrite {
 		t.Fatalf("write: %+v", change)
 	}
 	same("write", change.Added, "package main\nfunc main() {}")
 
-	// A patch changes only the sections of this call's file, named absolutely
-	// or relative to the working directory, also inside a code-mode script.
-	patch := "*** Begin Patch\n*** Update File: src/a.go\n@@\n-old line of a\n+new line of a\n*** Add File: /repo/src/b.go\n+a line of file b\n*** End Patch"
+	// A patch changes every file it names, absolutely or relative to the
+	// working directory the call's own file places, also inside a code-mode
+	// script; a deleted file is rewritten empty.
+	patch := "*** Begin Patch\n*** Update File: src/a.go\n@@\n-old line of a\n+new line of a\n+second line of a\n*** Add File: /repo/src/b.go\n+a line of file b\n" +
+		"*** Update File: src/c.go\n*** Move to: src/d.go\n@@\n-the line c had\n*** Delete File: src/e.go\n*** End Patch"
 	for name, input := range map[string]any{
 		"patch":       patch,
 		"patch field": map[string]any{"patch": patch},
 		"code mode":   "text(await tools.apply_patch(" + fmt.Sprintf("%q", patch) + "))",
 	} {
-		change, ok = read(input, "/repo/src/a.go")
-		if !ok {
-			t.Fatalf("%s: unread", name)
+		edits := read(input, "/repo/src/a.go")
+		if len(edits) != 4 || edits[0].Path != "/repo/src/a.go" || edits[1].Path != "/repo/src/b.go" || edits[2].Path != "/repo/src/c.go" || edits[3].Path != "/repo/src/e.go" {
+			t.Fatalf("%s: %+v", name, edits)
 		}
-		same(name+" added", change.Added, "new line of a")
-		same(name+" removed", change.Removed, "old line of a")
+		same(name+" added", edits[0].Change.Added, "new line of a\nsecond line of a")
+		same(name+" removed", edits[0].Change.Removed, "old line of a")
+		same(name+" moved", edits[2].Change.Removed, "the line c had")
+		if *edits[0].Added != 2 || *edits[0].Removed != 1 || *edits[1].Added != 1 || !edits[3].Change.Rewrite || len(edits[3].Change.Added) != 0 {
+			t.Fatalf("%s counts and deletion: %+v", name, edits)
+		}
 	}
-	if change, ok = read(patch, "/repo/src/c.go"); ok {
-		t.Fatalf("a patch of other files: %+v", change)
+	// Without the call's own file, a relative name cannot be placed.
+	if edits := read(patch, "/elsewhere/x.go"); len(edits) != 1 || edits[0].Path != "/repo/src/b.go" {
+		t.Fatalf("a patch not naming the call's file: %+v", edits)
 	}
-	if _, ok = read(map[string]any{"changes": []any{map[string]any{"kind": "update", "path": "/a.go"}}}, "/a.go"); ok {
-		t.Fatalf("a change without its lines")
+	if edits := read(map[string]any{"changes": []any{map[string]any{"kind": "update", "path": "/a.go"}}}, "/a.go"); len(edits) != 0 {
+		t.Fatalf("a change without its lines: %+v", edits)
 	}
 }
 
@@ -348,22 +377,66 @@ func TestSessionOutcomesReadCommitsFromToolOutput(t *testing.T) {
 	f.session("work", "claude")
 	f.edit("work", "/src/app/main.go", "", "", 20, "", code("main", 0, 4))
 	at := daysAgo(19)
+	// Results are stored in their envelope, as text or as content blocks.
 	execTx(t, f.catalog.DB,
-		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('result','work-c','result','tool','tool_result','[main 0123abc] Fix the parser','x','h')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
+			('result','work-c','result','tool','tool_result','{"content":"[main 0123abc] Fix the parser\n 1 file changed","is_error":false}','x','h'),
+			('pushed','work-c','pushed','tool','tool_result','{"content":[{"type":"text","text":"To github.com:acme/app.git\n   0123abc..4567def  main -> main\n"}]}','x','h')`,
 		`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,command,command_category,status,started_at,result_message_id)
-			VALUES('commit','work','work-c',99,'claude','tool','Bash','command','git commit -am "Fix the parser"','vcs','ok','`+at+`','result')`)
+			VALUES('commit','work','work-c',99,'claude','tool','Bash','command','git commit -am "Fix the parser"','vcs','ok','`+at+`','result'),
+			('push','work','work-c',100,'claude','tool','Bash','command','git push','vcs','ok','`+at+`','pushed')`)
 	f.refresh()
 	var commits string
 	var verification sql.NullString
-	if err := f.catalog.DB.QueryRow("SELECT commits_json,verification FROM session_outcomes WHERE workspace_id='work'").Scan(&commits, &verification); err != nil {
+	var pushed int
+	if err := f.catalog.DB.QueryRow("SELECT commits_json,verification,pushed FROM session_outcomes WHERE workspace_id='work'").Scan(&commits, &verification, &pushed); err != nil {
 		t.Fatal(err)
 	}
-	if commits != `[{"hash":"0123abc","branch":"main","at":"`+at+`"}]` || verification.String != "not_run" {
-		t.Fatalf("facts: %s %v", commits, verification)
+	if commits != `[{"hash":"0123abc","branch":"main","at":"`+at+`"}]` || verification.String != "not_run" || pushed != 1 {
+		t.Fatalf("facts: %s %v %d", commits, verification, pushed)
 	}
 	// A commit recorded only in the transcript is a Tier 1 fact; the label
 	// stays a transcript label until local Git confirms it.
 	if label := f.labels()["work"][0]; label != "changed_kept" {
 		t.Fatalf("label: %s", label)
+	}
+}
+
+// A workspace that becomes, or stops being, a mirror changes the rework it
+// gave, and a published outcome is new data for cached views.
+func TestSessionOutcomesFollowMirrors(t *testing.T) {
+	f := newOutcomeFixture(t)
+	f.session("first", "claude")
+	f.session("copy", "conductor")
+	f.edit("first", "/notes/plan.md", "", "", 20, "", code("plan", 0, 10))
+	f.edit("copy", "/notes/plan.md", "", "", 19, code("plan", 0, 10), "")
+	generation := func() int64 {
+		var value int64
+		if err := f.catalog.DB.QueryRow("SELECT value FROM query_cache_generation WHERE id=1").Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	before := generation()
+	f.refresh()
+	if label := f.labels()["first"][0]; label != "reworked" || generation() == before {
+		t.Fatalf("before the mirror: %s, generation %d -> %d", label, before, generation())
+	}
+	execTx(t, f.catalog.DB, `INSERT INTO tool_mirror_workspaces VALUES('copy')`)
+	f.refresh()
+	if label := f.labels()["first"][0]; label != "changed_kept" {
+		t.Fatalf("once it is a mirror: %s", label)
+	}
+	// Publishing the same mirrors again changes nothing.
+	execTx(t, f.catalog.DB, `DELETE FROM tool_mirror_workspaces`, `INSERT INTO tool_mirror_workspaces VALUES('copy')`)
+	f.refresh()
+	var marked int
+	if err := f.catalog.DB.QueryRow("SELECT COUNT(*) FROM session_rework_dirty").Scan(&marked); err != nil || marked != 0 {
+		t.Fatalf("left to judge: %d %v", marked, err)
+	}
+	execTx(t, f.catalog.DB, `DELETE FROM tool_mirror_workspaces`)
+	f.refresh()
+	if label := f.labels()["first"][0]; label != "reworked" {
+		t.Fatalf("once it is not a mirror: %s", label)
 	}
 }
