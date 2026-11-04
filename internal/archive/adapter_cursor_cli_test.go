@@ -319,22 +319,25 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 		t.Fatalf("with the latest root cut short: messages %d, before %d", after, before)
 	}
 
-	// An older root cut short: what it listed is not known, so is kept.
-	c, _ = testCatalog(t)
-	root = filepath.Join(t.TempDir(), ".cursor")
-	dir = cursorCLIWriteChat(t, root, cursorCLIConversation())
-	source = cursorCLISource(root)
-	ingestSource(t, c, source)
-	cursorCLIStore(t, dir, func(db *sql.DB) error {
-		_, err := db.Exec(`UPDATE blobs SET data=substr(data, 1, 50) WHERE id=?`, cursorCLIBlobID(cursorCLIRootBlob(cursorCLIRootIDs(cursorCLIConversation(), 0), "/work/app")))
-		return err
-	})
-	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" || record.Unread != nil {
-		t.Fatalf("with an older root cut short: coverage %s, unread %v", record.Coverage, record.Unread)
-	}
-	ingestSource(t, c, source)
-	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Abandoned reply.'`); n != 1 {
-		t.Fatalf("with an older root cut short: %d rewound replies", n)
+	// An older root cut short, or overwritten with what looks like a
+	// message: what it listed is not known, so is kept.
+	for _, damage := range []string{`substr(data, 1, 50)`, `'{'`} {
+		c, _ = testCatalog(t)
+		root = filepath.Join(t.TempDir(), ".cursor")
+		dir = cursorCLIWriteChat(t, root, cursorCLIConversation())
+		source = cursorCLISource(root)
+		ingestSource(t, c, source)
+		cursorCLIStore(t, dir, func(db *sql.DB) error {
+			_, err := db.Exec(`UPDATE blobs SET data=`+damage+` WHERE id=?`, cursorCLIBlobID(cursorCLIRootBlob(cursorCLIRootIDs(cursorCLIConversation(), 0), "/work/app")))
+			return err
+		})
+		if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" || record.Unread != nil {
+			t.Fatalf("with an older root's data %s: coverage %s, unread %v", damage, record.Coverage, record.Unread)
+		}
+		ingestSource(t, c, source)
+		if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Abandoned reply.'`); n != 1 {
+			t.Fatalf("with an older root's data %s: %d rewound replies", damage, n)
+		}
 	}
 
 	// A prompt sent twice, then rewound to before the second.
@@ -358,8 +361,10 @@ func TestCursorCLIReadsOnlyTheChatThatChanged(t *testing.T) {
 	if parsed := ingestSource(t, c, source).Parsed; parsed != 0 {
 		t.Fatalf("unchanged: %d chats parsed", parsed)
 	}
-	// A turn: a new reply and the root that lists it.
+	// A turn: a new reply and the root that lists it. The chat keeps the
+	// CLI's default name.
 	chat := cursorCLIConversation()
+	chat.meta["name"] = "New Agent"
 	chat.messages = append(chat.messages, map[string]any{"role": "assistant", "id": "a4", "content": []any{map[string]any{"type": "text", "text": "Also ran the tests."}}})
 	chat.roots = append(chat.roots, []int{0, 1, 2, 3, 4, 5, 6, 7, 9})
 	dir := filepath.Join(root, "chats", hashBytes([]byte(chat.folder))[:32], chat.agent)
@@ -376,7 +381,8 @@ func TestCursorCLIReadsOnlyTheChatThatChanged(t *testing.T) {
 	writeSourceFile(t, filepath.Join(dir, "meta.json"), jsonText(chat.metaJSON))
 	chat.metaJSON["updatedAtMs"] = 1793809300000
 	writeSourceFile(t, filepath.Join(dir, "meta.json"), jsonText(chat.metaJSON))
-	if parsed := ingestSource(t, c, source).Parsed; parsed != 1 || countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE ended_at='2026-11-04T16:21:40.000Z'`) != 1 {
+	if parsed := ingestSource(t, c, source).Parsed; parsed != 1 || countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE ended_at='2026-11-04T16:21:40.000Z'`) != 1 ||
+		countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE title='Fix the build and tests'`) != 1 {
 		t.Fatalf("after meta.json changed: %d chats parsed", parsed)
 	}
 }
@@ -605,5 +611,19 @@ func TestCursorCLIUnreadableFolderLeavesTheOthers(t *testing.T) {
 	store := filepath.Join("files", "chats", hashBytes([]byte("/work/app"))[:32], cursorCLIChatA, "store.db")
 	if _, err := os.Stat(capturedPath(config, "cursor-cli", store)); err != nil {
 		t.Fatalf("the readable chat was not captured: %v", err)
+	}
+	// So does a chat whose own folder cannot be read, and it is reported.
+	if err := os.Chmod(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chat := filepath.Join(folder, cursorCLIChatB)
+	if err := os.Chmod(chat, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(chat, 0o755) })
+	records = map[string]bool{}
+	err = adapter.Discover(func(record WorkspaceRecord) error { records[record.SourceID] = true; return nil })
+	if err == nil || !records[cursorCLIChatA] {
+		t.Fatalf("with a chat's folder unreadable: read %v, error %v", records, err)
 	}
 }

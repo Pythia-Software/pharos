@@ -86,9 +86,15 @@ func (a *cursorCLIAdapter) chats() ([]cursorCLIChat, error) {
 			continue
 		}
 		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
 			dir := filepath.Join(root, folder.Name(), entry.Name())
 			chat := cursorCLIChat{store: filepath.Join(dir, "store.db")}
-			if info, err := a.files().Stat(chat.store); err != nil || !info.Mode().IsRegular() {
+			if info, err := a.files().Stat(chat.store); err != nil && !errors.Is(err, os.ErrNotExist) {
+				failures = append(failures, err)
+				continue
+			} else if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
 			if info, err := a.files().Stat(filepath.Join(dir, "meta.json")); err == nil && info.Mode().IsRegular() {
@@ -326,10 +332,10 @@ func (a *cursorCLIAdapter) read(chat cursorCLIChat) (*WorkspaceRecord, error) {
 			return nil, err
 		}
 		// A blob that is not what its ID names, as one cut short, is read
-		// as gone; if it is not a message, it may have been a root.
+		// as gone; it may have been a root.
 		if strings.EqualFold(id, cursorCLIBlobID(data)) {
 			blobs[strings.ToLower(id)] = data
-		} else if len(data) == 0 || data[0] != '{' {
+		} else {
 			damaged = true
 		}
 	}
@@ -371,7 +377,7 @@ func cursorCLIUserText(value map[string]any) string {
 }
 
 // record builds a chat's record from its metadata, its meta.json and blobs;
-// damaged is whether a blob that was not a message could not be read.
+// damaged is whether a blob could not be read.
 func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any, blobs map[string][]byte, damaged bool, version int64) *WorkspaceRecord {
 	isMessage := func(id string) bool { data := blobs[id]; return len(data) > 0 && data[0] == '{' }
 	latest := strings.ToLower(firstString(meta["latestRootBlobId"]))
@@ -589,7 +595,10 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 		}
 	}
 	purpose, outcome := agentPurposeOutcome(selected)
-	title := firstString(meta["name"], extra["title"])
+	title := firstString(meta["name"])
+	if !meaningfulWorkspaceTitle(title, agent) {
+		title = firstString(extra["title"])
+	}
 	if !meaningfulWorkspaceTitle(title, agent) {
 		title = defaultString(purpose, "Cursor "+short(agent))
 	}
