@@ -113,3 +113,11 @@ const dateFields = new Set(["started_at", "day", "week", "month"]);
 export function withoutDates(where: WhereTerm[]): WhereTerm[] {
   return where.filter(term => predicatesOf(term).every(clause => !dateFields.has(clause.field)));
 }
+// The signal table's population: the dashboard's filters with its window,
+// from local midnight of the first day to local midnight after end. The
+// window bounds started_at: the service filters the text field day by
+// equality only.
+const localMidnight = (day: string) => new Date(`${day}T00:00:00`).toISOString();
+export function signalTablePopulation(where: WhereTerm[], end: string): WhereTerm[] {
+  return [...withoutDates(where), { field: "started_at", op: ">=", value: localMidnight(signalTableStart(end)) }, { field: "started_at", op: "<", value: localMidnight(shiftDay(end, 1)) }];
+}
