@@ -23,3 +23,9 @@ export function findingsDiscoveryChanged(previous: DiscoveryStatus | undefined, 
 const settingDatasets: Record<string, string> = { "pharos-carbon-v1": "usage", "pharos-concurrency-v1": "parallelism", "pharos-habits-v1": "rhythm" };
 export const datasetsForSavedPreferences = (saved: { set?: Record<string, unknown>; delete?: string[] } | undefined) =>
   [...new Set([...Object.keys(saved?.set ?? {}), ...saved?.delete ?? []].flatMap(key => settingDatasets[key] ? [settingDatasets[key]] : []))];
+
+// Fixes change on a triage action, a saved bound or a new grouping.
+export function onFixesChange(callback: () => void, target: Pick<EventTarget, "addEventListener" | "removeEventListener"> = window): () => void {
+  target.addEventListener("pharos:fixes-changed", callback);
+  return () => target.removeEventListener("pharos:fixes-changed", callback);
+}

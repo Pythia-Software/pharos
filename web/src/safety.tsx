@@ -1,19 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CartPanel, Dialog, ReviewDialog, type CartGroup, type Target } from "./findings";
+import { CartPanel, ReviewDialog, type CartGroup, type Target } from "./findings";
 import { useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
-import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetySelectionPlan, safetyPromptLimit, safetyCartChecks, type SafetyCartCheck, type SafetyCheckSummary, type SafetyDanger, type SafetyRank, type SafetySelectionGroup } from "./safety-dashboard-model";
+import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyPromptLimit, safetyCartChecks, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
+import { OptimizeCard, OptimizeCart, OptimizeSelectionBar } from "./optimize-shared";
 import { type SafetyView, safetyURL, safetyCheckTableURL, safetyStateLabels, safetyTableFocus } from "./safety-route";
 import type { QueryState } from "@pythia-software/query-table-core";
 import { useSelection, type SelectionApi } from "@pythia-software/query-table-react";
-import { SelectionToolbar } from "@pythia-software/query-table-ui";
 import { onSafetyChange } from "./dataset-refresh";
 
 const api = "/api/findings/safety";
 type State = "open" | "handed_off" | "dismissed";
 type Card = { id: string; rule: string; danger: SafetyDanger; subject: string; title: string; explanation: string; state: State; target: string; target_label: string; first_seen_at: string; last_seen_at: string; handed_at?: string; material_change: boolean; calls: number; cart?: { target: string; target_label: string; ticked: boolean } };
-type Evidence = { id: string; call_id: string; message_id: string; at: string; command: string; cwd: string; cwd_basis: string; status: string; outcome: string; conditional: boolean; path: string };
+// quote evidence is an agent's own sentence (a safeguard check) rather than a command.
+type Evidence = { id: string; call_id: string; message_id: string; at: string; command: string; cwd: string; cwd_basis: string; status: string; outcome: string; conditional: boolean; path: string; quote?: boolean };
 type Detail = Card & { questions: string[]; evidence: Evidence[] };
 type Overview = { cases: Card[]; summary: Record<State, number>; cart: CartGroup[]; targets: Target[]; built_at: string | null; scanned_calls: string; coverage: string };
 
@@ -97,7 +98,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <h3>Archived evidence</h3>
           <p className="findings-muted">{detail.calls} distinct calls in the latest discovery window; up to 20 examples below. A notice identifies commands to look into, not confirmed harm or authorization.</p>
           {detail.evidence.map(entry => <ViewDisclosure key={entry.id} viewKey={`safety:${detail.id}:evidence:${entry.id}`} className="safety-evidence" summary={<>{date(entry.at)} · {entry.outcome}</>}>
-            <pre>{entry.command}</pre><p>Working directory: <code>{entry.cwd || "Unresolved"}</code></p><p className="findings-muted">{entry.cwd_basis}{entry.conditional ? ". Compound or conditional call: individual execution needs context." : ""}</p>
+            {entry.quote ? <blockquote className="safety-quote">{entry.command}</blockquote> : <><pre>{entry.command}</pre><p>Working directory: <code>{entry.cwd || "Unresolved"}</code></p><p className="findings-muted">{entry.cwd_basis}{entry.conditional ? ". Compound or conditional call: individual execution needs context." : ""}</p></>}
             <a href={entry.path}>Open archived conversation ↗</a>
           </ViewDisclosure>)}
         </article> : !error ? <p>Loading case…</p> : null}
@@ -118,7 +119,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <SafetyCheckCart cart={overview.cart} onReview={next => setReview(next.target)} />
         </div>
       </>}
-      {view !== "table" ? <ViewDisclosure viewKey="safety:coverage" className="safety-coverage" summary={<>What Pharos checked{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}><p>{overview.built_at ? `${Number(overview.scanned_calls).toLocaleString()} retained shell calls examined. ` : "Risky action discovery runs with the next full Findings refresh. "}{overview.coverage}</p><p>Checks cover credential copies, rewritten published history, cloud deletion, disk and system changes, deletions outside the checkout, database changes, broadened permissions, deleted releases, discarded shared Git work, program-wide process signals, and remote API changes. They skip temporary, build and scratch locations. These are deterministic heuristics; no agent investigation runs inside Pharos.</p><a href={safetyURL("settings")}>Risky action settings and refresh</a></ViewDisclosure> : null}
+      {view !== "table" ? <ViewDisclosure viewKey="safety:coverage" className="safety-coverage" summary={<>What Pharos checked{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}><p>{overview.built_at ? `${Number(overview.scanned_calls).toLocaleString()} retained shell calls examined. ` : "Risky action discovery runs with the next full Findings refresh. "}{overview.coverage}</p><p>Checks cover credential copies, rewritten published history, cloud deletion, disk and system changes, deletions outside the checkout, database changes, broadened permissions, deleted releases, discarded shared Git work, program-wide process signals, and remote API changes. They skip temporary, build and scratch locations. Safeguard checks read agent events instead of commands: an agent saying it weakened or skipped a test, worked around a restriction, or bypassed a hook or gate raises one notice per instance; recurring problems agents could be spared go to Fixes instead. These are deterministic heuristics; no agent investigation runs inside Pharos.</p><a href={safetyURL("settings")}>Risky action settings and refresh</a></ViewDisclosure> : null}
     </>}
     {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>
       <div className="safety-table-main">{table}</div>
@@ -200,83 +201,11 @@ export function SafetyTableContext({ query, total }: { query: QueryState; total:
   </section>;
 }
 
-// Actions on the table's selected notices. Each applies to every selected
-// notice or to none. A prompt asks an agent working in one location, so a
-// selection across locations becomes one prompt per location. The bar
-// outlives the selection, so its outcome and dialogs stay on screen.
+// Actions on the table's selected notices (optimize-shared.tsx).
 export function SafetySelectionBar({ selection, copy }: { selection: SelectionApi; copy: (text: string) => Promise<void> }) {
   const overview = useSafetyOverview();
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<React.ReactNode>("");
-  const [choosing, setChoosing] = useState(false);
-  const [group, setGroup] = useState<CartGroup | null>(null);
-  const ids = [...selection.selected].map(String);
-  const plan = safetySelectionPlan(overview?.cases ?? [], ids);
-  const { groups, blocked } = overview ? plan : { ...plan, blocked: "Loading these notices…" };
-  const count = (n: number) => `${n.toLocaleString()} ${n === 1 ? "notice" : "notices"}`;
-  const places = (list: SafetySelectionGroup[]) => list.map(item => `${item.label} (${item.ids.length.toLocaleString()})`).join(", ");
-  async function bulk(action: string, chosen: string[]) {
-    setBusy(true); setMessage("");
-    try {
-      await request(`${api}/bulk`, { action, ids: chosen });
-      window.dispatchEvent(new Event("pharos:safety-changed"));
-      return true;
-    } catch (failure) { setMessage((failure as Error).message); return false; }
-    finally { setBusy(false); }
-  }
-  async function review(chosen: SafetySelectionGroup) {
-    setChoosing(false);
-    if (!await bulk("cart_add", chosen.ids)) return;
-    const cards = new Map(plan.selected.map(card => [card.id, card]));
-    setGroup({ target: chosen.target, label: chosen.label, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", ticked: chosen.ids.length,
-      items: chosen.ids.map(id => ({ id, title: cards.get(id)?.title ?? id, ticked: true, change_label: "Investigate and recommend", suggested_target: chosen.target })) });
-  }
-  function copyPrompts() {
-    if (groups.length === 1 && groups[0]!.ids.length <= safetyPromptLimit) void review(groups[0]!); else setChoosing(true);
-  }
-  async function addToPrompts() {
-    const added = groups;
-    if (!await bulk("cart_add", ids)) return;
-    selection.clear();
-    setMessage(`Added ${count(ids.length)} to ${added.length === 1 ? `the prompt for ${added[0]!.label}` : `${added.length} prompts, one per location: ${places(added)}`}. Copy ${added.length === 1 ? "it" : "them"} from the prompts beside these notices.`);
-  }
-  async function setState(action: "dismiss" | "restore") {
-    const n = ids.length;
-    if (!await bulk(action, ids)) return;
-    selection.clear();
-    setMessage(action === "dismiss" ? `Acknowledged and closed ${count(n)}. Bring them back at any time.` : `Brought back ${count(n)} to Open.`);
-  }
-  const promptLabel = groups.length > 1 ? `Copy ${groups.length} prompts…` : "Copy prompt…";
-  const addLabel = groups.length > 1 ? `Add to ${groups.length} location prompts` : groups.length === 1 ? `Add to ${groups[0]!.label} prompt` : "Add to prompt";
-  return <div className="safety-selection">
-    <SelectionToolbar selection={selection} className="safety-selection-toolbar" actions={() => <>
-      <button type="button" className="findings-button primary" disabled={busy || Boolean(blocked)} onClick={copyPrompts}>{promptLabel}</button>
-      <button type="button" className="findings-button" disabled={busy || Boolean(blocked)} onClick={() => void addToPrompts()}>{addLabel}</button>
-      {!plan.known || plan.selected.some(card => card.state !== "dismissed") ? <button type="button" className="findings-button" disabled={busy} onClick={() => void setState("dismiss")}>Acknowledge and close</button> : null}
-      {plan.closed ? <button type="button" className="findings-button" disabled={busy} onClick={() => void setState("restore")}>Bring back</button> : null}
-    </>} />
-    {ids.length ? <p className="safety-selection-note">{blocked || (groups.length > 1
-      ? `These notices come from ${groups.length} locations. A prompt asks an agent working in one location, so they become one prompt per location: ${places(groups)}.`
-      : `A prompt for an agent working in ${groups[0]?.label ?? "this location"}. Copying hands these notices off; adding keeps them in that location's prompt to copy later.`)}</p> : null}
-    {message ? <p className="safety-notice" role="status">{message}</p> : null}
-    {choosing ? <Dialog title="Copy a prompt for one location" onClose={() => setChoosing(false)}>
-      <p>A prompt asks an agent working in one location to investigate, so the {count(ids.length)} you selected become one prompt per location. Copy them one at a time; each copied prompt hands its notices off.</p>
-      <ul className="safety-prompt-choices">{groups.map(item => <li key={item.target}>
-        <span><strong>{item.label}</strong> · {count(item.ids.length)}</span>
-        {item.ids.length > safetyPromptLimit ? <span className="findings-muted">A prompt holds up to {safetyPromptLimit} notices; narrow the selection for this location.</span>
-          : <button type="button" className="findings-button primary" disabled={busy} onClick={() => void review(item)}>Review prompt</button>}
-      </li>)}</ul>
-    </Dialog> : null}
-    {group ? <ReviewDialog key={group.target} safety group={group} copy={copy}
-      onClose={() => { setGroup(null); setMessage(`Kept ${count(group.items.length)} in the prompt for ${group.label}; copy it from the prompts beside these notices.`); }}
-      onCopied={() => {
-        const copied = new Set(group.items.map(item => item.id)), remaining = ids.filter(id => !copied.has(id));
-        setGroup(null); selection.replace(remaining);
-        setMessage(remaining.length ? `Copied the prompt for ${group.label}; those notices moved to Handed off. ${count(remaining.length)} from other locations are still selected.` : `Copied the prompt for ${group.label}; those notices moved to Handed off.`);
-        if (remaining.length) setChoosing(true);
-        window.dispatchEvent(new Event("pharos:safety-changed"));
-      }} /> : null}
-  </div>;
+  return <OptimizeSelectionBar selection={selection} copy={copy} items={overview?.cases ?? null} api={api} area="safety" changed="pharos:safety-changed"
+    noun={{ one: "notice", many: "notices" }} place={{ one: "location", many: "locations" }} promptLimit={safetyPromptLimit} />;
 }
 
 const range = (first: string, last: string) => { const a = date(first), b = date(last); return a === b ? b : `${a} – ${b}`; };
@@ -286,23 +215,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 // directory, a recurring resource) before what varies, then when, how much,
 // and what is new. The checkbox selects every notice on the card.
 function SafetyCheckCard({ check, place, selection, href }: { check: SafetyCheckSummary; place: string; selection: SelectionApi; href: string }) {
-  const box = useRef<HTMLInputElement>(null);
-  const chosen = check.ids.filter(id => selection.isSelected(id)).length;
-  const all = chosen === check.ids.length;
-  useEffect(() => { if (box.current) box.current.indeterminate = chosen > 0 && !all; }, [chosen, all]);
-  const toggle = () => {
-    const next = new Set([...selection.selected].map(String));
-    for (const id of check.ids) if (all) next.delete(id); else next.add(id);
-    selection.replace(next);
-  };
   const where = place ? null : check.locations === 1 ? `${check.count === 1 ? "In" : "All in"} ${check.places[0]?.label}`
     : `${check.places.map(item => `${item.label} ${item.count}`).join(" · ")}${check.morePlaces ? ` · ${plural(check.morePlaces, "more location")}` : ""}`;
   const single = check.count === 1;
   const facts = [range(check.first_seen_at, check.last_seen_at), plural(check.calls, "call"), check.fresh ? `${check.fresh.toLocaleString()} with new evidence` : "", check.inPrompt ? `${check.inPrompt.toLocaleString()} in a prompt` : ""].filter(Boolean);
   const chips = <>{check.danger ? <DangerChip danger={check.danger} /> : null}{check.recent ? <span className="findings-chip safety-recent">Recent</span> : null}</>;
-  return <article className={`safety-check-card${chosen ? " selected" : ""}`} data-pharos-target={`safety-check:${check.rule}`}>
-    <input ref={box} className="safety-check-select" type="checkbox" checked={all} onChange={toggle} aria-label={`Select ${single ? "the notice" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`} />
-    <div className="safety-check-body">
+  return <OptimizeCard ids={check.ids} selection={selection} className="safety-check-card" target={`safety-check:${check.rule}`} count={check.count} countLabel={plural(check.count, "notice")}
+    label={`Select ${single ? "the notice" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`}>
     <div className="safety-check-head"><strong className="safety-check-title">{check.title}</strong>{chips}</div>
     {where ? <span className="safety-check-where">{where}</span> : null}
     {check.resources.length ? <div className="safety-check-what">
@@ -312,49 +231,15 @@ function SafetyCheckCard({ check, place, selection, href }: { check: SafetyCheck
     </div> : null}
     <span className="safety-check-when">{facts.join(" · ")}</span>
     <a className="safety-check-open" href={href}>{single ? "Open in the table →" : `List all ${check.count.toLocaleString()} →`}</a>
-    </div>
-    <span className="safety-check-count" aria-label={plural(check.count, "notice")}>{check.count.toLocaleString()}</span>
-  </article>;
+  </OptimizeCard>;
 }
 
 function SafetyCheckCart({ cart, onReview }: { cart: CartGroup[]; onReview: (group: CartGroup) => void }) {
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const bulk = async (body: Record<string, unknown>, ids: string[]) => {
-    setBusy(true); setError("");
-    try { await request(`${api}/bulk`, { ...body, ids }); window.dispatchEvent(new Event("pharos:safety-changed")); }
-    catch (failure) { setError((failure as Error).message); }
-    finally { setBusy(false); }
-  };
-  return <aside className="findings-cart safety-check-cart" id="findingsCart" aria-labelledby="findingsCartTitle">
-    <h2 id="findingsCartTitle">Risky action prompts to copy</h2>
-    {error ? <p className="findings-error" role="alert">{error}</p> : null}
-    {!cart.length ? <p className="findings-cart-empty">Tick a check to copy a prompt for it, or add it to a prompt for its location. Each location gets its own prompt.</p> : null}
-    {cart.map(group => {
-      const checks = safetyCartChecks(group), ticked = checks.reduce((sum, check) => sum + check.ticked, 0);
-      return <section key={group.target} className="findings-cart-group" aria-label={`Prompt for ${group.label}`}>
-        <div className="findings-cart-head"><h3>{group.label}</h3><span>{plural(ticked, "notice")} ticked</span></div>
-        <ul>{checks.map(check => <SafetyCartCheck key={check.rule} check={check} busy={busy}
-          onTick={value => void bulk({ action: "cart_tick", ticked: value }, check.ids)}
-          onRemove={() => void bulk({ action: "cart_remove" }, check.ids)} />)}</ul>
-        <button type="button" className="findings-button primary" disabled={busy || !ticked} onClick={() => onReview(group)}>Review prompt ({plural(ticked, "notice")})</button>
-      </section>;
-    })}
-    <p className="findings-cart-note">Risky actions and efficiency use separate prompts. After copying, these notices leave Open and remain in Handed off. To choose single notices, use the <a href={safetyURL("table")}>table</a>.</p>
-  </aside>;
-}
-
-function SafetyCartCheck({ check, busy, onTick, onRemove }: { check: SafetyCartCheck; busy: boolean; onTick: (ticked: boolean) => void; onRemove: () => void }) {
-  const box = useRef<HTMLInputElement>(null);
-  const all = check.ticked === check.ids.length;
-  useEffect(() => { if (box.current) box.current.indeterminate = check.ticked > 0 && !all; }, [check.ticked, all]);
-  return <li className={check.ticked ? "" : "unticked"}>
-    <label>
-      <input ref={box} type="checkbox" checked={all} disabled={busy} onChange={event => onTick(event.target.checked)} />
-      <span><span className="findings-cart-title">{check.title}</span><small>{check.ticked === check.ids.length ? plural(check.ids.length, "notice") : `${check.ticked.toLocaleString()} of ${plural(check.ids.length, "notice")} ticked`}{check.danger && safetyDangerLabels[check.danger] ? ` · ${safetyDangerLabels[check.danger]}` : ""}</small></span>
-    </label>
-    <button type="button" className="findings-button quiet safety-cart-remove" disabled={busy} aria-label={`Remove “${check.title}” from this prompt`} onClick={onRemove}>Remove</button>
-  </li>;
+  const groups = cart.map(group => ({ target: group.target, label: group.label, group,
+    entries: safetyCartChecks(group).map(check => ({ key: check.rule, title: check.title, ids: check.ids, ticked: check.ticked, counted: true, detail: check.danger && safetyDangerLabels[check.danger] ? safetyDangerLabels[check.danger] : "" })) }));
+  return <OptimizeCart className="safety-check-cart" title="Risky action prompts to copy" groups={groups} api={api} changed="pharos:safety-changed" noun={{ one: "notice", many: "notices" }} onReview={onReview}
+    empty="Tick a check to copy a prompt for it, or add it to a prompt for its location. Each location gets its own prompt."
+    note={<>Risky actions and efficiency use separate prompts. After copying, these notices leave Open and remain in Handed off. To choose single notices, use the <a href={safetyURL("table")}>table</a>.</>} />;
 }
 
 function DangerChip({ danger }: { danger?: SafetyDanger }) {

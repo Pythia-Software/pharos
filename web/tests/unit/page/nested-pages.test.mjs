@@ -63,6 +63,13 @@ test("Optimize resolves separate efficiency and safety pages", () => {
   const optimize = sections.find(section => section.id === "findings");
   assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety"]);
   assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety"]);
+  // Fixes come from agent events, a preview: listed only with it on.
+  const previews = optimizePages(true);
+  assert.deepEqual(previews.map(page => page.id), ["findings", "safety", "fixes"]);
+  for (const [query, trail] of [["optimize_area=fixes", ["fixes", "fixes:dashboard"]], ["optimize_area=fixes&fixes_item=x&fixes_list=dismissed", ["fixes", "fixes:dashboard"]], ["optimize_area=fixes&view=settings", ["fixes", "fixes:settings"]]]) {
+    const selected = appLocation("/findings", new URLSearchParams(query));
+    assert.deepEqual(nestedPageTrail(previews, selected.current).map(page => page.id), trail);
+  }
   for (const [path, query, trail] of [
     ["/findings", "", ["findings", "findings:dashboard"]],
     ["/findings", "list=watching&repo=example", ["findings", "findings:dashboard"]],

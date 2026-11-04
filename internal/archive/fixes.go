@@ -207,6 +207,7 @@ type fixQuote struct {
 	Day            string  `json:"day"`
 	At             string  `json:"at,omitempty"`
 	Source         string  `json:"source"`
+	WorkspaceID    string  `json:"workspace_id"`
 	ConversationID string  `json:"conversation_id"`
 	MessageID      string  `json:"message_id"`
 	Similarity     float64 `json:"similarity,omitempty"`
@@ -838,7 +839,7 @@ func fixesQuote(e fixesEvent, similarity float64) fixQuote {
 		about = fixesClip(e.Subject, 300)
 	}
 	return fixQuote{EventID: fmt.Sprintf("e%d", e.ID), Sentence: fixesClip(e.Sentence, 400), About: about, Kind: e.Family, KindLabel: label, Repository: e.repositoryLabel(),
-		Model: defaultString(nilIfEmpty(e.Model), "Unknown model"), Day: e.Day, At: e.At, Source: e.Source, ConversationID: e.ConversationID, MessageID: e.MessageID, Similarity: math.Round(similarity*1000) / 1000}
+		Model: defaultString(nilIfEmpty(e.Model), "Unknown model"), Day: e.Day, At: e.At, Source: e.Source, WorkspaceID: e.Workspace, ConversationID: e.ConversationID, MessageID: e.MessageID, Similarity: math.Round(similarity*1000) / 1000}
 }
 
 // fixesStatus says whether a problem still recurs. Expected is its rate per

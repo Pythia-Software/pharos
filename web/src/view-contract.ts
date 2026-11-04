@@ -3,6 +3,7 @@ import carbonFactors from "../../carbon/co2_factors.json";
 import { defaultConcurrencySettings, concurrencyRangePresets } from "./concurrency-settings";
 import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-search-model";
 import { safetyRanks } from "./safety-dashboard-model";
+import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
@@ -50,7 +51,13 @@ export const viewFields: Record<string, ViewField> = {
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
   card_filters: field("card_filters", ["cards"], "boolean", "Show the card filters.", undefined, false),
   findings_rank: field("findings_rank", ["findings", "findings/table"], "enum", "Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.", ["", "usd", "tokens", "minutes", "failures"]),
-  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate, in separate prompts.", ["efficiency", "safety"], "efficiency"),
+  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate; Fixes lists recurring agent problems a change to guidance, environment, tools or docs could prevent. Each has its own prompts.", ["efficiency", "safety", "fixes"], "efficiency"),
+  fixes_list: field("fixes_list", ["findings/fixes"], "enum", "Fix lifecycle. Copying a prompt moves selected fixes to handed_off, and one that recurs afterwards opens again; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
+  fixes_place: field("fixes_place", ["findings/fixes"], "text", "Filter fixes by where their prompt goes: global (the shared setup) or a stable repository target.", undefined, ""),
+  fixes_kind: field("fixes_kind", ["findings/fixes"], "enum", "Filter fixes by kind of fix; empty shows every kind.", ["", ...fixesKinds], ""),
+  fixes_rank: field("fixes_rank", ["findings/fixes"], "enum", "Order fix cards by priority (work items weighted down once quiet past the settings' bound, plus agent time lost), work items, latest occurrence, time lost, or repositories spanned.", fixesRanks, "priority"),
+  fixes_hidden: field("fixes_hidden", ["findings/fixes"], "boolean", "Also list open fixes the settings' bounds hide (quiet too long, or too few work items), marked as hidden. Default off.", undefined, false),
+  fixes_item: field("fixes_item", ["findings/fixes"], "text", "Open one fix by stable ID: its quotes with reader links, where the fix belongs, guidance matches and status.", undefined, ""),
   safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action notice lifecycle. Copying a prompt moves selected notices to handed_off; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
   safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
   safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
@@ -121,6 +128,7 @@ viewFields.carbon.details={
   grid:"Key from the shared carbon factors grids, or custom with nonnegative customGrid in g CO2e/kWh.",
 };
 export const attentionTargets = [
+  { pattern: "fix:<id>", pages: ["findings/fixes"], description: "A fix's card on the dashboard, or its open detail, by stable ID. Reveal scrolls and highlights without focusing." },
   { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action notice's open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
   { pattern: "page", pages: ["*"], description: "Main page content." },
   { pattern: "control:<field>", pages: ["*"], description: "A registered view field or control wrapper." },
@@ -215,6 +223,7 @@ export function retainPageView(params: URLSearchParams, page: string, nativePara
 export function viewPageForURL(url: URL): string {
   if(url.pathname.startsWith("/work/"))return "work";
   if(url.pathname==="/analyze")return url.searchParams.get("analyze_mode")==="query"?`analyze/query/${url.searchParams.get("analyze_data")||"usage"}`:`analyze/${url.searchParams.get("analyze_topic")||"tokens"}`;
+  if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="fixes")return url.searchParams.get("view")==="settings" ? "findings/fixes/settings" : "findings/fixes";
   if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="safety")return ["table","settings"].includes(url.searchParams.get("view")||"") ? `findings/safety/${url.searchParams.get("view")}` : "findings/safety";
   if(url.pathname==="/findings"&&["table","settings"].includes(url.searchParams.get("view")||""))return `findings/${url.searchParams.get("view")}`;
   return url.pathname.replace(/^\//,"")||"home";

@@ -1,3 +1,4 @@
+import { optimizeSelectionPlan, type OptimizeSelectionGroup } from "./optimize-model";
 export const safetyRanks = ["danger", "recent", "calls", "evidence"] as const;
 export type SafetyRank = typeof safetyRanks[number];
 export const safetyRankLabels: Record<SafetyRank, string> = { danger: "Danger", recent: "Recent", calls: "Calls", evidence: "New evidence" };
@@ -108,25 +109,10 @@ export function safetyDashboardChecks(notices: readonly CheckNotice[], state: st
 
 // A prompt asks an agent working in one location, and holds up to 50 notices.
 export const safetyPromptLimit = 50;
-export type SafetySelectionGroup = { target: string; label: string; ids: string[] };
+export type SafetySelectionGroup = OptimizeSelectionGroup;
 // How a table selection maps onto prompts: one group per location, largest
 // first, and why prompts are unavailable when they are.
-export function safetySelectionPlan<T extends Notice>(notices: readonly T[], ids: readonly string[]) {
-  const byID = new Map(notices.map(notice => [notice.id, notice]));
-  const selected = ids.flatMap(id => byID.get(id) ?? []);
-  const known = selected.length === ids.length;
-  const closed = selected.filter(notice => notice.state !== "open").length;
-  const groups = new Map<string, SafetySelectionGroup>();
-  for (const notice of selected) {
-    const group = groups.get(notice.target) ?? { target: notice.target, label: notice.target_label, ids: [] };
-    group.ids.push(notice.id);
-    groups.set(notice.target, group);
-  }
-  const blocked = !known ? "Loading these notices…"
-    : closed ? `${closed.toLocaleString()} of the selected notices ${closed === 1 ? "is" : "are"} not open. Bring ${closed === 1 ? "it" : "them"} back, or untick ${closed === 1 ? "it" : "them"}, to add the selection to a prompt.`
-      : "";
-  return { selected, known, closed, blocked, groups: [...groups.values()].sort((a, b) => b.ids.length - a.ids.length || a.label.localeCompare(b.label)) };
-}
+export const safetySelectionPlan = <T extends Notice>(notices: readonly T[], ids: readonly string[]) => optimizeSelectionPlan(notices, ids);
 
 export type SafetyCartCheck = { rule: string; title: string; danger?: SafetyDanger; ids: string[]; ticked: number };
 // A location's prompt as checks rather than notices: on the dashboard a card

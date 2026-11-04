@@ -186,6 +186,10 @@ function nodeCases(map: SiteMap) {
   add("findings/safety", "/findings?optimize_area=safety");
   for (const rank of ["danger", "recent", "calls", "evidence"]) add("findings/safety", `/findings?optimize_area=safety&safety_rank=${rank}&safety_place=repo%3Aexample`);
   add("findings/safety/settings", "/findings?optimize_area=safety&view=settings");
+  add("findings/fixes", "/findings?optimize_area=fixes");
+  add("findings/fixes", "/findings?optimize_area=fixes&fixes_list=handed_off&fixes_place=global&fixes_kind=env&fixes_rank=recent&fixes_hidden=1");
+  add("findings/fixes", "/findings?optimize_area=fixes&fixes_item=fix_example");
+  add("findings/fixes/settings", "/findings?optimize_area=fixes&view=settings");
   add("findings/safety", "/findings?optimize_area=safety&safety_list=handed_off&safety_place=repo%3Aexample&safety_case=safety_example");
   for (const path of Object.keys(map.nodes).filter(path => path.startsWith("settings"))) add(path, map.nodes[path].route);
   // The reader: a work, a conversation and message, and the delegation explorer.
