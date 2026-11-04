@@ -230,7 +230,7 @@ test("Session Shape daily cards: the card's counts and 7-day shares are the dash
     clearPreviewCache();
     const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
     const card = compactTimelineBuckets(preview.buckets, preview.timeline ?? {}), where = dashboardWhere(item);
-    const state = normalizeAnalysis(catalog, item.destination.chart), query = trendQuery(catalog, state, where, { now: cardNow });
+    const state = normalizeAnalysis(catalog, { ...dashboardDefaults.session_shape, ...item.destination.chart }), query = trendQuery(catalog, state, where, { now: cardNow });
     assert.deepEqual([state.view, state.period, state.rollingPeriods > 1, state.share], ["trend", "day", Boolean(item.cover.timeline?.percent), Boolean(item.cover.timeline?.percent)], id);
     const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
     assert.equal(built.error, undefined, id);

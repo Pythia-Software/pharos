@@ -20495,7 +20495,8 @@
           "split": "archetype",
           "period": "day",
           "scale": "linear",
-          "nonzero": false
+          "nonzero": false,
+          "share": false
         },
         "dataset": "session_shape",
         "detailAction": "Explore sessions over time"
