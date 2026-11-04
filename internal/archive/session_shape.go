@@ -29,7 +29,7 @@ import (
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
 	// Changing it marks every conversation for recomputation.
-	sessionShapeVersion = "3"
+	sessionShapeVersion = "4"
 	sessionShapeBatch   = 200
 	// A gap between consecutive messages longer than this is idle time.
 	sessionShapeActiveGap = 300.0
@@ -575,7 +575,7 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 		return in, false, err
 	}
 	positions := map[string]int{}
-	checkpoints := []shapeRequest{}
+	checkpoints, checkpointed := []shapeRequest{}, false
 	for _, row := range rows {
 		messageID := firstString(row["id"])
 		if owned[messageID] {
@@ -587,6 +587,7 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 			}
 		}
 		if match := lastUsageInput.FindStringSubmatch(firstString(row["last_usage"])); match != nil {
+			checkpointed = true
 			if input, err := strconv.ParseInt(match[1], 10, 64); err == nil && input > 0 {
 				checkpoint := shapeRequest{input: input}
 				if at, ok := parseTime(firstString(row["created_at"])); ok {
@@ -650,14 +651,15 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 	}
 	in.requests = checkpoints
 	for _, row := range rows {
-		if len(checkpoints) > 0 && integer(row["anonymous"]) != 0 {
+		if checkpointed && integer(row["anonymous"]) != 0 {
 			// A checkpoint's usage delta; its checkpoint is the sample.
 			continue
 		}
 		request := shapeRequest{input: integer(row["input_tokens"]), model: firstString(row["model"])}
-		if len(checkpoints) > 0 {
+		if checkpointed {
 			// Codex request rows, native or not, can hold cumulative usage;
-			// with checkpoints, a row names only its model.
+			// with checkpoints, even ones reporting no input, a row names
+			// only its model.
 			request.input = 0
 		}
 		if at, ok := parseTime(firstString(row["requested_at"])); ok {
