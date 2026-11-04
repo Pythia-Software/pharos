@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +175,46 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	}
 	if _, err := callMCP(library.catalog, "search_conversations", map[string]any{"project": "~/nowhere-at-all"}); err == nil || !strings.Contains(err.Error(), "list_projects") {
 		t.Fatalf("an unknown project should be an error naming list_projects: %v", err)
+	}
+
+	// A session that wrote a file: its outcome and the file's history come
+	// from the transcript alone, with nothing reported missing.
+	plan := filepath.Join(library.folders["notes"], "plan.md")
+	writeClaudeSession(t, library.claude, "s-plan", claudeEditSession("s-plan", library.folders["notes"], plan, []string{"# Plan", "", "- one", "- two"}, 20))
+	library.ingestClaude(t)
+	if err := library.catalog.ensureToolRollup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	listed := callProjectTool(t, library.catalog, "list_outcomes", map[string]any{"project": notes})
+	if integer(listed["total"]) != 2 {
+		t.Fatalf("list_outcomes in a folder: %#v", listed)
+	}
+	for _, item := range listed["items"].([]any) {
+		row := item.(map[string]any)
+		if row["git_check"] != "not_applicable" || row["git_check_reason"] != nil || firstString(row["outcome_why"]) == "" || row["outcome_label"] == "unknown" {
+			t.Fatalf("an outcome without Git: %#v", row)
+		}
+	}
+	history := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": notes})
+	files := history["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("get_file_history without Git: %#v", history)
+	}
+	file := files[0].(map[string]any)
+	session := file["sessions"].([]any)[0].(map[string]any)
+	if file["project"] != notes || file["git"].(map[string]any)["status"] != "not_applicable" || integer(session["lines_added"]) != 4 ||
+		!strings.Contains(firstString(session["url"]), "call=") || strings.Contains(firstString(history["note"]), "No session") {
+		t.Fatalf("file history without Git: %#v", history)
+	}
+	// The page and its endpoint answer the same, with no error.
+	for _, target := range []string{"/files?file=plan.md", "/api/file-history?path=plan.md&project=" + url.QueryEscape(notes)} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || strings.Contains(target, "/api/") && !strings.Contains(response.Body.String(), `"not_applicable"`) {
+			t.Fatalf("%s: %d %s", target, response.Code, response.Body.String())
+		}
 	}
 }
 

@@ -711,6 +711,20 @@ export const defaultApi = {
   "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
+  // File history: one repository file, with a linked and an unlinked commit.
+  "GET /api/file-history": ({ query }) => ({ path: query.get("path"), note: "Sessions are those that edited the file through their tool calls, newest first.", files: [{
+    file_key: "repository:repo-pharos:internal/archive/api.go", repository_id: "repo-pharos", path: "internal/archive/api.go", project: "pharos", project_kind: "repository", sessions_truncated: false,
+    sessions: [
+      { workspace_id: "workspace-1", title: "Add the file history endpoint with a title long enough to wrap at narrow widths", source: "claude", last_edit_at: iso(2 * day), edits: 3, lines_added: 42, lines_removed: 7, rewrote: false, outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", url: "/work/workspace-1?conversation=conversation-1&message=message-1" },
+      { workspace_id: "workspace-2", title: "Codex session", source: "codex", last_edit_at: iso(9 * day), edits: 1, lines_added: null, lines_removed: null, rewrote: true, outcome_label: "reworked", outcome_why: "Later sessions removed most of its lines (transcript).", url: "/work/workspace-2" },
+    ],
+    git: { status: "checked", reason: null, checked_at: iso(day), commits_truncated: false },
+    commits: [
+      { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null, sessions: [{ workspace_id: "workspace-1", method: "transcript", confidence: 1, counted: true }] },
+      { hash: "89abcdef0123456789abcdef0123456789abcdef", author_at: iso(5 * day), lines_added: 3, lines_removed: 1, on_mainline: true, reverted_by: null, sessions: [] },
+    ],
+  }] }),
+
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
   "POST /api/logs/page": ({ body }) => ({ recorded: body?.events?.length ?? 0 }),

@@ -314,7 +314,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask", "/files":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -403,6 +403,14 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/search/text":
 		writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
+	case path == "/api/file-history":
+		q := r.URL.Query()
+		value, err := s.Catalog.FileHistory(r.Context(), FileHistoryOptions{Path: q.Get("path"), Project: q.Get("project"), Limit: queryInt(r, "limit", 50)})
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+		} else {
+			writeJSON(w, value, http.StatusOK)
+		}
 	case path == "/api/library/find":
 		q := r.URL.Query()
 		options, err := textOptionsFromValues(q, "")
