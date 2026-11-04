@@ -92,6 +92,8 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 				value.harness = "vscode-copilot"
 			case "cursor":
 				value.harness = "cursor"
+			case "cursor-cli":
+				value.harness = "cursor-cli"
 			case "tl1", "tl1-export":
 				value.harness = "tl1"
 			case "canonical":

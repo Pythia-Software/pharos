@@ -203,6 +203,8 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 		return &vscodeCopilotAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "cursor":
 		return &cursorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
+	case "cursor-cli":
+		return &cursorCLIAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "opencode":
 		return &opencodeAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "conductor":

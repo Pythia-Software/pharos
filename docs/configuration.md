@@ -427,6 +427,7 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | Cline | `~/.cline/data`, `CLINE_DATA_DIR`, or `$CLINE_DIR/data`, when it has a `sessions` folder; each `sessions/<id>/<id>.messages.json` is a session |
 | VS Code Copilot | the `User` folder of VS Code, VS Code Insiders, VSCodium or Positron under `~/Library/Application Support`; each chat session (`workspaceStorage/<hash>/chatSessions/<id>.jsonl`, an older release's `.json`, or a window without a folder's in `globalStorage/emptyWindowChatSessions`) is a session |
 | Cursor | `~/Library/Application Support/Cursor/User`; each composer with a message in `globalStorage/state.vscdb` is a session |
+| Cursor CLI | `~/.cursor`, when it has a chat (`chats/<hash>/<chat>/store.db`); each chat is a session |
 | ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
 | Claude.ai | nothing on disk: export your data from Claude.ai and add a `claude-ai` source for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
@@ -802,6 +803,7 @@ upload permissions keep their existing behavior.
 | `cline` | each session's `<id>.json` and `<id>.messages.json` under `sessions`; not its compacted context (`<id>.compaction.json`), nor Cline's settings (which hold provider credentials), index database or checkpoints |
 | `vscode-copilot` | each chat session's file under `workspaceStorage/<hash>/chatSessions` or `globalStorage/emptyWindowChatSessions`, and its window's `workspace.json`; not a session's older `.json` beside its journal, nor the rest of the user folder: settings, `state.vscdb` databases and extension storage, which can hold other extensions' secrets |
 | `cursor` | a snapshot of `globalStorage/state.vscdb` and of each window's `state.vscdb`, and each window's `workspace.json`. A snapshot is a copy, row by row, of only the composers, their messages and headers, and a window's list of its composers, with each composer's encryption keys and encrypted state left out: Cursor's sign-in tokens (`cursorAuth/*`), settings and every other row are never written to the capture, even by one that stops part way. No rows are copied before indexing, even with `sqlite_record_capture`, since only a snapshot leaves them out; rows that option exports come from the snapshot. A composer deleted in Cursor before its last capture was indexed is indexed from an older snapshot that holds it |
+| `cursor-cli` | a snapshot of each chat's `store.db` under `chats`, and its `meta.json`. A snapshot is a copy, row by row, of the chat's blobs and its metadata without its encryption key (`blobEncryptionKey`); nothing else is ever written to the capture, even by one that stops part way, and no rows are copied before indexing. Not the rest of `~/.cursor`: the CLI's sign-in (`cli-config.json`), settings, projects and extensions. A chat deleted before its last capture was indexed is indexed from the capture that holds it |
 
 **Incremental and interruption-safe.** A file whose size and mtime match the
 manifest, and whose captured copy is still intact, is skipped. Anything else is

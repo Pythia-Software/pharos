@@ -244,7 +244,7 @@ func preservationMode(source SourceConfig) string {
 			return "retained-sessions"
 		}
 		return "live-sqlite-rollout-gap"
-	case "cursor":
+	case "cursor", "cursor-cli":
 		return "live-sqlite-rollout-gap"
 	case "tl1", "antigravity", "opencode":
 		if source.Options["sqlite_record_capture"] == true {

@@ -17,7 +17,7 @@ const workspaceNamesVersion = "workspace-names-v1/" + authorshipVersion
 func meaningfulWorkspaceTitle(title, sourceID string) bool {
 	title = strings.TrimSpace(title)
 	switch strings.ToLower(title) {
-	case "", "untitled", "untitled work", "new chat", "new conversation", "new session", "new thread":
+	case "", "untitled", "untitled work", "new agent", "new chat", "new conversation", "new session", "new thread":
 		return false
 	}
 	if title == sourceID {

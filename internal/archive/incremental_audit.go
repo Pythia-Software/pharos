@@ -679,6 +679,11 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		adapter := &cursorAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
 		return adapter.readGroup(unit.Parts)
 	}
+	if unit.Source.Kind == "cursor-cli" {
+		// Each chat is a database, read in place.
+		adapter := &cursorCLIAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
+		return adapter.readGroup(unit.Parts)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
 	}

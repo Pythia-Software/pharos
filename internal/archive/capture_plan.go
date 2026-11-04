@@ -189,6 +189,22 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			rel, _ := filepath.Rel(source.Path, file)
 			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
 		}
+	case "cursor-cli":
+		// Each chat's database, without its encryption key (captureTables),
+		// and its meta.json: not the rest of ~/.cursor, which holds the
+		// CLI's sign-in and settings.
+		databases, files, err := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: source}}).captureInputs()
+		if err != nil {
+			return plan, fmt.Errorf("Cursor CLI chats are unavailable: %w", err)
+		}
+		for _, database := range databases {
+			rel, _ := filepath.Rel(source.Path, database)
+			plan.databases = append(plan.databases, captureItem{database, filepath.ToSlash(rel)})
+		}
+		for _, file := range files {
+			rel, _ := filepath.Rel(source.Path, file)
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
+		}
 	case "opencode":
 		// Each database, without the tables that hold credentials and
 		// settings (captureTables).
