@@ -247,7 +247,7 @@ func (a *chatGPTAdapter) decode(content io.Reader, file, origin string, version 
 func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string, version int64) WorkspaceRecord {
 	nativeID := defaultString(conversation.ConversationID, conversation.ID)
 	children := chatGPTChildren(conversation.Mapping)
-	selected := chatGPTSelected(conversation)
+	selected := chatGPTSelected(conversation, children)
 	messages := []MessageRecord{}
 	// read is the message each node, or the nearest node above it, was
 	// read as; calls and tools are each call node's message and tool.
@@ -432,20 +432,35 @@ func chatGPTContent(content map[string]any) (string, []map[string]any) {
 
 // chatGPTSelected marks the nodes on the conversation's current branch: the
 // path from its current node, or when the export names none from its newest
-// message, to the root. A branch is newer than those it was regenerated or
-// edited from, so the newest message ends the current one.
-func chatGPTSelected(conversation chatGPTConversation) map[string]bool {
+// last message (one with no message after it), to the root.
+func chatGPTSelected(conversation chatGPTConversation, children map[string][]string) map[string]bool {
 	parents := map[string]string{}
 	for id, node := range conversation.Mapping {
 		parents[id] = node.Parent
 	}
 	leaf := conversation.CurrentNode
 	if _, ok := conversation.Mapping[leaf]; !ok {
+		// below reports whether a message follows a node.
+		known := map[string]bool{}
+		var below func(string) bool
+		below = func(id string) bool {
+			if found, ok := known[id]; ok {
+				return found
+			}
+			known[id] = false
+			for _, child := range children[id] {
+				if conversation.Mapping[child].Message != nil || below(child) {
+					known[id] = true
+					break
+				}
+			}
+			return known[id]
+		}
 		leaf = ""
 		newest := ""
-		for id, node := range conversation.Mapping {
-			at := iso(node.Message["create_time"])
-			if node.Message != nil && (at > newest || at == newest && id > leaf) {
+		for _, id := range slices.Sorted(maps.Keys(conversation.Mapping)) {
+			at := iso(conversation.Mapping[id].Message["create_time"])
+			if conversation.Mapping[id].Message != nil && !below(id) && (leaf == "" || at >= newest) {
 				leaf, newest = id, at
 			}
 		}

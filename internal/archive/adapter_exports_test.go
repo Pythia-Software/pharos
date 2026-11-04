@@ -238,6 +238,17 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 		t.Fatalf("with parents only\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 
+	// Without a current node, the newest message with none after it ends
+	// the branch: not one before it at the same time, nor a node without a
+	// message after it.
+	timed := func(parent string, at float64) chatGPTNode {
+		return chatGPTNode{Parent: parent, Message: map[string]any{"create_time": at}}
+	}
+	tied := chatGPTConversation{Mapping: map[string]chatGPTNode{"z": timed("", 5), "a": timed("z", 5), "p": {Parent: "a"}}}
+	if got := chatGPTSelected(tied, chatGPTChildren(tied.Mapping)); !got["a"] || !got["z"] {
+		t.Fatalf("selected %v", got)
+	}
+
 	// Without a current node, the newest leaf's branch is selected.
 	selected := []string{}
 	for _, message := range records[chatGPTSearchID].Conversations[0].Messages {
@@ -273,6 +284,15 @@ func TestChatGPTExportReplacesAnOlderIndex(t *testing.T) {
 	}
 	if selected("first") != 0 || selected("answer") != 1 || countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='output' AND kind='tool_result'`) != 1 {
 		t.Fatalf("the older index stays: first selected %d, answer %d", selected("first"), selected("answer"))
+	}
+	// A message whose content is then gone keeps what was indexed from it,
+	// its attachments too.
+	damaged := chatGPTConversations()
+	damaged[0].(map[string]any)["mapping"].(map[string]any)["ask"].(map[string]any)["message"].(map[string]any)["content"] = nil
+	writeSourceFile(t, filepath.Join(dir, "conversations.json"), jsonText(damaged))
+	ingestSource(t, c, chatGPTSource(dir))
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id IN ('ask','ask:part:0','ask:part:1')`); n != 4 {
+		t.Fatalf("after its content is gone: %d of the prompt's records", n)
 	}
 }
 
