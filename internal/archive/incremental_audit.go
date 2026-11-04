@@ -464,10 +464,9 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		compared := 0
 		err = group.Discover(func(record WorkspaceRecord) error {
 			matches := strings.HasPrefix(unit.ID, "sqlite:")
-			// A unit of one session group in a database is <database>#<root>.
-			database, root, grouped := strings.Cut(unit.ID, "#")
 			for _, conversation := range record.Conversations {
-				matches = matches || conversation.Origin == unit.ID || grouped && conversation.Origin == database && record.SourceID == root
+				// A unit of one session group in a database is <database>#<root>.
+				matches = matches || conversation.Origin == unit.ID || conversation.Origin+"#"+record.SourceID == unit.ID
 			}
 			if !matches {
 				return nil

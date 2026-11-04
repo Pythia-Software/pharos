@@ -429,7 +429,10 @@ func TestOpenCodeSessionIsVerifiedLive(t *testing.T) {
 	for _, recorded := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live", true: "copied"}[recorded], func(t *testing.T) {
 			c, _ := testCatalog(t)
-			source := SourceConfig{Name: "opencode", Kind: "opencode", Path: opencodeFixture(t), Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": recorded}}
+			// A folder's name can hold the # that separates a session.
+			root := filepath.Join(t.TempDir(), "work#2")
+			opencodeDatabase(t, filepath.Join(root, "opencode.db"), opencodeRows)
+			source := SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": recorded}}
 			ingestSource(t, c, source)
 			if result := c.auditUnit(t.Context(), firstSyncUnit(t, c, source), "manual", 0); result.Outcome != "passed" {
 				t.Fatalf("verification: %+v", result)
