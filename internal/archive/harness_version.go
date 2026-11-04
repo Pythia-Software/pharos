@@ -84,6 +84,8 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 				value.harness = "claude-ai-export"
 			case "copilot":
 				value.harness = "copilot-cli"
+			case "opencode":
+				value.harness = "opencode"
 			case "tl1", "tl1-export":
 				value.harness = "tl1"
 			case "canonical":

@@ -1,0 +1,538 @@
+package archive
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// opencodeAdapter reads OpenCode sessions: ~/.local/share/opencode (or
+// $XDG_DATA_HOME/opencode), or one of its databases. OpenCode keeps every
+// session in opencode.db, or opencode-<channel>.db for other release
+// channels, in its v2 schema: session_v2 rows, their session_message rows
+// in seq order, and session_part rows for messages whose content is not
+// inline. A subagent is a session whose parent_id names the session that
+// started it. The same database holds OpenCode's credentials and accounts,
+// which are neither read nor captured (opencodeCaptureTables).
+type opencodeAdapter struct{ baseAdapter }
+
+// opencodeExtractor versions the parser; bump it when parsing changes.
+const opencodeExtractor = "opencode-v1"
+
+func (a *opencodeAdapter) partExtractor() string { return opencodeExtractor }
+
+// opencodeCaptureTables are the tables a capture keeps; every other table,
+// including any a later release adds, is left out, since OpenCode keeps
+// credentials, accounts and settings in the same database.
+var opencodeCaptureTables = map[string]bool{"session_v2": true, "session_message": true, "session_part": true, "project": true}
+
+// databases lists OpenCode's databases: the source itself when it is one,
+// otherwise each opencode*.db in it.
+func (a *opencodeAdapter) databases() ([]string, error) {
+	info, err := os.Stat(a.config.Path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return []string{a.config.Path}, nil
+	}
+	entries, err := os.ReadDir(a.config.Path)
+	if err != nil {
+		return nil, err
+	}
+	databases := []string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "opencode") && strings.HasSuffix(name, ".db") && entry.Type().IsRegular() {
+			databases = append(databases, filepath.Join(a.config.Path, name))
+		}
+	}
+	sort.Strings(databases)
+	return databases, nil
+}
+
+func (a *opencodeAdapter) Fingerprint() (string, error) {
+	databases, err := a.databases()
+	if err != nil {
+		return "", err
+	}
+	rows := []string{}
+	for _, database := range databases {
+		relative, _ := filepath.Rel(a.config.Path, database)
+		rows = append(rows, fmt.Sprintf("%s:%d", filepath.ToSlash(relative), a.databaseVersion(database)))
+	}
+	return opencodeExtractor + ":" + hashBytes([]byte(strings.Join(rows, "\n"))), nil
+}
+
+func (a *opencodeAdapter) Discover(emit func(WorkspaceRecord) error) error {
+	return a.discoverParts(nil, func(record *WorkspaceRecord, _ []sourcePart) error {
+		if record == nil {
+			return nil
+		}
+		return emit(*record)
+	})
+}
+
+func (a *opencodeAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	plan, err := a.planParts()
+	if err != nil {
+		return err
+	}
+	return plan.discover(a.context(), unchanged, emit)
+}
+
+// opencodeSession is a session_v2 row's identity and how far it has changed.
+type opencodeSession struct {
+	id, parent string
+	// watermark is the latest time_updated of the session and its rows, and
+	// rows their count, which falls when an undo deletes messages.
+	watermark, rows int64
+}
+
+// open opens a database for reading in one transaction.
+func (a *opencodeAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
+	readable, err := a.files().Database(database)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := openReadOnlySQLite(readable)
+	if err != nil {
+		return nil, nil, err
+	}
+	tx, err := db.BeginTx(a.context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	return db, tx, nil
+}
+
+func (a *opencodeAdapter) sessions(database string) ([]opencodeSession, error) {
+	db, tx, err := a.open(database)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	defer tx.Rollback()
+	tables, err := tableNames(tx)
+	if err != nil {
+		return nil, err
+	}
+	if !tables["session_v2"] || !tables["session_message"] {
+		if tables["session"] && tables["message"] {
+			return nil, fmt.Errorf("OpenCode database %s uses the schema of releases before 2.0, which Pharos does not read yet", database)
+		}
+		return nil, nil
+	}
+	parts := "0, 0"
+	if tables["session_part"] {
+		parts = "(SELECT COALESCE(MAX(time_updated),0) FROM session_part p WHERE p.session_id=s.id), (SELECT COUNT(*) FROM session_part p WHERE p.session_id=s.id)"
+	}
+	rows, err := tx.QueryContext(a.context(), `SELECT s.id, COALESCE(s.parent_id,''), s.time_updated,
+		(SELECT COALESCE(MAX(time_updated),0) FROM session_message m WHERE m.session_id=s.id),
+		(SELECT COUNT(*) FROM session_message m WHERE m.session_id=s.id), `+parts+`
+		FROM session_v2 s ORDER BY s.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sessions := []opencodeSession{}
+	for rows.Next() {
+		var session opencodeSession
+		var updated, messagesUpdated, messages, partsUpdated, partCount int64
+		if err := rows.Scan(&session.id, &session.parent, &updated, &messagesUpdated, &messages, &partsUpdated, &partCount); err != nil {
+			return nil, err
+		}
+		session.watermark, session.rows = max(updated, messagesUpdated, partsUpdated), messages+partCount
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+// planParts plans one group per session that started its own work, holding
+// it and the subagents it started; each session is one part.
+func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
+	databases, err := a.databases()
+	if err != nil {
+		return nil, err
+	}
+	plan := &sourceWorkPlan{continueOnError: true}
+	var failures []error
+	for _, database := range databases {
+		sessions, err := a.sessions(database)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		byID := map[string]opencodeSession{}
+		for _, session := range sessions {
+			byID[session.id] = session
+		}
+		root := func(id string) string {
+			seen := map[string]bool{}
+			for byID[id].parent != "" && !seen[id] {
+				seen[id] = true
+				if _, ok := byID[byID[id].parent]; !ok {
+					break
+				}
+				id = byID[id].parent
+			}
+			return id
+		}
+		groups := map[string][]opencodeSession{}
+		roots := []string{}
+		for _, session := range sessions {
+			top := root(session.id)
+			if groups[top] == nil {
+				roots = append(roots, top)
+			}
+			groups[top] = append(groups[top], session)
+		}
+		for _, top := range roots {
+			members := groups[top]
+			// The root first, then its subagents by ID.
+			sort.SliceStable(members, func(i, j int) bool { return members[i].id == top && members[j].id != top })
+			parts := make([]sourcePart, 0, len(members))
+			for _, member := range members {
+				parts = append(parts, sourcePart{item: a.original(database) + "#" + member.id, size: member.rows, version: member.watermark * 1e6, signal: fmt.Sprintf("%d:%d", member.watermark, member.rows)})
+			}
+			database, members := database, members
+			plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
+				record, err := a.read(database, members)
+				if err != nil {
+					return err
+				}
+				return emit(record, parts)
+			}})
+		}
+	}
+	plan.discoveryError = errors.Join(failures...)
+	return plan, nil
+}
+
+// read reads a session and its subagents in one transaction.
+func (a *opencodeAdapter) read(database string, members []opencodeSession) (*WorkspaceRecord, error) {
+	db, tx, err := a.open(database)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	defer tx.Rollback()
+	tables, err := tableNames(tx)
+	if err != nil {
+		return nil, err
+	}
+	// Live, the version is read once the transaction has begun reading, so
+	// it is no older than what was read.
+	version := a.databaseVersion(database)
+	origin := a.original(database)
+	var record *WorkspaceRecord
+	depth := map[string]int{}
+	for _, member := range members {
+		conversation, session, err := a.conversation(tx, tables, origin, member.id)
+		if err != nil {
+			return nil, err
+		}
+		if conversation == nil {
+			continue
+		}
+		if member.parent != "" {
+			depth[member.id] = depth[member.parent] + 1
+			conversation.ParentNativeID, conversation.AgentDepth = member.parent, max(depth[member.id], 1)
+			conversation.AgentNickname, conversation.AgentPath = firstString(session["title"]), firstString(session["agent"])
+			// A subagent's prompts are its parent's.
+			for index := range conversation.Messages {
+				if message := &conversation.Messages[index]; message.Role == "user" {
+					message.Role, message.Sender = agentRole, "agent:"+member.parent
+				}
+			}
+		}
+		if record == nil {
+			purpose, outcome := agentPurposeOutcome(conversation.Messages)
+			title := firstString(session["title"])
+			if !meaningfulWorkspaceTitle(title, member.id) {
+				title = defaultString(purpose, "OpenCode "+short(member.id))
+			}
+			directory := firstString(session["directory"])
+			record = &WorkspaceRecord{SourceID: member.id, SourceKind: "opencode", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: iso(session["time_updated"]), Location: directory, Repository: a.repository(directory, ""), Metadata: map[string]any{}}
+			if cost, ok := number(session["cost"]); ok && cost > 0 {
+				record.Metadata["reported_cost_usd"] = cost
+			}
+			if fork := firstString(session["fork_session_id"]); fork != "" {
+				record.Metadata["forked_from"] = fork
+			}
+		}
+		record.Conversations = append(record.Conversations, *conversation)
+	}
+	if record == nil {
+		return nil, nil
+	}
+	observe(record, version)
+	return record, nil
+}
+
+// conversation reads one session: its row, then its messages in seq order.
+func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origin, id string) (*ConversationRecord, map[string]any, error) {
+	found, err := queryMapsContext(a.context(), tx, `SELECT * FROM session_v2 WHERE id=?`, id)
+	if err != nil || len(found) == 0 {
+		return nil, nil, err
+	}
+	session := found[0]
+	model := mapValueDefault(opencodeJSON(session["model"]))
+	conversation := &ConversationRecord{NativeID: id, Provider: "opencode", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "opencode",
+		HarnessVersionFirst: firstString(session["version"]), HarnessVersionLast: firstString(session["version"]), Model: firstString(model["id"]),
+		StartedAt: iso(session["time_created"]), EndedAt: iso(session["time_updated"])}
+	if provider := firstString(model["providerID"]); provider != "" {
+		conversation.NativeContext = map[string]any{"model_provider": provider}
+	}
+	rows, err := tx.QueryContext(a.context(), `SELECT id, type, seq, time_created, data FROM session_message WHERE session_id=? ORDER BY seq`, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	type row struct {
+		id, kind string
+		created  int64
+		data     map[string]any
+	}
+	messages := []row{}
+	for rows.Next() {
+		var r row
+		var seq int64
+		var data string
+		if err := rows.Scan(&r.id, &r.kind, &seq, &r.created, &data); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		if err := json.Unmarshal([]byte(data), &r.data); err != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("OpenCode message %s: %w", r.id, err)
+		}
+		messages = append(messages, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	locator := func(message string) string { return fmt.Sprintf("%s#%s:%s", origin, id, message) }
+	// What the session totals beyond its messages: requests whose messages
+	// an undo deleted, and title generation, which no message records.
+	sums := map[string]float64{}
+	for _, message := range messages {
+		data := message.data
+		created := iso(firstNonNil(mapValueDefault(data["time"])["created"], message.created))
+		// The message's type and ID stand in for its raw text, so text quoting
+		// usage JSON is never read as token usage.
+		base := MessageRecord{NativeID: message.id, Model: conversation.Model, CreatedAt: created, EvidenceLocator: locator(message.id), Selected: true,
+			RawText: jsonText(map[string]any{"type": message.kind, "id": message.id})}
+		add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
+		switch message.kind {
+		case "user":
+			item := base
+			item.Role, item.Kind, item.Text = "user", "message", firstString(data["text"])
+			if strings.TrimSpace(item.Text) != "" {
+				add(item)
+			}
+			if files, _ := data["files"].([]any); len(files) > 0 {
+				attachment := base
+				attachment.NativeID, attachment.Role, attachment.Kind, attachment.Text = message.id+":files", "user", "attachment", jsonText(files)
+				add(attachment)
+			}
+		case "assistant":
+			model := mapValueDefault(data["model"])
+			base.Model = defaultString(firstString(model["id"]), conversation.Model)
+			content, _ := data["content"].([]any)
+			if content == nil && tables["session_part"] {
+				if content, err = opencodeParts(tx, a, message.id); err != nil {
+					return nil, nil, err
+				}
+			}
+			for index, raw := range content {
+				part := mapValueDefault(raw)
+				item := base
+				item.NativeID = fmt.Sprintf("%s:block:%d", message.id, index)
+				if at := iso(mapValueDefault(part["time"])["created"]); at != "" {
+					item.CreatedAt = at
+				}
+				switch firstString(part["type"]) {
+				case "text":
+					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
+						item.Role, item.Kind, item.Text = "assistant", "message", text
+						add(item)
+					}
+				case "reasoning":
+					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
+						add(reasoningRecord(item, text, "text", ""))
+					}
+				case "tool":
+					a.tool(item, part, add)
+				}
+			}
+			if failure := mapValue(data["error"]); failure != nil {
+				item := base
+				item.NativeID, item.Role, item.Kind = message.id+":error", "system", "error"
+				item.Text = firstString(mapValueDefault(failure["data"])["message"], failure["message"], failure["name"], jsonText(failure))
+				add(item)
+			}
+			if tokens := mapValue(data["tokens"]); tokens != nil {
+				usage := opencodeTokenUsage(tokens)
+				for key, value := range usage {
+					sums[key] += value
+				}
+				item := base
+				item.NativeID, item.Role, item.Kind, item.RawText = message.id+":usage", "system", "metadata", ""
+				item.Text = jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": message.id})
+				add(item)
+			}
+		}
+	}
+	totals := opencodeTokenUsage(map[string]any{"input": session["tokens_input"], "output": session["tokens_output"], "reasoning": session["tokens_reasoning"], "cache": map[string]any{"read": session["tokens_cache_read"], "write": session["tokens_cache_write"]}})
+	residual, positive := map[string]any{}, false
+	for key, total := range totals {
+		left := max(total-sums[key], 0)
+		residual[key] = left
+		positive = positive || left > 0
+	}
+	if positive {
+		conversation.Messages = append(conversation.Messages, MessageRecord{NativeID: "usage:session", Role: "system", Kind: "metadata", Model: conversation.Model, CreatedAt: conversation.EndedAt, EvidenceLocator: locator("session"), Selected: true,
+			Text: jsonText(map[string]any{"type": "token_usage", "usage": residual, "source": "session_residual"})})
+	}
+	if len(conversation.Messages) == 0 {
+		return nil, session, nil
+	}
+	return conversation, session, nil
+}
+
+// tool adds a tool part's call and, once it has run, its result.
+func (a *opencodeAdapter) tool(base MessageRecord, part map[string]any, add func(MessageRecord)) {
+	name := defaultString(part["name"], "tool")
+	callID := defaultString(part["id"], base.NativeID)
+	state := mapValueDefault(part["state"])
+	delegated := matchesFold(name, "task", "subagent", "agent")
+	call := base
+	call.CallID, call.Role, call.Kind = callID, "assistant", "tool_call"
+	if delegated {
+		call.Kind = "delegation"
+	}
+	call.Text = jsonText(map[string]any{"tool": name, "input": state["input"]})
+	add(call)
+	status := firstString(state["status"])
+	if status != "completed" && status != "error" {
+		return
+	}
+	times := mapValueDefault(part["time"])
+	result := base
+	result.NativeID, result.CallID, result.Role, result.Kind = "result:"+callID, callID, "tool", "tool_result"
+	if delegated {
+		result.Kind = "delegation_result"
+	}
+	if at := iso(times["completed"]); at != "" {
+		result.CreatedAt = at
+	}
+	metadata := mapValueDefault(state["metadata"])
+	details := map[string]any{}
+	if exit, ok := number(metadata["exit"]); ok {
+		details["exit_code"] = exit
+	}
+	if metadata["truncated"] == true {
+		details["truncated"] = true
+	}
+	if started, ok := number(firstNonNil(times["ran"], times["created"])); ok {
+		if completed, ok := number(times["completed"]); ok && completed >= started {
+			details["duration_ms"] = completed - started
+		}
+	}
+	if failure := firstString(state["error"]); failure != "" {
+		details["error"] = failure
+	}
+	payload := map[string]any{"tool": name, "content": firstNonNil(state["content"], state["output"]), "is_error": status == "error"}
+	if len(details) > 0 {
+		payload["details"] = details
+	}
+	result.Text = jsonText(payload)
+	add(result)
+}
+
+// opencodeTokenUsage is OpenCode's usage in the shape token accounting
+// reads. OpenCode's input leaves out cache reads and writes, and its output
+// leaves out reasoning.
+func opencodeTokenUsage(tokens map[string]any) map[string]float64 {
+	value := func(v any) float64 {
+		n, _ := number(v)
+		return n
+	}
+	cache := mapValueDefault(tokens["cache"])
+	reasoning := value(tokens["reasoning"])
+	return map[string]float64{
+		"input_tokens":                value(tokens["input"]),
+		"cache_read_input_tokens":     value(cache["read"]),
+		"cache_creation_input_tokens": value(cache["write"]),
+		"output_tokens":               value(tokens["output"]) + reasoning,
+		"reasoning_output_tokens":     reasoning,
+	}
+}
+
+// opencodeParts reads a message's content from session_part, by ordinal.
+func opencodeParts(tx *sql.Tx, a *opencodeAdapter, message string) ([]any, error) {
+	rows, err := tx.QueryContext(a.context(), `SELECT data FROM session_part WHERE message_id=? ORDER BY ordinal`, message)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	parts := []any{}
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		var part map[string]any
+		if err := json.Unmarshal([]byte(data), &part); err != nil {
+			return nil, fmt.Errorf("OpenCode part of %s: %w", message, err)
+		}
+		parts = append(parts, part)
+	}
+	return parts, rows.Err()
+}
+
+// opencodeJSON decodes a JSON column, or nil.
+func opencodeJSON(value any) any {
+	text, _ := value.(string)
+	var decoded any
+	if text == "" || json.Unmarshal([]byte(text), &decoded) != nil {
+		return nil
+	}
+	return decoded
+}
+
+// opencodeProbeStats measures a database for the probe: its sessions and
+// when they were first and last active.
+func opencodeProbeStats(database string) (probeStats, error) {
+	stats := probeStats{}
+	info, err := os.Stat(database)
+	if err != nil {
+		return stats, err
+	}
+	db, err := openReadOnlySQLite(database)
+	if err != nil {
+		return stats, err
+	}
+	defer db.Close()
+	tables, err := tableNames(db)
+	if err != nil || !tables["session_v2"] {
+		return stats, err
+	}
+	var oldest, newest sql.NullInt64
+	if err := db.QueryRow(`SELECT COUNT(*), MIN(time_created), MAX(time_updated) FROM session_v2`).Scan(&stats.sessions, &oldest, &newest); err != nil {
+		return stats, err
+	}
+	stats.files, stats.bytes = 1, info.Size()
+	if oldest.Valid {
+		stats.oldest, stats.newest = time.UnixMilli(oldest.Int64), time.UnixMilli(newest.Int64)
+	}
+	return stats, nil
+}

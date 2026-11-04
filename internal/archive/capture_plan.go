@@ -146,6 +146,20 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			rel, _ := filepath.Rel(source.Path, file)
 			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
 		}
+	case "opencode":
+		// Each database, without the tables that hold credentials and
+		// settings (captureTables).
+		databases, err := (&opencodeAdapter{baseAdapter{config: source}}).databases()
+		if err != nil {
+			return plan, fmt.Errorf("OpenCode sessions are unavailable: %w", err)
+		}
+		for _, database := range databases {
+			rel := filepath.Base(database)
+			if !info.IsDir() {
+				rel = filepath.Base(source.Path)
+			}
+			plan.databases = append(plan.databases, captureItem{database, rel})
+		}
 	case "antigravity":
 		adapter := antigravityAdapter{baseAdapter: baseAdapter{config: source}}
 		files, err := adapter.captureFiles()
