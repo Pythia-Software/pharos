@@ -23,7 +23,7 @@ import (
 type copilotAdapter struct{ baseAdapter }
 
 // copilotExtractor versions the parser; bump it when parsing changes.
-const copilotExtractor = "copilot-v1"
+const copilotExtractor = "copilot-v2"
 
 func (a *copilotAdapter) partExtractor() string { return copilotExtractor }
 
