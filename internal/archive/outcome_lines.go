@@ -61,16 +61,26 @@ type editChange struct {
 	Rewrite        bool
 }
 
-// readEditChange reads an edit call's input, as its call message stores it:
-// a replacement (Claude and Codex Edit, MultiEdit, Antigravity), a whole file
-// (Write) or a patch (apply_patch, including one inside a Codex code-mode
-// script). An input it cannot read gives no lines.
-func readEditChange(text, path string) (editChange, bool) {
+// fileEdit is one file's change in an edit call. Path is absolute; an edit
+// of the call's own file has the call's path. A patch counts its own lines;
+// any other edit leaves the counts to the tool ledger (nil).
+type fileEdit struct {
+	Path           string
+	Change         editChange
+	Added, Removed *int64
+}
+
+// readEditChanges reads an edit call's input, as its call message stores
+// it: a replacement (Claude and Codex Edit, MultiEdit, Antigravity), a whole
+// file (Write) or a patch (apply_patch, including one inside a Codex
+// code-mode script), which may change several files. An input it cannot
+// read gives no files.
+func readEditChanges(text, path string) []fileEdit {
 	var message struct {
 		Input any `json:"input"`
 	}
 	if json.Unmarshal([]byte(text), &message) != nil {
-		return editChange{}, false
+		return nil
 	}
 	change := editChange{Added: lineSet{}, Removed: lineSet{}}
 	replace := func(fields map[string]any) bool {
@@ -93,42 +103,46 @@ func readEditChange(text, path string) (editChange, bool) {
 				found = replace(mapValue(edit)) || found
 			}
 			if !found {
-				return editChange{}, false
+				return nil
 			}
 		} else if content, ok := firstNonNil(input["content"], input["CodeContent"], input["file_text"]).(string); ok {
 			change.Rewrite = true
 			fingerprintLines(content, change.Added)
 		} else if !replace(input) {
 			patch, _ := firstNonNil(input["patch"], input["input"]).(string)
-			if !readPatch(patch, path, change) {
-				return editChange{}, false
-			}
+			return readPatch(patch, path)
 		}
 	case string:
-		if !readPatch(input, path, change) {
-			return editChange{}, false
-		}
+		return readPatch(input, path)
 	default:
-		return editChange{}, false
+		return nil
 	}
-	// A line both removed and added is moved or reindented, not changed.
+	return []fileEdit{{Path: path, Change: settle(change)}}
+}
+
+// settle drops the lines both removed and added: moved or reindented, not
+// changed.
+func settle(change editChange) editChange {
 	for line := range change.Removed {
 		if _, ok := change.Added[line]; ok {
 			delete(change.Removed, line)
 			delete(change.Added, line)
 		}
 	}
-	return change, true
+	return change
 }
 
 // patchEscapes decodes a patch quoted in a script's string literal.
 var patchEscapes = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\"`, `"`, `\'`, "'", `\\`, `\`, "\\`", "`")
 
-// readPatch reads the sections of an apply_patch patch that change path.
-func readPatch(patch, path string, change editChange) bool {
+// readPatch reads every file an apply_patch patch changes. A file named
+// relative to the working directory is placed by the call's path, which is
+// the patch's first file; a deleted file is rewritten empty, so every line
+// it had is removed.
+func readPatch(patch, path string) []fileEdit {
 	start := strings.Index(patch, "*** Begin Patch")
 	if start < 0 {
-		return false
+		return nil
 	}
 	patch = patch[start:]
 	if end := strings.Index(patch, "*** End Patch"); end >= 0 {
@@ -137,28 +151,57 @@ func readPatch(patch, path string, change editChange) bool {
 	if !strings.Contains(patch, "\n") || strings.Count(patch, `\n`) > strings.Count(patch, "\n") {
 		patch = patchEscapes.Replace(patch)
 	}
-	found, current := false, false
+	type section struct {
+		name           string
+		change         editChange
+		added, removed int64
+	}
+	var sections []*section
+	var current *section
 	for _, line := range strings.Split(patch, "\n") {
-		if name, ok := strings.CutPrefix(line, "*** "); ok {
-			current = false
+		if header, ok := strings.CutPrefix(line, "*** "); ok {
+			if strings.HasPrefix(header, "Move to: ") {
+				continue
+			}
+			current = nil
 			for _, kind := range []string{"Update File: ", "Add File: ", "Delete File: "} {
-				if file, ok := strings.CutPrefix(name, kind); ok {
-					current = patchNamesPath(strings.TrimSpace(file), path)
-					found = found || current
+				if file, ok := strings.CutPrefix(header, kind); ok && strings.TrimSpace(file) != "" {
+					current = &section{name: strings.TrimSpace(file), change: editChange{Added: lineSet{}, Removed: lineSet{}, Rewrite: kind == "Delete File: "}}
+					sections = append(sections, current)
 				}
 			}
 			continue
 		}
-		if !current || strings.HasPrefix(line, "@@") {
+		if current == nil || strings.HasPrefix(line, "@@") {
 			continue
 		}
 		if text, ok := strings.CutPrefix(line, "+"); ok {
-			fingerprintLines(text, change.Added)
+			current.added++
+			fingerprintLines(text, current.change.Added)
 		} else if text, ok := strings.CutPrefix(line, "-"); ok {
-			fingerprintLines(text, change.Removed)
+			current.removed++
+			fingerprintLines(text, current.change.Removed)
 		}
 	}
-	return found
+	directory := ""
+	for _, section := range sections {
+		if !filepath.IsAbs(section.name) && patchNamesPath(section.name, path) {
+			directory = strings.TrimSuffix(filepath.Clean(path), string(filepath.Separator)+filepath.Clean(section.name))
+			break
+		}
+	}
+	var files []fileEdit
+	for _, section := range sections {
+		file := filepath.Clean(section.name)
+		if !filepath.IsAbs(file) {
+			if directory == "" {
+				continue
+			}
+			file = filepath.Join(directory, file)
+		}
+		files = append(files, fileEdit{Path: file, Change: settle(section.change), Added: new(section.added), Removed: new(section.removed)})
+	}
+	return files
 }
 
 // patchNamesPath reports whether a patch's file name, absolute or relative to

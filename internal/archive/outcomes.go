@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -26,7 +28,7 @@ import (
 // since a change stops being too recent to judge without any write.
 
 // outcomesVersion derives every session again when its rules change.
-const outcomesVersion = "1"
+const outcomesVersion = "2"
 
 // defaultReworkDays is how long after a session's last edit a later session's
 // edits to the same files count as rework (outcome_rework_days).
@@ -87,6 +89,7 @@ CREATE TABLE IF NOT EXISTS session_outcomes(
   heavily_reworked INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_outcome_dirty(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_rework_dirty(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_outcome_mirrors(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 `
 
 // ensureOutcomes creates the outcome tables and the triggers that mark a
@@ -203,8 +206,13 @@ func laterThan(a, b string) bool {
 	return a > b
 }
 
+// fileResolver gives a path's identity as the tool ledger would: its path in
+// its repository, the repository and its scope.
+type fileResolver func(path string) (repoPath, repositoryID, scope string)
+
 // deriveSessionFacts reads a session's facts from its calls, in call order.
-func deriveSessionFacts(calls []outcomeCall) sessionFacts {
+// A patch's other files than the call's own are placed by resolve.
+func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts {
 	facts := sessionFacts{}
 	files := map[string]*sessionFile{}
 	lastEdit := -1
@@ -213,22 +221,42 @@ func deriveSessionFacts(calls []outcomeCall) sessionFacts {
 			continue
 		}
 		lastEdit = index
-		key, path := outcomeFileKey(call)
-		file := files[key]
-		if file == nil {
-			file = &sessionFile{Key: key, Path: path, RepositoryID: call.RepositoryID, First: call.StartedAt}
-			files[key] = file
+		edits := readEditChanges(call.Input, call.Path)
+		if len(edits) == 0 {
+			// Unreadable: the call's own file, without its lines.
+			edits = []fileEdit{{Path: call.Path}}
 		}
-		file.Edits++
-		if call.StartedAt != "" && (file.First == "" || laterThan(file.First, call.StartedAt)) {
-			file.First = call.StartedAt
-		}
-		if call.StartedAt != "" && (file.Last == "" || laterThan(call.StartedAt, file.Last)) {
-			file.Last = call.StartedAt
-		}
-		file.Added, file.Removed = addLines(file.Added, call.LinesAdded), addLines(file.Removed, call.LinesRemoved)
-		if change, ok := readEditChange(call.Input, call.Path); ok {
-			file.Lines.apply(change)
+		for _, edit := range edits {
+			target := call
+			if filepath.Clean(edit.Path) != filepath.Clean(call.Path) {
+				target.Path, target.RepoPath, target.RepositoryID, target.Scope = edit.Path, "", "", ""
+				if resolve != nil {
+					target.RepoPath, target.RepositoryID, target.Scope = resolve(edit.Path)
+				}
+				if !outcomeEdit(target) {
+					continue
+				}
+			}
+			if edit.Added != nil {
+				target.LinesAdded, target.LinesRemoved = edit.Added, edit.Removed
+			}
+			key, path := outcomeFileKey(target)
+			file := files[key]
+			if file == nil {
+				file = &sessionFile{Key: key, Path: path, RepositoryID: target.RepositoryID, First: call.StartedAt}
+				files[key] = file
+			}
+			file.Edits++
+			if call.StartedAt != "" && (file.First == "" || laterThan(file.First, call.StartedAt)) {
+				file.First = call.StartedAt
+			}
+			if call.StartedAt != "" && (file.Last == "" || laterThan(call.StartedAt, file.Last)) {
+				file.Last = call.StartedAt
+			}
+			file.Added, file.Removed = addLines(file.Added, target.LinesAdded), addLines(file.Removed, target.LinesRemoved)
+			if edit.Change.Added != nil {
+				file.Lines.apply(edit.Change)
+			}
 		}
 	}
 	for _, file := range files {
@@ -306,6 +334,17 @@ func nullableInt64(value any) *int64 {
 	return &number
 }
 
+// toolResultContent is a stored result's text as the model read it: a
+// result message keeps its content in a JSON envelope.
+func toolResultContent(text string) string {
+	var payload map[string]any
+	if text == "" || json.Unmarshal([]byte(text), &payload) != nil || payload == nil {
+		return text
+	}
+	content, _ := toolResultText(payload["content"])
+	return content
+}
+
 func readOutcomeCalls(ctx context.Context, tx *sql.Tx, workspace string) ([]outcomeCall, error) {
 	rows, err := queryMapsContext(ctx, tx, outcomeCallsSQL, workspace)
 	if err != nil {
@@ -316,7 +355,7 @@ func readOutcomeCalls(ctx context.Context, tx *sql.Tx, workspace string) ([]outc
 		calls[index] = outcomeCall{Category: firstString(row["tool_category"]), Status: firstString(row["status"]), CommandCategory: firstString(row["command_category"]),
 			Command: firstString(row["command"]), StartedAt: firstString(row["started_at"]), Path: firstString(row["path_absolute"]), RepoPath: firstString(row["repo_path"]),
 			RepositoryID: firstString(row["path_repository_id"]), Scope: firstString(row["path_scope"]), LinesAdded: nullableInt64(row["lines_added"]),
-			LinesRemoved: nullableInt64(row["lines_removed"]), Input: firstString(row["input"]), Result: firstString(row["result"])}
+			LinesRemoved: nullableInt64(row["lines_removed"]), Input: firstString(row["input"]), Result: toolResultContent(firstString(row["result"]))}
 	}
 	return calls, nil
 }
@@ -328,6 +367,21 @@ func (c *Catalog) refreshSessionOutcomes(ctx context.Context) error {
 	days := c.reworkDays()
 	setting := outcomesVersion + ":" + strconv.Itoa(days)
 	if err := c.writeTransaction(ctx, "session-outcomes-version", func(tx *sql.Tx) error {
+		// The tool rollup publishes mirrors (tool_mirror_workspaces) whole,
+		// so the workspaces whose membership changed since the last pass
+		// are found against the mirrors it judged with. Deriving them again
+		// judges the sessions sharing their files again.
+		for _, statement := range []string{
+			`INSERT OR IGNORE INTO session_outcome_dirty
+				SELECT workspace_id FROM (SELECT workspace_id FROM tool_mirror_workspaces EXCEPT SELECT workspace_id FROM session_outcome_mirrors)
+				UNION SELECT workspace_id FROM (SELECT workspace_id FROM session_outcome_mirrors EXCEPT SELECT workspace_id FROM tool_mirror_workspaces)`,
+			"DELETE FROM session_outcome_mirrors WHERE workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
+			"INSERT OR IGNORE INTO session_outcome_mirrors SELECT workspace_id FROM tool_mirror_workspaces",
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return err
+			}
+		}
 		var stored string
 		if err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='session_outcomes_version'),'')").Scan(&stored); err != nil || stored == setting {
 			return err
@@ -460,7 +514,23 @@ func deriveSessionOutcome(ctx context.Context, tx *sql.Tx, workspace string, day
 	if err != nil {
 		return err
 	}
-	facts := deriveSessionFacts(calls)
+	var roots []repoRoot
+	var rootsErr error
+	resolved := false
+	facts := deriveSessionFacts(calls, func(path string) (string, string, string) {
+		if !resolved {
+			resolved = true
+			var locations []repoRoot
+			if locations, rootsErr = toolRepositoryLocations(tx); rootsErr == nil {
+				roots, rootsErr = toolRepoRoots(tx, workspace, locations)
+			}
+		}
+		repoPath, repository, scope := resolveRepoPath(path, "", roots)
+		return repoPath, repository.ID, scope
+	})
+	if rootsErr != nil {
+		return rootsErr
+	}
 	var kept *int64
 	for _, file := range facts.Files {
 		if file.Lines.Read {
