@@ -653,16 +653,19 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
 
   // Where a page opts in, Back and Forward step through its query edits.
   const steps = useMemo(() => queryHistory ? createQueryHistory(dataset, window.history) : null, [queryHistory, dataset]);
+  // Query Table starts restoring in the same event, so the render that counts
+  // a navigation is not ready until the restored query is.
+  const [navigations, setNavigations] = useState(0);
   useEffect(() => {
     if (!steps) return;
-    const navigated = () => steps.navigated(window.history.state);
+    const navigated = () => { steps.navigated(window.history.state); setNavigations(count => count + 1); };
     for (const name of ["popstate", "pharos:route"]) window.addEventListener(name, navigated);
     return () => { for (const name of ["popstate", "pharos:route"]) window.removeEventListener(name, navigated); };
   }, [steps]);
   useEffect(() => {
     if (!steps || !visible || !api.restoration.ready) return;
     if (steps.observe(api.query, query => apiRef.current.links.local(query, location.href, `q_${dataset}`).url)) window.dispatchEvent(new Event("pharos:uri-changed"));
-  }, [steps, api.query, visible, api.restoration.ready, dataset]);
+  }, [steps, api.query, visible, api.restoration.ready, dataset, navigations]);
   // Drilldowns filter source records, including canonical computed fields.
   const sourceSchema = useMemo(() => ({ ...schema, fields: api.computed.catalogue }), [schema, api.computed.catalogue]);
   // Inactive controllers retain their query state, but their controls must not

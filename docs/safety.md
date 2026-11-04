@@ -24,7 +24,7 @@ evidence, and notices already in a prompt. Paths read from `~`, and Git
 subjects show the operation, since the location already names the repository.
 Each card's checkbox selects all of its notices for the same actions as table
 rows, so a whole check can be copied as a prompt (one per location) or
-dismissed at once. The card's link opens the table filtered to
+acknowledged and closed at once. The card's link opens the table filtered to
 that check (`rule`), with the same state and location (`target`). The table
 then starts with the check's explanation and questions, keeps the query builder
 collapsed (`query_layout`), and lists each selected path beside the latest
@@ -32,7 +32,8 @@ command that selected it and its working directory, sorted by path. Details
 links to every notice of its check. MCP's `list_safety_cases(rule=…)` returns
 the same selection with each notice's `subject`.
 
-Table rows have checkboxes. A selection can be dismissed, brought back, or
+Table rows have checkboxes. A selection can be acknowledged and closed (moving it to
+Closed), brought back, or
 added to prompt baskets at once (`POST /api/findings/safety/bulk`); any
 unavailable or ineligible notice rejects the whole selection. A prompt asks an
 agent working in one location, so a selection is planned per location, and a
@@ -43,7 +44,7 @@ notice to its location's basket and names the baskets it filled. When notices
 are not open, the note says so instead of leaving the buttons silently disabled.
 
 Each edit to the table's query (filters, sorts, columns, paging) is its own
-browser history step. After filtering, selecting and dismissing a set of
+browser history step. After filtering, selecting and closing a set of
 notices, which leaves the filtered table empty, Back returns to the query
 before the filter.
 
@@ -78,7 +79,7 @@ switches use `safety_rule_off:*` keys in the library's existing settings store.
 Each check states what happened (for example "Credentials copied to another
 location") rather than asking for a review. A notice's exact subject, commands,
 investigation questions, and archived source links live in Details, opened from
-the table, with **Add to prompt** and **Dismiss** for that one notice. The wording never equates a selected command with
+the table, with **Add to prompt** and **Acknowledge and close** for that one notice. The wording never equates a selected command with
 harm, authorization, or a confirmed effect.
 
 ## Handoff
@@ -167,7 +168,8 @@ notices where the earlier ones raised 2,557.
 
 Discovery records its version (`safety-v3`) on each case. A refresh removes
 cases an earlier version selected that this one no longer does, unless the user
-dismissed, handed off, or added them to a prompt.
+closed, handed off, or added them to a prompt. A disabled check is not run, so
+its cases stay until it is enabled again.
 
 Unlike the offline `tools/risky_tools` research passes, this first product
 implementation does **not** interpret embedded Python ASTs, arbitrary native or
@@ -223,7 +225,7 @@ history moves preserve the user-state tables separately from derived evidence.
 ## API and links
 
 `/findings?optimize_area=safety` opens Risky actions. `safety_list` selects `open`,
-`handed_off`, or `dismissed`; `safety_place` selects a stable target; `safety_case`
+`handed_off`, or `dismissed` (shown as Closed); `safety_place` selects a stable target; `safety_case`
 opens Details. Evidence and coverage disclosures use shared URL view state.
 `view=table` opens its table (`q_safety`); `view=settings` opens Risky action settings.
 

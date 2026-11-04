@@ -6597,20 +6597,20 @@
       "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
     },
     {
-      "key": "9a4c889d09545973:0",
-      "file": "web/src/safety.tsx",
-      "owner": "actions",
-      "tag": "button",
-      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Dismissed. You can bring it back at any time.\")}",
-      "contract": "editing",
-      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
-    },
-    {
       "key": "9f6fc49bad424044:0",
       "file": "web/src/safety.tsx",
       "owner": "actions",
       "tag": "button",
       "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "dfe8fb9c955132b5:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Acknowledged and closed. You can bring it back at any time.\")}",
       "contract": "editing",
       "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
     },

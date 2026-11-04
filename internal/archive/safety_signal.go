@@ -56,25 +56,41 @@ var safetyTempVariables = map[string]bool{"TMPDIR": true, "TMP": true, "TEMP": t
 
 const safetyTempMarker = "/tmp/pharos-safety-temporary"
 
-// safetyAssignments reads the variables a command assigns itself. A value from
-// mktemp is temporary space; any other value is used only when it is literal
-// after expanding earlier assignments, $PWD and $HOME.
-func safetyAssignments(command, cwd string) map[string]string {
-	values := map[string]string{}
-	for _, match := range safetyAssignment.FindAllStringSubmatch(command, -1) {
-		name, value := match[1], match[2]
-		if strings.Contains(value, "mktemp") {
-			values[name] = safetyTempMarker
-			continue
+// A value that is exactly the output of mktemp, quoted or not.
+var safetyMktemp = regexp.MustCompile(`^"?\$\(\s*mktemp(?:\s[^()]*)?\)"?$`)
+
+// safetyAssignments reads, for each segment, the variables the command
+// assigned before it: in earlier segments of the same shell or an enclosing
+// one, never in a subshell that has exited, nor later in the command. A value
+// from mktemp is temporary space; any other value is used only when it is
+// literal after expanding earlier assignments, $PWD and $HOME. An assignment
+// that cannot be read forgets the variable's earlier value.
+func safetyAssignments(parsed shellCommand, cwd string) []map[string]string {
+	visible := make([]map[string]string, len(parsed.Segments))
+	for index, segment := range parsed.Segments {
+		values := map[string]string{}
+		for _, earlier := range parsed.Segments[:index] {
+			if !strings.HasPrefix(segment.Scope, earlier.Scope) {
+				continue
+			}
+			for _, match := range safetyAssignment.FindAllStringSubmatch(earlier.Text, -1) {
+				name, value := match[1], match[2]
+				delete(values, name)
+				if safetyMktemp.MatchString(value) {
+					values[name] = safetyTempMarker
+					continue
+				}
+				if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+					value = value[1 : len(value)-1]
+				}
+				if expanded, ok := safetyExpand(value, values, cwd); ok {
+					values[name] = expanded
+				}
+			}
 		}
-		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
-			value = value[1 : len(value)-1]
-		}
-		if expanded, ok := safetyExpand(value, values, cwd); ok {
-			values[name] = expanded
-		}
+		visible[index] = values
 	}
-	return values
+	return visible
 }
 
 // safetyExpand substitutes known variables. It reports false when any

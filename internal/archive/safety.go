@@ -820,9 +820,9 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 	for _, command := range commands {
 		parsed := parseShellCommand(command.text)
 		directories := safetyDirectories(parsed, command.cwd, call.Root)
-		assigned := safetyAssignments(command.text, command.cwd)
+		assignments := safetyAssignments(parsed, command.cwd)
 		for index, segment := range parsed.Segments {
-			cwd := directories[index]
+			cwd, assigned := directories[index], assignments[index]
 			argv := safetyArgv(segment)
 			if len(argv) == 0 {
 				continue
@@ -1315,8 +1315,15 @@ func (c *Catalog) refreshSafety(ctx context.Context) error {
 		}
 		// Cases an earlier version selected and this one does not are noise
 		// the user never acted on. Keep any the user dismissed, handed off or
-		// put in a prompt.
-		if _, err := tx.Exec(`DELETE FROM safety_cases WHERE version<>? AND id NOT IN (SELECT case_id FROM safety_state) AND id NOT IN (SELECT case_id FROM safety_cart)`, safetyVersion); err != nil {
+		// put in a prompt. A disabled check was not run, so its cases stay
+		// until it is enabled and can decide.
+		prune := `DELETE FROM safety_cases WHERE version<>? AND id NOT IN (SELECT case_id FROM safety_state) AND id NOT IN (SELECT case_id FROM safety_cart)`
+		args := []any{safetyVersion}
+		for rule := range disabled {
+			prune += ` AND rule<>?`
+			args = append(args, rule)
+		}
+		if _, err := tx.Exec(prune, args...); err != nil {
 			return err
 		}
 		for key, value := range map[string]string{"safety_built_at": formatTime(c.clock()), "safety_version": safetyVersion, "safety_scanned_calls": fmt.Sprint(count)} {

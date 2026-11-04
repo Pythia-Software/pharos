@@ -1,7 +1,7 @@
 import { EMPTY_QUERY, encodeQuery, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
 export const safetyViews = ["", "table", "settings"] as const;
 export type SafetyView = typeof safetyViews[number];
-export const safetyStateLabels = { open: "Open", handed_off: "Handed off", dismissed: "Dismissed" };
+export const safetyStateLabels = { open: "Open", handed_off: "Handed off", dismissed: "Closed" };
 export function safetyURL(view: SafetyView = ""): string {
   return `/findings?${new URLSearchParams({ optimize_area: "safety", ...(view ? { view } : {}) })}`;
 }
