@@ -12,6 +12,19 @@ export function nearestRankOffset(n: number, p: number): number | null {
   if (!Number.isInteger(n) || n < 1) return null;
   return Math.min(n, Math.max(1, Math.ceil(p * n))) - 1;
 }
+// Nearest-rank percentiles read as rows at their ranks, one request each.
+// Sessions can be added or removed between requests, so every read must
+// report the count the ranks came from; a changed count reads them again. A
+// rank that returns no value is unavailable, never a crash.
+export type RankRead = (offset: number) => Promise<{ value: number | null; total: number }>;
+export async function readPercentiles(read: RankRead, ps: readonly number[], attempts = 3): Promise<{ n: number; values: Array<number | null> }> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { total } = await read(0);
+    const reads = await Promise.all(ps.map(p => { const offset = nearestRankOffset(total, p); return offset === null ? null : read(offset); }));
+    if (reads.every(item => item === null || item.total === total)) return { n: total, values: reads.map(item => item?.value ?? null) };
+  }
+  throw new Error("the sessions changed while they were read; Refresh to try again");
+}
 
 // A duration in seconds, as people say it: 42 s, 12 min, 1 h 20 min.
 export function formatSeconds(value: number): string {
@@ -58,27 +71,45 @@ export function binPosition(edges: readonly number[], value: number): number {
 }
 
 // Each repository's sessions by archetype, largest repositories first, with
-// the rest folded into Other so every session counts once.
+// the rest folded into Other so every session counts once. A breakdown by
+// repository and archetype together has too many groups to read whole, so
+// the mix is read exactly in two steps: sessions by archetype and the largest
+// repositories (mixFirstClauses), then each of those repositories by
+// archetype (mixRepositoryClauses). Other is the archetype totals less the
+// repositories shown.
 export type MixRow = { key: string; total: number; counts: Record<string, number> };
-export function archetypeMix(buckets: Array<{ keys: unknown[]; value: unknown }>, limit = 10): MixRow[] {
-  const rows = new Map<string, MixRow>();
-  for (const bucket of buckets) {
-    const key = bucket.keys[0] == null || bucket.keys[0] === "" ? "" : String(bucket.keys[0]);
-    const archetype = bucket.keys[1] == null || bucket.keys[1] === "" ? "" : String(bucket.keys[1]);
-    const value = Number(bucket.value) || 0;
-    let row = rows.get(key);
-    if (!row) rows.set(key, row = { key, total: 0, counts: {} });
-    row.counts[archetype] = (row.counts[archetype] ?? 0) + value;
-    row.total += value;
-  }
-  const sorted = [...rows.values()].filter(row => row.total > 0).sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
-  if (sorted.length <= limit) return sorted;
-  const other: MixRow = { key: "\u0000other", total: 0, counts: {} };
-  for (const row of sorted.slice(limit - 1)) {
-    other.total += row.total;
-    for (const [archetype, value] of Object.entries(row.counts)) other.counts[archetype] = (other.counts[archetype] ?? 0) + value;
-  }
-  return [...sorted.slice(0, limit - 1), other];
+export const mixOther = "\u0000other", mixRepositories = 10;
+const bucketKey = (value: unknown) => value == null || value === "" ? "" : String(value);
+export function mixFirstClauses(limit = mixRepositories): AggregationClause[] {
+  return [{ id: "archetypes", op: "count", groupBy: ["archetype"] },
+    { id: "repositories", op: "count", groupBy: ["repository_name"], sort: [{ key: "value", dir: "desc" }, { key: "group0", dir: "asc" }], groupLimit: limit }];
+}
+// The repositories shown: all of them when they fit, otherwise one fewer, so
+// the last row can be Other.
+// More repositories exist when the result counted groups beyond those
+// returned or reports an omitted remainder.
+export function mixShownRepositories(result: { buckets: Array<{ keys: unknown[]; value: unknown }>; groupCount?: number; other?: { value: unknown } }, limit = mixRepositories): { repositories: string[]; folded: boolean } {
+  const keys = result.buckets.filter(bucket => Number(bucket.value) > 0).map(bucket => bucketKey(bucket.keys[0]));
+  const folded = (result.groupCount ?? 0) > result.buckets.length || Number(result.other?.value) > 0 || keys.length > limit;
+  return { repositories: folded ? keys.slice(0, limit - 1) : keys, folded };
+}
+export function mixRepositoryClauses(repositories: string[]): AggregationClause[] {
+  return repositories.map((repository, index) => ({ id: `repository_${index}`, op: "count", groupBy: ["archetype"],
+    where: [repository ? { field: "repository_name", op: "=", value: repository } : { field: "repository_name", op: "is_null", value: "" }] }));
+}
+export function archetypeMix(totals: Array<{ keys: unknown[]; value: unknown }>, repositories: string[], perRepository: Array<Array<{ keys: unknown[]; value: unknown }>>, folded: boolean): MixRow[] {
+  const counts = (buckets: Array<{ keys: unknown[]; value: unknown }>) => {
+    const result: Record<string, number> = {};
+    for (const bucket of buckets) { const archetype = bucketKey(bucket.keys[0]); result[archetype] = (result[archetype] ?? 0) + (Number(bucket.value) || 0); }
+    return result;
+  };
+  const sum = (record: Record<string, number>) => Object.values(record).reduce((total, value) => total + value, 0);
+  const rows = repositories.map((key, index) => { const row = counts(perRepository[index] ?? []); return { key, total: sum(row), counts: row }; }).filter(row => row.total > 0);
+  const other = counts(totals);
+  for (const row of rows) for (const [archetype, value] of Object.entries(row.counts)) other[archetype] = (other[archetype] ?? 0) - value;
+  for (const [archetype, value] of Object.entries(other)) if (value <= 0) delete other[archetype];
+  const sorted = rows.sort((a, b) => b.total - a.total || a.key.localeCompare(b.key));
+  return folded && sum(other) > 0 ? [...sorted, { key: mixOther, total: sum(other), counts: other }] : sorted;
 }
 
 // The signal table. Each signal is a pooled rate: a summed numerator over a

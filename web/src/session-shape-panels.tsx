@@ -12,7 +12,7 @@ import { conversationRowURL } from "./usage-row-model";
 import { usageWorkspaceURL } from "./usage-workspace-model";
 import { useViewState } from "./view-state";
 import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog, type BandBreakdown } from "./session-shape-analysis-catalog";
-import { archetypeMix, binClauses, formatSeconds, binEdgeLabel, binLabel, binPosition, dayTotals, durationEdges, formatSignal, nearestRankOffset, sessionSignalLabels, sessionSignals, signalParts, signalRows, signalTableStart,
+import { archetypeMix, mixFirstClauses, mixOther, mixRepositoryClauses, mixShownRepositories, readPercentiles, binClauses, formatSeconds, binEdgeLabel, binLabel, binPosition, dayTotals, durationEdges, formatSignal, sessionSignalLabels, sessionSignals, signalParts, signalRows, signalTableStart,
   withoutDates, type SessionSignal, type SignalRow } from "./session-shape-model";
 import "./session-shape.css";
 
@@ -63,16 +63,12 @@ type Percentiles = { n: number; p50: number | null; p90: number | null };
 function usePercentiles(where: WhereTerm[], field: string): Loaded<Percentiles> {
   return useLoad(JSON.stringify([where, field]), async signal => {
     const request = { select: [field], where: [...where, { field, op: "is_not_null", value: "" }], orderBy: [{ field, dir: "asc" }, { field: "id", dir: "asc" }] };
-    const { total } = await postRows({ ...request, limit: 1, offset: 0 }, signal);
-    const at = async (p: number) => {
-      const offset = nearestRankOffset(total, p);
-      if (offset === null) return null;
-      const { rows } = await postRows({ ...request, limit: 1, offset }, signal);
-      const value = Number(rows[0]?.[field]);
-      return Number.isFinite(value) ? value : null;
-    };
-    const [p50, p90] = await Promise.all([at(0.5), at(0.9)]);
-    return { n: total, p50, p90 };
+    const { n, values: [p50, p90] } = await readPercentiles(async offset => {
+      const { rows, total } = await postRows({ ...request, limit: 1, offset }, signal);
+      const value = rows[0]?.[field] == null ? NaN : Number(rows[0][field]);
+      return { value: Number.isFinite(value) ? value : null, total };
+    }, [0.5, 0.9]);
+    return { n, p50, p90 };
   });
 }
 const sessionsText = (n: number) => `${n.toLocaleString()} ${n === 1 ? "session" : "sessions"}`;
@@ -90,7 +86,8 @@ export function SessionShapeBandSummary({ where, split, onSplit }: { where: Wher
     <p className="muted" role="status" aria-busy={result.loading}>
       {result.error ? `${label} percentiles are unavailable: ${result.error}` : result.loading || !value ? `${label} per session: loading…`
         : !value.n ? `No sessions in this range have a ${label.toLowerCase()} value.`
-        : <>{label} per session: median <strong>{format(value.p50!)}</strong>, p90 <strong>{format(value.p90!)}</strong>, over {sessionsText(value.n)}.</>}
+        : value.p50 === null || value.p90 === null ? `${label} percentiles are unavailable; Refresh to try again.`
+        : <>{label} per session: median <strong>{format(value.p50)}</strong>, p90 <strong>{format(value.p90)}</strong>, over {sessionsText(value.n)}.</>}
     </p>
   </div>;
 }
@@ -103,7 +100,9 @@ export function ActiveTimeDistribution({ where, schema, onOpen }: { where: Where
   const bins = useSessionMetrics(where, schema, [clauses]), percentiles = usePercentiles(where, "active_seconds");
   const counts = durationEdges.map((_, index) => Number(bins.value?.find(result => result.id === `bin_${index}`)?.buckets[0]?.value) || 0);
   const highest = Math.max(1, ...counts), total = counts.reduce((sum, value) => sum + value, 0);
-  const marks = percentiles.value?.n ? [["p50", percentiles.value.p50], ["p90", percentiles.value.p90]] as const : [];
+  // A rank without a value is left unmarked.
+  const marks: Array<[string, number]> = [];
+  if (percentiles.value?.n) for (const [label, value] of [["p50", percentiles.value.p50], ["p90", percentiles.value.p90]] as const) if (value !== null) marks.push([label, value]);
   const loading = bins.loading || percentiles.loading, error = bins.error || percentiles.error;
   return <section className="session-shape-panel" aria-busy={loading}>
     <header>
@@ -111,11 +110,10 @@ export function ActiveTimeDistribution({ where, schema, onOpen }: { where: Where
       <p className="muted">Time between consecutive messages, counting gaps of five minutes or less; a longer gap counts as nothing. Bins widen as time grows. {total ? `${sessionsText(total)} with timestamps.` : ""}</p>
     </header>
     {error ? <p className="query-table-error" role="alert">{error}</p> : !loading && !total ? <p className="muted">No sessions with timestamps match these filters.</p> : <>
-      <div className="session-shape-histogram" role="img" aria-label={`Sessions by active time${marks.length ? `; median ${seconds(marks[0][1]!)}, p90 ${seconds(marks[1][1]!)}` : ""}`}>
+      <div className="session-shape-histogram" role="img" aria-label={`Sessions by active time${marks.map(([label, value]) => `; ${label === "p50" ? "median" : label} ${seconds(value)}`).join("")}`}>
         <div className="session-shape-bins">
           {counts.map((count, index) => <i key={index} className="qt-metric-mark" style={{ height: `${100 * count / highest}%`, background: binColor }} data-chart-tooltip={`${binLabel(durationEdges, index)}\n${sessionsText(count)}`} />)}
           {marks.map(([label, value]) => {
-            if (value === null) return null;
             const at = 100 * binPosition(durationEdges, value) / durationEdges.length;
             return <span key={label} className={`session-shape-mark${at > 50 ? " is-end" : ""}`} style={{ left: `${at}%` }}><b>{label}</b> {seconds(value)}</span>;
           })}
@@ -155,9 +153,15 @@ export function TurnCycleByProvider({ where, schema, onOpen }: { where: WhereTer
 const archetypeColor = (archetype: string) => chartSeriesStyle("archetype", archetype).color;
 const archetypeLabel = (archetype: string) => (archetypes.values as Record<string, string>)[archetype] ?? (archetype || "Not enough evidence");
 export function ArchetypeMix({ where, schema, onOpen }: { where: WhereTerm[]; schema: FieldSchema<any>; onOpen: (state: AnalysisState) => void }) {
-  const clauses = useMemo((): AggregationClause[] => [{ id: "mix", op: "count", groupBy: ["repository_name", "archetype"], groupLimit: 500 }], []);
-  const result = useSessionMetrics(where, schema, [clauses]);
-  const rows = archetypeMix(result.value?.[0]?.buckets ?? []);
+  const result = useLoad(JSON.stringify(["mix", where]), async signal => {
+    const [totals, repositories] = await postMetrics(dataset, schema, where, mixFirstClauses(), signal);
+    for (const metric of [totals, repositories]) if (metric?.error) throw new Error(metric.error);
+    const shown = mixShownRepositories(repositories);
+    const each = shown.repositories.length ? await postMetrics(dataset, schema, where, mixRepositoryClauses(shown.repositories), signal) : [];
+    for (const metric of each) if (metric.error) throw new Error(metric.error);
+    return archetypeMix(totals.buckets, shown.repositories, each.map(metric => metric.buckets), shown.folded);
+  });
+  const rows = result.value ?? [];
   // The known archetypes in their order, then any value the data adds.
   const present = [...new Set([...archetypes.order, ...rows.flatMap(row => Object.keys(row.counts)).sort(), ""])].filter(archetype => rows.some(row => row.counts[archetype]));
   return <section className="session-shape-panel" aria-busy={result.loading}>
@@ -169,7 +173,7 @@ export function ArchetypeMix({ where, schema, onOpen }: { where: WhereTerm[]; sc
       <ChartLegend items={present.map(archetype => ({ key: archetype || "none", label: archetypeLabel(archetype), color: archetypeColor(archetype) }))} />
       <ul className="session-shape-mix">
         {rows.map(row => <li key={row.key}>
-          <span className="session-shape-mix-label">{row.key === "\u0000other" ? "Other repositories" : row.key || "No repository"}</span>
+          <span className="session-shape-mix-label">{row.key === mixOther ? "Other repositories" : row.key || "No repository"}</span>
           <span className="session-shape-mix-bar">{present.filter(archetype => row.counts[archetype]).map(archetype => <i key={archetype} className="qt-metric-mark" style={{ flexGrow: row.counts[archetype], background: archetypeColor(archetype) }}
             data-chart-tooltip={`${archetypeLabel(archetype)}: ${(100 * row.counts[archetype] / row.total).toFixed(0)}%\n${sessionsText(row.counts[archetype])} of ${row.total.toLocaleString()}`} />)}</span>
           <span className="session-shape-mix-n muted">{sessionsText(row.total)}</span>
