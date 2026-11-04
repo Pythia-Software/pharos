@@ -1126,9 +1126,9 @@ function CarbonDashboard() {
 function HabitsDashboard() {
   const headline = useDashboardHeadline();
   return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
-    before={<>
+    frame={views => <>
       {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
-      <HabitsPanel />
+      <HabitsPanel analysis={views(habitsAnalysisCatalog)} />
     </>} />;
 }
 
