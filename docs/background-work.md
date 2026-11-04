@@ -1466,10 +1466,10 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   each library's service by the PID it started (so a service too busy to
   answer is still measured), the Terminal commands each service's snapshot
   names (or, without a service, the library's leases), and the app-level
-  commands' leases. The broker's own figure leaves out its exited
-  children's time: they are the services it reads itself, and a service
-  reaped after hours would otherwise count its whole life again. The
-  native app (Swift) is not measured.
+  commands' leases. Reaped child CPU is reconciled against readings of
+  children and descendants already sampled, so a short helper contributes
+  without charging a service twice when a worker tree exits. The native app
+  (Swift) is not measured.
 - **How.** `proc_pid_rusage(pid, RUSAGE_INFO_V4)`, made as the `proc_info`
   system call (336, `PROC_INFO_CALL_PIDRUSAGE`) with `syscall.Syscall6`,
   as `capture_iopolicy_darwin.go` makes `iopolicysys`: the package has no
@@ -1491,10 +1491,13 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   (`TestResourceSamplingIsCheap`).
 - **What.** On macOS the kernel process tree adds active descendants (including
   labeling CLIs and their workers) as separate rows with process names and PIDs,
-  attributed to their owning library. CPU uses each process's own user and system
-  time so exiting workers are not counted again through their parent. Work that
-  starts and exits between samples can be missed. If the process tree is
-  unavailable, the fallback includes exited child CPU in the parent. CPU is
+  attributed to their owning library. CPU uses each live process's own user and system
+  time. The parent's reaped-child counter supplies CPU for helpers that
+  finish between samples; previously sampled child CPU is subtracted when
+  that child exits, including descendants that exit with it. Liveness comes
+  from the current kernel process table: a cached service snapshot can still
+  list an exited worker. A helper still running at the last sample and
+  exiting before the next can only be measured at its parent's next sample. CPU is
   the delta over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
   Monitor's figure); disk is the delta of `ri_diskio_bytesread` plus
@@ -1506,9 +1509,11 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   (another `ri_proc_start_abstime`), when the previous reading is more
   than 10 s old (no page was open: an average over the gap is not the
   current load), and when its children's time grew by more than the
-  interval × cores (a long child reaped). A total's `cpu_percent` is
-  `null` (memory only) while any of its processes has none, and so is its
-  `disk_bytes_per_second`. `cpu_percent` is a whole number, and
+  interval × cores after overlap is deducted (an unmeasured long child
+  reaped). A total's rates sum the processes that have two samples; the
+  `cpu_partial` and `disk_partial` flags mark a lower bound when a new
+  process has no rate yet. If no process has two samples, the rate is
+  `null`. `cpu_percent` is a whole number, and
   `memory_bytes` and `disk_bytes_per_second` two significant figures.
 - **Change detection.** `resources` objects are left out of the snapshot's
   tag (`statusTag`), so a document whose only change is its load keeps its
@@ -1516,10 +1521,12 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   stream carries the latest resources in every event, and sends a
   resources-only update at most every 5 s (`statusResourcesRefresh`)
   while a client listens.
-- **Subprocesses** (`git`, `gh`, `diskutil`, CLIs) count only when they
-  exit and are reaped, in the child time of the process that ran them: a
-  short call shows in the interval it ended, and one that ran longer than
-  the interval could account for starts a new baseline instead.
+- **Subprocesses** (`git`, `gh`, `diskutil`, CLIs) count as live process
+  rows when sampled, and their remaining CPU counts at reap. I/O has no
+  reaped-child counter, so a helper that finishes between samples can
+  still be missing from I/O. An inaccessible or detached process cannot
+  be counted. These readings are sampled estimates, not a per-operation
+  accounting ledger.
 - **Per-operation** attribution inside a process (pprof labels, already
   used by findings detectors) is not built; questions about load need only
   per-machine and per-library answers.
@@ -1535,7 +1542,7 @@ and in `/api/app/status` (the machine's total as `resources`, and each
 library entry's own as `libraries[].resources`):
 
 ```json
-{"cpu_percent": 45, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+{"cpu_percent": 45, "cpu_partial": false, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "disk_partial": false, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
  "label": "Pharos is using ~45% of one core · 1.2 GB",
  "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
                 "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
@@ -1545,11 +1552,15 @@ library entry's own as `libraries[].resources`):
 `label` and `text` are the server's words. The panel's Load row shows CPU
 (% of one core), RAM and Disk (per second) in one row, each with its icon,
 for the machine in the app and the library otherwise, with `label` and the
-processes' `text` in its tooltip. The panel's Load row is four equal
-cells, CPU | RAM | I/O | Storage: I/O is `disk_bytes_per_second`, and
+processes' `text` in its tooltip. The panel's Load row has five cells,
+CPU | RAM | I/O | Storage | WAL: I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it
 keeps on its drive, from the last drive check, which Health refreshes;
-the snapshot never measures it, and leaves it out before a check).
+the snapshot never measures it, and leaves it out before a check). WAL
+is the size of the catalog's `-wal` file at snapshot time (`wal_bytes`,
+zero when there is no WAL file). When the selected service briefly fails
+to answer, the broker's CPU, RAM and I/O remain visible; previously
+reported Storage and WAL sizes are labeled `last` until it answers again.
 
 **Priority classes to IO policy:**
 

@@ -106,15 +106,26 @@ test("the schedule and load stay out while the snapshot has none", () => {
 
 test("the load row is CPU, RAM and disk in one row, the server's line and each process's in its tooltip; in the app, every Pharos process's", () => {
   const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, disk_bytes_per_second: 12e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
-  const own = plain(model(view({ resources: library, library: { drive: { name: "Euclid", ejectable: true }, path: "/Volumes/Euclid/Pharos", storage_bytes: 48e9 } })).load);
-  assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"]]);
-  assert.equal(own.tooltip, "Library line\nService line\nTerminal line");
+  const own = plain(model(view({ resources: library, library: { drive: { name: "Euclid", ejectable: true }, path: "/Volumes/Euclid/Pharos", storage_bytes: 48e9, wal_bytes: 64e6 } })).load);
+  assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"], ["wal", "WAL", "64 MB"]]);
+  assert.ok(own.tooltip.startsWith("Library line\n"));
+  assert.ok(own.tooltip.endsWith("Service line\nTerminal line"));
   // The broker's total, when the store has one, wins over the library's.
   const app = plain(model(view({ resources: library }, { resources: { label: "Machine line", cpu_percent: 337, memory_bytes: 8.2e9, disk_bytes_per_second: null, processes: [] } })).load);
-  assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—"], "a figure not measured yet is a dash");
+  assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—", "—"], "a figure not measured yet is a dash");
   // A service that does not measure I/O: no I/O.
-  assert.deepEqual(plain(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.metrics).map(metric => metric.id), ["cpu", "memory", "disk"]);
+  assert.deepEqual(plain(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.metrics).map(metric => metric.id), ["cpu", "memory", "disk", "wal"]);
   assert.equal(model(view({ resources: {} })).load, null);
+});
+
+test("the broker load remains visible during a service timeout, and partial rates say they are lower bounds", () => {
+  const unavailable = model({library: null, service: {name: "Euclid", error: "timeout", resources: {memory_bytes: 1e9}},
+    resources: {cpu_percent: 12, cpu_partial: true, memory_bytes: 2e9, disk_bytes_per_second: 4e6, disk_partial: true, label: "Pharos is using resources"},
+    lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
+  assert.equal(unavailable.available, false);
+  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB", "last 64 MB"]);
+  assert.match(unavailable.load.tooltip, /lower bound/);
+  assert.match(unavailable.load.tooltip, /last reported/);
 });
 
 const at = Date.parse("2026-10-27T12:00:00Z");

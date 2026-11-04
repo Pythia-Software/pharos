@@ -438,7 +438,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 	// The status document carries resources (§10); the operations document
 	// and the eject check do not.
 	withResources := withLibraries && !fresh && strings.HasPrefix(path, "/api/status")
-	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker", OwnOnly: true}}
+	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
 	entries := []map[string]any{}
 	for index, library := range libraries {
 		service := map[string]any{"state": "stopped", "pid": nil, "started_at": nil, "restarts_10m": 0}
