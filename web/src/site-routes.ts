@@ -15,7 +15,7 @@ export const siteSections = [
   { path: "cards", route: "/cards", description: "The card library: every prebuilt question, each opening a dashboard. Filter by text, data source, topic or kind." },
   { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
-  { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action review questions, in separate prompt baskets." },
+  { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action notices, in separate prompt baskets." },
   { path: "ask", route: "/ask", description: "Ask Pharos full screen: a new chat on its own page, without the rest of the app." },
   { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },
@@ -24,7 +24,7 @@ export const siteSections = [
 // Descriptions of pages below a section, where the page's own module has none.
 export const pageDescriptions: Record<string, string> = {
   "analyze/query": "Query tables over each Analyze dataset, filtered by where terms.",
-  "findings/safety/table": "Every risky action review, filterable and groupable by resource, check, location, handoff state, or recorded activity.",
+  "findings/safety/table": "Every risky action notice, filterable and groupable by resource, check, danger, location, handoff state, or recorded activity.",
   "findings/safety/settings": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
   "findings/table": "Every finding as a filterable table.",
   "findings/settings": "Which detectors run and how findings are ranked.",

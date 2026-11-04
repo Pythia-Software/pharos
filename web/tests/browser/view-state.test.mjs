@@ -5,6 +5,7 @@ import {workID,rootConversation,defaultApi,busyStatus,eventStream,conversationLa
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
+import safetyDocument from '../../../schemas/safety.schema.json' with {type:'json'};
 import messageLabelsDocument from '../../../schemas/message_labels.schema.json' with {type:'json'};
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
@@ -272,6 +273,33 @@ test('Timeline segments pin exact content before revealing their conversation so
  assert.equal(new URL(page.url()).searchParams.get('reveal'),'message:m-1');
  assert.equal(await page.getByRole('button',{name:'Open full-width timeline',exact:true}).isVisible(),true);
  assert.equal(await pinned.isVisible(),false);
+});
+
+test('nested navigation branches restore independently in a fresh browser',{skip},async t=>{
+ const viewport={width:1024,height:900};
+ const app=await open(t,{url:'/analyze',viewport,ready:'.usage-dashboard .usage-chart'}),{page}=app;
+ const navigation=page.getByRole('complementary',{name:'Analyze navigation',exact:true});
+ const human=navigation.getByRole('link',{name:'Human Words',exact:true});
+ const tokens=navigation.getByRole('link',{name:'Tokens and Cost',exact:true});
+ const toggle=async label=>{
+  const control=navigation.getByText(label,{exact:true});
+  await control.click();await app.settled();
+ };
+ assert.equal(await human.isVisible(),false);
+ await toggle('People');await human.waitFor();
+ await toggle('People');await human.waitFor({state:'hidden'});
+ assert.equal(await tokens.isVisible(),true);
+ await toggle('Dashboards');await tokens.waitFor({state:'hidden'});
+ await toggle('Dashboards');await tokens.waitFor();
+ assert.equal(await human.isVisible(),false);
+ const fresh=await open(t,{url:path(page),viewport,ready:'.usage-dashboard .usage-chart'});
+ const restored=fresh.page.getByRole('complementary',{name:'Analyze navigation',exact:true});
+ assert.equal(await restored.getByRole('link',{name:'Human Words',exact:true}).isVisible(),false);
+ assert.equal(await restored.getByRole('link',{name:'Tokens and Cost',exact:true}).isVisible(),true);
+ await restored.getByText('People',{exact:true}).click();
+ await restored.getByRole('link',{name:'Human Words',exact:true}).waitFor();
+ await fresh.shot('nested-dashboards');
+
 });
 
 function jsonInspectorFixture() {
@@ -938,4 +966,28 @@ test('fingerprint taxonomy inspection supports pointer handoff and scrolling wit
  assert.equal(path(page),before);await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
  await page.locator('.message-label-result-card svg g[tabindex]').first().focus();await page.getByRole('tooltip').waitFor();assert.equal(path(page),before);await page.keyboard.press('Escape');
  await app.shot('fingerprint-taxonomy');
+});
+
+test('Risky actions table edits are Back/Forward steps that restore the table',{skip},async t=>{
+ const schema=loadSchema(safetyDocument),now=Date.now();
+ const rows=['/srv/a','/srv/b','/srv/c'].map((subject,i)=>({id:`safety_${i}`,rule:'permissions',state:'open',title:'Permissions broadened',subject,command:`chmod 700 ${subject}`,target:'repo:r',target_label:'explo',calls:1,last_seen_at:new Date(now-i*86400000).toISOString()}));
+ const api={'* /api/query/safety/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
+ const query={...EMPTY_QUERY,where:[{field:'rule',op:'=',value:'permissions'}],orderBy:[{field:'subject',dir:'asc'}],select:[{field:'subject'},{field:'command'}]};
+ const app=await open(t,{url:'/findings?'+new URLSearchParams({optimize_area:'safety',view:'table',q_safety:encodeQuery(query)}),api,ready:'.safety-table .qt-row'}),{page}=app;
+ const read=()=>decodeQueryStrict(new URL(page.url()).searchParams.get('q_safety'));
+ const first=()=>page.locator('.safety-table .qt-row').first().textContent();
+ assert.match(await first(),/\/srv\/a/);
+ const before=new URL(page.url()).searchParams.get('q_safety');
+ await page.locator('.safety-table th[data-qt-field="subject"]').click();await page.getByRole('menuitem',{name:/desc/i}).first().click();
+ await page.waitForFunction(before=>new URLSearchParams(location.search).get('q_safety')!==before,before);await app.settled();
+ assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
+ await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
+ await page.goBack();
+ await page.waitForFunction(()=>/\/srv\/a/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
+ assert.deepEqual(read().orderBy,[{field:'subject',dir:'asc'}]);
+ assert.equal(new URL(page.url()).pathname,'/findings','Back stays on the table');
+ await page.goForward();
+ await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
+ assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
+
 });

@@ -177,7 +177,7 @@ export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
   period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, nonzero: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
 // Groups drawn are fixed per display. The trend's seriesLimit is its own.
-const barsShown = 12, slicesShown = 8;
+export const barsShown = 12, slicesShown = 8;
 // The groups a view fetches, and the points a scatter draws; a test lowers
 // them rather than inserting thousands of rows.
 export const analysisLimits = { groups: 1000, points: 2000 };

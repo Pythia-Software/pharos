@@ -719,7 +719,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         child({ path: `findings/${view}`, title: page.label, description: pageDescriptions[`findings/${view}`], route: "/findings", fixed: { view },
           ...view === "table" ? { dataset: "findings", builder: "queryURL", options: [whereOption("q_findings", "findings"), windowOption("window_days", rollingWindowDays, "A rolling window on findings.window_field, as for query tables.")] } : {} });
       }
-      const safety = child({ path: "findings/safety", title: "Risky actions", description: "Deterministically selected review questions with separate prompt baskets and handoff history.", route: "/findings", fixed: { optimize_area: "safety" }, children: [] });
+      const safety = child({ path: "findings/safety", title: "Risky actions", description: "Notices about likely dangerous agent actions, most dangerous checks first, with separate prompt baskets and handoff history.", route: "/findings", fixed: { optimize_area: "safety" }, children: [] });
       for (const page of safetyPages.slice(1)) {
         const view = new URL(page.href!, origin).searchParams.get("view")!;
         const node = add({ path: `findings/safety/${view}`, title: page.label, description: pageDescriptions[`findings/safety/${view}`], route: "/findings", fixed: { optimize_area: "safety", view },

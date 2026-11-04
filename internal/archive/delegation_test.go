@@ -818,3 +818,23 @@ func TestWorkPreviewSummarizesWorkspaceAndConversation(t *testing.T) {
 		t.Fatal("missing workspace")
 	}
 }
+
+// The timeline groups a shell call by what its primary command does.
+func TestDelegationCategoryReadsShellCommands(t *testing.T) {
+	for _, test := range []struct{ name, category, command, want string }{
+		{"Bash", "command", "read", "read"},
+		{"exec_command", "command", "search", "read"},
+		{"Bash", "command", "list", "read"},
+		{"Bash", "command", "vcs", "git"},
+		{"Bash", "command", "file-write", "write"},
+		{"Bash", "command", "network", "network"},
+		{"Bash", "command", "test", "run"},
+		{"Bash", "command", "", "run"},
+		{"write_stdin", "command", "", "poll"},
+		{"Read", "read", "", "read"},
+	} {
+		if got := delegationCategory(test.name, test.category, test.command); got != test.want {
+			t.Errorf("%s/%s/%s: %q, want %q", test.name, test.category, test.command, got, test.want)
+		}
+	}
+}

@@ -78,8 +78,9 @@ pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog con
 
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
 status panel, cancels it (`Op.setStopper`), and it ends between chunks with what it scored stored. Its next run
-resumes from the conversations still unread; a chunk in flight, about 512 candidates, is scored again. Cores apply
-from the next run: a running one keeps its workers, so stop it and choose Run now to apply them sooner.
+resumes from the conversations still unread; a chunk in flight, about 512 candidates, is scored again. Active runs
+check the Cores target every two minutes and replace their workers after the current scoring chunk finishes,
+keeping its results. Changing cores needs no stop or app relaunch; the shared budget and battery cap still apply.
 
 - **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
   (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into

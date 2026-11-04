@@ -201,7 +201,7 @@ function CustomPeriod({ period, value, onChange }: { period: "hours" | "days"; v
 }
 
 export function ScaleControl({ value, onChange, percent = false }: { value: ChartScale; onChange: (next: ChartScale) => void; percent?: boolean }) {
-  const descriptions = { linear: "Column heights are proportional to their values.", logarithmic: "Compresses large values so smaller values are easier to compare.", half: "Linear for smaller values, logarithmic for peaks." };
+  const descriptions = { linear: "Column heights are proportional to their values.", logarithmic: "Compresses large values so smaller values are easier to compare.", half: "Stays linear unless the peak exceeds 10× the 80th percentile of at least five nonzero values; then compresses peaks logarithmically." };
   return <ChartSelect label="Scale" value={percent ? "linear" : value} disabled={percent}
     options={[["linear", "Linear"], ["logarithmic", "Logarithmic"], ["half", "Linear + log"]]}
     title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
@@ -288,7 +288,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;
   const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
   const averageLabel = !cumulative && rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling ${rolling}` : "";
-  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${percent || scale === "linear" ? "linear" : scale === "logarithmic" ? "logarithmic" : "linear and logarithmic"} scale`;
+  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${split ? "linear and logarithmic" : !percent && scale === "logarithmic" ? "logarithmic" : "linear"} scale`;
   const label = (date: Date) => isHourly(period) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
   const heading = (bucket: ChartBucket) => {
     if (cumulative) {

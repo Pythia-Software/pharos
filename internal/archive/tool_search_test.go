@@ -167,7 +167,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			contains := func(value string, negated bool) qt.WhereClause {
 				return qt.WhereClause{Field: index.field, Op: "contains", Value: value, Negated: negated}
 			}
-			check := func() {
+			check := func(afterMutation bool) {
 				t.Helper()
 				filters := [][]qt.WhereTerm{
 					// Either branch indexed, and a branch that is not: the term
@@ -177,7 +177,13 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					{{Any: []qt.WhereClause{{All: []qt.WhereClause{contains("test", false), contains("updated", true)}}, contains("foo", false)}}},
 					{{Any: []qt.WhereClause{{All: []qt.WhereClause{contains("test", false), {Field: "conversation_id", Op: "is_not_null"}}}, contains("zzz", false)}}},
 				}
-				for _, needle := range []string{"TEST", "foo", "bar", "quotes", "kelvin", "a", "absent_82f14c", "\"qu", "  ", "\nwi", "   ", "İ"} {
+				needles := []string{"TEST", "foo", "bar", "quotes", "kelvin", "a", "absent_82f14c", "\"qu", "  ", "\nwi", "   ", "İ"}
+				if afterMutation {
+					// The full substring matrix covered the backfilled index above.
+					// Here, check changed and removed rows through each query API.
+					needles = []string{"UPDATED", "test", "a"}
+				}
+				for _, needle := range needles {
 					for _, negated := range []bool{false, true} {
 						filters = append(filters, []qt.WhereTerm{{Field: index.field, Op: "contains", Value: needle, Negated: negated}})
 					}
@@ -227,7 +233,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			if err != nil || indexed.queryText == nil {
 				t.Fatal("missing complete index", err)
 			}
-			check()
+			check(false)
 			if dataset == "tool_calls" {
 				// Upgrade a previous facts version in bounded batches, retaining
 				// scalar availability until the local calendar is complete.
@@ -262,7 +268,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			check()
+			check(true)
 		})
 	}
 }
