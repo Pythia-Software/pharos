@@ -25,8 +25,8 @@ const clineManifest = `{"version":1,"session_id":"1793000000000_abcde","source":
 
 // clineMessages is its <id>.messages.json: four requests, each ended by an
 // assistant message carrying its metrics; tool inputs as JSON text; a
-// failed command; and a prompt sent after a switch to plan mode, which
-// quotes usage JSON.
+// failed command; an empty reply; and a prompt sent after a switch to plan
+// mode, which quotes usage JSON.
 const clineMessages = `{"version":1,"updated_at":"2026-11-03T15:01:00.000Z","agent":"lead","sessionId":"1793000000000_abcde",
 "origin":{"source":"cli","mode":"user","sessionId":"1793000000000_abcde","version":"4.1.26"},"system_prompt":"You are Cline.","messages":[
 {"id":"u1","role":"user","ts":1793718000000,"content":[{"type":"text","text":"<user_input mode=\"act\">Count the words</user_input>"}]},
@@ -42,6 +42,7 @@ const clineMessages = `{"version":1,"updated_at":"2026-11-03T15:01:00.000Z","age
   {"type":"tool_result","tool_use_id":"c3","name":"run_commands","content":"{\"error\":\"No such file\"}","is_error":true}]},
 {"id":"a3","role":"assistant","ts":1793718005000,"content":[{"type":"text","text":"There are 74 words."}],
   "modelInfo":{"id":"claude-sonnet-4.5","provider":"anthropic"},"metrics":{"inputTokens":1300,"outputTokens":20,"cacheReadTokens":1200,"cacheWriteTokens":0}},
+{"id":"e1","role":"assistant","ts":1793718005500,"content":[]},
 {"id":"u2","role":"user","ts":1793718006000,"content":[{"type":"text","text":"<user_input mode=\"plan\"><mode_notice>The user switched from act mode to plan mode before sending this message.</mode_notice>\n{\"usage\":{\"input_tokens\":1000,\"output_tokens\":200}} Plan the next step</user_input>"}]},
 {"id":"a4","role":"assistant","ts":1793718007000,"content":[{"type":"text","text":"Next, add tests."}],
   "modelInfo":{"id":"claude-opus-4.5","provider":"anthropic"},"metrics":{"inputTokens":1400,"outputTokens":30,"cacheReadTokens":1300,"cacheWriteTokens":0}}]}`

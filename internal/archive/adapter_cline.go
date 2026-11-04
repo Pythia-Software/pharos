@@ -247,7 +247,7 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 		}
 		base := MessageRecord{Role: role, Model: model, CreatedAt: created, EvidenceLocator: fmt.Sprintf("%s#%s", origin, id), Selected: true}
 		blocks, _ := message["content"].([]any)
-		if text := firstString(message["content"]); len(blocks) == 0 && text != "" {
+		if text, _ := message["content"].(string); text != "" {
 			blocks = []any{map[string]any{"type": "text", "text": text}}
 		}
 		texts := 0
