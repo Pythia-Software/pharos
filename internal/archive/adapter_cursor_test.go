@@ -98,13 +98,18 @@ func cursorComposerRows() []cursorRow {
 		{"bubbleId:" + cursorChild + ":s1", map[string]any{"_v": 3, "type": 1, "text": "Review wordstats.py", "createdAt": "2026-11-03T16:08:24.500Z", "subagentSpawnTaskToolCallId": "call-2\nfc_2"}},
 		{"bubbleId:" + cursorChild + ":s2", map[string]any{"_v": 3, "type": 2, "text": `{"usage":{"input_tokens":3000000}} Looks fine.`, "createdAt": "2026-11-03T16:08:24.800Z"}},
 
-		// A fork: a copy of the composer's first two messages, then its own.
-		{"composerData:" + cursorFork, map[string]any{"_v": 18, "composerId": cursorFork, "name": "Check again", "createdAt": ms(100), "headerLog": map[string]any{"chunkCount": 1, "count": 4},
-			"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorNew, "forkedFromComposerId": cursorNew, "conversationLengthAtSpawn": 2, "toolCallId": "call-4\nfc_4", "subagentTypeName": "generalPurpose"}}},
+		// A fork: a copy of the composer's first five messages, up to the
+		// call that started its subagent, then its own. Cursor holds some of
+		// the copied messages.
+		{"composerData:" + cursorFork, map[string]any{"_v": 18, "composerId": cursorFork, "name": "Check again", "createdAt": ms(100), "headerLog": map[string]any{"chunkCount": 1, "count": 7},
+			"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorNew, "forkedFromComposerId": cursorNew, "conversationLengthAtSpawn": 5, "toolCallId": "call-4\nfc_4", "subagentTypeName": "generalPurpose"}}},
 		{"composerConvHeaders:" + cursorFork + ":000000", []any{map[string]any{"bubbleId": cursorPrompt, "type": 1}, map[string]any{"bubbleId": cursorPrompt + "/s:0", "type": 2},
+			map[string]any{"bubbleId": cursorPrompt + "/s:1", "type": 2}, map[string]any{"bubbleId": cursorPrompt + "/t:call-1\nfc_1", "type": 2}, map[string]any{"bubbleId": cursorPrompt + "/t:call-2\nfc_2", "type": 2},
 			map[string]any{"bubbleId": "f1", "type": 1}, map[string]any{"bubbleId": "f2", "type": 2}}},
 		{"bubbleId:" + cursorFork + ":" + cursorPrompt, map[string]any{"_v": 3, "type": 1, "text": "Write wordstats.py and test it", "createdAt": "2026-11-03T16:08:20.000Z"}},
 		{"bubbleId:" + cursorFork + ":" + cursorPrompt + "/s:0", map[string]any{"_v": 3, "type": 2, "thinking": map[string]any{"text": "Plan the file."}, "createdAt": "2026-11-03T16:08:21.000Z"}},
+		{"bubbleId:" + cursorFork + ":" + cursorPrompt + "/t:call-2\nfc_2", map[string]any{"_v": 3, "type": 2, "capabilityType": 15, "createdAt": "2026-11-03T16:08:24.000Z",
+			"toolFormerData": tool("task_v2", "call-2\nfc_2", "completed", map[string]any{"params": `{"description":"Review","prompt":"Review wordstats.py"}`})}},
 		{"bubbleId:" + cursorFork + ":f1", map[string]any{"_v": 3, "type": 1, "text": "Check again", "createdAt": "2026-11-03T16:08:26.500Z"}},
 		{"bubbleId:" + cursorFork + ":f2", map[string]any{"_v": 3, "type": 2, "text": "Still fine.", "createdAt": "2026-11-03T16:08:27.000Z"}},
 
@@ -544,9 +549,10 @@ func TestCursorForkOfAForkDropsWhatItCopied(t *testing.T) {
 	const nested = "c0000000-0000-4000-8000-000000000008"
 	cursorWrite(t, root, func(db *sql.DB) error {
 		cursorPut(t, db,
-			cursorRow{"composerData:" + nested, map[string]any{"_v": 18, "composerId": nested, "name": "Once more", "createdAt": 1793722100000, "headerLog": map[string]any{"chunkCount": 1, "count": 4},
-				"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorFork, "forkedFromComposerId": cursorFork, "conversationLengthAtSpawn": 3, "toolCallId": "call-9"}}},
-			cursorRow{"composerConvHeaders:" + nested + ":000000", []any{map[string]any{"bubbleId": cursorPrompt}, map[string]any{"bubbleId": cursorPrompt + "/s:0"}, map[string]any{"bubbleId": "f1"}, map[string]any{"bubbleId": "g1"}}},
+			cursorRow{"composerData:" + nested, map[string]any{"_v": 18, "composerId": nested, "name": "Once more", "createdAt": 1793722100000, "headerLog": map[string]any{"chunkCount": 1, "count": 7},
+				"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorFork, "forkedFromComposerId": cursorFork, "conversationLengthAtSpawn": 6, "toolCallId": "call-9"}}},
+			cursorRow{"composerConvHeaders:" + nested + ":000000", []any{map[string]any{"bubbleId": cursorPrompt}, map[string]any{"bubbleId": cursorPrompt + "/s:0"}, map[string]any{"bubbleId": cursorPrompt + "/s:1"},
+				map[string]any{"bubbleId": cursorPrompt + "/t:call-1\nfc_1"}, map[string]any{"bubbleId": cursorPrompt + "/t:call-2\nfc_2"}, map[string]any{"bubbleId": "f1"}, map[string]any{"bubbleId": "g1"}}},
 			cursorRow{"bubbleId:" + nested + ":" + cursorPrompt, map[string]any{"type": 1, "text": "Write wordstats.py and test it"}},
 			cursorRow{"bubbleId:" + nested + ":" + cursorPrompt + "/s:0", map[string]any{"type": 2, "thinking": map[string]any{"text": "Plan the file."}}},
 			cursorRow{"bubbleId:" + nested + ":f1", map[string]any{"type": 1, "text": "Check again"}},
@@ -606,16 +612,7 @@ func TestCursorComposerDeletedBeforeIndexingIsKept(t *testing.T) {
 	c, _ := testCatalog(t)
 	indexCaptures(t, c, config.CaptureRoot, "host-a")
 	// Each is read as it was, with what it copied left to its composer.
-	live, _ := testCatalog(t)
-	ingestSource(t, live, SourceConfig{Name: "cursor", Kind: "cursor", Path: cursorFixture(t), Account: "local", Enabled: true})
-	shape := `SELECT group_concat(native_id||'='||n, ' ') FROM (SELECT v.native_id, COUNT(m.id) n FROM conversations v LEFT JOIN messages m ON m.conversation_id=v.id GROUP BY 1 ORDER BY 1)`
-	read := func(catalog *Catalog) (text string) {
-		if err := catalog.DB.QueryRow(shape).Scan(&text); err != nil {
-			t.Fatal(err)
-		}
-		return text
-	}
-	if got, want := read(c), read(live); got != want {
+	if got, want := cursorShape(t, c), cursorShape(t, cursorLive(t)); got != want {
 		t.Fatalf("salvaged %s, read live %s", got, want)
 	}
 	// Placed as it was, by its window, and the side chat by its composer.
@@ -625,6 +622,23 @@ func TestCursorComposerDeletedBeforeIndexingIsKept(t *testing.T) {
 	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=? AND parent_id IS NOT NULL`, cursorSide); n != 1 {
 		t.Fatalf("the side chat lost its composer")
 	}
+}
+
+// cursorLive is a catalog that indexed the fixture as it is.
+func cursorLive(t *testing.T) *Catalog {
+	live, _ := testCatalog(t)
+	ingestSource(t, live, SourceConfig{Name: "cursor", Kind: "cursor", Path: cursorFixture(t), Account: "local", Enabled: true})
+	return live
+}
+
+// cursorShape lists each conversation with its number of messages.
+func cursorShape(t *testing.T, c *Catalog) (shape string) {
+	t.Helper()
+	if err := c.DB.QueryRow(`SELECT group_concat(native_id||'='||n, ' ') FROM (SELECT v.native_id, COUNT(m.id) n
+		FROM conversations v LEFT JOIN messages m ON m.conversation_id=v.id GROUP BY 1 ORDER BY 1)`).Scan(&shape); err != nil {
+		t.Fatal(err)
+	}
+	return shape
 }
 
 // A composer deleted once its newer copy was indexed is not rolled back to
@@ -674,6 +688,55 @@ func TestCursorSalvageLeavesANewerCopy(t *testing.T) {
 	}
 	if n := countRows(t, c, `SELECT COUNT(DISTINCT workspace_id) FROM conversations WHERE native_id IN (?, ?)`, cursorNew, cursorChild); n != 1 {
 		t.Fatalf("the subagent left its composer's workspace: %d", n)
+	}
+	// Its fork still leaves out what it copied, the copies of subagents are
+	// still left out, and the work is not named for a subagent.
+	live := cursorLive(t)
+	if got, want := cursorShape(t, c), cursorShape(t, live); got != want {
+		t.Fatalf("after the composer was deleted %s, read live %s", got, want)
+	}
+	purpose := `SELECT COALESCE(purpose,'') || ' / ' || COALESCE((SELECT display_title FROM workspace_names WHERE workspace_id=w.id),'') FROM workspaces w WHERE source_id=?`
+	var got, want string
+	if err := c.DB.QueryRow(purpose, cursorNew).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.DB.QueryRow(purpose, cursorNew).Scan(&want); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(want, strings.SplitN(got, " / ", 2)[0]+" / ") || strings.HasSuffix(got, " / Review") {
+		t.Fatalf("the work is %q, read live %q", got, want)
+	}
+
+	// Nor is a subagent whose composer became another's subagent, so that
+	// the group is another's when the older capture is read.
+	const top = "c0000000-0000-4000-8000-000000000009"
+	root = cursorFixture(t)
+	source.Path = root
+	config = captureTestConfig(t, source)
+	useHost(t, "host-a")
+	runCapture(t, config)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		cursorPut(t, db, cursorRow{"composerData:" + top, map[string]any{"_v": 18, "composerId": top, "name": "Above", "createdAt": 1793722090000, "headerLog": map[string]any{"chunkCount": 1, "count": 1}}},
+			cursorRow{"composerConvHeaders:" + top + ":000000", []any{map[string]any{"bubbleId": "a1", "type": 1}}},
+			cursorRow{"bubbleId:" + top + ":a1", map[string]any{"_v": 3, "type": 1, "text": "Start"}})
+		if _, err := db.Exec(`UPDATE cursorDiskKV SET value=json_set(value, '$.subagentInfo', json_object('parentComposerId', ?)) WHERE key=?`, top, "composerData:"+cursorNew); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorSide+":*", "composerData:"+cursorSide); err != nil {
+			return err
+		}
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, 'Looks fine.', 'Looks fine now.') WHERE key=?`, "bubbleId:"+cursorChild+":s2")
+		return err
+	})
+	runCapture(t, config)
+	useHost(t, "host-b")
+	c, _ = testCatalog(t)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=? AND m.text LIKE '%Looks fine now.'`, cursorChild); n != 1 {
+		t.Fatalf("a subagent regrouped since was rolled back: %d", n)
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=?`, cursorSide); n != 1 {
+		t.Fatalf("the deleted side chat was not kept: %d", n)
 	}
 }
 

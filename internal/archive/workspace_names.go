@@ -23,7 +23,7 @@ func meaningfulWorkspaceTitle(title, sourceID string) bool {
 	if title == sourceID {
 		return false
 	}
-	for _, label := range []string{"Codex", "Claude", "Conductor", "ChatGPT", "Antigravity", "Antigravity CLI", "Antigravity IDE"} {
+	for _, label := range []string{"Codex", "Claude", "Conductor", "ChatGPT", "Antigravity", "Antigravity CLI", "Antigravity IDE", "Cursor"} {
 		if title == label+" "+short(sourceID) {
 			return false
 		}
@@ -71,7 +71,9 @@ func recordWorkspaceSourceTitle(tx *sql.Tx, id string, record WorkspaceRecord) e
 	title := defaultString(record.Title, record.SourceID)
 	// A newer rollout-only capture may lack the optional naming stores. Keep
 	// a known name when that evidence is absent; an observed clear still wins.
-	if record.SourceKind == "codex" && !meaningfulWorkspaceTitle(title, record.SourceID) && record.Metadata["title_cleared"] != true {
+	// Cursor's subagents carry no name for the work once Cursor deletes the
+	// composer that started it.
+	if (record.SourceKind == "codex" || record.SourceKind == "cursor") && !meaningfulWorkspaceTitle(title, record.SourceID) && record.Metadata["title_cleared"] != true {
 		var previous string
 		err := tx.QueryRow("SELECT source_title FROM workspace_names WHERE workspace_id=?", id).Scan(&previous)
 		if err != nil && err != sql.ErrNoRows {

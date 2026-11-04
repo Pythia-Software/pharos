@@ -526,8 +526,9 @@ type cursorThread struct {
 	ids     []string
 	missing map[string]bool
 	short   bool
-	// calls are the tool calls of its own messages, by call ID.
-	calls map[string]bool
+	// calls are the tool calls of its own messages, by call ID, and
+	// copiedCalls those of the messages a fork copied from its parent.
+	calls, copiedCalls map[string]bool
 }
 
 // complete reports whether every message the headers name was read.
@@ -561,26 +562,33 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		}
 		info := mapValueDefault(thread.data["subagentInfo"])
 		// A fork starts with a copy of its parent's messages, as its parent's
-		// headers name them, which are the parent's.
-		if parent := byID[firstString(info["forkedFromComposerId"])]; parent != nil {
+		// headers name them, which are the parent's. Once Cursor deletes the
+		// parent, the copy is known by its length alone.
+		copied := map[string]bool{}
+		if forked := firstString(info["forkedFromComposerId"]); forked != "" {
+			parent := byID[forked]
 			if inherited, ok := number(info["conversationLengthAtSpawn"]); ok && inherited > 0 {
 				n := int(inherited)
-				if n <= len(thread.ids) && n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n]) {
-					copied := map[string]bool{}
+				if n <= len(thread.ids) && (parent == nil || n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n])) {
 					for _, id := range thread.ids[:n] {
 						copied[id] = true
 						delete(thread.missing, id)
 					}
-					thread.bubbles = slices.DeleteFunc(thread.bubbles, func(bubble map[string]any) bool { return copied[firstString(bubble["bubbleId"])] })
 				}
 			}
 		}
-		thread.calls = map[string]bool{}
-		for _, bubble := range thread.bubbles {
+		thread.calls, thread.copiedCalls = map[string]bool{}, map[string]bool{}
+		thread.bubbles = slices.DeleteFunc(thread.bubbles, func(bubble map[string]any) bool {
+			own := !copied[firstString(bubble["bubbleId"])]
 			if call, _ := mapValueDefault(bubble["toolFormerData"])["toolCallId"].(string); call != "" {
-				thread.calls[call] = true
+				if own {
+					thread.calls[call] = true
+				} else {
+					thread.copiedCalls[call] = true
+				}
 			}
-		}
+			return !own
+		})
 		threads = append(threads, thread)
 		byID[member.id] = thread
 	}
@@ -597,13 +605,14 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 				continue
 			}
 			// A fork's copy of its parent's messages starts its own copies of
-			// the subagents those messages started: a subagent the call that
-			// started it does not belong to is one of these.
+			// the subagents those messages started: a subagent started by a
+			// copied call, or by a call that is not its parent's, is one of
+			// these.
 			owned := false
 			for _, other := range threads {
 				owned = owned || other.member.id != member.parent && other.calls[spawn]
 			}
-			if spawn != "" && !byID[member.parent].calls[spawn] && owned {
+			if spawn != "" && (byID[member.parent].copiedCalls[spawn] || !byID[member.parent].calls[spawn] && owned) {
 				echoes[member.id] = true
 				continue
 			}
@@ -627,6 +636,12 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 			title := firstString(thread.data["name"])
 			if !meaningfulWorkspaceTitle(title, member.id) {
 				title = defaultString(purpose, "Cursor "+short(member.id))
+			}
+			// The composer that started the work names it; once Cursor
+			// deletes it, its subagents leave the name and purpose to the
+			// copy indexed before.
+			if member.id != top {
+				title, purpose, outcome = "Cursor "+short(top), "", ""
 			}
 			metadata := map[string]any{}
 			if mode := firstString(thread.data["unifiedMode"]); mode != "" {

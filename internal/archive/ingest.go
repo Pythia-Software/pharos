@@ -1117,22 +1117,25 @@ var errOlderCopy = errors.New("the capture is older than what its host already i
 // stored is left alone, and then so are the workspace's own fields: only a copy
 // no older in any part may replace them, and prune, as a live sync does. A
 // record with nothing newer is rejected with errOlderCopy. Equal versions are
-// the same content, so they pass.
+// the same content, so they pass. A conversation is checked in the workspace
+// that holds it, which a source that regroups its sessions may have changed;
+// a new workspace has nothing of its own to roll back.
 func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, authority *copyAuthority) error {
-	if workspaceID == "" {
-		return nil
-	}
 	older := 0
 	for index, conversation := range record.Conversations {
 		claim := &authority.conversations[index]
 		if claim.id == "" {
 			continue
 		}
-		stored, known, err := storedCopyVersion(tx, host, workspaceID, claim.id, conversation.Origin)
+		var holder string
+		if err := tx.QueryRow("SELECT workspace_id FROM conversations WHERE id=?", claim.id).Scan(&holder); err != nil {
+			return err
+		}
+		stored, known, err := storedCopyVersion(tx, host, holder, claim.id, conversation.Origin)
 		if err != nil {
 			return err
 		}
-		rejected, err := evidenceVersionRejected(tx, host, workspaceID, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
+		rejected, err := evidenceVersionRejected(tx, host, holder, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
 		if err != nil {
 			return err
 		}
@@ -1140,6 +1143,12 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 			claim.older = true
 			older++
 		}
+	}
+	if workspaceID == "" {
+		if older > 0 && older == len(record.Conversations) {
+			return errOlderCopy
+		}
+		return nil
 	}
 	stored, known, err := storedCopyVersion(tx, host, workspaceID, "", "")
 	if err != nil {
