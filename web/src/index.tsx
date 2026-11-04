@@ -88,6 +88,8 @@ import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
+import { SafetySelectionBar, SafetyTableContext } from "./safety";
+import { createQueryHistory } from "./query-history";
 import { Icon } from "./icons";
 import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
@@ -406,7 +408,7 @@ const emptyMessages: Record<Dataset, string> = {
   parallelism: "No agent activity matches this query.",
   rhythm: "No activity matches this query.",
   findings: "No findings match this query.",
-  safety: "No risky action reviews match this query.",
+  safety: "No risky action notices match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No agent messages read for events match this query.",
 };
@@ -456,7 +458,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // carries other request parameters, such as a message search cursor.
 // onFind receives Library message-search coverage when present.
 type SurfaceHost = { requiresV3?: boolean; query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
-function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const attention = useMemo(() => createAttentionRegistry(), [dataset]);
   const visible = datasetIsVisible(dataset);
   const schema = useMemo(() => usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, usageActions]);
@@ -649,6 +651,18 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     }
   }, [dataset, api.query, visible, api.restoration.ready, api.error]);
 
+  // Where a page opts in, Back and Forward step through its query edits.
+  const steps = useMemo(() => queryHistory ? createQueryHistory(dataset, window.history) : null, [queryHistory, dataset]);
+  useEffect(() => {
+    if (!steps) return;
+    const navigated = () => steps.navigated(window.history.state);
+    for (const name of ["popstate", "pharos:route"]) window.addEventListener(name, navigated);
+    return () => { for (const name of ["popstate", "pharos:route"]) window.removeEventListener(name, navigated); };
+  }, [steps]);
+  useEffect(() => {
+    if (!steps || !visible || !api.restoration.ready) return;
+    if (steps.observe(api.query, query => apiRef.current.links.local(query, location.href, `q_${dataset}`).url)) window.dispatchEvent(new Event("pharos:uri-changed"));
+  }, [steps, api.query, visible, api.restoration.ready, dataset]);
   // Drilldowns filter source records, including canonical computed fields.
   const sourceSchema = useMemo(() => ({ ...schema, fields: api.computed.catalogue }), [schema, api.computed.catalogue]);
   // Inactive controllers retain their query state, but their controls must not
@@ -692,6 +706,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
+    {selectionBar && !api.query.grouping ? selectionBar(api) : null}
     {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
       : <DataTable
       maxHeight={100000}
@@ -701,6 +716,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onQueryChange={api.setQuery}
       renderers={tableRenderers}
       rowId={api.rowId}
+      selection={selectionBar && !api.query.grouping ? api.selection : undefined}
       columnDrag={api.columnDrag}
       itemDetails={api.itemDetails ?? undefined}
       linkTargets={linkTargets}
@@ -1554,7 +1570,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open review</a>} />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

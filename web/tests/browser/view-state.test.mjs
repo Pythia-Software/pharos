@@ -5,6 +5,7 @@ import {workID,rootConversation,defaultApi,busyStatus,eventStream} from './fixtu
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
+import safetyDocument from '../../../schemas/safety.schema.json' with {type:'json'};
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
@@ -597,4 +598,27 @@ test('Thinking custom date editor follows the viewer zone and writes absolute da
  assert.equal(await page.getByLabel('From date and time',{exact:true}).inputValue(),'2026-10-20T00:00');
  await page.getByLabel('From date and time',{exact:true}).fill('2026-10-21T12:30');await app.settled();
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('thinking')).from,'2026-10-21T18:30:00.000Z');
+});
+
+test('Risky actions table edits are Back/Forward steps that restore the table',{skip},async t=>{
+ const schema=loadSchema(safetyDocument),now=Date.now();
+ const rows=['/srv/a','/srv/b','/srv/c'].map((subject,i)=>({id:`safety_${i}`,rule:'permissions',state:'open',title:'Permissions broadened',subject,command:`chmod 700 ${subject}`,target:'repo:r',target_label:'explo',calls:1,last_seen_at:new Date(now-i*86400000).toISOString()}));
+ const api={'* /api/query/safety/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
+ const query={...EMPTY_QUERY,where:[{field:'rule',op:'=',value:'permissions'}],orderBy:[{field:'subject',dir:'asc'}],select:[{field:'subject'},{field:'command'}]};
+ const app=await open(t,{url:'/findings?'+new URLSearchParams({optimize_area:'safety',view:'table',q_safety:encodeQuery(query)}),api,ready:'.safety-table .qt-row'}),{page}=app;
+ const read=()=>decodeQueryStrict(new URL(page.url()).searchParams.get('q_safety'));
+ const first=()=>page.locator('.safety-table .qt-row').first().textContent();
+ assert.match(await first(),/\/srv\/a/);
+ const before=new URL(page.url()).searchParams.get('q_safety');
+ await page.locator('.safety-table th[data-qt-field="subject"]').click();await page.getByRole('menuitem',{name:/desc/i}).first().click();
+ await page.waitForFunction(before=>new URLSearchParams(location.search).get('q_safety')!==before,before);await app.settled();
+ assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
+ await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
+ await page.goBack();
+ await page.waitForFunction(()=>/\/srv\/a/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
+ assert.deepEqual(read().orderBy,[{field:'subject',dir:'asc'}]);
+ assert.equal(new URL(page.url()).pathname,'/findings','Back stays on the table');
+ await page.goForward();
+ await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
+ assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
 });

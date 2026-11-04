@@ -184,7 +184,7 @@ function nodeCases(map: SiteMap) {
   add("findings", findingDetailURL("tool-failures:repository:abc123", "evidence"), { finding: "tool-failures:repository:abc123", tab: "evidence" });
   add("findings/settings", "/findings?view=settings", { view: "settings" });
   add("findings/safety", "/findings?optimize_area=safety");
-  for (const rank of ["recent", "calls", "evidence"]) add("findings/safety", `/findings?optimize_area=safety&safety_rank=${rank}&safety_place=repo%3Aexample`);
+  for (const rank of ["danger", "recent", "calls", "evidence"]) add("findings/safety", `/findings?optimize_area=safety&safety_rank=${rank}&safety_place=repo%3Aexample`);
   add("findings/safety/settings", "/findings?optimize_area=safety&view=settings");
   add("findings/safety", "/findings?optimize_area=safety&safety_list=handed_off&safety_place=repo%3Aexample&safety_case=safety_example");
   for (const path of Object.keys(map.nodes).filter(path => path.startsWith("settings"))) add(path, map.nodes[path].route);
