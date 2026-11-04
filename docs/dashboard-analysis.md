@@ -830,11 +830,9 @@ around it. Its default view is the one it always opened on.
   are the four bands, archetype and the origin fields. The root-conversation
   unit has no breakdowns, since a root and its delegated runs can differ in
   every one. Its own panels (`session-shape-panels.tsx`, logic in
-  `session-shape-model.ts`) read the dashboard's filters: a band toggle with
-  each band's median and p90, an active-time histogram, turn cycle by
-  provider, the archetype mix by repository, the signal table and Sessions
-  to read. Query Table has no percentile operation, so median and p90 are
-  nearest-rank rows read with `rows-v2` at offset `ceil(p·n) − 1`. See
+  `session-shape-model.ts`) read the dashboard's filters: the signal table,
+  Sessions to read and the definitions. Its common views are Card Library
+  cards. See
   [Session shape](session-shape.md#the-dashboard).
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,

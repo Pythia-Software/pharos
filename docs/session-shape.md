@@ -232,22 +232,9 @@ grade, colours no value as good or bad, and shows each rate's sample size
 beside it. The note's Definitions button scrolls to the definitions at the
 foot of the page.
 
-**Shape.**
-
-- A band toggle sets the chart's breakdown to the length, active-time, tool
-  or autonomy band. Beside it are that band's median and p90 per session and
-  the number of sessions with a value.
-- *Active time per session* is a histogram over log-widening bins (30 s to
-  8 h) with the median and p90 marked.
-- *Turn cycle by provider* is a distribution of each session's median turn
-  cycle. Its note says how it differs from Waiting and Compaction's
-  post-tool gap.
-- *Archetype mix by repository* shows each repository's sessions as shares
-  of that repository's own sessions: the nine largest repositories, then the rest
-  as Other.
-
-Each panel has "Open in the chart above", which moves the main chart to the
-same view.
+The chart above is the dashboard's only chart: its view, measure, breakdown
+and unit controls reach every band, distribution and rate. Starting points
+for the common views are cards (below).
 
 **Forensics.**
 
@@ -267,9 +254,22 @@ same view.
   reader.
 
 The main chart's catalog is described in
-[dashboard analysis](dashboard-analysis.md#the-catalogs). Home cards are not
-added yet. Each would need a recipe whose destination is exactly one of
-these states.
+[dashboard analysis](dashboard-analysis.md#the-catalogs).
+
+**Cards.** The Card Library's Session Shape category
+(`session-shape-card-recipes.ts`) has sixteen cards, each opening the
+dashboard on the state its cover draws: length and archetype mix over time,
+archetype share, active time, turn cycle, autonomy and peak context
+distributions, failure, steering, one-shot and verification rates beside
+their sample sizes, the failure-rate trend, a weekday cycle and active time
+against tool calls. A rate card's coverage flags are in its `where`, so they
+arrive as the dashboard's filters. Two cards show part of the sessions on
+purpose: failure rate for steered sessions (`archetype != automated`) and
+session length without Antigravity CLI (`harness != antigravity-cli`).
+
+The dashboard counts each session or root conversation as a group, so
+`session_shape` queries get the same 100,000-group budget as `usage`
+(`queryV3Dataset`).
 
 ## Related dashboards
 
