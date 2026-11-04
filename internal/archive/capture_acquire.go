@@ -23,7 +23,7 @@ type retainedInput struct {
 
 func productionAdapter(adapter Adapter) bool {
 	switch adapter.(type) {
-	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
+	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *clineAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
 		return true
 	}
 	// Synthetic record adapters are package/test inputs, never MakeAdapter results.

@@ -32,7 +32,7 @@ const (
 	probeSmallFileLimit = 32 << 20
 )
 
-var probeEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "XDG_DATA_HOME"}
+var probeEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "XDG_DATA_HOME", "CLINE_DATA_DIR", "CLINE_DIR"}
 
 // tccFolders are home-relative folders whose contents macOS guards with a
 // privacy prompt (Files and Folders, App Data, iCloud, Mail, and the like).
@@ -192,6 +192,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		"antigravity": {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
 		"copilot":     {".copilot"},
 		"opencode":    {".local/share/opencode"},
+		"cline":       {".cline/data"},
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
@@ -223,10 +224,12 @@ func probeTools(home string, config Config) []ProbeTool {
 			check(kind, filepath.Join(root, bundle), "application")
 		}
 	}
-	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "COPILOT_HOME": "copilot", "XDG_DATA_HOME": "opencode"} {
+	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "COPILOT_HOME": "copilot", "XDG_DATA_HOME": "opencode", "CLINE_DATA_DIR": "cline", "CLINE_DIR": "cline"} {
 		if path := os.Getenv(name); path != "" {
 			if kind == "opencode" {
 				path = filepath.Join(path, "opencode")
+			} else if name == "CLINE_DIR" {
+				path = filepath.Join(path, "data")
 			}
 			check(kind, resolvePath(home, path), name)
 		}
@@ -235,7 +238,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode"} {
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline"} {
 		if tool, exists := found[kind]; exists {
 			tools = append(tools, tool)
 		}
@@ -289,6 +292,14 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			}
 		}
 	}
+	if status.HostFileExists && (kinds == nil || kinds["cline"]) {
+		dir := filepath.Join(home, ".cline", "data")
+		if info, err := os.Stat(filepath.Join(dir, "sessions")); err == nil && info.IsDir() {
+			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cline", resolved) == nil {
+				status.NewSources++
+			}
+		}
+	}
 	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
 		dir := filepath.Join(home, ".copilot")
 		if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
@@ -330,7 +341,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	shell := make(chan shellResult, 1)
 	envNames := []string{}
 	for _, name := range probeEnvNames {
-		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) || (name == "COPILOT_HOME" && kinds["copilot"]) || (name == "XDG_DATA_HOME" && kinds["opencode"]) {
+		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) || (name == "COPILOT_HOME" && kinds["copilot"]) || (name == "XDG_DATA_HOME" && kinds["opencode"]) || (strings.HasPrefix(name, "CLINE_") && kinds["cline"]) {
 			envNames = append(envNames, name)
 		}
 	}
@@ -366,6 +377,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	timed("codex", func() { run.codex(filepath.Join(home, ".codex"), "default location") })
 	timed("copilot", func() { run.copilot(filepath.Join(home, ".copilot"), "default location") })
 	timed("opencode", func() { run.opencode(filepath.Join(home, ".local", "share", "opencode"), "default location") })
+	timed("cline", func() { run.cline(filepath.Join(home, ".cline", "data"), "default location") })
 	timed("antigravity", func() {
 		for _, dir := range antigravityDirs(home) {
 			foundBy := "~/.gemini/antigravity* directory"
@@ -398,6 +410,10 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 				timed("copilot", func() { run.copilot(path, foundBy) })
 			} else if name == "XDG_DATA_HOME" {
 				timed("opencode", func() { run.opencode(filepath.Join(path, "opencode"), foundBy) })
+			} else if name == "CLINE_DATA_DIR" {
+				timed("cline", func() { run.cline(path, foundBy) })
+			} else if name == "CLINE_DIR" {
+				timed("cline", func() { run.cline(filepath.Join(path, "data"), foundBy) })
 			} else {
 				timed("codex", func() { run.codex(path, foundBy) })
 			}
@@ -435,6 +451,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.copilot(path, foundBy)
 		case "opencode":
 			run.opencode(path, foundBy)
+		case "cline":
+			run.cline(path, foundBy)
 		case "antigravity":
 			run.antigravity(path, foundBy)
 		case "conductor":
@@ -616,6 +634,39 @@ func (r *probeRun) copilot(dir, foundBy string) {
 				}
 				if len(parts) == 1 {
 					return strings.TrimSuffix(parts[0], ".jsonl"), true
+				}
+				return "", false
+			})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// cline finds Cline sessions: sessions/<id>/<id>.messages.json under its
+// data folder.
+func (r *probeRun) cline(dir, foundBy string) {
+	candidate, resolved := r.locate("cline", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	// Named for ~/.cline rather than its data folder.
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.baseName == "data" {
+		candidate.baseName = filepath.Base(filepath.Dir(dir))
+	}
+	if candidate.Status == "found" {
+		root, err := resolveUnprotected(r.home, filepath.Join(resolved, "sessions"))
+		if errors.Is(err, fs.ErrNotExist) {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"cline", candidate.DisplayPath, foundBy, "no sessions folder"})
+			return
+		}
+		var stats probeStats
+		if err == nil {
+			stats, err = walkTranscripts(root, r.deadline, func(relative string) (string, bool) {
+				parts := strings.Split(relative, "/")
+				if len(parts) == 2 && parts[1] == parts[0]+".messages.json" {
+					return parts[0], true
 				}
 				return "", false
 			})
