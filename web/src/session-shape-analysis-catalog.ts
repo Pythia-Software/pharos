@@ -1,5 +1,6 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, RatioPart } from "./dashboard-analysis-model";
+import { archetypes, bandBreakdowns } from "./session-shape-bands";
 
 // Session shape over the session_shape dataset: one record is one agent
 // session (one conversation; a delegated run is its own session), with its
@@ -25,8 +26,13 @@ const measures: Record<string, AnalysisMeasure> = {
   typed_messages: { label: "Typed human messages", unit: "messages", format: count, op: "sum", field: "typed_human_messages", value: "typed_human_messages", additive: true, where: authorship,
     note: "User messages holding text you typed or dictated. Pasted, quoted, re-sent, template, harness and automated text does not count. Only sessions whose prompts are all classified." },
   tool_calls: { label: "Tool calls", unit: "calls", format: count, op: "sum", field: "tool_calls", value: "tool_calls", additive: true, where: toolData, note: "The session's own tool calls, in sessions the tool ledger covers." },
-  autonomy: { label: "Autonomy", unit: "calls per message", format: mean, op: "sum", ratio: ["tool_calls", "autonomy_prompts"], value: "autonomy", additive: false, where: [...toolData, ...authorship],
-    note: "Tool calls per typed human message (a session with none counts one), pooled: summed calls over summed messages." },
+  // How much the agent did per thing you wrote: per typed message, and per
+  // 100 typed words. The id stays "autonomy" for links made before.
+  autonomy: { label: "Tool calls per typed message", unit: "calls per typed message", format: mean, op: "sum", ratio: ["tool_calls", "autonomy_prompts"], value: "autonomy", additive: false, where: [...toolData, ...authorship],
+    note: "Tool calls per message holding text you typed (a session with none counts one), pooled: summed calls over summed messages. Pasted or quoted text alone does not count as a message." },
+  calls_per_words: { label: "Tool calls per 100 typed words", unit: "calls per 100 words", format: mean, op: "sum", ratio: [{ op: "sum", expression: "[tool_calls]*100", label: "Tool calls × 100" }, "typed_words"], additive: false,
+    where: [...toolData, ...authorship, { field: "typed_words", op: ">", value: "0" }],
+    note: "Tool calls per 100 words you typed, pooled: summed calls over summed typed words. Only sessions where you typed something; pasted and quoted text is not typed." },
   turn_cycle: { label: "Turn cycle (session median)", unit: "seconds", format: seconds, op: "sum", ratio: ["turn_cycle_p50_seconds", counted("turn_cycle_p50_seconds", "sessions with a turn cycle")], value: "turn_cycle_p50_seconds", additive: false,
     note: "Each session's median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Pooled over groups it is the mean of those medians; the distribution draws them." },
   active_share: { label: "Active share of wall time", unit: "percent", format: percent, op: "sum", ratio: ["active_seconds", "wall_seconds"], additive: false, note: "Active time divided by first-to-last message time, pooled over sessions." },
@@ -55,20 +61,13 @@ const measures: Record<string, AnalysisMeasure> = {
   forensic_events: { label: "Forensic events", unit: "events", format: count, op: "sum", field: "forensic_events", value: "forensic_events", additive: true, note: "Every signal's count added up: a way to find sessions to read, not a score." },
 };
 
-// Bands in their order, labelled as the schema labels them.
-export const bandBreakdowns = {
-  length_band: { label: "Length", field: "messages", order: ["1-5", "6-15", "16-30", "31-60", "61-120", "121+"], values: { "1-5": "1–5 messages", "6-15": "6–15 messages", "16-30": "16–30 messages", "31-60": "31–60 messages", "61-120": "61–120 messages", "121+": "121+ messages" } },
-  active_band: { label: "Active time", field: "active_seconds", order: ["<5m", "5-15m", "15-30m", "30-60m", "1-2h", "2h+"], values: { "<5m": "Under 5 min", "5-15m": "5–15 min", "15-30m": "15–30 min", "30-60m": "30–60 min", "1-2h": "1–2 h", "2h+": "2 h or more" } },
-  tool_band: { label: "Tool calls", field: "tool_calls", order: ["0", "1-5", "6-20", "21-50", "51-100", "101+"], values: { "0": "No tool calls", "1-5": "1–5 calls", "6-20": "6–20 calls", "21-50": "21–50 calls", "51-100": "51–100 calls", "101+": "101+ calls" } },
-  autonomy_band: { label: "Autonomy", field: "autonomy", order: ["<0.5", "0.5-1", "1-2", "2-5", "5-10", "10+"], values: { "<0.5": "Under 0.5", "0.5-1": "0.5–1", "1-2": "1–2", "2-5": "2–5", "5-10": "5–10", "10+": "10 or more" } },
-} as const;
-export type BandBreakdown = keyof typeof bandBreakdowns;
-export const archetypes = { order: ["automated", "quick", "standard", "deep", "marathon"], values: { automated: "Automated", quick: "Quick", standard: "Standard", deep: "Deep", marathon: "Marathon" } };
+// Bands and archetypes in their order (session-shape-bands.ts).
+export { bandBreakdowns, archetypes, type BandBreakdown } from "./session-shape-bands";
 const notEnough = "Not enough evidence";
 
 const sessionBreakdowns: AnalysisCatalog["breakdowns"] = {
   ...Object.fromEntries(Object.entries(bandBreakdowns).map(([id, band]) => [id, { label: `${band.label} band`, fields: [id], order: [...band.order], values: band.values, empty: notEnough }])),
-  archetype: { label: "Archetype", fields: ["archetype"], order: archetypes.order, values: archetypes.values, empty: notEnough },
+  archetype: { label: "Archetype", fields: ["archetype"], order: [...archetypes.order], values: archetypes.values, empty: notEnough },
   provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
   harness: { label: "Harness", fields: ["harness"], empty: "No harness" },
   model_family: { label: "Model", fields: ["model_family"], empty: "Unknown model" },
@@ -94,6 +93,9 @@ export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
       breakdowns: {}, note: "A root conversation is a top-level session with its delegated runs; their providers, repositories and bands can differ, so it has no breakdown." },
   },
   cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
+  // A session can also fold by when it was last worked in; the range still
+  // picks sessions by their start.
+  cycleOn: { label: "Session start", options: { last_message: { label: "Last message", cycle: { hour: { kind: "timestamp", field: "last_message_at" }, weekday: { kind: "timestamp", field: "last_message_at" } } } } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
   trend: { metric: "sessions", split: "length_band" },
   scatter: ["active_time", "tool_calls"],

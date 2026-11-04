@@ -1,5 +1,6 @@
 import type { MetricDisplay, MetricValue, MetricValueFormat } from "@pythia-software/query-table-core";
 import { chartSeriesStyle } from "./chart-colors";
+import { orderedValues } from "./session-shape-bands";
 import { denseBoxGroups, fittedCoverHeight } from "./card-loading-model";
 import type { QueryPreview } from "./query-previews";
 
@@ -18,7 +19,13 @@ function compactAxisFormat(format: MetricValueFormat | undefined, values: (Metri
 export function compactMetricPresentation(preview: QueryPreview) {
   let metric = preview.metrics?.find(item => item.clause.id === preview.coverMetricId);
   if (!metric) return;
-  if (metric.clause.groupBy.length === 1 && metric.clause.groupBy[0] === "effort" && ["pie", "donut"].includes(metric.clause.display?.kind ?? "")) metric = { ...metric, result: { ...metric.result, buckets: [...metric.result.buckets].sort((a, b) => chartSeriesStyle("effort", String(a.keys[0] ?? "Unspecified")).order!.localeCompare(chartSeriesStyle("effort", String(b.keys[0] ?? "Unspecified")).order!, undefined, { numeric: true })) } };
+  // Effort slices, and every chart of a session band or archetype, read in
+  // their scale's order, as their colours do.
+  const [stepped] = metric.clause.groupBy, drawn = metric.clause.display?.kind ?? "";
+  if (metric.clause.groupBy.length === 1 && (stepped === "effort" ? ["pie", "donut"].includes(drawn) : Object.hasOwn(orderedValues, stepped) && drawn !== "line")) {
+    const order = (bucket: { keys: unknown[] }) => chartSeriesStyle(stepped, String(bucket.keys[0] ?? "Unspecified")).order!;
+    metric = { ...metric, result: { ...metric.result, buckets: [...metric.result.buckets].sort((a, b) => order(a).localeCompare(order(b), undefined, { numeric: true })) } };
+  }
   if (metric.clause.display?.kind === "box" && metric.clause.groupBy.includes("run_role") && metric.clause.groupBy.includes("effort")) {
     const effort = metric.clause.groupBy.indexOf("effort"), role = metric.clause.groupBy.indexOf("run_role"), roles = ["standalone", "parent", "delegated"];
     metric = { ...metric, result: { ...metric.result, buckets: [...metric.result.buckets].sort((a, b) =>

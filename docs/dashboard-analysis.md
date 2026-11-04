@@ -161,6 +161,14 @@ what each offers and why.
   weekday cards' `weekdayMetric` alike. A catalog without cycle keys offers
   the cycle view disabled with its reason; one without a cycle disables that
   cycle.
+- **Cycle placement** (optional, `cycleOn`). Other timestamps a record can
+  be placed by in a cycle, each with its own cycle keys, offered as *Placed
+  by*. Session Shape places a session by its start (the default) or by its
+  last message (`last_message_at`). The range still picks records by the
+  catalog's `time`, so a timestamp cycle on the other field fills idle days
+  from its first observed occurrence; the note says so. A weekday card does
+  the same: a bound on another datetime field picks records, not dates
+  (`weekdayDatePredicates`).
 - **Record views** follow from the catalog. Without units, Scatter is
   unavailable; without units or any measure with a per-record `value`,
   Distribution is too (the Tools rollup: a daily summary is not an
@@ -256,6 +264,7 @@ fields:
 | `minSamples` | hide groups with fewer observations |
 | `scale`, `scaleY` | `linear` or `logarithmic` |
 | `cycle` | `hour` or `weekday` |
+| `cycleOn` | in a cycle, the catalog's `cycleOn` option that places each record; its default timestamp when absent |
 | `period`, `hours`, `days` | the trend's time bucket, and how many hours or days a custom bucket holds |
 | `rollingPeriods`, `rollingOp` | the trend's trailing window in buckets, and whether each point is its `mean` (default) or `sum` |
 | `display` | `interval` or `cumulative` |
@@ -720,7 +729,7 @@ around it. Its default view is the one it always opened on.
 | Human Words | `writing_messages`: one classified user message | conversation; work | `typed`, `words` | `sent_at` (timestamp) | Over time |
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
-| Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp) | Over time: sessions by length band, weekly shares |
+| Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp), or `last_message_at` placed by last message | Over time: sessions by length band, weekly shares |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
@@ -855,14 +864,17 @@ around it. Its default view is the one it always opened on.
   ones and say so.
 - **Session Shape** (`session-shape-analysis-catalog.ts`). Sessions, active
   hours, messages, typed messages, tool calls, and the per-session values
-  (active time, turn cycle, peak context share, autonomy) as pooled ratios of
+  (active time, turn cycle, peak context share, tool calls per typed
+  message, whose id stays `autonomy`) as pooled ratios of
   a sum over the count of sessions that have the value, so Distribution
   draws the sessions themselves. Every rate (failure rate, steering load,
   one-shot edit turns, verified handbacks) pools its parts over the sessions
   whose coverage flag (`has_tool_data`, `has_authorship`,
   `has_context_window`) says the evidence was there; that `where` is the
-  rate's population. Each forensic signal is a summed measure. Breakdowns
-  are the four bands, archetype and the origin fields. The root-conversation
+  rate's population. Tool calls per 100 typed words pools `tool_calls × 100`
+  over `typed_words`, over sessions where you typed. Each forensic signal is
+  a summed measure. Breakdowns are the four bands, archetype and the origin
+  fields; the bands and archetype draw in their order on one ramp. The root-conversation
   unit has no breakdowns, since a root and its delegated runs can differ in
   every one. Its own panels (`session-shape-panels.tsx`, logic in
   `session-shape-model.ts`) read the dashboard's filters: the signal table,

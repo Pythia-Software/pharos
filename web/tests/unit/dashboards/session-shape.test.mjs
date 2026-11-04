@@ -17,7 +17,7 @@ import { answerQuery } from "../../support/query-server.mjs";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
-import { dayTotals, formatSeconds, formatSignal, signalDefinitions, signalParts, signalRows, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
+import { dayTotals, formatSeconds, formatSignal, signalDefinitions, signalParts, signalRows, signalTablePopulation, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
 import { viewFields } from "../../../src/view-contract";
 
 const field = name => document.fields.find(item => item.name === name);
@@ -121,6 +121,13 @@ test("the signal table's parts execute over session rows, and its population dro
   for (const definition of signalDefinitions) for (const part of [definition.numerator, definition.denominator, definition.evidence]) assert.ok(signalParts.some(item => item.id === part), `${definition.id} needs ${part}`);
   const where = [{ field: "started_at", op: ">=", value: "2026-10-01" }, { field: "repository_name", op: "=", value: "pharos" }, { field: "day", op: "<", value: "2026-11-01" }];
   assert.deepEqual(withoutDates(where), [{ field: "repository_name", op: "=", value: "pharos" }]);
+  // Its window bounds started_at, with operators the field's schema enables:
+  // the service rejects a range on the text field day.
+  const population = signalTablePopulation(where, "2026-10-31");
+  assert.deepEqual(population.slice(0, 1), [{ field: "repository_name", op: "=", value: "pharos" }]);
+  assert.deepEqual(population.slice(1).map(term => [term.field, term.op, new Date(term.value).getTime()]),
+    [["started_at", ">=", new Date("2026-08-30T00:00:00").getTime()], ["started_at", "<", new Date("2026-11-01T00:00:00").getTime()]]);
+  for (const term of population) assert.ok(core.opsForField(document.fields.find(field => field.name === term.field)).includes(term.op), `${term.field} ${term.op}`);
 });
 
 // ----- Cards: each card's cover is the dashboard state it opens --------------
@@ -139,7 +146,7 @@ const ledger = Array.from({ length: 360 }, (_, index) => {
   const tools = index % 9 !== 0, authored = index % 7 !== 0, window = index % 4 !== 0, typed = authored ? index % 5 * 3 : null;
   const calls = tools ? index % 11 * 4 + 1 : null, edits = tools && authored ? index % 6 : null, handbacks = tools && authored ? index % 4 : null;
   return {
-    id: `session-${index}`, conversation_id: `session-${index}`, root_conversation_id: `session-${index % 300}`, started_at: at.toISOString(), day: localDay(at), week: localDay(monday), month: localDay(at).slice(0, 7),
+    id: `session-${index}`, conversation_id: `session-${index}`, root_conversation_id: `session-${index % 300}`, started_at: at.toISOString(), last_message_at: new Date(at.getTime() + index % 9 * 7_200_000).toISOString(), day: localDay(at), week: localDay(monday), month: localDay(at).slice(0, 7),
     provider: ["claude", "codex", "antigravity"][index % 3], harness: ["claude-code", "codex/codex_exec", "antigravity-cli", "conductor"][index % 4], model_family: ["opus", "gpt-6", "gemini", "sonnet"][index % 4 === 3 ? 3 : index % 3],
     repository_name: ["pharos", "query-table", null][index % 3 === 2 && index % 2 ? 2 : index % 2], length_band: ["1-5", "6-15", "16-30", "31-60", "61-120", "121+"][index % 6],
     archetype: typed === null ? null : typed ? ["quick", "standard", "deep", "marathon"][index % 4] : "automated", messages: index % 6 * 10 + 2,
@@ -245,28 +252,43 @@ test("Session Shape daily cards: the card's counts and 7-day shares are the dash
   }
 });
 
-test("Session Shape failure trend: failed calls over tool calls, pooled over 7 complete days, with its norm", () => {
-  const recipe = recipeById("session-failure-trend"), trend = recipe.trend;
+// The failure rate and the sparklines of your sessions: each card's points
+// are the dashboard's trailing seven complete days, and over 30 days its
+// norm. Over 90 days the dashboard draws more days; the card's are its last.
+test("Session Shape trend cards: each pools its measure over 7 complete days, as the dashboard's trend, with its norm", () => {
+  const cards = { "session-failure-trend": "failure_rate", "session-count-trend": "sessions", "session-hours-trend": "active_hours", "session-autonomy-trend": "autonomy", "session-turn-cycle-trend": "turn_cycle", "session-context-trend": "context_peak" };
   const afternoon = new Date(cardNow); afternoon.setHours(14, 0, 0, 0);
   const at = afternoon.getTime() < cardNow ? afternoon.getTime() + 86400000 : afternoon.getTime();
-  const { days, ends } = cardTrendDays(trend.lookback, true, at);
-  const card = buildCardTrend(trend, trend.lookback, cardTrendQueries(recipe.where, trend, days).map(query => core.evaluateMetrics(ledger, query, schemas.session_shape, { now: at }).metrics), at).study;
-  const where = [...recipe.where, ...withTimeRange([], catalog.time, undefined, undefined, "30d")];
-  const state = normalizeAnalysis(catalog, recipe.destination.chart);
-  assert.deepEqual([state.view, state.metric, state.rollingPeriods, state.completePeriods, state.norm], ["trend", "failure_rate", 7, true, true]);
-  const query = trendQuery(catalog, state, where, { now: at, zone: Intl.DateTimeFormat().resolvedOptions().timeZone });
-  const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: at }).metrics, { now: at });
-  assert.equal(built.error, undefined);
-  const skip = ends.length - built.buckets.length;
-  assert.deepEqual(built.buckets.map(bucket => bucket.key), ends.slice(skip));
-  built.buckets.forEach((bucket, index) => assert.ok(Math.abs(bucket.values.total - card.points[index + skip]) < 1e-9, `${bucket.key}: ${bucket.values.total} != ${card.points[index + skip]}`));
-  assert.ok(card.points.some(point => point > 0));
-  assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
+  for (const [id, metric] of Object.entries(cards)) {
+    const recipe = recipeById(id), trend = recipe.trend;
+    const { days, ends } = cardTrendDays(trend.lookback, true, at);
+    const card = buildCardTrend(trend, trend.lookback, cardTrendQueries(recipe.where, trend, days).map(query => core.evaluateMetrics(ledger, query, schemas.session_shape, { now: at }).metrics), at).study;
+    assert.ok(card.points.some(point => point > 0), id);
+    const state = normalizeAnalysis(catalog, recipe.destination.chart);
+    assert.deepEqual([state.view, state.metric, state.split, state.period, state.rollingPeriods, state.completePeriods, state.norm], ["trend", metric, "none", "day", 7, true, true], id);
+    for (const window of recipe.days) {
+      const where = [...recipe.where, ...withTimeRange([], catalog.time, undefined, undefined, `${window}d`)];
+      const query = trendQuery(catalog, state, where, { now: at, zone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: at }).metrics, { now: at });
+      assert.equal(built.error, undefined, id);
+      const drawn = new Map(built.buckets.map(bucket => [bucket.key, bucket.values.total])), shared = ends.filter(end => drawn.has(end));
+      assert.ok(shared.length >= Math.min(window, ends.length) - 7, `${id} ${window}d: ${shared.length} shared days`);
+      for (const end of shared) {
+        const point = card.points[ends.indexOf(end)];
+        assert.ok(point === null ? drawn.get(end) === null : Math.abs(drawn.get(end) - point) < 1e-9, `${id} ${window}d ${end}: ${drawn.get(end)} != ${point}`);
+      }
+      if (window === 30) assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `${id}: norm ${built.norm} != baseline ${card.baseline}`);
+    }
+  }
 });
 
-test("Session Shape weekday card: daily sessions by local weekday are the dashboard's weekday cycle", () => {
+test("Session Shape weekday cards: daily sessions by the local weekday they start or last interact on are the dashboard's weekday cycle", () => {
+  for (const id of ["session-weekday", "session-last-weekday"]) weekdayParity(id);
+});
+
+function weekdayParity(id) {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const { recipe, item } = cardItem("session-weekday", 90);
+  const { recipe, item } = cardItem(id, 90);
   const source = cardCoverQuery(item.query, recipe).query, clause = { ...source.aggregations[0], dateGrouping: { ...source.aggregations[0].dateGrouping, timeZone: zone } };
   const daily = core.evaluateMetrics(ledger, { ...source, aggregations: [clause] }, schemas.session_shape, { now: cardNow }).metrics[0];
   const card = weekdayMetric(clause, daily, { ...source, aggregations: [clause] }, cardNow, recipe.weekday.unit);
@@ -276,4 +298,4 @@ test("Session Shape weekday card: daily sessions by local weekday are the dashbo
   const summaries = buckets => Object.fromEntries(buckets.map(bucket => [bucket.keys[0], JSON.stringify(bucket.distribution.summary, (_, value) => shapeRound(value))]));
   assert.deepEqual(summaries(native.result.buckets.map(bucket => ({ ...bucket, keys: [weekdays[bucket.keys[0] - 1]] }))), summaries(card.result.buckets));
   assert.ok(card.result.buckets.some(bucket => bucket.distribution.summary?.max > 0));
-});
+}
