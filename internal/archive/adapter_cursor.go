@@ -553,10 +553,10 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 	threads := []*cursorThread{}
 	byID := map[string]*cursorThread{}
 	// copies are the parents Cursor deleted, as their forks' copies hold
-	// them: the longest copy's headers, every fork's messages, and when the
-	// first of those forks copied them, from its place.
+	// them: the longest copy's headers, each message as the newest fork
+	// holding it copied it, and when and where the newest fork copied them.
 	copies, copied, copiedAt := map[string][]string{}, map[string]map[string]map[string]any{}, map[string]int64{}
-	copiedFrom := map[string]cursorPlace{}
+	copiedFrom, bubbleAt := map[string]cursorPlace{}, map[string]int64{}
 	for _, member := range members {
 		thread, err := a.thread(tx, member)
 		if err != nil {
@@ -596,13 +596,15 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 				if copied[forked] == nil {
 					copied[forked] = map[string]map[string]any{}
 				}
+				created, _ := number(thread.data["createdAt"])
+				at := max(int64(created)*1e6, 1)
 				for _, bubble := range thread.bubbles {
-					if id := firstString(bubble["bubbleId"]); inCopy[id] && copied[forked][id] == nil {
-						copied[forked][id] = bubble
+					if id := firstString(bubble["bubbleId"]); inCopy[id] && at >= bubbleAt[forked+"\x00"+id] {
+						copied[forked][id], bubbleAt[forked+"\x00"+id] = bubble, at
 					}
 				}
-				if at, _ := number(thread.data["createdAt"]); copiedAt[forked] == 0 || int64(at)*1e6 < copiedAt[forked] {
-					copiedAt[forked], copiedFrom[forked] = max(int64(at)*1e6, 1), member.place
+				if at >= copiedAt[forked] {
+					copiedAt[forked], copiedFrom[forked] = at, member.place
 				}
 			}
 		}
@@ -710,8 +712,8 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		return nil, nil
 	}
 	observe(record, version)
-	// A copy is as old as the fork that made it, so any read of the parent
-	// itself, as an older capture holds it, replaces it.
+	// A copy is as new as the newest fork that made it, so a read of the
+	// parent itself replaces it once it is newer, holding all the copy holds.
 	for index, conversation := range record.Conversations {
 		if at := copiedAt[conversation.NativeID]; at > 0 {
 			record.Conversations[index].Observed = min(at, version)

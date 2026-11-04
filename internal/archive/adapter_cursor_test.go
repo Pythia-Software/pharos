@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -776,7 +777,8 @@ func TestCursorSalvageLeavesANewerCopy(t *testing.T) {
 // copy, and a re-created subagent is the only copy of one Cursor deleted.
 func TestCursorForkKeepsWhatOnlyItHolds(t *testing.T) {
 	root := cursorFixture(t)
-	// A second fork holds a copied message the first does not.
+	// A second, newer fork holds a copied message the first does not, and
+	// the subagent's call as it finished.
 	const second = "c0000000-0000-4000-8000-00000000000a"
 	cursorWrite(t, root, func(db *sql.DB) error {
 		var headers string
@@ -785,7 +787,10 @@ func TestCursorForkKeepsWhatOnlyItHolds(t *testing.T) {
 		}
 		cursorPut(t, db, cursorRow{"composerData:" + second, map[string]any{"_v": 18, "composerId": second, "name": "Again", "createdAt": 1793722101000, "headerLog": map[string]any{"chunkCount": 1, "count": 7},
 			"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorNew, "forkedFromComposerId": cursorNew, "conversationLengthAtSpawn": 5, "toolCallId": "call-8"}}},
-			cursorRow{"bubbleId:" + second + ":" + cursorPrompt + "/s:1", map[string]any{"_v": 3, "type": 2, "text": "Counting words.", "createdAt": "2026-11-03T16:08:22.000Z"}})
+			cursorRow{"bubbleId:" + second + ":" + cursorPrompt + "/s:1", map[string]any{"_v": 3, "type": 2, "text": "Counting words.", "createdAt": "2026-11-03T16:08:22.000Z"}},
+			cursorRow{"bubbleId:" + second + ":" + cursorPrompt + "/t:call-2\nfc_2", map[string]any{"_v": 3, "type": 2, "capabilityType": 15, "createdAt": "2026-11-03T16:08:24.000Z",
+				"toolFormerData": map[string]any{"tool": "15", "name": "task_v2", "toolCallId": "call-2\nfc_2", "status": "completed", "additionalData": map[string]any{},
+					"params": `{"description":"Review","prompt":"Review wordstats.py"}`, "result": `{"agentId":"review-finished"}`}}})
 		_, err := db.Exec(`INSERT INTO cursorDiskKV(key, value) VALUES(?, ?)`, "composerConvHeaders:"+second+":000000", headers)
 		return err
 	})
@@ -820,7 +825,8 @@ func TestCursorForkKeepsWhatOnlyItHolds(t *testing.T) {
 	for _, message := range parent.Messages {
 		ids[message.NativeID] = true
 	}
-	if !parent.Copy || parent.Coverage != "partial" || len(parent.Messages) == 0 || parent.Messages[0].NativeID != cursorPrompt || !ids[cursorPrompt+"/s:1"] || !ids[cursorPrompt+"/s:0:thinking"] {
+	finished := slices.ContainsFunc(parent.Messages, func(message MessageRecord) bool { return strings.Contains(message.Text, "review-finished") })
+	if !finished || parent.Observed != 1793722101000*1e6 || !parent.Copy || parent.Coverage != "partial" || len(parent.Messages) == 0 || parent.Messages[0].NativeID != cursorPrompt || !ids[cursorPrompt+"/s:1"] || !ids[cursorPrompt+"/s:0:thinking"] {
 		t.Fatalf("the deleted parent = %+v", parent)
 	}
 	if fork := conversations[cursorFork]; cursorKinds(fork.Messages) != "agent:message assistant:message" {
