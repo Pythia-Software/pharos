@@ -5,6 +5,7 @@ import {peopleMessageLabelCatalog} from "../../../src/people-message-labels";
 // and that every link it builds reads back, through the page's own readers,
 // as exactly the state that produced it. npm run check-site-map catches a
 // stale file; these check what the file says.
+import { readFileHistoryRoute } from "../../../src/file-history-model";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -222,6 +223,8 @@ test("every other page's link reads back through its page's reader", () => {
         assert.deepEqual(plain({ mode: route.mode, sort: route.sort, scope: route.scope, direction: route.direction, collapsed: route.collapsed, selected: route.selected, range: route.range, tab: route.tab }),
           { mode: item.state.mode, sort: item.state.sort, scope: item.state.scope, direction: item.state.direction, collapsed: item.state.collapsed, selected: item.state.selected, range: item.state.range, tab: item.state.tab }, name);
       }
+    } else if (item.path === "files") {
+      assert.deepEqual(readFileHistoryRoute(search), item.state, name);
     } else assert.fail(`${name} has no reader check`);
   }
   for (const path of Object.keys(map.nodes)) if (!map.nodes[path].children || map.nodes[path].options?.length) assert.ok(paths.has(path) || path.startsWith("analyze/") && !path.startsWith("analyze/query"), `${path} has a link case`);

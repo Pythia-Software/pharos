@@ -70,7 +70,7 @@ import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { useLocationRevision } from "./nested-pages";
+import { PageLink, useLocationRevision } from "./nested-pages";
 import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
@@ -117,6 +117,8 @@ import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import outcomesDocument from "../../schemas/outcomes.schema.json";
 import branchUsageDocument from "../../schemas/branch_usage.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
+import { FileHistoryPage } from "./file-history";
+import { fileHistoryURL } from "./file-history-model";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { SafetySelectionBar, SafetyTableContext } from "./safety";
 import { FixesSelectionBar, FixesTableContext } from "./fixes";
@@ -878,7 +880,7 @@ function ConversationResults({ api, searching, failed, renderers }: { api: Query
   </div>;
 }
 
-type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; highlights?: [number, number][]; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
+type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; highlights?: [number, number][]; path?: string; old_path?: string; project?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
 // What the Library's keyword search found within the stored table filters.
 type SearchProgress = { complete: boolean; stop_reason: string; stop_message?: string; next_cursor: string; count: number; count_relation: string; candidates: number; verified_bytes: number; skipped_oversize: number; elapsed_ms: number; strategy: string; coverage: string; expansions?: Record<string,string[]> };
 type FindSummary = { workspaces: number; limited: boolean; search?: SearchProgress };
@@ -936,7 +938,10 @@ function FindMatchCell({ row }: { row: Row }) {
   const hit = row.find_hit as FindHit | undefined;
   if (!hit) return null;
   const count = Number(row.find_match_count) || 1;
-  return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
+  const open = <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
+  // A file sessions edited opens its history: every session and commit.
+  if (!hit.path || !hit.project) return open;
+  return <>{open} <PageLink className="library-find-cell" href={fileHistoryURL(hit.path, hit.project)} title={`Every session that edited ${hit.path}`} onClick={event => event.stopPropagation()}>File history</PageLink></>;
 }
 
 // Search's content search (messages, files or URLs) and its result view are
@@ -1772,6 +1777,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
+  ["fileHistoryPage", <FileHistoryPage />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" optimizeTitle="Efficiency findings" />} safetyTable={<QuerySurface dataset="safety" optimizeTitle="Risky action notices" queryHistory tableHeading={(api, fallback, schemas) => <SafetyTableContext query={api.query} schemas={schemas} total={api.total} fallback={fallback} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />}
     fixesTable={<QuerySurface dataset="fixes" optimizeTitle="Fixes" queryHistory tableHeading={(api, fallback, schemas) => <FixesTableContext query={api.query} schemas={schemas} total={api.total} fallback={fallback} />} selectionBar={api => <FixesSelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={fixDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open fix</a>} />} />],
 ];

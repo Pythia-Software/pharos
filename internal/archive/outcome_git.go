@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +37,9 @@ import (
 // is checked when any Mac checked it.
 //
 // Only facts are stored: hashes, times, counts, the files a link shares and
-// how a commit was reverted. No commit message, diff or file content.
+// how a commit was reverted. No commit message, diff or file content. For
+// file history, every commit that changed a file some session edited keeps
+// that file's path and line counts (git_commit_files).
 
 // outcomeGitVersion scans every repository again when the rules change.
 const outcomeGitVersion = "2"
@@ -96,6 +99,13 @@ CREATE TABLE IF NOT EXISTS session_git(
   reverted_commits INTEGER NOT NULL DEFAULT 0,
   mainline_unknown INTEGER NOT NULL DEFAULT 0,
   checked_at TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS git_commit_files(
+  repository_id TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  path TEXT NOT NULL,
+  lines_added INTEGER NOT NULL,
+  lines_removed INTEGER NOT NULL,
+  PRIMARY KEY(repository_id,path,hash)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS git_repository_scans(
   repository_id TEXT NOT NULL,
   host_id TEXT NOT NULL,
@@ -163,6 +173,9 @@ type gitScan struct {
 	Status, Reason string
 	Commits        map[string]*gitCommit
 	Links          []gitLink
+	// Edited are the repository's files some session edited: the commits
+	// that changed them are kept for file history.
+	Edited map[string]bool
 }
 
 var errGitTimeout = errors.New("git timed out")
@@ -561,7 +574,12 @@ func scanRepository(ctx context.Context, clones []*gitClone, sessions map[string
 			}
 		}
 	}
-	scan := gitScan{Status: "checked", Commits: commits}
+	scan := gitScan{Status: "checked", Commits: commits, Edited: map[string]bool{}}
+	for _, id := range members {
+		for path := range sessions[id].Files[repository] {
+			scan.Edited[path] = true
+		}
+	}
 	scan.Links, _ = inferLinks(ctx, clones, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
@@ -1114,9 +1132,23 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	}
 	// The commits of this scan's links, as it read them; another Mac's
 	// commits that a kept link still names stay as that Mac read them.
+	// Commits no session is linked to are kept too where they changed an
+	// edited file, for file history, with each such file's lines.
 	linked := map[string]bool{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = true
+	}
+	files := map[[2]string][2]int64{}
+	for hash, commit := range scan.Commits {
+		for path, lines := range commit.Files {
+			if scan.Edited[path] {
+				files[[2]string{hash, path}] = lines
+				linked[hash] = true
+			}
+		}
+	}
+	if err := writeGitCommitFiles(ctx, tx, repository, files); err != nil {
+		return err
 	}
 	kept, err := queryMapsContext(ctx, tx, "SELECT DISTINCT hash FROM session_commit_links WHERE repository_id=?", repository)
 	if err != nil {
@@ -1151,6 +1183,33 @@ func writeGitLinks(ctx context.Context, tx *sql.Tx, repository, host string, sca
 	for _, hash := range hashes {
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO git_commits(repository_id,hash,`+strings.Join(gitCommitColumns, ",")+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			append([]any{repository, hash}, gitCommitValues(scan.Commits[hash])...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeGitCommitFiles makes a repository's git_commit_files hold files,
+// writing only the rows that changed.
+func writeGitCommitFiles(ctx context.Context, tx *sql.Tx, repository string, files map[[2]string][2]int64) error {
+	stored, err := queryMapsContext(ctx, tx, "SELECT hash,path,lines_added,lines_removed FROM git_commit_files WHERE repository_id=?", repository)
+	if err != nil {
+		return err
+	}
+	want := maps.Clone(files)
+	for _, row := range stored {
+		id := [2]string{firstString(row["hash"]), firstString(row["path"])}
+		if lines, ok := want[id]; ok && integer(row["lines_added"]) == lines[0] && integer(row["lines_removed"]) == lines[1] {
+			delete(want, id)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM git_commit_files WHERE repository_id=? AND hash=? AND path=?", repository, id[0], id[1]); err != nil {
+			return err
+		}
+	}
+	for id, lines := range want {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO git_commit_files(repository_id,hash,path,lines_added,lines_removed) VALUES(?,?,?,?,?)`,
+			repository, id[0], id[1], lines[0], lines[1]); err != nil {
 			return err
 		}
 	}

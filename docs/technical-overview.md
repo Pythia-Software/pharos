@@ -284,6 +284,12 @@ another Mac's links to commits this Mac's clones lack; the Library reads
 `git_check`, `linked_commits` and `landed_commits`, and a repository Git
 could not check reads "Not checked" with the reason.
 
+File history (`file_history.go`, `/files`, `/api/file-history`) lists the
+sessions that edited a file from `session_files`, and in a checked
+repository the commits that changed it from `git_commit_files`, which the
+Tier 2 scan fills for session-edited paths only. Library file search reads
+`session_files` beside `change_files`.
+
 Analyze → Outcomes reads the `outcomes` dataset (`outcomes_table.go`): one
 row per Library session, with its label, evidence tier, branch, main model
 and the cost the Library gives it, counted at its start. Its catalog
@@ -451,6 +457,11 @@ folders checked out inside it, or a folder project as `~/path`, any part of
 it, or an absolute path. A folder name never reaches a repository checked out
 inside that folder, which is a project of its own. `query_statistics` can also group by `project`. A project
 filter that matches nothing is an error that points to `list_projects`.
+
+`list_outcomes` lists sessions with their outcome label, its evidence and
+tier, and the local Git state with its reason (`mcp_outcomes.go`);
+`get_file_history` returns the file timeline. Both take `project` and
+answer for folders from transcripts alone.
 
 `list_findings` and `get_finding` read findings: compact cards, then one
 finding's extracted facts kept apart from its evidence handles, which are
