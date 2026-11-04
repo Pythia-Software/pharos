@@ -60,7 +60,7 @@ func chatGPTConversations() []any {
 				map[string]any{"content_type": "audio_transcription", "text": "Only the odd ones?"}}}, nil),
 			"first":    chatGPTNodeOf("first", "ask", nil, "assistant", 1793720002, chatGPTText("Two, three, five."), gpt),
 			"thoughts": chatGPTNodeOf("thoughts", "ask", []string{"recap"}, "assistant", 1793720010, map[string]any{"content_type": "thoughts", "thoughts": []any{map[string]any{"summary": "Primes", "content": "Check each number below 10"}}}, hiddenGPT),
-			"recap":    chatGPTNodeOf("recap", "thoughts", []string{"call"}, "assistant", 1793720011, map[string]any{"content_type": "reasoning_recap", "content": "Thought for 2 seconds"}, gpt),
+			"recap":    chatGPTNodeOf("recap", "thoughts", []string{"call"}, "assistant", 1793720011, map[string]any{"content_type": "reasoning_recap", "content": "Thought for 2 seconds", "parts": []any{"Thought for 2 seconds"}}, gpt),
 			"call": chatGPTNodeOf("call", "recap", []string{"output"}, "assistant", 1793720012, map[string]any{"content_type": "code", "language": "python", "text": "print([2, 3, 5, 7])"},
 				map[string]any{"recipient": "python", "metadata": map[string]any{"model_slug": "gpt-5"}}),
 			"output": chatGPTNodeOf("output", "call", []string{"answer"}, "tool", 1793720013, map[string]any{"content_type": "execution_output", "text": "[2, 3, 5, 7]"},
@@ -79,7 +79,9 @@ func chatGPTConversations() []any {
 			"results": chatGPTNodeOf("results", "search", []string{"older", "newer"}, "tool", 1793721003, map[string]any{"content_type": "tether_browsing_display", "result": "Headlines"}, map[string]any{"author": map[string]any{"role": "tool", "name": "browser"}}),
 			// A part in another shape is read as text too.
 			"older": chatGPTNodeOf("older", "results", nil, "assistant", 1793721004, chatGPTText("Some", map[string]any{"type": "text", "text": "headlines."}), gpt),
-			"newer": chatGPTNodeOf("newer", "results", nil, "assistant", 1793721005, chatGPTText("Today's headlines."), gpt),
+			"newer": chatGPTNodeOf("newer", "results", []string{"placeholder"}, "assistant", 1793721005, chatGPTText("Today's headlines."), gpt),
+			// A node without a message ends the branch.
+			"placeholder": map[string]any{"id": "placeholder", "parent": "newer", "children": []any{}, "message": nil},
 		},
 	}
 	return []any{code, search}
@@ -172,7 +174,9 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 		// The regenerated reply is kept, off the current branch.
 		"first assistant message <ask>  (unselected)",
 		"thoughts assistant reasoning <ask> ",
-		"call assistant tool_call <thoughts> call",
+		// The recap after them sums them up; it keeps its ID.
+		"recap system " + contextKind + " <thoughts> ",
+		"call assistant tool_call <recap> call",
 		"output tool tool_result <call> call",
 		"answer assistant message <output> ",
 	}
@@ -363,6 +367,14 @@ func TestChatGPTExportDamageIsReported(t *testing.T) {
 	sharded := t.TempDir()
 	writeSourceFile(t, filepath.Join(sharded, "conversations-000.json"), "[{")
 	writeSourceFile(t, filepath.Join(sharded, "conversations-001.json"), jsonText(conversations))
+	// A message whose content is gone leaves its conversation partial, so
+	// what was indexed from it is kept.
+	damaged := chatGPTConversations()
+	damaged[1].(map[string]any)["mapping"].(map[string]any)["results"].(map[string]any)["message"].(map[string]any)["content"] = nil
+	writeSourceFile(t, filepath.Join(dir, "conversations.json"), jsonText(damaged))
+	if search := chatGPTRecords(t, dir)[chatGPTSearchID].Conversations[0]; search.Coverage != "partial" || !slices.Equal(search.Unread, []string{"results"}) {
+		t.Fatalf("without content: coverage %s, unread %v", search.Coverage, search.Unread)
+	}
 	if ids, err := read(sharded); err == nil || len(ids) != 2 {
 		t.Fatalf("a damaged shard: read %v, error %v", ids, err)
 	}

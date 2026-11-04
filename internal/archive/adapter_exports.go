@@ -247,11 +247,12 @@ func (a *chatGPTAdapter) decode(content io.Reader, file, origin string, version 
 func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string, version int64) WorkspaceRecord {
 	nativeID := defaultString(conversation.ConversationID, conversation.ID)
 	children := chatGPTChildren(conversation.Mapping)
-	selected := chatGPTSelected(conversation, children)
+	selected := chatGPTSelected(conversation)
 	messages := []MessageRecord{}
 	// read is the message each node, or the nearest node above it, was
 	// read as; calls and tools are each call node's message and tool.
 	read, calls, tools, kinds := map[string]string{}, map[string]string{}, map[string]string{}, map[string]string{}
+	unread := []string{}
 	for _, nodeID := range chatGPTOrder(conversation.Mapping, children) {
 		node := conversation.Mapping[nodeID]
 		read[nodeID] = read[node.Parent]
@@ -260,6 +261,12 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			continue
 		}
 		metadata, content, author := mapValue(message["metadata"]), mapValue(message["content"]), mapValue(message["author"])
+		if content == nil {
+			// A message without content is damage: what was indexed from it
+			// is kept.
+			unread = append(unread, defaultString(message["id"], nodeID))
+			continue
+		}
 		id, role, contentType := defaultString(message["id"], nodeID), defaultString(author["role"], "unknown"), firstString(content["content_type"])
 		kinds[nodeID] = contentType
 		base := func(suffix string) MessageRecord {
@@ -357,6 +364,12 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			item.Kind, item.Text = "message", text
 			add(item)
 		}
+		// A node read as nothing above that holds text, such as a recap
+		// after the thoughts it sums up, keeps its ID, as the adapter
+		// before chatgpt-v2 read it.
+		if text := messageText(content["parts"]); !own && text != "" {
+			add(injectedContext(item, "chatgpt_"+defaultString(contentType, "message"), text))
+		}
 		for index, attachment := range attachments {
 			attached := base(fmt.Sprintf(":part:%d", index))
 			attached.Kind, attached.Text, attached.RawText = "attachment", jsonText(attachment), jsonText(attachment)
@@ -375,8 +388,12 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	purpose, outcome := agentPurposeOutcome(active)
 	title := defaultString(conversation.Title, "ChatGPT "+short(nativeID))
 	created, updated := iso(conversation.CreateTime), iso(conversation.UpdateTime)
+	coverage := "complete"
+	if len(unread) > 0 {
+		coverage = "partial"
+	}
 	return WorkspaceRecord{Observed: version, SourceID: nativeID, SourceKind: "chatgpt", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: map[string]any{},
-		Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "chatgpt", Model: defaultString(model, conversation.DefaultModel), Account: a.config.Account, Origin: "user-export", Harness: "chatgpt-export", Coverage: "complete", Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
+		Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "chatgpt", Model: defaultString(model, conversation.DefaultModel), Account: a.config.Account, Origin: "user-export", Harness: "chatgpt-export", Coverage: coverage, Unread: unread, Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
 }
 
 // chatGPTContent is a message's text, and the files (images, audio) its
@@ -414,9 +431,10 @@ func chatGPTContent(content map[string]any) (string, []map[string]any) {
 }
 
 // chatGPTSelected marks the nodes on the conversation's current branch: the
-// path from its current node, or when the export names none from its
-// newest leaf, to the root.
-func chatGPTSelected(conversation chatGPTConversation, children map[string][]string) map[string]bool {
+// path from its current node, or when the export names none from its newest
+// message, to the root. A branch is newer than those it was regenerated or
+// edited from, so the newest message ends the current one.
+func chatGPTSelected(conversation chatGPTConversation) map[string]bool {
 	parents := map[string]string{}
 	for id, node := range conversation.Mapping {
 		parents[id] = node.Parent
@@ -427,7 +445,7 @@ func chatGPTSelected(conversation chatGPTConversation, children map[string][]str
 		newest := ""
 		for id, node := range conversation.Mapping {
 			at := iso(node.Message["create_time"])
-			if len(children[id]) == 0 && node.Message != nil && (at > newest || at == newest && id > leaf) {
+			if node.Message != nil && (at > newest || at == newest && id > leaf) {
 				leaf, newest = id, at
 			}
 		}
