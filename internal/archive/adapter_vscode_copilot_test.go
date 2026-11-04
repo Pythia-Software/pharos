@@ -22,8 +22,8 @@ const (
 // (the second replacing the first), a title, a response pushed in two parts
 // (the second cutting the first back to where a tool call changed), the
 // request's result and output, a deletion, a kind VS Code may add later, and
-// a second request that ran a subagent with two models. Its prompt quotes
-// usage JSON.
+// a second request that ran a subagent with two models. Its prompt, its
+// reply and the subagent's answer quote usage JSON.
 var vscodeJournal = []string{
 	`{"kind":0,"v":{"version":3,"creationDate":1793718000000,"sessionId":"` + vscodeSessionID + `","requests":[],"inputState":{"mode":{"id":"agent"}}}}`,
 	`{"kind":2,"k":["requests"],"v":[{"requestId":"request_a","timestamp":1793718001000,"modelId":"copilot/auto","agent":{"extensionVersion":"0.51.0"},"message":{"text":"Count the words"},"response":[{"kind":"progressMessage","content":{"value":"Working"}}]}]}`,
@@ -49,9 +49,9 @@ var vscodeJournal = []string{
 	`{"kind":9,"k":["requests"],"v":[]}`,
 	`{"kind":2,"k":["requests"],"v":[{"requestId":"request_b","timestamp":1793718020000,"modelId":"copilot/claude-sonnet-4.5","agent":{"extensionVersion":"0.52.0"},` +
 		`"message":{"text":"{\"usage\":{\"input_tokens\":1000000}} Review it with a subagent"},"response":[` +
-		`{"kind":"toolInvocationSerialized","toolCallId":"s1","toolId":"runSubagent","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Explore","description":"Review","prompt":"Review words.py","result":"Add a test for empty input."}},` +
+		`{"kind":"toolInvocationSerialized","toolCallId":"s1","toolId":"runSubagent","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Explore","description":"Review","prompt":"Review words.py","result":"{\"usage\":{\"input_tokens\":2000000,\"output_tokens\":7}}"}},` +
 		`{"kind":"toolInvocationSerialized","toolCallId":"s2","toolId":"copilot_readFile","subAgentInvocationId":"s1","isComplete":true,"pastTenseMessage":{"value":"Read words.py"}},` +
-		`{"value":"Added the test."}],"completionTokens":50,` +
+		`{"value":"{\"usage\":{\"input_tokens\":1000000,\"output_tokens\":100}}"}],"completionTokens":50,` +
 		`"modelTotals":{"claude-sonnet-4.5":{"inputTokens":3000,"cachedTokens":2000,"outputTokens":40},"gpt-5-mini":{"inputTokens":500,"cachedTokens":0,"outputTokens":10}},` +
 		`"result":{"metadata":{"resolvedModel":"claude-sonnet-4.5","promptTokens":2200,"outputTokens":25}}}]}`,
 }
@@ -173,7 +173,7 @@ func TestVSCodeCopilotUsageCountsEachRequestOnce(t *testing.T) {
 	ingestSource(t, c, SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: vscodeFixture(t), Account: "local", Enabled: true})
 	// The first request's output over its rounds and its last round's
 	// input; each model's totals for the second, not its last round as well.
-	// Nothing from the prompt's quoted JSON.
+	// Nothing from the JSON a prompt, reply or subagent quotes.
 	if total := countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`); total != 1590+3040+510 {
 		t.Fatalf("usage %d tokens", total)
 	}
@@ -302,7 +302,67 @@ func TestVSCodeCopilotIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	automatic.runAutomatic(automatic.life.ctx, syncSettings{Interval: 300})
-	if n := countRows(t, automatic.Catalog, `SELECT COUNT(*) FROM messages WHERE native_id='request_b:block:2' AND text='Added the test. All green.'`); n != 1 {
+	if n := countRows(t, automatic.Catalog, `SELECT COUNT(*) FROM messages WHERE native_id='request_b:block:2' AND text LIKE '%}} All green.'`); n != 1 {
 		t.Fatalf("automatic updates skipped the grown response: %d", n)
+	}
+}
+
+// A session read from another file, a newer copy in another window or a
+// journal replacing its .json, is the same session: what grew is read.
+func TestVSCodeCopilotSessionMovingFilesKeepsGrowing(t *testing.T) {
+	grown := strings.Join(vscodeJournal, "\n") + "\n" + `{"kind":2,"k":["requests",1,"response"],"v":[{"value":" All green."}]}` + "\n"
+	for name, move := range map[string]func(root string) string{
+		"another window": func(root string) string {
+			return filepath.Join(root, "workspaceStorage", "d4", "chatSessions", vscodeSessionID+".jsonl")
+		},
+		"a journal replacing its .json": func(root string) string {
+			journal := filepath.Join(root, "workspaceStorage", "a1", "chatSessions", vscodeSessionID+".jsonl")
+			object := filepath.Join(root, "workspaceStorage", "a1", "chatSessions", vscodeSessionID+".json")
+			writeSourceFile(t, object, `{"version":3,"sessionId":"`+vscodeSessionID+`","requests":[{"requestId":"request_b","timestamp":1793718020000,"message":{"text":"Review it"},"response":[{"kind":"toolInvocationSerialized","toolCallId":"s1","toolId":"runSubagent","toolSpecificData":{"kind":"subagent"}},{"kind":"progressMessage"},{"value":"Working"}]}]}`)
+			if err := os.Remove(journal); err != nil {
+				t.Fatal(err)
+			}
+			return journal
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			root := vscodeFixture(t)
+			source := SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root, Account: "local", Enabled: true}
+			file := move(root)
+			ingestSource(t, c, source)
+			writeSourceFile(t, file, grown)
+			later := time.Now().Add(time.Hour)
+			if err := os.Chtimes(file, later, later); err != nil {
+				t.Fatal(err)
+			}
+			ingestSource(t, c, source)
+			if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='request_b:block:2' AND text LIKE '%}} All green.'`); n != 1 {
+				t.Fatalf("the grown reply was not read: %d", n)
+			}
+		})
+	}
+}
+
+// A window whose sessions cannot be listed is reported; every other
+// session is still read. A capture, which would miss its sessions, fails.
+func TestVSCodeCopilotUnreadableWindowLeavesTheOthers(t *testing.T) {
+	root := vscodeFixture(t)
+	locked := filepath.Join(root, "workspaceStorage", "b2", "chatSessions")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("running with access to every folder")
+	}
+	adapter, _ := MakeAdapter(SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root, Account: "local"})
+	found := []string{}
+	err := adapter.Discover(func(record WorkspaceRecord) error { found = append(found, record.SourceID); return nil })
+	if err == nil || strings.Join(found, ",") != vscodeSessionID+","+vscodeEmptyID {
+		t.Fatalf("records %v, error %v", found, err)
+	}
+	if _, err := planCapture(SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root}); err == nil {
+		t.Fatal("a capture missing a window's sessions was planned")
 	}
 }

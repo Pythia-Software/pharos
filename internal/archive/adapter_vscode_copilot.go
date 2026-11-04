@@ -37,13 +37,16 @@ func (a *vscodeCopilotAdapter) partExtractor() string { return vscodeCopilotExtr
 // it belongs to ("" for a window without a folder).
 type vscodeSession struct{ id, file, workspace string }
 
-func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, error) {
+// sessions lists the sessions, and the folders that could not be listed: a
+// window's failure leaves the others' sessions to read.
+func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, []error, error) {
 	type folder struct{ dir, workspace string }
 	folders := []folder{}
+	var failures []error
 	storage := filepath.Join(a.config.Path, "workspaceStorage")
 	entries, err := os.ReadDir(storage)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		failures = append(failures, err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -55,13 +58,14 @@ func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, error) {
 	versions := map[string]int64{}
 	for _, folder := range folders {
 		if err := a.context().Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		entries, err := os.ReadDir(folder.dir)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
-			return nil, err
+			failures = append(failures, err)
+			continue
 		}
 		workspace := ""
 		if folder.workspace != "" {
@@ -102,12 +106,16 @@ func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, error) {
 		sessions = append(sessions, session)
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].id < sessions[j].id })
-	return sessions, nil
+	return sessions, failures, nil
 }
 
-// captureFiles lists every file the adapter reads.
+// captureFiles lists every file the adapter reads. A capture missing a
+// window's sessions is not made.
 func (a *vscodeCopilotAdapter) captureFiles() ([]string, error) {
-	sessions, err := a.sessions()
+	sessions, failures, err := a.sessions()
+	if err == nil {
+		err = errors.Join(failures...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -160,12 +168,11 @@ func (a *vscodeCopilotAdapter) discoverParts(unchanged func([]sourcePart) bool, 
 // planParts plans one group per session: its file, which versions it, and
 // its window's workspace.json, which names where it ran.
 func (a *vscodeCopilotAdapter) planParts() (*sourceWorkPlan, error) {
-	sessions, err := a.sessions()
+	sessions, failures, err := a.sessions()
 	if err != nil {
 		return nil, err
 	}
 	plan := &sourceWorkPlan{continueOnError: true}
-	var failures []error
 	for _, session := range sessions {
 		parts := []sourcePart{}
 		for _, file := range []string{session.file, session.workspace} {
@@ -444,8 +451,12 @@ type vscodeToolCall struct {
 }
 
 func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]any, location, remote string) *WorkspaceRecord {
-	origin := a.original(session.file)
 	sessionID := defaultString(value["sessionId"], session.id)
+	// The session is known by its ID in the user folder, not by the file it
+	// was read from: a newer copy in another window, or a journal replacing
+	// its .json, is the same copy of it.
+	origin := filepath.Join(a.original(a.config.Path), "chatSessions", sessionID)
+	locator := a.original(session.file)
 	started, ended := iso(value["creationDate"]), iso(value["lastMessageDate"])
 	messages := []MessageRecord{}
 	children := map[string]*vscodeSubagent{}
@@ -494,11 +505,13 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 				ended = at
 			}
 		}
-		base := MessageRecord{Model: requestModel, CreatedAt: created, EvidenceLocator: fmt.Sprintf("%s#%s", origin, id), Selected: true}
+		// The request's ID stands in for each record's raw text, so JSON in
+		// a reply, a thought or a subagent's answer is never read as usage.
+		base := MessageRecord{Model: requestModel, CreatedAt: created, EvidenceLocator: fmt.Sprintf("%s#%s", locator, id), Selected: true,
+			RawText: jsonText(map[string]any{"type": "vscode_request", "id": id})}
 		prompt := mapValueDefault(request["message"])
 		if text := firstString(prompt["text"]); strings.TrimSpace(text) != "" {
-			// The prompt as sent is its raw text, so nothing a person types is
-			// read as protocol, such as pasted usage.
+			// The prompt as sent is its raw text.
 			item := base
 			item.NativeID, item.Role, item.Kind, item.Text, item.RawText = id, "user", "message", text, jsonText(prompt)
 			messages = append(messages, item)
@@ -634,7 +647,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		flushThought()
 		for index, usage := range vscodeTokenUsage(request, requestModel) {
 			item := base
-			item.NativeID, item.Role, item.Kind, item.Model = id+":usage", "system", "metadata", usage.model
+			item.NativeID, item.Role, item.Kind, item.Model, item.RawText = id+":usage", "system", "metadata", usage.model, ""
 			// The first record, of the model that served the request, pays for
 			// its calls; another model's is its own.
 			usageID := id

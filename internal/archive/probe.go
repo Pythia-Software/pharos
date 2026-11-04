@@ -304,7 +304,7 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 	if status.HostFileExists && (kinds == nil || kinds["vscode-copilot"]) {
 		for _, user := range vscodeUserDirs {
 			dir := filepath.Join(home, filepath.FromSlash(user))
-			if sessions, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: dir}}}).sessions(); err == nil && len(sessions) > 0 {
+			if sessions, _, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: dir}}}).sessions(); err == nil && len(sessions) > 0 {
 				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "vscode-copilot", resolved) == nil {
 					status.NewSources++
 				}
@@ -713,7 +713,10 @@ func (r *probeRun) vscodeCopilot(dir, foundBy string) {
 		candidate.baseName = strings.TrimPrefix(strings.TrimPrefix(strings.ReplaceAll(strings.ToLower(filepath.Base(filepath.Dir(dir))), " ", ""), "code"), "-")
 	}
 	if candidate.Status == "found" {
-		sessions, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: resolved}}}).sessions()
+		sessions, failures, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: resolved}}}).sessions()
+		if err == nil {
+			err = errors.Join(failures...)
+		}
 		var stats probeStats
 		for _, session := range sessions {
 			info, statErr := os.Stat(session.file)
