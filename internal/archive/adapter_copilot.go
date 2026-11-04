@@ -364,8 +364,9 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		request  string
 		usage    map[string]any
 		totalled bool
-		// The last report, and the last to name the model.
-		updated, named int
+		// The report that last gave each field, and the last to name the model.
+		reported map[string]int
+		named    int
 	}
 	receipts, byRequest, reports := []*receipt{}, map[string]*receipt{}, 0
 	// Records of receipts found to be one request, by conversation.
@@ -541,19 +542,17 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 					continue
 				}
 				// Reports under each ID alone, then under both: the earlier
-				// receipt keeps the request, and the later reports' fields
-				// supersede.
+				// receipt keeps the request, and each field and the model
+				// come from whichever reported them last.
 				first, later := r, found
 				if later.index < first.index {
 					first, later = later, first
 				}
-				older, newer := first, later
-				if older.updated > newer.updated {
-					older, newer = newer, older
+				for key, value := range later.usage {
+					if later.reported[key] > first.reported[key] {
+						first.usage[key], first.reported[key] = value, later.reported[key]
+					}
 				}
-				usage := maps.Clone(older.usage)
-				maps.Copy(usage, newer.usage)
-				first.usage, first.updated = usage, newer.updated
 				if later.named > first.named {
 					first.model, first.named = later.model, later.named
 				}
@@ -574,7 +573,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				item := base
 				item.RawText, item.Role, item.Kind = "", "system", "metadata"
 				item.Model, item.Effort = agent.model, agent.effort
-				r = &receipt{agent: agent, index: add(item), model: agent.model, usage: map[string]any{}}
+				r = &receipt{agent: agent, index: add(item), model: agent.model, usage: map[string]any{}, reported: map[string]int{}}
 				receipts = append(receipts, r)
 			}
 			for _, key := range keys {
@@ -588,12 +587,13 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			}
 			r.request = firstString(api, r.request, usage["providerCallId"])
 			reports++
-			r.updated = reports
 			if model := firstString(usage["model"]); model != "" {
 				r.model, r.named = model, reports
 			}
 			stored.Model = r.model
-			maps.Copy(r.usage, copilotTokenUsage(usage))
+			for key, value := range copilotTokenUsage(usage) {
+				r.usage[key], r.reported[key] = value, reports
+			}
 			stored.Text = jsonText(map[string]any{"type": "token_usage", "usage": r.usage, "usage_message_id": defaultString(r.request, eventID)})
 		case "session.shutdown":
 			// Each shutdown totals the whole session so far, receipts included.

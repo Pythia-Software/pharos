@@ -197,7 +197,7 @@ func TestCopilotUsageCountsEachRequestOnce(t *testing.T) {
 // resumed by one that does: each shutdown totals the whole session. Its
 // requests are reported more than once, first in part. One is reported under
 // the provider's ID, then the API's with its model, then corrected under the
-// provider's, then joined by a report of both. Another's model is corrected
+// provider's, completed under the API's, and joined by a report of both. Another's model is corrected
 // after the shutdown. A prompt quotes usage JSON.
 const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","copilotVersion":"0.0.330"},"id":"m1","timestamp":"2026-01-02T10:00:00.000Z"}
 {"type":"user.message","data":{"content":"Hello"},"id":"m2","timestamp":"2026-01-02T10:00:01.000Z"}
@@ -211,7 +211,8 @@ const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","c
 {"type":"session.usage_record","data":{"usage":{"inputTokens":40,"providerCallId":"p-10"}},"id":"m10a","timestamp":"2026-01-03T10:00:02.500Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":40,"apiCallId":"api-10"}},"id":"m10b","timestamp":"2026-01-03T10:00:02.550Z"}
 {"type":"session.usage_record","data":{"usage":{"inputTokens":50,"providerCallId":"p-10"}},"id":"m10c","timestamp":"2026-01-03T10:00:02.560Z"}
-{"type":"session.usage_record","data":{"usage":{"outputTokens":5,"apiCallId":"api-10","providerCallId":"p-10"}},"id":"m10d","timestamp":"2026-01-03T10:00:02.600Z"}
+{"type":"session.usage_record","data":{"usage":{"outputTokens":5,"apiCallId":"api-10"}},"id":"m10d","timestamp":"2026-01-03T10:00:02.570Z"}
+{"type":"session.usage_record","data":{"usage":{"apiCallId":"api-10","providerCallId":"p-10"}},"id":"m10e","timestamp":"2026-01-03T10:00:02.600Z"}
 {"type":"session.usage_record","data":{"usage":{"inputTokens":20,"apiCallId":"api-11"}},"id":"m11a","timestamp":"2026-01-03T10:00:02.700Z"}
 {"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390,"outputTokens":30,"cacheReadTokens":180,"cacheWriteTokens":0}},"gpt-5-mini":{"usage":{"inputTokens":70,"outputTokens":5}}}},"id":"m9","timestamp":"2026-01-03T10:00:03.000Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-5-mini","inputTokens":20,"apiCallId":"api-11"}},"id":"m11","timestamp":"2026-01-03T10:00:03.100Z"}
