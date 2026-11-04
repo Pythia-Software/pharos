@@ -370,8 +370,9 @@ func TestVSCodeCopilotUnreadableWindowLeavesTheOthers(t *testing.T) {
 	}
 }
 
-// While the window holding a session's newest copy cannot be listed, an
-// older copy in another window does not replace what was read from it.
+// While the window holding a session's newest copy cannot be listed, or
+// once it is gone, an older copy in another window does not replace what
+// was read from the newer.
 func TestVSCodeCopilotOlderCopyNeverReplacesTheNewer(t *testing.T) {
 	c, _ := testCatalog(t)
 	root := vscodeFixture(t)
@@ -387,14 +388,19 @@ func TestVSCodeCopilotOlderCopyNeverReplacesTheNewer(t *testing.T) {
 	}
 	ingestSource(t, c, source)
 	before := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`)
-	// A folder that cannot be listed, or whose files cannot be looked up.
-	for _, mode := range []os.FileMode{0, 0o444} {
+	// A folder that cannot be listed, or whose files cannot be looked up,
+	// and then the newer copy's window removed.
+	for _, mode := range []os.FileMode{0, 0o444, 0o755} {
 		locked := filepath.Join(root, "workspaceStorage", "a1", "chatSessions")
 		if err := os.Chmod(locked, mode); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { os.Chmod(locked, 0o755) })
-		if _, err := os.Stat(filepath.Join(locked, vscodeSessionID+".jsonl")); err == nil {
+		if mode == 0o755 {
+			if err := os.RemoveAll(filepath.Dir(locked)); err != nil {
+				t.Fatal(err)
+			}
+		} else if _, err := os.Stat(filepath.Join(locked, vscodeSessionID+".jsonl")); err == nil {
 			t.Skip("running with access to every folder")
 		}
 		adapter, _ := MakeAdapter(source)
@@ -402,5 +408,29 @@ func TestVSCodeCopilotOlderCopyNeverReplacesTheNewer(t *testing.T) {
 		if after := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`); after != before || before == 0 {
 			t.Fatalf("mode %o: the second request's messages: %d, before %d", mode, after, before)
 		}
+	}
+}
+
+// A window opened on another folder moves its sessions there, though their
+// files, which version them, are unchanged; also when read from retained
+// copies.
+func TestVSCodeCopilotFolderChangeIsReadWithoutANewTurn(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "retained"}[retained], func(t *testing.T) {
+			c, _ := testCatalog(t)
+			root := vscodeFixture(t)
+			source := SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": retained}}
+			ingestSource(t, c, source)
+			manifest := filepath.Join(root, "workspaceStorage", "a1", "workspace.json")
+			writeSourceFile(t, manifest, `{"folder":"file:///work/app-renamed"}`)
+			later := time.Now().Add(time.Hour)
+			if err := os.Chtimes(manifest, later, later); err != nil {
+				t.Fatal(err)
+			}
+			ingestSource(t, c, source)
+			if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE location='/work/app-renamed'`); n != 1 {
+				t.Fatalf("moved workspaces: %d", n)
+			}
+		})
 	}
 }
