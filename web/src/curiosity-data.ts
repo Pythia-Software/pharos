@@ -20,6 +20,7 @@ import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
 import type { CardTrend } from "./card-trend";
 import { coverageRecipes } from "./coverage-recipes";
+import { sessionShapeCardRecipes } from "./session-shape-card-recipes";
 import type { ThinkingState } from "./thinking-model";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
@@ -111,6 +112,7 @@ const baseRecipes: QueryRecipe[] = [
   ...delegationRecipes,
   ...steeringRecipes,
   ...coverageRecipes,
+  ...sessionShapeCardRecipes,
   ...dashboardCardRecipes,
   ...thinkingCardRecipes,
   ...weekdayRecipes,

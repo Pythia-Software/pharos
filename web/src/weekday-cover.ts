@@ -1,11 +1,12 @@
 import { boxSummary, coerceValue, loadSchema, predicatesOf, metricDateFloor, metricDateNext, metricDateTime, resolveFieldName, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
 import writingDocument from "../../schemas/writing_messages.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
+import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import type { QueryRecipe } from "./curiosity-data";
 import type { CardCover } from "./card-cover";
 
 export const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const calendarSchemas = [loadSchema(writingDocument as never), loadSchema(parallelismDocument as never)];
+const calendarSchemas = [loadSchema(writingDocument as never), loadSchema(parallelismDocument as never), loadSchema(sessionShapeDocument as never)];
 
 // Only a conjunction of simple date bounds defines one interval that we can
 // safely fill with idle days. Preserve native daily results for other date

@@ -1,11 +1,19 @@
-// Session Shape: the catalog's rules, its bands, and the dashboard's own
-// panels (the signal table's trailing range).
+// Session Shape: the catalog's rules, its bands, the dashboard's own panels
+// (the signal table's trailing range), and the cards that open it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import document from "../../../../schemas/session_shape.schema.json";
-import { core, schemas } from "../helpers/recipes.mjs";
-import { analysisQuery, catalogProblems, normalizeAnalysis } from "../../../src/dashboard-analysis-model";
-import { trendQuery } from "../../../src/dashboard-trend-model";
+import { core, schemas, queryRecipes, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
+import { analysisQuery, catalogProblems, nativeCycleResult, normalizeAnalysis, selectGroups } from "../../../src/dashboard-analysis-model";
+import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
+import { cardDashboardWhere } from "../../../src/card-exploration";
+import { filterBoxSamples } from "../../../src/compact-box-model";
+import { loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
+import { compactTimelineBuckets } from "../../../src/column-marks";
+import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/card-trend";
+import { withTimeRange } from "../../../src/chart-range";
+import { weekdayMetric, weekdays } from "../../../src/weekday-cover";
+import { answerQuery } from "../../support/query-server.mjs";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
@@ -113,4 +121,169 @@ test("the signal table's parts execute over session rows, and its population dro
   for (const definition of signalDefinitions) for (const part of [definition.numerator, definition.denominator, definition.evidence]) assert.ok(signalParts.some(item => item.id === part), `${definition.id} needs ${part}`);
   const where = [{ field: "started_at", op: ">=", value: "2026-10-01" }, { field: "repository_name", op: "=", value: "pharos" }, { field: "day", op: "<", value: "2026-11-01" }];
   assert.deepEqual(withoutDates(where), [{ field: "repository_name", op: "=", value: "pharos" }]);
+});
+
+// ----- Cards: each card's cover is the dashboard state it opens --------------
+//
+// The card's own query and the dashboard's run over the same sessions with
+// Query Table's in-process evaluation and must report the same numbers,
+// compared by full group keys (record-dashboard-parity.test.mjs).
+const pad = value => String(value).padStart(2, "0");
+const localDay = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+const cardNow = Date.parse("2026-10-16T18:00:00Z");
+// Sessions every few hours over 40 days. Some lack tool data, authorship or
+// a known context window, so each rate's population is a part of them.
+const ledger = Array.from({ length: 360 }, (_, index) => {
+  const at = new Date(cardNow - (index % 40 + 1) * 86400000); at.setHours(index * 5 % 24, index % 60, 0, 0);
+  const monday = new Date(at); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
+  const tools = index % 9 !== 0, authored = index % 7 !== 0, window = index % 4 !== 0, typed = authored ? index % 5 * 3 : null;
+  const calls = tools ? index % 11 * 4 + 1 : null, edits = tools && authored ? index % 6 : null, handbacks = tools && authored ? index % 4 : null;
+  return {
+    id: `session-${index}`, conversation_id: `session-${index}`, root_conversation_id: `session-${index % 300}`, started_at: at.toISOString(), day: localDay(at), week: localDay(monday), month: localDay(at).slice(0, 7),
+    provider: ["claude", "codex", "antigravity"][index % 3], harness: ["claude-code", "codex/codex_exec", "antigravity-cli", "conductor"][index % 4], model_family: ["opus", "gpt-6", "gemini", "sonnet"][index % 4 === 3 ? 3 : index % 3],
+    repository_name: ["pharos", "query-table", null][index % 3 === 2 && index % 2 ? 2 : index % 2], length_band: ["1-5", "6-15", "16-30", "31-60", "61-120", "121+"][index % 6],
+    archetype: typed === null ? null : typed ? ["quick", "standard", "deep", "marathon"][index % 4] : "automated", messages: index % 6 * 10 + 2,
+    has_tool_data: tools, has_authorship: authored, has_context_window: window, has_timestamps: index % 13 !== 0,
+    active_seconds: index % 13 === 0 ? null : (index % 17 + 1) * 97, wall_seconds: (index % 17 + 1) * 210, turn_cycle_p50_seconds: authored && typed ? index % 8 * 15 + 5 : null,
+    typed_human_messages: typed, autonomy_prompts: authored ? Math.max(1, typed) : null, autonomy: tools && authored ? calls / Math.max(1, typed) : null,
+    tool_calls: calls, failed_calls: tools ? index % 5 : null, corrections: authored ? index % 3 : null, edit_turns: edits, one_shot_edit_turns: edits === null ? null : Math.max(0, edits - index % 2),
+    edit_handbacks: handbacks, verified_handbacks: handbacks === null ? null : Math.max(0, handbacks - index % 3), context_peak_ratio: window ? index % 10 / 10 + 0.05 : null,
+  };
+});
+const shapeRound = value => typeof value === "number" ? Number(value.toPrecision(12)) : value;
+const shapeKeys = (buckets, value = bucket => bucket.value) => Object.fromEntries(buckets.map(bucket => [JSON.stringify(bucket.keys), shapeRound(value(bucket))]));
+const cardItem = (id, days = 30, at = cardNow) => { const recipe = recipeById(id); return { recipe, item: instantiateRecipe(recipe, days, new Date(at)) }; };
+const dashboardWhere = item => cardDashboardWhere("session_shape", "session_shape", (item.query.grouping?.source ?? item.query).where);
+
+function cardPair(id) {
+  const { recipe, item } = cardItem(id), chart = recipe.destination.chart;
+  assert.equal(recipe.destination.topic, "session_shape", id);
+  const card = cardCoverQuery(item.query, recipe), analysis = analysisQuery(catalog, chart, dashboardWhere(item), { now: cardNow });
+  const cardResult = core.evaluateMetrics(ledger, card.query, schemas.session_shape, { now: cardNow }).metrics.find(metric => metric.id === card.metricId);
+  const dashboard = selectGroups(core.evaluateMetrics(ledger, analysis.query, schemas.session_shape, { now: cardNow }).metrics[0], analysis.selection);
+  assert.equal(cardResult.error, undefined, `${id}: card`);
+  assert.equal(dashboard.error, undefined, `${id}: dashboard`);
+  assert.ok(cardResult.buckets.length >= 1, `${id}: the card draws something`);
+  return { recipe, card: cardResult, dashboard, analysis, state: normalizeAnalysis(catalog, chart) };
+}
+
+test("Session Shape cards: every one opens the Session Shape dashboard with its population as the filters", () => {
+  const cards = queryRecipes.filter(recipe => recipe.dataset === "session_shape");
+  assert.ok(cards.length >= 12, "a collection of cards");
+  for (const recipe of cards) {
+    assert.equal(recipe.category, "sessions", recipe.id);
+    assert.equal(recipe.destination.topic, "session_shape", recipe.id);
+    const { item } = cardItem(recipe.id), params = new URL(item.url, "http://localhost").searchParams;
+    assert.equal(params.get("analyze_topic"), "session_shape", recipe.id);
+    const filters = core.decodeQueryStrict(params.get("analyze_filters")).where;
+    for (const term of recipe.where ?? []) assert.ok(filters.some(filter => JSON.stringify(filter) === JSON.stringify(term)), `${recipe.id}: ${JSON.stringify(term)} is a dashboard filter`);
+  }
+  // A partial population is the dashboard's, and its query's.
+  for (const [id, term] of [["session-steered-failure-rates", { field: "archetype", op: "!=", value: "automated" }], ["session-length-without-batch", { field: "harness", op: "!=", value: "antigravity-cli" }]]) {
+    const { analysis } = cardPair(id);
+    assert.ok(analysis.query.where.some(filter => JSON.stringify(filter) === JSON.stringify(term)), id);
+  }
+});
+
+test("Session Shape rate cards: pooled rates by group over the covered sessions, with the same ten-session minimum", () => {
+  for (const id of ["session-model-failure-rates", "session-steered-failure-rates", "session-repository-steering", "session-model-one-shot", "session-repository-verification"]) {
+    const { card, dashboard, state } = cardPair(id);
+    assert.deepEqual([state.view, state.minSamples], ["compare", 10], id);
+    assert.deepEqual(shapeKeys(dashboard.buckets), shapeKeys(card.buckets), id);
+    assert.ok(card.buckets.some(bucket => bucket.value > 0 && bucket.value < 1), `${id}: rates between zero and one`);
+  }
+  // Steering leaves out sessions whose prompts are not all classified; the
+  // failure rate, sessions without tool data.
+  const pooled = (rows, top, bottom) => rows.reduce((n, row) => n + row[top], 0) / rows.reduce((n, row) => n + row[bottom], 0);
+  const from = cardNow - 30 * 86400000;
+  const opus = ledger.filter(row => row.model_family === "opus" && row.has_tool_data && Date.parse(row.started_at) >= from);
+  assert.equal(shapeKeys(cardPair("session-model-failure-rates").card.buckets)['["opus"]'], shapeRound(pooled(opus, "failed_calls", "tool_calls")));
+});
+
+test("Session Shape share and distribution cards draw the dashboard's slices, boxes and bins", () => {
+  for (const id of ["session-archetypes", "session-length-without-batch"]) {
+    const { card, dashboard, analysis } = cardPair(id);
+    assert.equal(analysis.clause.display.kind, "pie", id);
+    assert.deepEqual(shapeKeys(dashboard.buckets), shapeKeys(card.buckets), id);
+  }
+  const summary = bucket => JSON.stringify(bucket.distribution.summary, (_, value) => shapeRound(value));
+  for (const id of ["session-turn-cycle", "session-autonomy", "session-model-context"]) {
+    const { recipe, card, dashboard, state } = cardPair(id);
+    assert.equal(state.minSamples, recipe.cover.minSamples, id);
+    assert.deepEqual(shapeKeys(dashboard.buckets, summary), shapeKeys(filterBoxSamples(card, recipe.cover.minSamples).buckets, summary), id);
+  }
+  const { card, dashboard, state } = cardPair("session-active-time");
+  assert.deepEqual([state.view, state.split, state.scale], ["distribution", "none", "logarithmic"]);
+  assert.deepEqual(dashboard.buckets.map(bucket => bucket.distribution), card.buckets.map(bucket => bucket.distribution));
+});
+
+test("Session Shape scatter card: one point per session, active time against tool calls", () => {
+  const { card, dashboard, analysis } = cardPair("session-active-tools");
+  assert.equal(analysis.clause.display.kind, "scatter");
+  const points = buckets => shapeKeys(buckets, bucket => `${shapeRound(bucket.value)},${shapeRound(bucket.y)}`);
+  assert.ok(Object.keys(points(card.buckets)).length > 50);
+  assert.deepEqual(points(dashboard.buckets), points(card.buckets));
+});
+
+test("Session Shape mix cards: the card's 7-day shares are the dashboard's trend, day by day", async t => {
+  const prior = { fetch: global.fetch, location: global.location };
+  global.location = { origin: "http://parity.test" };
+  t.mock.timers.enable({ apis: ["Date"], now: cardNow });
+  global.fetch = async (url, init = {}) => {
+    const path = String(url);
+    if (path.includes("computed-columns")) return Response.json([]);
+    return Response.json(answerQuery(path.split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, ledger, schemas.session_shape, { now: cardNow }));
+  };
+  t.after(() => { Object.assign(global, prior); clearPreviewCache(); });
+  for (const id of ["session-length-mix", "session-archetype-mix"]) {
+    const { item } = cardItem(id);
+    clearPreviewCache();
+    const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
+    const card = compactTimelineBuckets(preview.buckets, preview.timeline ?? {}), where = dashboardWhere(item);
+    const state = normalizeAnalysis(catalog, item.destination.chart), query = trendQuery(catalog, state, where, { now: cardNow });
+    assert.deepEqual([state.view, state.period, state.rollingPeriods, state.share], ["trend", "day", 7, true], id);
+    const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
+    assert.equal(built.error, undefined, id);
+    assert.deepEqual(built.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
+    // Series match by their group's label: the card names a band as the
+    // schema does, the dashboard as its catalog does (the same words); a
+    // session without one is "Unspecified" on the card.
+    const labels = catalog.breakdowns[state.split].values, label = item => labels[item.value] ?? (item.value || "Unspecified");
+    const named = (values, series, name) => Object.fromEntries(series.filter(item => values[item.key]).map(item => [name(item), shapeRound(values[item.key])]));
+    card.forEach((bucket, index) => assert.deepEqual(named(built.buckets[index].values, built.series, label), named(bucket.values, preview.series, item => item.value ?? item.key), `${id} ${bucket.key}`));
+    assert.ok(card.some(bucket => Object.values(bucket.values).some(share => share > 0 && share < 1)), `${id}: shares`);
+  }
+});
+
+test("Session Shape failure trend: failed calls over tool calls, pooled over 7 complete days, with its norm", () => {
+  const recipe = recipeById("session-failure-trend"), trend = recipe.trend;
+  const afternoon = new Date(cardNow); afternoon.setHours(14, 0, 0, 0);
+  const at = afternoon.getTime() < cardNow ? afternoon.getTime() + 86400000 : afternoon.getTime();
+  const { days, ends } = cardTrendDays(trend.lookback, true, at);
+  const card = buildCardTrend(trend, trend.lookback, cardTrendQueries(recipe.where, trend, days).map(query => core.evaluateMetrics(ledger, query, schemas.session_shape, { now: at }).metrics), at).study;
+  const where = [...recipe.where, ...withTimeRange([], catalog.time, undefined, undefined, "30d")];
+  const state = normalizeAnalysis(catalog, recipe.destination.chart);
+  assert.deepEqual([state.view, state.metric, state.rollingPeriods, state.completePeriods, state.norm], ["trend", "failure_rate", 7, true, true]);
+  const query = trendQuery(catalog, state, where, { now: at, zone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: at }).metrics, { now: at });
+  assert.equal(built.error, undefined);
+  const skip = ends.length - built.buckets.length;
+  assert.deepEqual(built.buckets.map(bucket => bucket.key), ends.slice(skip));
+  built.buckets.forEach((bucket, index) => assert.ok(Math.abs(bucket.values.total - card.points[index + skip]) < 1e-9, `${bucket.key}: ${bucket.values.total} != ${card.points[index + skip]}`));
+  assert.ok(card.points.some(point => point > 0));
+  assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
+});
+
+test("Session Shape weekday card: daily sessions by local weekday are the dashboard's weekday cycle", () => {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { recipe, item } = cardItem("session-weekday", 90);
+  const source = cardCoverQuery(item.query, recipe).query, clause = { ...source.aggregations[0], dateGrouping: { ...source.aggregations[0].dateGrouping, timeZone: zone } };
+  const daily = core.evaluateMetrics(ledger, { ...source, aggregations: [clause] }, schemas.session_shape, { now: cardNow }).metrics[0];
+  const card = weekdayMetric(clause, daily, { ...source, aggregations: [clause] }, cardNow, recipe.weekday.unit);
+  const state = normalizeAnalysis(catalog, recipe.destination.chart), analysis = analysisQuery(catalog, state, dashboardWhere(item), { now: cardNow, zone });
+  assert.deepEqual([state.view, state.cycle, state.reduce, analysis.native], ["cycle", "weekday", "median", true]);
+  const native = nativeCycleResult(analysis, core.evaluateMetrics(ledger, analysis.query, schemas.session_shape, { now: cardNow }).metrics[0]);
+  const summaries = buckets => Object.fromEntries(buckets.map(bucket => [bucket.keys[0], JSON.stringify(bucket.distribution.summary, (_, value) => shapeRound(value))]));
+  assert.deepEqual(summaries(native.result.buckets.map(bucket => ({ ...bucket, keys: [weekdays[bucket.keys[0] - 1]] }))), summaries(card.result.buckets));
+  assert.ok(card.result.buckets.some(bucket => bucket.distribution.summary?.max > 0));
 });
