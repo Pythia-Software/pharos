@@ -693,6 +693,10 @@ func (s *recordStore) table(tx *sql.Tx, name, where, order string, args []any) (
 	return t, flush()
 }
 
+// recordExportReading is called once an export's transaction has begun
+// reading; tests write to the source there.
+var recordExportReading = func(file string) {}
+
 // exportSQLite reads exactly one consistent transaction. Selection is used
 // only by the Conductor fast path; unknown tables are covered by full scans.
 func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSourceState, selected string, dependencies []recordDependency) (recordObject, error) {
@@ -778,11 +782,13 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	if e != nil {
 		return recordObject{}, e
 	}
+	recordExportReading(file)
 	if !strings.HasPrefix(input, s.c.dir+string(filepath.Separator)) {
-		state, e = sqliteDependencyState(file)
-		if e != nil {
-			return recordObject{}, e
-		}
+		// The live file as it was before this transaction first read: its
+		// rows are no older, so a write during the read makes the state
+		// differ next time and the rows are copied again, never kept as the
+		// newer file's.
+		state = before
 	}
 	var user, app, encoding any
 	if e = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&user); e != nil {

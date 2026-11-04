@@ -149,7 +149,7 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 	case "opencode":
 		// Each database, without the tables that hold credentials and
 		// settings (captureTables).
-		databases, err := (&opencodeAdapter{baseAdapter{config: source}}).databases()
+		databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: source}}).databases()
 		if err != nil {
 			return plan, fmt.Errorf("OpenCode sessions are unavailable: %w", err)
 		}

@@ -2,11 +2,13 @@ package archive
 
 import (
 	"bytes"
-	"net/http"
 	"compress/gzip"
 	"database/sql"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,7 +223,12 @@ func TestOpenCodeCaptureHoldsOnlyTheSessions(t *testing.T) {
 	}
 	tables, err := tableNames(db)
 	db.Close()
-	if err != nil || len(tables) != len(opencodeCaptureTables) {
+	for table := range tables {
+		if !opencodeCaptureTables[table] {
+			err = errors.Join(err, fmt.Errorf("captured %s", table))
+		}
+	}
+	if err != nil || !tables["session_v2"] || !tables["session_message"] {
 		t.Fatalf("captured tables %v %v", tables, err)
 	}
 	if strings.Contains(capturedText(t, config.CaptureRoot), opencodeSecret) {
@@ -287,20 +294,135 @@ func TestOpenCodeReadsOnlyTheSessionThatChanged(t *testing.T) {
 	}
 }
 
+// A database in the 1.x schema is reported, read live or from either kind of
+// capture, and its sessions are kept in the capture for a later reader.
 func TestOpenCodeOlderSchemaIsReportedNotSkipped(t *testing.T) {
+	useHost(t, "host-a")
 	root := t.TempDir()
 	path := filepath.Join(root, "opencode.db")
 	db, err := sql.Open("sqlite", path)
 	if err == nil {
-		_, err = db.Exec(`CREATE TABLE session (id text); CREATE TABLE message (id text)`)
+		_, err = db.Exec(`CREATE TABLE session (id text); CREATE TABLE message (id text); CREATE TABLE part (id text); CREATE TABLE credential (secret text)`)
 		db.Close()
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, _ := MakeAdapter(SourceConfig{Name: "opencode", Kind: "opencode", Path: root})
-	if err := adapter.Discover(func(WorkspaceRecord) error { return nil }); err == nil || !strings.Contains(err.Error(), "before 2.0") {
-		t.Fatalf("older schema: %v", err)
+	reported := func(name string, err any) {
+		t.Helper()
+		if !strings.Contains(fmt.Sprint(err), "before 2.0") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true}
+	adapter, _ := MakeAdapter(source)
+	reported("live", adapter.Discover(func(WorkspaceRecord) error { return nil }))
+
+	c, config := testCatalog(t)
+	config.Sources = []SourceConfig{source}
+	runCapture(t, config)
+	useHost(t, "host-b")
+	targets, err := captureTargets(config.CaptureRoot, []string{"host-a"}, false, nil)
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("captures %v %v", targets, err)
+	}
+	result := c.IndexCapture(t.Context(), targets[0], nil)
+	reported("captured", result.Error)
+	if !strings.Contains(fmt.Sprint(result.Error), path) {
+		t.Fatalf("the error names %v", result.Error)
+	}
+	useHost(t, "host-a")
+	source.Options = map[string]any{"sqlite_record_capture": true}
+	adapter, _ = MakeAdapter(source)
+	reported("copied before indexing", c.Ingest(adapter, nil).Error)
+}
+
+// A session deleted in OpenCode between two captures, before either was
+// indexed, is indexed from the older one.
+func TestOpenCodeSessionDeletedBeforeIndexingIsKept(t *testing.T) {
+	useHost(t, "host-a")
+	root := opencodeFixture(t)
+	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true}
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	db, err := sql.Open("sqlite", filepath.Join(root, "opencode.db"))
+	if err == nil {
+		_, err = db.Exec(`DELETE FROM session_part WHERE session_id='ses_parts'; DELETE FROM session_message WHERE session_id='ses_parts'; DELETE FROM session_v2 WHERE id='ses_parts'`)
+		db.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCapture(t, config)
+	useHost(t, "host-b")
+	c, _ := testCatalog(t)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	for _, id := range []string{"ses_root", "ses_child", "ses_parts"} {
+		if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=?`, id); n != 1 {
+			t.Fatalf("%s: %d conversations", id, n)
+		}
+	}
+}
+
+// Rows copied before indexing while OpenCode writes are copied again, never
+// kept as the newer database's.
+func TestOpenCodeRowsCopiedDuringAWriteAreCopiedAgain(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := opencodeFixture(t)
+	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+	// OpenCode writes through a write-ahead log, which readers don't block.
+	db, err := sql.Open("sqlite", filepath.Join(root, "opencode.db"))
+	if err == nil {
+		_, err = db.Exec(`PRAGMA journal_mode=WAL`)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	written := false
+	override(t, &recordExportReading, func(file string) {
+		if written {
+			return
+		}
+		written = true
+		if _, err := db.Exec(`INSERT INTO session_message VALUES('q3','ses_parts','user',3,1793721002000,1793721002000,'{"time":{"created":1793721002000},"text":"Again"}');
+			UPDATE session_v2 SET time_updated=1793721002000 WHERE id='ses_parts'`); err != nil {
+			t.Error(err)
+		}
+	})
+	adapter, _ := MakeAdapter(source)
+	c.Ingest(adapter, nil)
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='q3'`); n != 1 || !written {
+		t.Fatalf("the prompt written during the copy: %d", n)
+	}
+}
+
+// A subagent's own subagent follows it, and is two levels down.
+func TestOpenCodeNestedSubagentFollowsItsParent(t *testing.T) {
+	root := t.TempDir()
+	opencodeDatabase(t, filepath.Join(root, "opencode.db"), opencodeRows+`
+INSERT INTO session_v2 VALUES('ses_a','p1',NULL,'ses_child',NULL,'nested','/work/app','Nested','2.2.5',0.0,'{}',
+  0,0,0,0,0,'explore','{"id":"big-pickle","providerID":"opencode"}',1793720005000,1793720006000);
+INSERT INTO session_message VALUES('n1','ses_a','user',1,1793720005000,1793720005000,'{"time":{"created":1793720005000},"text":"Look closer"}');
+`)
+	conversations := discoverOpenCode(t, root)["ses_root"].Conversations
+	order := []string{}
+	for _, conversation := range conversations {
+		order = append(order, conversation.NativeID)
+	}
+	if strings.Join(order, " ") != "ses_root ses_child ses_a" || conversations[2].ParentNativeID != "ses_child" || conversations[2].AgentDepth != 2 {
+		t.Fatalf("conversations %v, nested %+v", order, conversations[len(conversations)-1])
+	}
+}
+
+// Live verification reads a session as indexing does.
+func TestOpenCodeSessionIsVerifiedLive(t *testing.T) {
+	c, _ := testCatalog(t)
+	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: opencodeFixture(t), Account: "local", Enabled: true}
+	ingestSource(t, c, source)
+	if result := c.auditUnit(t.Context(), firstSyncUnit(t, c, source), "manual", 0); result.Outcome != "passed" {
+		t.Fatalf("verification: %+v", result)
 	}
 }
 

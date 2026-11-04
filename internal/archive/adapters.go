@@ -188,7 +188,7 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 	case "copilot":
 		return &copilotAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "opencode":
-		return &opencodeAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
+		return &opencodeAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "conductor":
 		return &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "tl1":

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,12 @@ import (
 // inline. A subagent is a session whose parent_id names the session that
 // started it. The same database holds OpenCode's credentials and accounts,
 // which are neither read nor captured (opencodeCaptureTables).
-type opencodeAdapter struct{ baseAdapter }
+type opencodeAdapter struct {
+	baseAdapter
+	// selected, when set, limits reading to the sessions that started these
+	// groups (snapshotSessions).
+	selected map[string]bool
+}
 
 // opencodeExtractor versions the parser; bump it when parsing changes.
 const opencodeExtractor = "opencode-v1"
@@ -29,8 +35,10 @@ func (a *opencodeAdapter) partExtractor() string { return opencodeExtractor }
 
 // opencodeCaptureTables are the tables a capture keeps; every other table,
 // including any a later release adds, is left out, since OpenCode keeps
-// credentials, accounts and settings in the same database.
-var opencodeCaptureTables = map[string]bool{"session_v2": true, "session_message": true, "session_part": true, "project": true}
+// credentials, accounts and settings in the same database. The 1.x schema's
+// session, message and part are kept too: a capture of such a database is
+// reported as unread, as it is live, and holds its sessions for a reader.
+var opencodeCaptureTables = map[string]bool{"session_v2": true, "session_message": true, "session_part": true, "project": true, "session": true, "message": true, "part": true}
 
 // databases lists OpenCode's databases: the source itself when it is one,
 // otherwise each opencode*.db in it.
@@ -126,7 +134,7 @@ func (a *opencodeAdapter) sessions(database string) ([]opencodeSession, error) {
 	}
 	if !tables["session_v2"] || !tables["session_message"] {
 		if tables["session"] && tables["message"] {
-			return nil, fmt.Errorf("OpenCode database %s uses the schema of releases before 2.0, which Pharos does not read yet", database)
+			return nil, fmt.Errorf("OpenCode database %s uses the schema of releases before 2.0, which Pharos does not read yet", a.original(database))
 		}
 		return nil, nil
 	}
@@ -195,9 +203,22 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 			groups[top] = append(groups[top], session)
 		}
 		for _, top := range roots {
+			if a.selected != nil && !a.selected[top] {
+				continue
+			}
 			members := groups[top]
-			// The root first, then its subagents by ID.
-			sort.SliceStable(members, func(i, j int) bool { return members[i].id == top && members[j].id != top })
+			// The root first, then its subagents a level at a time, each
+			// level by ID, so a subagent follows the one that started it.
+			levels := map[string]int{}
+			for _, member := range members {
+				id, seen := member.id, map[string]bool{}
+				for id != top && !seen[id] {
+					seen[id] = true
+					id = byID[id].parent
+					levels[member.id]++
+				}
+			}
+			sort.SliceStable(members, func(i, j int) bool { return levels[members[i].id] < levels[members[j].id] })
 			parts := make([]sourcePart, 0, len(members))
 			for _, member := range members {
 				parts = append(parts, sourcePart{item: a.original(database) + "#" + member.id, size: member.rows, version: member.watermark * 1e6, signal: fmt.Sprintf("%d:%d", member.watermark, member.rows)})
@@ -214,6 +235,52 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 	}
 	plan.discoveryError = errors.Join(failures...)
 	return plan, nil
+}
+
+// snapshotSessions lists the sessions in a database snapshot that start
+// their own groups; a superseded snapshot's that no newer one holds are
+// sessions deleted in OpenCode, and are read from it alone.
+func (a *opencodeAdapter) snapshotSessions(ctx context.Context, file string) (map[string]bool, error) {
+	db, err := openReadOnlySQLite(file)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	tables, err := tableNames(db)
+	if err != nil || !tables["session_v2"] {
+		return map[string]bool{}, err
+	}
+	rows, err := queryMapsContext(ctx, db, `SELECT id FROM session_v2 WHERE parent_id IS NULL OR parent_id='' OR parent_id NOT IN (SELECT id FROM session_v2)`)
+	ids := map[string]bool{}
+	for _, row := range rows {
+		ids[firstString(row["id"])] = true
+	}
+	return ids, err
+}
+
+func (a *opencodeAdapter) olderReader(file string, view *captureView, selected map[string]bool) Adapter {
+	config := a.config
+	config.Path = file
+	return &opencodeAdapter{baseAdapter: baseAdapter{config: config, capability: a.capability, view: view}, selected: selected}
+}
+
+// readGroup reads, as indexing does, the group whose parts begin as parts
+// do; nothing when that session is gone.
+func (a *opencodeAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	plan, err := a.planParts()
+	if err != nil || len(parts) == 0 {
+		return nil, nil, err
+	}
+	for _, group := range plan.groups {
+		if group.parts[0].item != parts[0].item {
+			continue
+		}
+		var record *WorkspaceRecord
+		var read []sourcePart
+		err := group.read(func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
+		return record, read, err
+	}
+	return nil, nil, plan.discoveryError
 }
 
 // read reads a session and its subagents in one transaction.

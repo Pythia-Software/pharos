@@ -283,7 +283,7 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 	}
 	if status.HostFileExists && (kinds == nil || kinds["opencode"]) {
 		dir := filepath.Join(home, ".local", "share", "opencode")
-		if databases, err := (&opencodeAdapter{baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
+		if databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
 			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "opencode", resolved) == nil {
 				status.NewSources++
 			}
@@ -633,7 +633,7 @@ func (r *probeRun) opencode(dir, foundBy string) {
 	}
 	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
 	if candidate.Status == "found" {
-		databases, err := (&opencodeAdapter{baseAdapter{config: SourceConfig{Path: resolved}}}).databases()
+		databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).databases()
 		if err == nil && len(databases) == 0 {
 			r.report.Checked = append(r.report.Checked, ProbeLocation{"opencode", candidate.DisplayPath, foundBy, "no opencode.db"})
 			return
