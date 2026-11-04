@@ -209,6 +209,10 @@ test("Session Shape rate cards: pooled rates by group over the covered sessions,
 });
 
 test("Session Shape count and distribution cards draw the dashboard's bars and boxes", () => {
+  // Hours read as whole hours, not three decimals.
+  const { recipe: hoursRecipe, item: hoursItem } = cardItem("session-repository-hours");
+  const hoursCover = cardCoverQuery(hoursItem.query, hoursRecipe);
+  assert.deepEqual(hoursCover.query.aggregations.find(clause => clause.id === hoursCover.metricId).display.format, { kind: "number", decimals: 0 });
   for (const id of ["session-sources", "session-repository-hours"]) {
     const { card, dashboard } = cardPair(id);
     assert.ok(card.buckets.every(bucket => bucket.value > 0), id);
