@@ -326,6 +326,10 @@ type LabelsRunOptions struct {
 	// DryRun builds and frames items and counts what would be labeled, but
 	// starts no worker and stores nothing.
 	DryRun bool
+	// ThreadTarget, when set, supplies the current Threads, PeerThreads and
+	// ThreadBudget every two minutes. Workers switch after in-flight batches
+	// finish; the model and other run options stay fixed.
+	ThreadTarget func() LabelerSettings
 	// Export, when set, receives one JSON line per item built (dry run) or
 	// labeled: its identity, segment, cohort, sender role, hashes of its
 	// context and text, token count and, once labeled, its probabilities and
@@ -790,21 +794,24 @@ func (r *labelsRun) capacity() int {
 	return max(1, r.settings.Workers) * 2
 }
 
+func (r *labelsRun) releasePool(kill bool) {
+	if r.runner == nil {
+		return
+	}
+	r.stats.Restarts += r.runner.Pool().Restarts() - r.restartsBefore
+	if kill {
+		r.c.labelers.Kill(r.runner)
+	}
+	r.release()
+	r.runner, r.release = nil, nil
+}
+
 // execute runs the pipeline over jobs.
 func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, jobs []*labelsJob) (err error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	defer func() {
-		if r.runner != nil {
-			r.stats.Restarts = r.runner.Pool().Restarts() - r.restartsBefore
-			if parent.Err() != nil {
-				// A stop: do not wait for batches in flight.
-				r.c.labelerManager(r.settings).Kill(r.runner)
-			}
-			// Otherwise the runner stays warm for the next run.
-			r.release()
-		}
-	}()
+	// A stop kills the workers; otherwise the final runner stays warm.
+	defer func() { r.releasePool(parent.Err() != nil) }()
 	built := make(chan *labelsJob, 2)
 	produced := make(chan error, 1)
 	go func() { produced <- r.produce(ctx, builder, jobs, built) }()
@@ -887,8 +894,24 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 	windowSize := 4 * r.maxBatch() * r.capacity()
 	room := func() bool { return len(window) < windowSize && len(ready) <= r.capacity() }
 	var failure error
+	target := labelerThreadTarget{read: r.opts.ThreadTarget}
+	nextSettings := r.settings
 	for producing || inflight > 0 || len(window) > 0 || len(ready) > 0 {
 		if failure == nil {
+			if !r.opts.DryRun {
+				nextSettings = target.settings(nextSettings)
+			}
+			retuning := nextSettings.Threads != r.settings.Threads
+			if retuning && inflight == 0 {
+				// No request still holds the old runner. Free its budget before
+				// starting workers at the latest target, keeping queued work.
+				r.releasePool(true)
+				r.progress("labels: changing cores per worker to %d", nextSettings.Threads)
+				retuning = false
+			}
+			if !retuning {
+				r.settings = nextSettings
+			}
 			// Take what the producer has ready without waiting.
 			for producing && room() {
 				select {
@@ -915,7 +938,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 				}
 				pack()
 			}
-			for len(ready) > 0 && inflight < r.capacity() && !exclusive && (!ready[0].isolated || inflight == 0) {
+			for !retuning && len(ready) > 0 && inflight < r.capacity() && !exclusive && (!ready[0].isolated || inflight == 0) {
 				if err := r.startPool(ctx); err != nil {
 					failure = err
 					cancel()
@@ -987,8 +1010,9 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 
 // apply merges a batch's results into its messages. A batch the worker
 // rejected, or that kept crashing workers, is split and sent again one item
-// at a time, so one bad item fails only its own message (which stays
-// pending for a later run) and the rest are labeled.
+// at a time. A single item that crashed outside isolation is also retried:
+// another request in flight may have killed its worker. Only an isolated
+// single crash fails its message, which stays pending for a later run.
 func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish func(*labelsJob)) error {
 	r.stats.Infer += result.took
 	if result.err != nil {
@@ -1011,6 +1035,10 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 			} else {
 				*ready = append(*ready, singles...)
 			}
+			return nil
+		}
+		if errors.Is(result.err, labelrt.ErrWorkerExited) && !result.batch.isolated {
+			*ready = append([]labelsBatch{{seqs: result.batch.seqs, isolated: true}}, *ready...)
 			return nil
 		}
 		message := result.batch.seqs[0].message
@@ -1326,7 +1354,7 @@ func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) erro
 	}
 	settings = settings.withAssets()
 	settings, bulk := labelsForPower(settings, s.cachedPower(ctx))
-	stats, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{Limit: labelsChainLimit})
+	stats, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{Limit: labelsChainLimit, ThreadTarget: s.labelerThreadSettings(ctx, false)})
 	switch {
 	case errors.Is(err, errLabelsRunning):
 		// A backlog run (or pharos labels run) is labeling; this pass
@@ -1366,7 +1394,7 @@ func (s *Server) chainLabels(ctx context.Context, settings LabelerSettings) erro
 				}
 			}
 		}()
-		_, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{})
+		_, err := s.Catalog.RunLabels(ctx, settings, LabelsRunOptions{ThreadTarget: s.labelerThreadSettings(ctx, false)})
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			// Workers failing, or this Mac went onto battery: stored labels

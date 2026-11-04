@@ -317,7 +317,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
     windows: [], punchcard: { from: '2026-10-01', to: '2026-10-07', weeks: empty().map(hours => hours.map(() => 1)), cells: { you: empty(), with_you: empty(), unattended: empty(), automated: empty() } },
     automations: [{ initiator: 'scripted', label: 'claude -p', runs: 3, active_days: 3, agent_hours: 3, first_run: 0, last_run: 0, median_gap_ms: 2 * 86400000, missed: 0, daily: {} }],
     coverage: { turns: 10, unmatched_turns: 0, typed_messages: 6, messages: 6 } };
-  const address = '/analyze?' + new URLSearchParams({ analyze_topic: 'habits', habits_calendar: 'automated', habits_weekends: 'hide', habits_weeks: '13', habits_punchcard: 'agents', habits_punchcard_days: 'all', habits_day: '2026-10-03' });
+  const address = '/analyze?' + new URLSearchParams({ analyze_topic: 'habits', habits_calendar: 'automated', habits_weekends: 'hide', habits_weeks: '13', habits_punchcard: 'agents', habits_punchcard_days: 'all', habits_shape_days: '7', habits_day: '2026-10-03' });
   const url = dashboardCardURL(address, analysisCatalogs.habits, dashboardDefaults.habits, []);
   assert.equal(new URL(url, location.origin).searchParams.has('habits_day'), false, 'a selected day is not part of a card');
   assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations', 'chart']);
@@ -330,6 +330,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   assert.equal(yearPreview.habits.weeks, 17);
   assert.match(yearPreview.note, /open it for the year/);
   assert.equal(dashboardCardWindow(url, 'habits-punchcard'), 'All time');
+  assert.equal(dashboardCardWindow(url, 'habits-days'), 'Past 7 days');
   assert.equal(dashboardCardWindow(url, 'habits-streaks'), 'Today');
   assert.equal(dashboardCardPresentation(url, 'habits-calendar').category, 'machines');
   assert.equal(dashboardCardPresentation(url, 'habits-streaks').category, 'human');
@@ -347,7 +348,8 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   const calendar = await preview('habits-calendar');
   assert.deepEqual([calendar.state, calendar.habits.chart, calendar.habits.actor, calendar.habits.weeks, calendar.habits.weekends], ['ready', 'calendar', 'automated', 13, false]);
   assert.equal((await preview('habits-punchcard')).habits.view, 'agents');
-  assert.equal((await preview('habits-days')).habits.chart, 'days');
+  const shape = await preview('habits-days');
+  assert.deepEqual([shape.habits.chart, shape.habits.count], ['days', 7]);
   assert.equal((await preview('habits-pace')).insights.length, 4);
   assert.deepEqual((await preview('habits-automations')).ranking.map(item => item.value), [3]);
 

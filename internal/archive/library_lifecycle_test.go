@@ -31,10 +31,15 @@ func lifecycleLibraries(t *testing.T) (Config, Config) {
 }
 func catalogCount(t *testing.T, cfg Config, table string) int {
 	t.Helper()
-	c := reopenCatalog(t, cfg.CatalogPath)
-	defer c.Close()
+	// Counts only inspect a catalog that the fixture already initialized. A
+	// full OpenCatalog repeats host migration and schema checks on every call.
+	db, err := openReadOnlySQLite(cfg.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 	var n int
-	if err := c.DB.QueryRow("SELECT COUNT(*) FROM " + quotedIdentifier(table)).Scan(&n); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + quotedIdentifier(table)).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n

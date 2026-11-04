@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { hourOfDayColor } from "./chart-colors";
 import {
   calendarValue, calendarWeeks, formatClock, formatDay, formatHours, level, monthLabels, punchcardGrid, punchcardViews, quartileLevels, streakActors, workdayShape,
@@ -8,8 +8,8 @@ import type { HabitsCover } from "./habits-card";
 import "./habits.css";
 
 // The Habits page's three drawings, shared by the page and its Home cards.
-// On the page they keep their natural size and scroll; on a card (fit) they
-// shrink to fit the cover, never past their natural size.
+// The day chart fills its page card; the calendar and punchcard can scroll.
+// On a Home card (fit), each chart shrinks to the cover.
 
 const cell = 11, gapPx = 2, pitch = cell + gapPx;
 export const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -61,17 +61,30 @@ export function PunchcardChart({ data, view, fit }: { data: HabitsSummary; view:
 
 export function DaysChart({ data, count = 28, fit }: { data: HabitsSummary; count?: number; fit?: boolean }) {
   const days = useMemo(() => workdayShape(data.days, count, data.settings.dayStart, data.timezone === "Local" ? undefined : data.timezone), [data, count]);
-  const span = Math.max(24, ...days.map(day => Math.ceil(day.end ?? 0))), height = 210, top = 6, bar = 10, pitchX = 14, left = 42;
+  const container = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+  useEffect(() => {
+    if (fit || !container.current) return;
+    const element = container.current;
+    const observer = new ResizeObserver(() => setAvailableWidth(element.clientWidth));
+    observer.observe(element);
+    setAvailableWidth(element.clientWidth);
+    return () => observer.disconnect();
+  }, [fit]);
+  const span = Math.max(24, ...days.map(day => Math.ceil(day.end ?? 0))), height = 210, top = 6, left = 42;
+  const width = fit ? left + days.length * 14 : Math.max(left + 1, availableWidth || left + days.length * 14);
+  const pitchX = (width - left) / Math.max(1, days.length), bar = Math.min(18, pitchX * 0.72);
+  const x = (index: number) => left + index * pitchX + (pitchX - bar) / 2;
   const y = (hours: number) => top + (hours / span) * (height - top);
   const clock = (hours: number) => formatClock(hours + data.settings.dayStart);
-  return <svg {...size(fit, left + days.length * pitchX, height + 10)} role="img" aria-label="When you were engaged each day">
-    {[0, 6, 12, 18, 24].filter(hours => hours <= span).map(hours => <g key={hours}><line x1={left - 4} x2={left + days.length * pitchX} y1={y(hours)} y2={y(hours)} className="habits-grid" /><text x={0} y={y(hours) + 4} className="habits-axis">{clock(hours)}</text></g>)}
+  return <div className="habits-days-chart" ref={container}><svg {...size(fit, width, height + 10)} role="img" aria-label="When you were engaged each day">
+    {[0, 6, 12, 18, 24].filter(hours => hours <= span).map(hours => <g key={hours}><line x1={left - 4} x2={width} y1={y(hours)} y2={y(hours)} className="habits-grid" /><text x={0} y={y(hours) + 4} className="habits-axis">{clock(hours)}</text></g>)}
     {days.map((day, index) => day.start !== undefined && day.end !== undefined ? <g key={day.day} className={day.vacation ? "habits-excused" : undefined}>
-      <rect x={left + index * pitchX} y={y(day.start)} width={bar} height={Math.max(2, y(day.end) - y(day.start))} rx={2} className="habits-span">
+      <rect x={x(index)} y={y(day.start)} width={bar} height={Math.max(2, y(day.end) - y(day.start))} rx={2} className="habits-span">
         <title>{`${formatDay(day.day)}: ${clock(day.start)} to ${clock(day.end)}, ${day.engagedHours.toFixed(1)} h engaged in ${day.blockCount} ${day.blockCount === 1 ? "block" : "blocks"}`}</title></rect>
-      {day.blocks.map((piece, part) => <rect key={part} x={left + index * pitchX} y={y(piece.start)} width={bar} height={Math.max(1, y(piece.end) - y(piece.start))} style={{ fill: piece.color }} pointerEvents="none" />)}
+      {day.blocks.map((piece, part) => <rect key={part} x={x(index)} y={y(piece.start)} width={bar} height={Math.max(1, y(piece.end) - y(piece.start))} style={{ fill: piece.color }} pointerEvents="none" />)}
     </g> : null)}
-  </svg>;
+  </svg></div>;
 }
 
 // A Home card's cover: the section's chart, scaled to the card.
@@ -79,6 +92,6 @@ export function HabitsCoverChart({ cover }: { cover: HabitsCover }) {
   return <span className="habits-cover">
     {cover.chart === "calendar" ? <CalendarChart data={cover.summary} actor={cover.actor} weeks={cover.weeks} weekends={cover.weekends} fit />
       : cover.chart === "punchcard" ? <PunchcardChart data={cover.summary} view={cover.view} fit />
-      : <DaysChart data={cover.summary} fit />}
+      : <DaysChart data={cover.summary} count={cover.count} fit />}
   </span>;
 }

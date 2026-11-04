@@ -190,97 +190,163 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
 
 // Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
-const safetyCard = { id: "safety_sample", title: "Check where credentials were copied", explanation: "A command selected credential files or cloud configuration for copying to another location.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
+const safetyCard = { id: "safety_sample", rule: "credentials", danger: "high", subject: "/Users/example/repo/.build/gcloud", title: "Credentials copied to another location", explanation: "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
 export const safetyFixtures = {
-  cases: [safetyCard, { ...safetyCard, id: "safety_delete", target: "machine:studio", target_label: "Mac Studio", calls: 7, material_change: true, handed_at: iso(3 * day), first_seen_at: iso(4 * day), last_seen_at: iso(2 * day), title: "Review a deletion outside this checkout", explanation: "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.", cart: undefined }, { ...safetyCard, id: "safety_handed", title: "Review a change to published Git history", explanation: "A command selects a force push or remote ref deletion.", state: "handed_off", handed_at: iso(day), cart: undefined }],
+  cases: [safetyCard, { ...safetyCard, id: "safety_delete", rule: "boundary-delete", danger: "medium", subject: "/Users/example/old-builds", target: "machine:studio", target_label: "Mac Studio", calls: 7, material_change: true, handed_at: iso(3 * day), first_seen_at: iso(4 * day), last_seen_at: iso(2 * day), title: "Deletion outside the checkout", explanation: "A command deleted content outside the recorded checkout and outside temporary or build space, or a path that could expand to a whole directory.", cart: undefined }, { ...safetyCard, id: "safety_handed", rule: "remote-history", danger: "high", subject: "/Users/example/repo · push --force origin main", title: "Published Git history rewritten", explanation: "A command force-pushed, mirrored, or deleted a branch or tag on a remote that others fetch.", state: "handed_off", handed_at: iso(day), cart: undefined }],
   summary: { open: 2, handed_off: 1, dismissed: 0 },
-  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, rule: safetyCard.rule, danger: safetyCard.danger, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
   targets: [{ target: repoTarget, label: "explo" }, { target: "machine:studio", label: "Mac Studio" }], built_at: iso(3600000), scanned_calls: "807",
-  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open reviews is not a safety assessment.",
+  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open notices is not a safety assessment.",
 };
 export const safetyDetailFixture = { ...safetyCard, subject: "/Users/example/repo/.build/gcloud", questions: ["Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"], evidence: [{ id: "safety_evidence_sample", call_id: "tool-call_sample", message_id: "m-1", at: iso(day), command: "cp -R ~/.config/gcloud .build/gcloud", cwd: "/Users/example/repo", cwd_basis: "tool input", status: "no_result", outcome: "Execution and effects need context", conditional: false, path: `/work/${workID}?conversation=${rootConversation}&message=m-1` }] };
 // Keep the sample settings catalog complete, even when there are only three example reviews.
 export const safetySettingsFixture = { rules: [
   {
-    "id": "api",
-    "title": "Check what an API request changes",
-    "explanation": "An HTTP mutation needs its endpoint and payload semantics checked.",
-    "enabled": true
-  },
-  {
-    "id": "boundary-delete",
-    "title": "Review a deletion outside this checkout",
-    "explanation": "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.",
-    "enabled": true
-  },
-  {
     "id": "cloud-delete",
-    "title": "Review a cloud deletion",
-    "explanation": "A command selects remote objects for deletion.",
+    "title": "Cloud objects deleted",
+    "explanation": "A command deleted objects or resources in a cloud account.",
+    "questions": [
+      "Which account, bucket, and object prefix were selected?",
+      "What establishes deletion, retention, and recovery?"
+    ],
+    "danger": "high",
     "enabled": true
   },
   {
     "id": "credentials",
-    "title": "Check where credentials were copied",
-    "explanation": "A command selected credential files or cloud configuration for copying to another location.",
-    "enabled": true
-  },
-  {
-    "id": "database",
-    "title": "Review a database change",
-    "explanation": "A command contains a database mutation. Its environment and affected records need checking.",
-    "enabled": true
-  },
-  {
-    "id": "delete",
-    "title": "Check content selected for deletion",
-    "explanation": "A command selects checkout content for deletion without establishing that it is disposable.",
+    "title": "Credentials copied to another location",
+    "explanation": "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.",
+    "questions": [
+      "Which sources contain credentials rather than configuration?",
+      "Was the destination uploaded, published, or later cleaned up?"
+    ],
+    "danger": "high",
     "enabled": true
   },
   {
     "id": "disk-image",
-    "title": "Check a disk image operation",
-    "explanation": "A command selects a disk image or mounted volume for a lifecycle operation.",
-    "enabled": true
-  },
-  {
-    "id": "local-history",
-    "title": "Check a change to saved Git work",
-    "explanation": "A command selects a reset, history rewrite, branch deletion, or stash discard.",
-    "enabled": true
-  },
-  {
-    "id": "permissions",
-    "title": "Review a permission change",
-    "explanation": "A command selects permissions outside the recorded checkout or against an unresolved path.",
-    "enabled": true
-  },
-  {
-    "id": "process",
-    "title": "Check which processes were selected",
-    "explanation": "A process signal uses a name or expression that may match more than this task's process.",
-    "enabled": true
-  },
-  {
-    "id": "publication",
-    "title": "Review a merge or publication",
-    "explanation": "A command selects a merge, release change, or tag publication.",
+    "title": "Disk image or volume detached or changed",
+    "explanation": "A command detached, ejected, resized, or converted an existing disk image or volume.",
+    "questions": [
+      "Was this a newly created test image or an existing volume?",
+      "Which image or mount was selected, and what does the result establish?"
+    ],
+    "danger": "high",
     "enabled": true
   },
   {
     "id": "remote-history",
-    "title": "Review a change to published Git history",
-    "explanation": "A command selects a force push or remote ref deletion.",
-    "enabled": false
+    "title": "Published Git history rewritten",
+    "explanation": "A command force-pushed, mirrored, or deleted a branch or tag on a remote that others fetch.",
+    "questions": [
+      "Which remote and refs were selected?",
+      "What did the lease protect, what did the remote report, and what user request covered the change?"
+    ],
+    "danger": "high",
+    "enabled": true
   },
   {
     "id": "system",
-    "title": "Review a system change",
-    "explanation": "A command selects a system service, installation, or disk change.",
+    "title": "System or disk changed",
+    "explanation": "A command changed a system service, an installation, or a disk.",
+    "questions": [
+      "Was this a test resource or a persistent system resource?",
+      "What privileges, persistence, and recovery consequences were involved?"
+    ],
+    "danger": "high",
+    "enabled": true
+  },
+  {
+    "id": "delete",
+    "title": "Checkout or ignored files deleted",
+    "explanation": "A command deleted the checkout itself, its Git directory, or ignored files such as local configuration and data.",
+    "questions": [
+      "Which exact paths were selected?",
+      "Was the content created for this task or preserved elsewhere, and what does the result establish?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "database",
+    "title": "Database changed outside the checkout",
+    "explanation": "A command changed a database file outside the checkout's scratch space, or a database on another host.",
+    "questions": [
+      "Which database and environment were selected?",
+      "What tables and predicates bound the change, and what result or recovery evidence exists?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "boundary-delete",
+    "title": "Deletion outside the checkout",
+    "explanation": "A command deleted content outside the recorded checkout and outside temporary or build space, or a path that could expand to a whole directory.",
+    "questions": [
+      "Resolve the target using the archived working directory and command context.",
+      "Was the content created for this task, preserved elsewhere, or potentially pre-existing?",
+      "What establishes execution, affected contents, and recovery?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "permissions",
+    "title": "Permissions broadened",
+    "explanation": "A command made a path writable by everyone or setuid, or gave a path outside the checkout a new owner.",
+    "questions": [
+      "Which resource and mode or owner were selected?",
+      "Does this broaden access, repair permissions, or protect sensitive content?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "publication",
+    "title": "Published release deleted or replaced",
+    "explanation": "A command deleted a release, or replaced assets others may already have downloaded.",
+    "questions": [
+      "Which repository and release were selected?",
+      "What request covered the operation, and who may already depend on the release?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "process",
+    "title": "Every instance of a program stopped",
+    "explanation": "A process signal matched a program by name, so it can stop other tasks' processes too.",
+    "questions": [
+      "What could the selector match?",
+      "Is there launch or ownership evidence, and was unrelated work affected?"
+    ],
+    "danger": "low",
+    "enabled": true
+  },
+  {
+    "id": "api",
+    "title": "Remote service changed by an API request",
+    "explanation": "An HTTP request with a mutating method went to a service that is not local.",
+    "questions": [
+      "Which endpoint, method, account, and resource were selected?",
+      "Was this a test or a consequential change, and what does the response establish?"
+    ],
+    "danger": "low",
+    "enabled": true
+  },
+  {
+    "id": "local-history",
+    "title": "Shared Git work discarded",
+    "explanation": "A command force-deleted a shared branch, or dropped a stash entry by position. Every worktree shares one stash.",
+    "questions": [
+      "Which refs or saved work were selected?",
+      "Was the work preserved, and whose work was it?"
+    ],
+    "danger": "low",
     "enabled": true
   }
-], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v1" };
-datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
+], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v3" };
+datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, danger_rank: card.danger === "high" ? 3 : 2, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
@@ -468,6 +534,7 @@ export const busyStatus = {
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
   freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
+  library: {...idleStatus.library, wal_bytes: 64e6},
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -638,6 +705,11 @@ export const defaultApi = {
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
   "GET /api/sync/status": syncStatus,
+  "GET /api/operations": { journal: { recent: [
+    { id: "op-index-history", root_id: "op-index-history", kind: "index.changes.manual", label: "Index changes", trigger: "user", process: "service", state: "succeeded", started_at: iso(145000), updated_at: iso(120000), ended_at: iso(120000), legacy_ref: "run-0" },
+    { id: "op-findings-history", root_id: "op-findings-history", kind: "analysis.findings", label: "Update findings", trigger: "schedule", process: "service", state: "succeeded", started_at: iso(360000), updated_at: iso(300000), ended_at: iso(300000) },
+    { id: "op-backup-history", root_id: "op-backup-history", kind: "backup.local", label: "Back up", trigger: "user", process: "service", state: "failed", error: "Destination unavailable", started_at: iso(600000), updated_at: iso(540000), ended_at: iso(540000) },
+  ] } },
   "GET /api/sync/issues": { issues: [] },
   "GET /api/sync/settings": syncSettings,
   "GET /api/sync/history": { history: syncHistory },
@@ -654,6 +726,7 @@ export const defaultApi = {
   "GET /api/findings/safety/settings": safetySettingsFixture,
   "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),
   "GET /api/findings/safety/:id": ({ params }) => ({ ...safetyDetailFixture, ...safetyFixtures.cases.find(item => item.id === params.id) }),
+  "POST /api/findings/safety/bulk": ({ body }) => ({ ok: true, count: body?.ids?.length ?? 0 }),
   "POST /api/findings/safety/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Review these archived safety questions. Investigate and recommend; make no changes.\nUse get_safety_case for each case:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
   "POST /api/findings/seen": { ok: true },
   "POST /api/findings/refresh": { started: true },

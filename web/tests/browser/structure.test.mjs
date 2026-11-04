@@ -137,6 +137,15 @@ const overTimeReady = 'section[aria-label="Over time"][aria-busy="false"] .usage
 const storageBreakdown = defaultApi["GET /api/health/storage/breakdown"];
 const compactableBreakdown = { ...storageBreakdown, catalog_free_bytes: 31e9, compact_needs_bytes: 70e9,
   parts: storageBreakdown.parts.flatMap(part => part.key === "catalog_database" ? [{ ...part, bytes: 63e9 }, { key: "catalog_free", label: "Free space in the catalog", bytes: 31e9 }] : [part]) };
+const backgroundTaskStatus = { ...busyStatus,
+  operations: [{ ...busyStatus.operations[0], kind: 'background.update', variant: 'frequent', label: 'Frequent update', priority: 'background',
+    step: { index: 2, count: 2, name: 'Repositories & merges', unit: null, done: 0, total: null } }],
+  background: { ...idleStatus.background,
+    items: idleStatus.background.items.map(item => item.id === 'repositories' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
+    cadences: idleStatus.background.cadences.map(cadence => cadence.id === 'frequent' ? { ...cadence, state: 'running', state_label: 'Updating now' } : cadence),
+  },
+  attention: [],
+};
 const ROUTES = [
   {name:"Waiting and Compaction",url:"/analyze?analyze_topic=thinking-overview&analyze_data=model_requests",ready:'.thinking-dashboard[aria-busy="false"] .thinking-overview-stats'},
   ...['time','heatmap','histogram','reasoning','wait-box','calendar'].map(view=>({name:'Thinking '+view,url:'/analyze?'+new URLSearchParams({analyze_topic:'thinking-detail',analyze_data:'model_requests',thinking:JSON.stringify({view,groupBy:'model_effort'})}),ready:'.thinking-dashboard[aria-busy="false"] .thinking-population'})),
@@ -257,6 +266,10 @@ const ROUTES = [
       while (await closed.count()) await closed.first().click();
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
+  { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
+    api: {'GET /api/status/stream': eventStream(backgroundTaskStatus), 'GET /api/status': backgroundTaskStatus},
+    open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosStatusPanel .pharos-status-position-track',
+  },
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
@@ -393,11 +406,11 @@ const ROUTES = [
   })),
   { name: "Analyze query recovery", url: "/analyze?analyze_mode=query&analyze_data=usage&q_usage=invalid", ready: ".query-recovery", open: page => page.getByRole("button", { name: "Reset table", exact: true }).click(), shown: ".usage-workspace-table .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
-  { name: "Safety reviews", url: "/findings?optimize_area=safety", ready: ".safety-card" },
-  { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .qt-row" },
+  { name: "Safety notices", url: "/findings?optimize_area=safety", ready: ".safety-check-card", open: page => page.locator(".safety-check-card input[type=checkbox]").first().check(), shown: ".safety-check-cards .safety-selection-toolbar" },
+  { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .findings-cart li", open: page => page.locator(".safety-table .qt-row input[type=checkbox]").first().check(), shown: ".safety-selection-toolbar" },
   { name: "Safety settings", url: "/findings?optimize_area=safety&view=settings", ready: ".safety-check" },
   { name: "Safety evidence", url: "/findings?optimize_area=safety&safety_case=safety_sample", ready: ".safety-detail", open: async page => { await page.locator('.safety-evidence summary').click(); }, shown: '.safety-evidence[open] pre' },
-  { name: "Safety prompt", url: "/findings?optimize_area=safety", ready: ".safety-card", open: async page => { await page.getByRole('button', { name: 'Review prompt (1 ticked)' }).click(); }, shown: '.findings-dialog' },
+  { name: "Safety prompt", url: "/findings?optimize_area=safety", ready: ".safety-check-card", open: async page => { await page.getByRole('button', { name: 'Review prompt (1 notice)' }).click(); }, shown: '.findings-dialog' },
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
@@ -802,6 +815,38 @@ test("Background Processing items drag to another schedule for a week", { skip }
   await page.getByRole('button', { name: 'Run Findings now', exact: true }).focus();
   await page.evaluate(() => window.pharosBackground.render());
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Run Findings now');
+});
+
+test("Background Processing shares the busy switch across Hourly and Daily and shows work history", { skip }, async t => {
+  let holdWhenBusy = true;
+  const { page, calls, settled, shot } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row', api: {
+    'POST /api/background/settings': ({ body }) => {
+      holdWhenBusy = body.hold_when_busy;
+      return { ...defaultApi['GET /api/background'], settings: { ...defaultApi['GET /api/background'].settings, hold_when_busy: holdWhenBusy } };
+    },
+  } });
+  const schedule = page.locator('#backgroundSchedule');
+  assert.equal(await schedule.getByText('What it costs').count(), 0);
+  assert.equal(await schedule.getByText('Be considerate').count(), 0);
+  const hourly = schedule.locator('.bg-col[data-cadence="hourly"]').getByRole('switch', { name: 'Hold while busy' });
+  const daily = schedule.locator('.bg-col[data-cadence="daily"]').getByRole('switch', { name: 'Hold while busy' });
+  assert.ok(await hourly.isVisible());
+  assert.ok(await daily.isVisible());
+  assert.equal(await schedule.locator('.bg-mode').getByRole('switch').count(), 0);
+  await hourly.uncheck();
+  await settled();
+  assert.equal(await daily.isChecked(), false);
+  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings' && call.body?.hold_when_busy === false));
+  await daily.check();
+  await settled();
+  assert.equal(await hourly.isChecked(), true);
+  assert.equal(calls.filter(call => call.method === 'POST' && call.path === '/api/background/settings' && 'hold_when_busy' in call.body).length, 2);
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
+  assert.equal(await page.getByLabel('Last run cost').count(), 0);
+  await shot('background-processing');
+  await history.scrollIntoViewIfNeeded();
+  await shot('work-history');
 });
 
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {

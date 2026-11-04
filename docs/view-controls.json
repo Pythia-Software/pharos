@@ -169,6 +169,14 @@
     },
     {
       "file": "web/src/habits-card.ts",
+      "field": "habits_shape_days"
+    },
+    {
+      "file": "web/src/habits.tsx",
+      "field": "habits_shape_days"
+    },
+    {
+      "file": "web/src/habits-card.ts",
       "field": "habits_streak"
     },
     {
@@ -1073,9 +1081,9 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
-      "key": "f96939e6262189c2:1",
+      "key": "753c06d3723ca570:0",
       "file": "internal/archive/assets/background.js",
-      "owner": "render",
+      "owner": "renderColumns",
       "tag": "input",
       "control": "'input'",
       "contract": "settings",
@@ -5753,6 +5761,15 @@
       "reason": "Writes habits_punchcard through useViewState."
     },
     {
+      "key": "bdac7b450f1fa738:0",
+      "file": "web/src/habits.tsx",
+      "owner": "WorkdayShape",
+      "tag": "ChartSelect",
+      "control": "value={String(days)} onChange={onDays}",
+      "contract": "view.habits_shape_days",
+      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanel's useViewState binding."
+    },
+    {
       "key": "0cc6b34321064cd2:0",
       "file": "web/src/home.tsx",
       "owner": "HomePage",
@@ -6580,15 +6597,6 @@
       "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
     },
     {
-      "key": "9a4c889d09545973:0",
-      "file": "web/src/safety.tsx",
-      "owner": "actions",
-      "tag": "button",
-      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Dismissed. You can bring it back at any time.\")}",
-      "contract": "editing",
-      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
-    },
-    {
       "key": "9f6fc49bad424044:0",
       "file": "web/src/safety.tsx",
       "owner": "actions",
@@ -6596,6 +6604,51 @@
       "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
       "contract": "editing",
       "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "dfe8fb9c955132b5:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Acknowledged and closed. You can bring it back at any time.\")}",
+      "contract": "editing",
+      "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "8bf20d550a1a6e6b:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyCartCheck",
+      "tag": "input",
+      "control": "checked={all} onChange={event => onTick(event.target.checked)}",
+      "contract": "editing",
+      "reason": "Edits a risky action prompt basket (tick or remove every notice of one check); prompt contents are drafts for a handoff, not view state."
+    },
+    {
+      "key": "de7008472f395b64:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyCartCheck",
+      "tag": "button",
+      "control": "aria-label={`Remove “${check.title}” from this prompt`} onClick={onRemove}",
+      "contract": "editing",
+      "reason": "Edits a risky action prompt basket (tick or remove every notice of one check); prompt contents are drafts for a handoff, not view state."
+    },
+    {
+      "key": "4f0dde3a0577c82f:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyCheckCard",
+      "tag": "input",
+      "control": "checked={all} onChange={toggle} aria-label={`Select ${single ? \"the notice\" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`}",
+      "contract": "editing",
+      "reason": "Selects every notice a check card summarizes for the shared selection actions; a selection is a draft for an action, like the table's row checkboxes, not a view input."
+    },
+    {
+      "key": "06597ccc36d04224:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetyCheckCart",
+      "tag": "button",
+      "control": "onClick={() => onReview(group)}",
+      "contract": "editing",
+      "reason": "Opens the transient prompt-review dialog for one location's basket before a handoff; the dialog is an action, not view state."
     },
     {
       "key": "0b02d959799fef64:0",
@@ -6648,26 +6701,6 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "df39f809cdc2c8c1:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyPage",
-      "tag": "button",
-      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
-      "binding": "safety_case",
-      "contract": "view.safety_case",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "df39f809cdc2c8c1:1",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyPage",
-      "tag": "button",
-      "control": "data-view-field=\"safety_case\" onClick={() => select(card.id)}",
-      "binding": "safety_case",
-      "contract": "view.safety_case",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "e0307aedafa343ef:0",
       "file": "web/src/safety.tsx",
       "owner": "SafetyPage",
@@ -6676,6 +6709,51 @@
       "binding": "safety_list",
       "contract": "view.safety_list",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "28f05988e477e05e:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySelectionBar",
+      "tag": "button",
+      "control": "onClick={copyPrompts}",
+      "contract": "editing",
+      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "432b22e7a189ce67:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void review(item)}",
+      "contract": "editing",
+      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "c241e84a6ffc92c0:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void setState(\"restore\")}",
+      "contract": "editing",
+      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "e5dea662dbe25224:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void addToPrompts()}",
+      "contract": "editing",
+      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "fb34228103ff9d11:0",
+      "file": "web/src/safety.tsx",
+      "owner": "SafetySelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void setState(\"dismiss\")}",
+      "contract": "editing",
+      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
     },
     {
       "key": "2cdbc38b92746f90:0",

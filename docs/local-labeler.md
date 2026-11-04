@@ -338,8 +338,15 @@ schedule rather than one of their own:
 
   `labels_thread_budget`, when set, overrides the battery reduction too, and
   `labels_memory_budget_mb` applies to both. The runtime's budget is set
-  before each run (`Manager.SetBudget`): a smaller one stops idle workers
-  over it at once; workers in use finish their run.
+  before workers start (`Manager.SetBudget`): a smaller one stops idle workers
+  over it at once.
+- **Cores is a live target.** Message labels and agent events read their
+  Settings targets when workers start and every two minutes during an active
+  run. When the target changes, message labels finish their in-flight batches
+  and agent events finish their current scoring chunk, then replace the
+  workers with the new thread count. Queued work and finished results are
+  kept, and no app relaunch is needed. The shared budget and battery cap
+  still apply. Command-line runs keep the thread count they started with.
 - Low battery (under 20%) or Low Power Mode makes the item wait, as it does
   all background work, unless you Run now.
 

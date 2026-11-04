@@ -190,6 +190,26 @@ func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotCarriesCatalogWALSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.sqlite3")
+	if got := catalogWALBytes(path); got == nil || *got != 0 {
+		t.Fatalf("a missing WAL is empty: %v", got)
+	}
+	if err := os.WriteFile(path+"-wal", make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogWALBytes(path); got == nil || *got != 4096 {
+		t.Fatalf("WAL file size: %v", got)
+	}
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	want := catalogWALBytes(config.CatalogPath)
+	got := getStatus(t, server, "/api/status").Library["wal_bytes"]
+	if want == nil || got != float64(*want) {
+		t.Fatalf("WAL in service snapshot: got %v, want %v", got, want)
+	}
+}
+
 // The attention rules (§7.3) list only what the user can act on, each with
 // server words, a severity and where to act.
 func TestAttentionListsWhatTheUserCanActOn(t *testing.T) {
@@ -901,6 +921,31 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	}
 	if _, ok := broker.statusDocumentChecked(context.Background(), true)["resources"]; ok {
 		t.Fatal("the eject check carries no resources")
+	}
+}
+
+func TestBrokerStatusTimeoutKeepsProcessResources(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("reading another process needs proc_pid_rusage")
+	}
+	command := exec.Command("sleep", "30")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { command.Process.Kill(); command.Wait() })
+	unresponsive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer unresponsive.Close()
+	broker := newBrokerOperations(filepath.Join(t.TempDir(), "operations.json"))
+	broker.client.Timeout = 20 * time.Millisecond
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true,
+		Child: &applicationEndpoint{URL: unresponsive.URL, Token: "t", PID: command.Process.Pid}}})
+	entry := broker.statusDocument(context.Background())["libraries"].([]map[string]any)[0]
+	if entry["snapshot"] != nil || entry["error"] == nil {
+		t.Fatalf("the service snapshot should have timed out: %#v", entry)
+	}
+	summary, _ := entry["resources"].(*resourceSummary)
+	if summary == nil || len(summary.Processes) == 0 || summary.Processes[0].PID != command.Process.Pid {
+		t.Fatalf("broker still samples the service after its status request times out: %+v", summary)
 	}
 }
 

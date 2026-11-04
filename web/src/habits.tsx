@@ -49,13 +49,14 @@ function useHabits(mode: HabitsMode, days: number) {
   return { ...state, settings, update };
 }
 
-export function HabitsPanel() {
+export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
   const [mode, setMode] = useViewState<HabitsMode>("habits_streak", "all");
   const [weeks, setWeeks] = useViewState<string>("habits_weeks", "53");
   const [calendar, setCalendar] = useViewState<StreakActor>("habits_calendar", "you");
   const [weekends, setWeekends] = useViewState<string>("habits_weekends", "show");
   const [view, setView] = useViewState<PunchcardView>("habits_punchcard", "you");
   const [punchcardDays, setPunchcardDays] = useViewState<string>("habits_punchcard_days", "90");
+  const [shapeDays, setShapeDays] = useViewState<string>("habits_shape_days", "28");
   const [selected, setSelected] = useViewState<string>("habits_day", "");
   const { data, error, loading, settings, update } = useHabits(mode, punchcardDays === "all" ? 0 : Number(punchcardDays));
   if (error && !data) return <p className="query-table-error" role="alert">{error}</p>;
@@ -82,14 +83,15 @@ export function HabitsPanel() {
         <DayDetail data={data} day={day} settings={settings} onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))} />
       </div>
     </div>
-    <Punchcard data={data} view={view} onView={setView} days={punchcardDays} onDays={setPunchcardDays} />
-    <div className="habits-pair">
-      <WorkdayShape data={data} />
-      <Health data={data} />
+    <Health data={data} />
+    <div className="habits-pair habits-charts-pair">
+      <Punchcard data={data} view={view} onView={setView} days={punchcardDays} onDays={setPunchcardDays} />
+      <WorkdayShape data={data} days={Number(shapeDays)} onDays={setShapeDays} />
     </div>
+    {analysis}
+    <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
     <Automations data={data} />
     <HabitsSettingsPanel settings={settings} onChange={update} />
-    <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
   </section>;
 }
 
@@ -140,27 +142,29 @@ function Punchcard({ data, view, onView, days, onDays }: { data: HabitsSummary; 
   </div>;
 }
 
-function WorkdayShape({ data }: { data: HabitsSummary }) {
+const shapeRanges: Array<[string, string]> = [["7", "Last 7 days"], ["14", "Last 14 days"], ["28", "Last 28 days"], ["56", "Last 56 days"], ["90", "Last 90 days"]];
+function WorkdayShape({ data, days, onDays }: { data: HabitsSummary; days: number; onDays: (days: string) => void }) {
   return <div className="habits-card" data-pharos-target="section:habits-days">
     <Heading title="Your days" target="habits-days" />
-    <p className="muted">The last four weeks. The faint bar runs from your first engaged minute to your last; the solid pieces are when you were engaged, coloured by time of day.</p>
-    <div className="habits-scroll"><DaysChart data={data} /></div>
+    <div className="usage-chart-controls habits-controls"><ChartSelect label="Range" ariaLabel="Your days range" value={String(days)} onChange={onDays} options={shapeRanges} /></div>
+    <p className="muted">The faint bar runs from your first engaged minute to your last; the solid pieces are when you were engaged, coloured by time of day.</p>
+    <DaysChart data={data} count={days} />
   </div>;
 }
 
 function Health({ data }: { data: HabitsSummary }) {
   const health = useMemo(() => healthStats(data.days, 28), [data.days]);
   const percent = (value?: number) => value === undefined ? "—" : `${Math.round(value * 100)}%`;
-  return <div className="habits-card" data-pharos-target="section:habits-pace">
+  return <section className="habits-pace" data-pharos-target="section:habits-pace">
     <Heading title="Pace" target="habits-pace" />
     <p className="muted">The last four weeks.</p>
-    <div className="mcp-metrics habits-health">
+    <div className="mcp-metrics dashboard-stats habits-health">
       <div className="mcp-metric"><span>Days off</span><strong>{health.restDays}</strong><small>longest run without one: {streakDays(health.longestWithoutRest)}</small></div>
       <div className="mcp-metric"><span>Typical day</span><strong>{health.typicalHours === undefined ? "—" : `${health.typicalHours.toFixed(1)} h`}</strong><small>median engaged time on days you worked</small></div>
       <div className="mcp-metric"><span>Agents while you're away</span><strong>{health.leverage === undefined ? "—" : `${health.leverage.toFixed(1)}×`}</strong><small>unattended agent hours per engaged hour</small></div>
       <div className="mcp-metric"><span>Focus</span><strong>{percent(health.focusShare)}</strong><small>of engaged time in blocks of 25 min or more</small></div>
     </div>
-  </div>;
+  </section>;
 }
 
 function Automations({ data }: { data: HabitsSummary }) {
