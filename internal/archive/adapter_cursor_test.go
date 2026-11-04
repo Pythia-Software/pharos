@@ -776,15 +776,51 @@ func TestCursorSalvageLeavesANewerCopy(t *testing.T) {
 // copy, and a re-created subagent is the only copy of one Cursor deleted.
 func TestCursorForkKeepsWhatOnlyItHolds(t *testing.T) {
 	root := cursorFixture(t)
+	// A second fork holds a copied message the first does not.
+	const second = "c0000000-0000-4000-8000-00000000000a"
 	cursorWrite(t, root, func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorNew+":*", "composerData:"+cursorNew)
+		var headers string
+		if err := db.QueryRow(`SELECT value FROM cursorDiskKV WHERE key=?`, "composerConvHeaders:"+cursorFork+":000000").Scan(&headers); err != nil {
+			return err
+		}
+		cursorPut(t, db, cursorRow{"composerData:" + second, map[string]any{"_v": 18, "composerId": second, "name": "Again", "createdAt": 1793722101000, "headerLog": map[string]any{"chunkCount": 1, "count": 7},
+			"subagentInfo": map[string]any{"subagentType": 3, "parentComposerId": cursorNew, "forkedFromComposerId": cursorNew, "conversationLengthAtSpawn": 5, "toolCallId": "call-8"}}},
+			cursorRow{"bubbleId:" + second + ":" + cursorPrompt + "/s:1", map[string]any{"_v": 3, "type": 2, "text": "Counting words.", "createdAt": "2026-11-03T16:08:22.000Z"}})
+		_, err := db.Exec(`INSERT INTO cursorDiskKV(key, value) VALUES(?, ?)`, "composerConvHeaders:"+second+":000000", headers)
 		return err
 	})
+	// The parent was indexed, and its thinking changed since its forks copied it.
+	c, _ := testCatalog(t)
+	source := SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true}
+	cursorWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, 'Plan the file.', 'Plan the file well.') WHERE key=?`, "bubbleId:"+cursorNew+":"+cursorPrompt+"/s:0")
+		return err
+	})
+	ingestSource(t, c, source)
+	before := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=?`, cursorNew)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		if _, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorNew+":*", "composerData:"+cursorNew); err != nil {
+			return err
+		}
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, 'Still fine.', 'Still fine, twice.') WHERE key=?`, "bubbleId:"+cursorFork+":f2")
+		return err
+	})
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Still fine, twice.'`); n != 1 {
+		t.Fatalf("the group was not read again: %d", n)
+	}
+	if after := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=? AND (m.text NOT LIKE '%Plan the file.%')`, cursorNew); after != before {
+		t.Fatalf("the parent indexed before holds %d of its %d messages as it read them", after, before)
+	}
 	conversations := map[string]ConversationRecord{}
 	for _, conversation := range cursorRecords(t, root)[cursorNew].Conversations {
 		conversations[conversation.NativeID] = conversation
 	}
-	if parent := conversations[cursorNew]; parent.Coverage != "partial" || len(parent.Messages) == 0 || parent.Messages[0].NativeID != cursorPrompt {
+	parent, ids := conversations[cursorNew], map[string]bool{}
+	for _, message := range parent.Messages {
+		ids[message.NativeID] = true
+	}
+	if !parent.Copy || parent.Coverage != "partial" || len(parent.Messages) == 0 || parent.Messages[0].NativeID != cursorPrompt || !ids[cursorPrompt+"/s:1"] || !ids[cursorPrompt+"/s:0:thinking"] {
 		t.Fatalf("the deleted parent = %+v", parent)
 	}
 	if fork := conversations[cursorFork]; cursorKinds(fork.Messages) != "agent:message assistant:message" {

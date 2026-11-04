@@ -552,9 +552,11 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 	origin := a.original(database)
 	threads := []*cursorThread{}
 	byID := map[string]*cursorThread{}
-	// copies are the parents Cursor deleted, as their forks' copies hold them,
-	// and copiedAt when those forks copied them.
-	copies, copiedAt := map[string]*cursorThread{}, map[string]int64{}
+	// copies are the parents Cursor deleted, as their forks' copies hold
+	// them: the longest copy's headers, every fork's messages, and when the
+	// first of those forks copied them, from its place.
+	copies, copied, copiedAt := map[string][]string{}, map[string]map[string]map[string]any{}, map[string]int64{}
+	copiedFrom := map[string]cursorPlace{}
 	for _, member := range members {
 		thread, err := a.thread(tx, member)
 		if err != nil {
@@ -568,7 +570,7 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		// headers name them, which are the parent's. A parent read elsewhere
 		// holds them; once Cursor deletes the parent, the copy is all that is
 		// left of it, and is read as the parent (copies).
-		copied := map[string]bool{}
+		inCopy := map[string]bool{}
 		forked := firstString(info["forkedFromComposerId"])
 		inherited, _ := number(info["conversationLengthAtSpawn"])
 		if n := int(inherited); forked != "" && n > 0 && n <= len(thread.ids) {
@@ -583,21 +585,30 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 			}
 			if parent == nil || n <= len(parent.ids) && slices.Equal(thread.ids[:n], parent.ids[:n]) {
 				for _, id := range thread.ids[:n] {
-					copied[id] = true
+					inCopy[id] = true
 					delete(thread.missing, id)
 				}
 			}
-			if copy := copies[forked]; gone && (copy == nil || len(copy.ids) < n) {
-				// Partial: Cursor held more of it than a fork copied.
-				copies[forked] = &cursorThread{member: cursorComposer{id: forked, place: member.place}, data: map[string]any{}, ids: thread.ids[:n], missing: map[string]bool{}, short: true,
-					bubbles: slices.DeleteFunc(slices.Clone(thread.bubbles), func(bubble map[string]any) bool { return !copied[firstString(bubble["bubbleId"])] })}
-				at, _ := number(thread.data["createdAt"])
-				copiedAt[forked] = max(int64(at)*1e6, 1)
+			if gone {
+				if len(copies[forked]) < n {
+					copies[forked] = thread.ids[:n]
+				}
+				if copied[forked] == nil {
+					copied[forked] = map[string]map[string]any{}
+				}
+				for _, bubble := range thread.bubbles {
+					if id := firstString(bubble["bubbleId"]); inCopy[id] && copied[forked][id] == nil {
+						copied[forked][id] = bubble
+					}
+				}
+				if at, _ := number(thread.data["createdAt"]); copiedAt[forked] == 0 || int64(at)*1e6 < copiedAt[forked] {
+					copiedAt[forked], copiedFrom[forked] = max(int64(at)*1e6, 1), member.place
+				}
 			}
 		}
 		thread.calls, thread.copiedCalls = map[string]bool{}, map[string]bool{}
 		thread.bubbles = slices.DeleteFunc(thread.bubbles, func(bubble map[string]any) bool {
-			own := !copied[firstString(bubble["bubbleId"])]
+			own := !inCopy[firstString(bubble["bubbleId"])]
 			if call, _ := mapValueDefault(bubble["toolFormerData"])["toolCallId"].(string); call != "" {
 				if own {
 					thread.calls[call] = true
@@ -611,11 +622,15 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		byID[member.id] = thread
 	}
 	for _, id := range slices.Sorted(maps.Keys(copies)) {
-		copy := copies[id]
-		copy.calls, copy.copiedCalls = map[string]bool{}, map[string]bool{}
-		for _, bubble := range copy.bubbles {
-			if call, _ := mapValueDefault(bubble["toolFormerData"])["toolCallId"].(string); call != "" {
-				copy.calls[call] = true
+		// Partial: Cursor held more of it than a fork copied.
+		copy := &cursorThread{member: cursorComposer{id: id, place: copiedFrom[id]}, data: map[string]any{}, ids: copies[id], missing: map[string]bool{}, short: true,
+			calls: map[string]bool{}, copiedCalls: map[string]bool{}}
+		for _, header := range copy.ids {
+			if bubble := copied[id][header]; bubble != nil {
+				copy.bubbles = append(copy.bubbles, bubble)
+				if call, _ := mapValueDefault(bubble["toolFormerData"])["toolCallId"].(string); call != "" {
+					copy.calls[call] = true
+				}
 			}
 		}
 		threads = append([]*cursorThread{copy}, threads...)
@@ -652,6 +667,7 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		if conversation == nil {
 			continue
 		}
+		_, conversation.Copy = copies[member.id]
 		// Linked to its composer even when that is not read with it: deleted
 		// in Cursor, or not selected.
 		if member.parent != "" {

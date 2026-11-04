@@ -52,6 +52,11 @@ type ConversationRecord struct {
 	// keepStoredMessages). A partial conversation without it keeps every
 	// indexed message it lacks.
 	Unread []string `json:"Unread,omitempty"`
+	// Copy marks a conversation rebuilt from another's copy of it, as a
+	// Cursor fork holds its deleted parent's first messages: it only adds
+	// messages not yet indexed, never replacing what a read of the
+	// conversation itself wrote.
+	Copy bool `json:"Copy,omitempty"`
 	// Observed is the version of the source this copy was read from (see
 	// sourceVersion); not part of the record's digest.
 	Observed int64 `json:"-"`
