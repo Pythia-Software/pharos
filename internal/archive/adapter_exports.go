@@ -150,7 +150,8 @@ func (a *chatGPTAdapter) discoverFile(file string, emit func(WorkspaceRecord) er
 	for _, name := range chosen {
 		content, err := entries[name].Open()
 		if err != nil {
-			return fmt.Errorf("ChatGPT export %s: %s: %w", file, name, err)
+			failures = append(failures, fmt.Errorf("ChatGPT export %s: %s: %w", file, name, err))
+			continue
 		}
 		err = a.decode(content, file+"/"+name, origin+"/"+name, version, emit)
 		content.Close()
@@ -288,9 +289,6 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			}
 			continue
 		}
-		if metadata["is_visually_hidden_from_conversation"] == true {
-			continue
-		}
 		recipient := firstString(message["recipient"])
 		text, attachments := chatGPTContent(content)
 		switch {
@@ -341,10 +339,23 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			item.Kind, item.Text = "tool_result", jsonText(result)
 			add(item)
 		default:
-			if strings.TrimSpace(text) != "" {
-				item.Kind, item.Text = "message", text
-				add(item)
+			// Whatever text a node holds is read, under the node's ID, as
+			// the adapter before chatgpt-v2 read it: so a read holds every
+			// message an older one indexed, and replaces it.
+			if text == "" {
+				text = messageText(content["parts"])
 			}
+			if text == "" {
+				break
+			}
+			if metadata["is_visually_hidden_from_conversation"] == true {
+				// What ChatGPT hides from the person, such as its system
+				// prompt, is context, not their conversation.
+				add(injectedContext(item, "chatgpt_hidden", text))
+				break
+			}
+			item.Kind, item.Text = "message", text
+			add(item)
 		}
 		for index, attachment := range attachments {
 			attached := base(fmt.Sprintf(":part:%d", index))
@@ -389,13 +400,9 @@ func chatGPTContent(content map[string]any) (string, []map[string]any) {
 				}
 				continue
 			}
-			attachment := map[string]any{"type": defaultString(part["content_type"], "part")}
-			for _, key := range []string{"asset_pointer", "width", "height", "size_bytes", "format", "name", "mime_type"} {
-				if value, ok := part[key]; ok && value != nil {
-					attachment[key] = value
-				}
-			}
-			attachments = append(attachments, attachment)
+			// An image, a recording or a video frame, whole: its pointers
+			// may be nested.
+			attachments = append(attachments, part)
 		}
 	}
 	return strings.Join(texts, "\n"), attachments

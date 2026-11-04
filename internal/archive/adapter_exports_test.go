@@ -16,9 +16,13 @@ const (
 )
 
 // chatGPTNodeOf is one mapping node: a message from role, with its content,
-// under parent.
+// under parent; at 0, the message has no time, as ChatGPT's hidden ones.
 func chatGPTNodeOf(id, parent string, children []string, role string, at float64, content map[string]any, extra map[string]any) map[string]any {
-	message := map[string]any{"id": id, "author": map[string]any{"role": role}, "create_time": at, "content": content, "metadata": map[string]any{}, "recipient": "all"}
+	var created any
+	if at != 0 {
+		created = at
+	}
+	message := map[string]any{"id": id, "author": map[string]any{"role": role}, "create_time": created, "content": content, "metadata": map[string]any{}, "recipient": "all"}
 	for key, value := range extra {
 		message[key] = value
 	}
@@ -41,6 +45,7 @@ func chatGPTText(parts ...any) map[string]any {
 func chatGPTConversations() []any {
 	gpt := map[string]any{"metadata": map[string]any{"model_slug": "gpt-5"}}
 	hidden := map[string]any{"metadata": map[string]any{"is_visually_hidden_from_conversation": true}}
+	hiddenGPT := map[string]any{"metadata": map[string]any{"model_slug": "gpt-5", "is_visually_hidden_from_conversation": true}}
 	code := map[string]any{
 		"id": chatGPTCodeID, "conversation_id": chatGPTCodeID, "title": "Primes", "create_time": 1793720000.5, "update_time": 1793720100.25,
 		"current_node": "answer", "default_model_slug": "gpt-5",
@@ -49,9 +54,11 @@ func chatGPTConversations() []any {
 			"system":       chatGPTNodeOf("system", "root", []string{"instructions"}, "system", 0, chatGPTText("You are ChatGPT."), hidden),
 			"instructions": chatGPTNodeOf("instructions", "system", []string{"ask"}, "user", 0, map[string]any{"content_type": "user_editable_context", "user_profile": "", "user_instructions": "Answer briefly"}, hidden),
 			"ask": chatGPTNodeOf("ask", "instructions", []string{"first", "thoughts"}, "user", 1793720001, map[string]any{"content_type": "multimodal_text", "parts": []any{
-				map[string]any{"content_type": "image_asset_pointer", "asset_pointer": "file-service://file-abc", "width": 640, "height": 480}, "List the primes below 10"}}, nil),
+				map[string]any{"content_type": "image_asset_pointer", "asset_pointer": "file-service://file-abc", "width": 640, "height": 480}, "List the primes below 10",
+				map[string]any{"content_type": "real_time_user_audio_video_asset_pointer", "audio_asset_pointer": map[string]any{"content_type": "audio_asset_pointer", "asset_pointer": "sediment://file-voice"}, "frames_asset_pointers": []any{}},
+				map[string]any{"content_type": "audio_transcription", "text": "Only the odd ones?"}}}, nil),
 			"first":    chatGPTNodeOf("first", "ask", nil, "assistant", 1793720002, chatGPTText("Two, three, five."), gpt),
-			"thoughts": chatGPTNodeOf("thoughts", "ask", []string{"recap"}, "assistant", 1793720010, map[string]any{"content_type": "thoughts", "thoughts": []any{map[string]any{"summary": "Primes", "content": "Check each number below 10"}}}, gpt),
+			"thoughts": chatGPTNodeOf("thoughts", "ask", []string{"recap"}, "assistant", 1793720010, map[string]any{"content_type": "thoughts", "thoughts": []any{map[string]any{"summary": "Primes", "content": "Check each number below 10"}}}, hiddenGPT),
 			"recap":    chatGPTNodeOf("recap", "thoughts", []string{"call"}, "assistant", 1793720011, map[string]any{"content_type": "reasoning_recap", "content": "Thought for 2 seconds"}, gpt),
 			"call": chatGPTNodeOf("call", "recap", []string{"output"}, "assistant", 1793720012, map[string]any{"content_type": "code", "language": "python", "text": "print([2, 3, 5, 7])"},
 				map[string]any{"recipient": "python", "metadata": map[string]any{"model_slug": "gpt-5"}}),
@@ -66,11 +73,26 @@ func chatGPTConversations() []any {
 			"ask":     chatGPTNodeOf("ask", "", []string{"search"}, "user", 1793721001, chatGPTText("What's in the news?"), nil),
 			"search":  chatGPTNodeOf("search", "ask", []string{"results"}, "assistant", 1793721002, chatGPTText(`search("news")`), map[string]any{"recipient": "browser"}),
 			"results": chatGPTNodeOf("results", "search", []string{"older", "newer"}, "tool", 1793721003, map[string]any{"content_type": "tether_browsing_display", "result": "Headlines"}, map[string]any{"author": map[string]any{"role": "tool", "name": "browser"}}),
-			"older":   chatGPTNodeOf("older", "results", nil, "assistant", 1793721004, chatGPTText("Some headlines."), gpt),
+			// A part in another shape is read as text too.
+			"older": chatGPTNodeOf("older", "results", nil, "assistant", 1793721004, chatGPTText(map[string]any{"type": "text", "text": "Some headlines."}), gpt),
 			"newer":   chatGPTNodeOf("newer", "results", nil, "assistant", 1793721005, chatGPTText("Today's headlines."), gpt),
 		},
 	}
 	return []any{code, search}
+}
+
+// recordsMessage finds a message by its ID in any of records.
+func recordsMessage(records map[string]WorkspaceRecord, id string) (MessageRecord, bool) {
+	for _, record := range records {
+		for _, conversation := range record.Conversations {
+			for _, message := range conversation.Messages {
+				if message.NativeID == id {
+					return message, true
+				}
+			}
+		}
+	}
+	return MessageRecord{}, false
 }
 
 func chatGPTSource(path string) SourceConfig {
@@ -120,7 +142,7 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 	writeSourceFile(t, filepath.Join(dir, "conversations.json"), jsonText(chatGPTConversations()))
 	records := chatGPTRecords(t, dir)
 	code := records[chatGPTCodeID]
-	if len(records) != 2 || code.Title != "Primes" || code.Purpose != "List the primes below 10" {
+	if len(records) != 2 || code.Title != "Primes" || code.Purpose != "List the primes below 10\nOnly the odd ones?" {
 		t.Fatalf("records %v, code %+v", slices.Sorted(maps.Keys(records)), code)
 	}
 	conversation := code.Conversations[0]
@@ -136,11 +158,13 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 		got = append(got, message.NativeID+" "+message.Role+" "+message.Kind+" <"+message.PreviousNativeID+"> "+message.CallID+selected)
 	}
 	want := []string{
-		// The hidden system message is left out; the custom instructions
-		// are context.
-		"instructions system " + contextKind + " <> ",
+		// The hidden system message and the custom instructions are
+		// context.
+		"system system " + contextKind + " <> ",
+		"instructions system " + contextKind + " <system> ",
 		"ask user message <instructions> ",
 		"ask:part:0 user attachment <instructions> ",
+		"ask:part:1 user attachment <instructions> ",
 		// The regenerated reply is kept, off the current branch.
 		"first assistant message <ask>  (unselected)",
 		"thoughts assistant reasoning <ask> ",
@@ -161,8 +185,23 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 	if !strings.Contains(byID["call"].Text, `"tool":"python"`) || !strings.Contains(byID["call"].Text, "print([2, 3, 5, 7])") || !strings.Contains(byID["output"].Text, "[2, 3, 5, 7]") {
 		t.Fatalf("call %s, output %s", byID["call"].Text, byID["output"].Text)
 	}
-	if !strings.Contains(byID["ask:part:0"].Text, "file-service://file-abc") || !strings.Contains(byID["instructions"].Text, "Answer briefly") {
-		t.Fatalf("image %s, instructions %s", byID["ask:part:0"].Text, byID["instructions"].Text)
+	if !strings.Contains(byID["ask:part:0"].Text, "file-service://file-abc") || !strings.Contains(byID["ask:part:1"].Text, "sediment://file-voice") || !strings.Contains(byID["instructions"].Text, "Answer briefly") {
+		t.Fatalf("image %s, voice %s, instructions %s", byID["ask:part:0"].Text, byID["ask:part:1"].Text, byID["instructions"].Text)
+	}
+	if byID["ask"].Text != "List the primes below 10\nOnly the odd ones?" {
+		t.Fatalf("prompt %q", byID["ask"].Text)
+	}
+	// Every node with text is read under its ID, as the adapter before
+	// chatgpt-v2 read it, so a read replaces what that one indexed.
+	for _, raw := range chatGPTConversations() {
+		for id, node := range raw.(map[string]any)["mapping"].(map[string]any) {
+			message := mapValue(node.(map[string]any)["message"])
+			if text := messageText(mapValue(message["content"])["parts"]); text != "" {
+				if _, ok := recordsMessage(records, id); !ok {
+					t.Errorf("node %s, with text %q, is not read under its ID", id, text)
+				}
+			}
+		}
 	}
 
 	// Without a current node, the newest leaf's branch is selected.
@@ -174,6 +213,32 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 	}
 	if want := []string{"ask message", "search tool_call", "results tool_result", "newer message"}; !slices.Equal(selected, want) {
 		t.Fatalf("selected %v, want %v", selected, want)
+	}
+}
+
+// An export indexed before chatgpt-v2 read every branch as selected, and
+// tool messages as messages; reading it again replaces that.
+func TestChatGPTExportReplacesAnOlderIndex(t *testing.T) {
+	dir := t.TempDir()
+	writeSourceFile(t, filepath.Join(dir, "conversations.json"), jsonText(chatGPTConversations()))
+	c, _ := testCatalog(t)
+	older := chatGPTRecords(t, dir)[chatGPTCodeID]
+	messages := []MessageRecord{}
+	for _, message := range older.Conversations[0].Messages {
+		if message.Kind != "reasoning" && !strings.Contains(message.NativeID, ":") {
+			message.Kind, message.Selected, message.CallID = "message", true, ""
+			messages = append(messages, message)
+		}
+	}
+	older.Conversations = []ConversationRecord{older.Conversations[0]}
+	older.Conversations[0].Messages = messages
+	ingestRecords(t, c, older)
+	ingestSource(t, c, chatGPTSource(dir))
+	selected := func(id string) int {
+		return countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id=? AND selected=1`, id)
+	}
+	if selected("first") != 0 || selected("answer") != 1 || countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='output' AND kind='tool_result'`) != 1 {
+		t.Fatalf("the older index stays: first selected %d, answer %d", selected("first"), selected("answer"))
 	}
 }
 
@@ -270,5 +335,20 @@ func TestChatGPTExportDamageIsReported(t *testing.T) {
 	writeSourceFile(t, filepath.Join(sharded, "conversations-001.json"), jsonText(conversations))
 	if ids, err := read(sharded); err == nil || len(ids) != 2 {
 		t.Fatalf("a damaged shard: read %v, error %v", ids, err)
+	}
+	// In a ZIP too: the first shard's own header is damaged, and the ZIP's
+	// list of files is whole.
+	zipped := filepath.Join(t.TempDir(), "export.zip")
+	chatGPTZip(t, zipped, map[string]string{"conversations-000.json": jsonText(conversations[:1]), "conversations-001.json": jsonText(conversations[1:])})
+	data, err := os.ReadFile(zipped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(data, "XX")
+	if err := os.WriteFile(zipped, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := read(zipped); err == nil || !slices.Equal(ids, []string{chatGPTSearchID}) {
+		t.Fatalf("a damaged shard in a ZIP: read %v, error %v", ids, err)
 	}
 }
