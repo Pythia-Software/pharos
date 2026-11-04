@@ -209,22 +209,62 @@ transcript it was read from already holds the text.
 
 ### Tier 2: from local git (repositories only, read-only)
 
-- **Commits linked to the session.** A link comes either from a hash in the
-  transcript (direct, confidence 1.0) or by inference: the commit's author
-  time falls in the session window (plus a short grace period), on the
-  recorded branch, and it touches files the session edited. When several
-  sessions overlap a commit, the commit goes to the session with the
-  tightest window that contains it (CodeBurn's rule), at a lower
-  confidence. Every link stores its evidence, as `work_pr_links` does.
-- **Mainline.** Whether those commits reached mainline. This reuses
-  `git_integration.go`, applied to linked commits rather than only to
-  `workspaces.head_ref`.
-- **Reverts.** A later commit is a revert when its message is
-  `Revert "…"` with `This reverts commit <hash>`, or when its diff is the
-  exact inverse of the linked commit's diff.
-- **Per-commit numstat.**
-- **Git AI notes** (`refs/notes/ai`), when present, are read as Tier 2
-  evidence. They are never written.
+`internal/archive/outcome_git.go` asks local git about the repositories in
+which sessions changed files or printed a commit, using only checkouts this
+Mac recorded that still exist.
+
+- **When.** In background stages only: after the tool summaries in
+  incremental recovery, and as the "linking commits" phase of a library
+  update. It never runs in `ensureToolRollup`, which a page view can start.
+  Before each repository it yields to interactive queries, and git runs
+  under `nice -n 10` with a 60-second timeout for the log and 10 seconds for
+  everything else.
+- **Cache.** A repository's scan key is its refs (heads, remotes, tags and
+  `refs/notes/ai`) plus its sessions' edit windows, files and printed
+  commits. An unchanged key runs no `git log` and writes nothing, so the
+  cached views stay valid. A scan that could not start is keyed by its
+  reason; one that timed out is tried again when the repository changes or
+  on the next day.
+- **What it reads.** `git log --branches --remotes --tags --no-renames
+  --numstat` since a day before the earliest session edit: each commit's
+  hash, parent count, author and commit times, and lines per file.
+- **Commits linked to the session.** A link comes either from a hash the
+  session's own `git commit` printed (direct, confidence 1.0) or by
+  inference: the commit is not a merge, its author time falls in the
+  session's edit window (plus an hour of grace), and it touches a file the
+  session had edited by then. When several sessions qualify, the commit goes
+  to the one still editing its files, or that stopped nearest before it,
+  then to the tightest window (CodeBurn's rule), at confidence 0.5; a tie
+  links nothing. A 0.5 link is kept as a candidate but counts toward no
+  session's commits or label (see [Commit-linking
+  calibration](#commit-linking-calibration)). Every link stores its
+  evidence: the printed hash, or the author time, the window, the shared
+  files and the number of candidates.
+- **Mainline.** Mainline is `origin/HEAD`, else `origin/main` or
+  `origin/master`, else a local `main` or `master`. A linked commit landed
+  when mainline reaches it, or when a mainline commit since has the same
+  `git patch-id --stable` (a rebase, cherry-pick or one-commit squash). A
+  cherry-pick keeps the author time, so both copies link to the session;
+  the change is linked once, as the copy. In a shallow clone a commit
+  mainline does not reach is unknown, not "not landed", and so is a commit
+  whose patch could not be read.
+- **Reverts.** A later commit reverts a linked one when its message says
+  `This reverts commit <hash>`, or when it changes the same files with the
+  added and removed counts swapped and its patch-id equals the linked
+  commit's inverse patch-id (read with `--no-prefix`, since `-R` swaps the
+  `a/` and `b/` prefixes).
+- **Per-commit numstat** is stored as the commit's file count and line
+  totals.
+- **Git AI notes** (`refs/notes/ai`) are listed and recorded as a flag on
+  the commit. They are never written.
+
+What it stores: `git_commits` (one row per linked commit: hash, times,
+parents, counts, mainline and revert evidence), `session_commit_links`
+(method, confidence and evidence per link), `session_git` (each session's
+state and counts) and `git_repository_scans` (each repository's scan key
+and state on this host). The Library reads them as `git_check`,
+`git_check_reason`, `linked_commits` and `landed_commits`, and the outcome
+label as Landed, Committed or, for a revert, Reworked.
 
 ### Tier 3: from the forge
 
@@ -262,8 +302,8 @@ Each git-only fact has three distinct states, both in data and in the UI:
 
 | State | Meaning | Shown as |
 |---|---|---|
-| Not applicable | The project is a folder or none. | "Not a repository" / "No git data" |
-| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, shallow clone, checkout deleted or recorded on another Mac, repository over the size budget, or a timeout. | "Not checked", with the reason |
+| Not applicable | The project is a folder or none, or the session changed no file in its repository. | "Not a repository" / "No git data" / "Not applicable" |
+| Not checked | A repository, but Pharos could not inspect it. Reasons: no `git` binary, checkout deleted or recorded only on another Mac, a timeout, or git failing to read it. | "Not checked", with the reason |
 | None | Inspected, and nothing was found. | "Not on mainline", "No commits" |
 
 A "Not checked" state is never negative evidence.
@@ -273,10 +313,60 @@ A "Not checked" state is never negative evidence.
 | Evidence | Confidence |
 |---|---|
 | Hash printed by `git commit` in the session's own tool output, and the commit exists locally | 1.0 |
-| Hash printed by `git commit`, but the commit is not in any local repository | 0.9 (Tier 1 only) |
-| Inferred: author time in the window, on the recorded branch, touching the session's edited files, and the only containing session | 0.7 |
-| Inferred, and the tightest of several overlapping sessions | 0.5 |
+| Hash printed by `git commit`, but the commit is not in the local repository | Not linked; it stays a Tier 1 fact (`recorded_commits`) |
+| Inferred: author time in the edit window plus an hour, touching the session's edited files, not a merge, and the only containing session | 0.7 |
+| Inferred, and of several overlapping sessions the one editing nearest the commit (then the tightest window) | 0.5, a candidate: stored with its evidence, never counted |
+| Inferred, and tied for the tightest window | Not linked |
 | Inferred from time alone (no file overlap) | Not linked |
+
+Links of 0.7 and above count toward a session's linked and landed commits
+and its label.
+
+## Commit-linking calibration
+
+Measured on 2026-11-04 against the same backup copy as the rework
+calibration, with read-only git in this Mac's 47 recorded repositories
+(`outcome_git_probe_test.go`).
+
+- **Coverage.** 6,498 sessions were checked. 983 were not checked, each
+  with its reason: git could not read 2 repositories (477 sessions), no
+  checkout was recorded on this Mac (265), or the recorded checkouts are
+  gone (241).
+- **Speed.** A first pass over every repository took 1 m 53 s (2 m 2 s
+  beside a frontend build). The largest,
+  a TL1 experiment repository with about 4,100 linked commits, took 66 s of
+  git. A pass with nothing changed took 1.3 s and ran no `git log`
+  or write.
+- **Grace.** Of 787 commits whose session printed the hash and had edits,
+  186 were authored during the edits, 313 within 10 minutes after the last
+  edit, 140 within the hour, 48 within four hours, 87 later and 13 before
+  the first edit. An hour of grace covers 81%. Four hours would add 6% and
+  widen the overlap between sessions.
+- **Transcript hash vs inference.** For each commit a session printed, the
+  probe asked what inference alone would have linked:
+
+  | Case | Commits |
+  |---|---|
+  | The printing session edited a shared file in the window: inference picked it | 650 of 971 |
+  | ... at 0.7 (the only candidate) | 392 of 392 |
+  | ... at 0.5 (nearest of several) | 258 of 577 (45%) |
+  | The printing session made no edits ("Create PR", "Review changes") | 730 |
+  | Authored outside the printing session's window plus grace | 145 |
+  | A merge commit (never inferred) | 77 |
+  | Sharing no file the printing session edited | 34 |
+
+  The first rule, the tightest window alone, picked the printing session
+  in 59% of the 971. A session that edited a file once, an hour earlier,
+  has the tightest window but did not make the commit. Ranking first by
+  how recently each session edited the commit's files raised that to 67%,
+  and still left 0.5 links wrong more often than right, so they do not
+  count. When the printing session made no edits, a 0.7 link goes to the
+  session that did, which is the session whose work the commit holds.
+- **Labels.** Of 7,187 sessions with changes: Landed 1,577, Committed 339,
+  Changed and kept 4,955, Reworked 252 (9 counted commits were reverted), Changed
+  (too recent) 64, with 40,175 No changes and 16 Unknown. Counting 0.5
+  links would have made 498 more sessions Landed on evidence that is
+  wrong more often than right.
 
 ## Rework calibration
 
@@ -365,8 +455,8 @@ first and rework judged once per marked session (`session_rework_dirty`).
   (`workspace_sightings.host_id`), because that path may be an unrelated
   checkout here.
 - It never runs git on a request. Pages and MCP tools read stored facts.
-  Git runs in background stages with timeouts and cancellation, and caches
-  by repository tip.
+  Git runs in background stages at low priority, with timeouts and
+  cancellation, and caches by the repository's refs.
 - It never stores diffs or file contents. It stores hashes, paths, counts
   and timestamps.
 - It never makes a network call for git data.
@@ -500,6 +590,20 @@ head in, and writes `main_merge_*`. Its properties:
   events.
 - **Transcript commits and PR URLs:** nothing stores commit hashes from
   `git commit` output. PR URLs are stored only for Conductor.
+- **Linking on the recorded branch:** git does not record the branch a
+  commit was made on, branches are usually deleted after merging, and
+  Claude Code stores only a workspace's last branch. Inference uses the
+  edit window and shared files instead, and the branch a printed commit
+  names is kept only as evidence.
+- **Shallow clones and size:** a shallow clone is not a reason to skip a
+  repository. Only a mainline answer it cannot give is unknown. There is no
+  size budget: the log is bounded by time (since the earliest session edit)
+  and by its timeout.
+- **Mainline without a remote:** a repository with no `origin` uses its
+  local `main` or `master`, so local-only work can still land.
+- **Squash merges:** a squash of several commits has no single patch-id
+  match, so those commits stay Committed. A one-commit squash or a rebase
+  is recognised.
 - **Exports:** there is no Claude.ai export source; ChatGPT is the only chat
   export.
 - **`session_shape`:** neither `docs/session-shape.md` nor a `session_shape`
