@@ -246,12 +246,13 @@ func (a *chatGPTAdapter) decode(content io.Reader, file, origin string, version 
 // edited turns are siblings, kept unselected.
 func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string, version int64) WorkspaceRecord {
 	nativeID := defaultString(conversation.ConversationID, conversation.ID)
-	selected := chatGPTSelected(conversation)
+	children := chatGPTChildren(conversation.Mapping)
+	selected := chatGPTSelected(conversation, children)
 	messages := []MessageRecord{}
 	// read is the message each node, or the nearest node above it, was
 	// read as; calls and tools are each call node's message and tool.
 	read, calls, tools, kinds := map[string]string{}, map[string]string{}, map[string]string{}, map[string]string{}
-	for _, nodeID := range chatGPTOrder(conversation.Mapping) {
+	for _, nodeID := range chatGPTOrder(conversation.Mapping, children) {
 		node := conversation.Mapping[nodeID]
 		read[nodeID] = read[node.Parent]
 		message := node.Message
@@ -278,16 +279,15 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 		case "user_editable_context":
 			// The person's custom instructions, which ChatGPT hides and
 			// adds to the conversation: context, not what they wrote.
-			text := strings.TrimSpace(firstString(content["user_profile"]) + "\n\n" + firstString(content["user_instructions"]))
-			if text != "" {
+			if text := strings.TrimSpace(firstString(content["user_profile"]) + "\n\n" + firstString(content["user_instructions"])); text != "" {
 				add(injectedContext(item, "chatgpt_custom_instructions", text))
+				continue
 			}
-			continue
 		case "model_editable_context":
 			if text := strings.TrimSpace(firstString(content["model_set_context"])); text != "" {
 				add(injectedContext(item, "chatgpt_memory", text))
+				continue
 			}
-			continue
 		}
 		recipient := firstString(message["recipient"])
 		text, attachments := chatGPTContent(content)
@@ -394,6 +394,11 @@ func chatGPTContent(content map[string]any) (string, []map[string]any) {
 				texts = append(texts, part)
 			}
 		case map[string]any:
+			// Text in the shapes the adapter before chatgpt-v2 read too.
+			if kind := firstString(part["type"]); kind == "text" || kind == "input_text" || kind == "output_text" {
+				texts = append(texts, firstString(part["text"]))
+				continue
+			}
 			if part["content_type"] == "audio_transcription" {
 				if text := firstString(part["text"]); text != "" {
 					texts = append(texts, text)
@@ -411,7 +416,7 @@ func chatGPTContent(content map[string]any) (string, []map[string]any) {
 // chatGPTSelected marks the nodes on the conversation's current branch: the
 // path from its current node, or when the export names none from its
 // newest leaf, to the root.
-func chatGPTSelected(conversation chatGPTConversation) map[string]bool {
+func chatGPTSelected(conversation chatGPTConversation, children map[string][]string) map[string]bool {
 	parents := map[string]string{}
 	for id, node := range conversation.Mapping {
 		parents[id] = node.Parent
@@ -422,7 +427,7 @@ func chatGPTSelected(conversation chatGPTConversation) map[string]bool {
 		newest := ""
 		for id, node := range conversation.Mapping {
 			at := iso(node.Message["create_time"])
-			if len(node.Children) == 0 && node.Message != nil && (at > newest || at == newest && id > leaf) {
+			if len(children[id]) == 0 && node.Message != nil && (at > newest || at == newest && id > leaf) {
 				leaf, newest = id, at
 			}
 		}
@@ -442,24 +447,45 @@ func branchPath(parents map[string]string, leaf string) map[string]bool {
 	return selected
 }
 
-// chatGPTOrder lists a conversation's nodes each after its parent, siblings
-// in the order the export lists them, and any the tree doesn't reach last.
-func chatGPTOrder(mapping map[string]chatGPTNode) []string {
+// chatGPTChildren are each node's children: the nodes that name it as their
+// parent, since an export may not list them. They are in the order the
+// parent lists them, then by time.
+func chatGPTChildren(mapping map[string]chatGPTNode) map[string][]string {
+	children := map[string][]string{}
+	for _, id := range slices.Sorted(maps.Keys(mapping)) {
+		children[mapping[id].Parent] = append(children[mapping[id].Parent], id)
+	}
+	for parent, ids := range children {
+		listed := map[string]int{}
+		for index, child := range mapping[parent].Children {
+			listed[child] = index + 1
+		}
+		slices.SortStableFunc(ids, func(a, b string) int {
+			if listed[a] != listed[b] {
+				if listed[a] == 0 || listed[b] == 0 {
+					return listed[b] - listed[a]
+				}
+				return listed[a] - listed[b]
+			}
+			return strings.Compare(iso(mapping[a].Message["create_time"]), iso(mapping[b].Message["create_time"]))
+		})
+	}
+	return children
+}
+
+// chatGPTOrder lists a conversation's nodes each after its parent, and any
+// the tree doesn't reach last.
+func chatGPTOrder(mapping map[string]chatGPTNode, children map[string][]string) []string {
 	order, seen := []string{}, map[string]bool{}
 	var visit func(string)
 	visit = func(id string) {
 		if seen[id] {
 			return
 		}
-		if _, ok := mapping[id]; !ok {
-			return
-		}
 		seen[id] = true
 		order = append(order, id)
-		for _, child := range mapping[id].Children {
-			if mapping[child].Parent == id {
-				visit(child)
-			}
+		for _, child := range children[id] {
+			visit(child)
 		}
 	}
 	ids := slices.Sorted(maps.Keys(mapping))

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"archive/zip"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -70,12 +71,15 @@ func chatGPTConversations() []any {
 	search := map[string]any{
 		"id": chatGPTSearchID, "title": "News", "create_time": 1793721000, "update_time": 1793721100,
 		"mapping": map[string]any{
-			"ask":     chatGPTNodeOf("ask", "", []string{"search"}, "user", 1793721001, chatGPTText("What's in the news?"), nil),
+			"ask": chatGPTNodeOf("ask", "", []string{"search", "blank"}, "user", 1793721001, chatGPTText("What's in the news?"), nil),
+			// Parts that are only empty text, which the adapter before
+			// chatgpt-v2 read as a line break.
+			"blank":   chatGPTNodeOf("blank", "ask", nil, "system", 1793721002.5, chatGPTText("", ""), hidden),
 			"search":  chatGPTNodeOf("search", "ask", []string{"results"}, "assistant", 1793721002, chatGPTText(`search("news")`), map[string]any{"recipient": "browser"}),
 			"results": chatGPTNodeOf("results", "search", []string{"older", "newer"}, "tool", 1793721003, map[string]any{"content_type": "tether_browsing_display", "result": "Headlines"}, map[string]any{"author": map[string]any{"role": "tool", "name": "browser"}}),
 			// A part in another shape is read as text too.
-			"older": chatGPTNodeOf("older", "results", nil, "assistant", 1793721004, chatGPTText(map[string]any{"type": "text", "text": "Some headlines."}), gpt),
-			"newer":   chatGPTNodeOf("newer", "results", nil, "assistant", 1793721005, chatGPTText("Today's headlines."), gpt),
+			"older": chatGPTNodeOf("older", "results", nil, "assistant", 1793721004, chatGPTText("Some", map[string]any{"type": "text", "text": "headlines."}), gpt),
+			"newer": chatGPTNodeOf("newer", "results", nil, "assistant", 1793721005, chatGPTText("Today's headlines."), gpt),
 		},
 	}
 	return []any{code, search}
@@ -202,6 +206,32 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	if older, _ := recordsMessage(records, "older"); older.Text != "Some\nheadlines." {
+		t.Fatalf("mixed parts = %q", older.Text)
+	}
+
+	// An export that lists only each node's parent reads the same.
+	shape := func(records map[string]WorkspaceRecord) []string {
+		lines := []string{}
+		for _, id := range slices.Sorted(maps.Keys(records)) {
+			for _, message := range records[id].Conversations[0].Messages {
+				lines = append(lines, fmt.Sprintf("%s <%s> %t", message.NativeID, message.PreviousNativeID, message.Selected))
+			}
+		}
+		return lines
+	}
+	stripped := chatGPTConversations()
+	for _, raw := range stripped {
+		for _, node := range raw.(map[string]any)["mapping"].(map[string]any) {
+			delete(node.(map[string]any), "children")
+		}
+	}
+	parents := t.TempDir()
+	writeSourceFile(t, filepath.Join(parents, "conversations.json"), jsonText(stripped))
+	if got, want := shape(chatGPTRecords(t, parents)), shape(records); !slices.Equal(got, want) {
+		t.Fatalf("with parents only\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 
 	// Without a current node, the newest leaf's branch is selected.
