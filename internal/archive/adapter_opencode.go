@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,8 +24,8 @@ import (
 // which are neither read nor captured (opencodeCaptureTables).
 type opencodeAdapter struct {
 	baseAdapter
-	// selected, when set, limits reading to the sessions that started these
-	// groups (snapshotSessions).
+	// selected, when set, limits reading to these sessions, in groups whose
+	// root is among them (snapshotSessions).
 	selected map[string]bool
 }
 
@@ -203,10 +204,13 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 			groups[top] = append(groups[top], session)
 		}
 		for _, top := range roots {
-			if a.selected != nil && !a.selected[top] {
-				continue
-			}
 			members := groups[top]
+			if a.selected != nil {
+				if !a.selected[top] {
+					continue
+				}
+				members = slices.DeleteFunc(slices.Clone(members), func(member opencodeSession) bool { return !a.selected[member.id] })
+			}
 			// The root first, then its subagents a level at a time, each
 			// level by ID, so a subagent follows the one that started it.
 			levels := map[string]int{}
@@ -237,9 +241,10 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 	return plan, nil
 }
 
-// snapshotSessions lists the sessions in a database snapshot that start
-// their own groups; a superseded snapshot's that no newer one holds are
-// sessions deleted in OpenCode, and are read from it alone.
+// snapshotSessions lists the sessions in a database snapshot. A superseded
+// snapshot's that no newer one holds were deleted in OpenCode, and are read
+// from it alone: a group whose root was deleted, without its subagents a
+// newer snapshot still holds, which are newer there.
 func (a *opencodeAdapter) snapshotSessions(ctx context.Context, file string) (map[string]bool, error) {
 	db, err := openReadOnlySQLite(file)
 	if err != nil {
@@ -250,7 +255,7 @@ func (a *opencodeAdapter) snapshotSessions(ctx context.Context, file string) (ma
 	if err != nil || !tables["session_v2"] {
 		return map[string]bool{}, err
 	}
-	rows, err := queryMapsContext(ctx, db, `SELECT id FROM session_v2 WHERE parent_id IS NULL OR parent_id='' OR parent_id NOT IN (SELECT id FROM session_v2)`)
+	rows, err := queryMapsContext(ctx, db, `SELECT id FROM session_v2`)
 	ids := map[string]bool{}
 	for _, row := range rows {
 		ids[firstString(row["id"])] = true

@@ -338,7 +338,8 @@ func TestOpenCodeOlderSchemaIsReportedNotSkipped(t *testing.T) {
 }
 
 // A session deleted in OpenCode between two captures, before either was
-// indexed, is indexed from the older one.
+// indexed, is indexed from the older one; a subagent whose session remains
+// is not taken from it, and keeps what was added since.
 func TestOpenCodeSessionDeletedBeforeIndexingIsKept(t *testing.T) {
 	useHost(t, "host-a")
 	root := opencodeFixture(t)
@@ -347,7 +348,10 @@ func TestOpenCodeSessionDeletedBeforeIndexingIsKept(t *testing.T) {
 	runCapture(t, config)
 	db, err := sql.Open("sqlite", filepath.Join(root, "opencode.db"))
 	if err == nil {
-		_, err = db.Exec(`DELETE FROM session_part WHERE session_id='ses_parts'; DELETE FROM session_message WHERE session_id='ses_parts'; DELETE FROM session_v2 WHERE id='ses_parts'`)
+		_, err = db.Exec(`DELETE FROM session_part WHERE session_id='ses_parts'; DELETE FROM session_message WHERE session_id='ses_parts'; DELETE FROM session_v2 WHERE id='ses_parts';
+			INSERT INTO session_message VALUES('c3','ses_child','user',6,1793720009000,1793720009000,'{"time":{"created":1793720009000},"text":"One more look"}');
+			UPDATE session_v2 SET time_updated=1793720009000 WHERE id='ses_child';
+			DELETE FROM session_message WHERE session_id='ses_root'; DELETE FROM session_v2 WHERE id='ses_root'`)
 		db.Close()
 	}
 	if err != nil {
@@ -361,6 +365,9 @@ func TestOpenCodeSessionDeletedBeforeIndexingIsKept(t *testing.T) {
 		if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=?`, id); n != 1 {
 			t.Fatalf("%s: %d conversations", id, n)
 		}
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='c3'`); n != 1 {
+		t.Fatalf("the subagent's newer prompt: %d", n)
 	}
 }
 
@@ -416,13 +423,18 @@ INSERT INTO session_message VALUES('n1','ses_a','user',1,1793720005000,179372000
 	}
 }
 
-// Live verification reads a session as indexing does.
+// Verification reads a session as indexing does, live or from rows copied
+// before indexing.
 func TestOpenCodeSessionIsVerifiedLive(t *testing.T) {
-	c, _ := testCatalog(t)
-	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: opencodeFixture(t), Account: "local", Enabled: true}
-	ingestSource(t, c, source)
-	if result := c.auditUnit(t.Context(), firstSyncUnit(t, c, source), "manual", 0); result.Outcome != "passed" {
-		t.Fatalf("verification: %+v", result)
+	for _, recorded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "copied"}[recorded], func(t *testing.T) {
+			c, _ := testCatalog(t)
+			source := SourceConfig{Name: "opencode", Kind: "opencode", Path: opencodeFixture(t), Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": recorded}}
+			ingestSource(t, c, source)
+			if result := c.auditUnit(t.Context(), firstSyncUnit(t, c, source), "manual", 0); result.Outcome != "passed" {
+				t.Fatalf("verification: %+v", result)
+			}
+		})
 	}
 }
 
