@@ -343,3 +343,64 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("after new work: %d logs, %v", logs, f.links())
 	}
 }
+
+// A commit two sessions could have made goes to the session the checkout
+// that made it or the lines it adds point to, before the session editing
+// nearest the commit. In each case here the nearest is
+// the wrong one.
+func TestSessionGitContestedCommits(t *testing.T) {
+	f := newGitFixture(t)
+	repo := f.repo
+	for _, id := range []string{"writer", "bystander", "worktree", "main", "neither", "near"} {
+		f.session(id, "")
+	}
+	edit := func(session, name string, days float64, content string) {
+		t.Helper()
+		f.outcomeFixture.edit(session, filepath.Join(repo.dir, name), "repo-app", name, days, "", content)
+	}
+	// Lines: the commit adds the writer's lines.
+	edit("writer", "lines.go", 10.02, code("written", 0, 3))
+	edit("bystander", "lines.go", 10, code("other", 0, 3))
+	byLines := repo.commit(9.99, "Lines", map[string]string{"lines.go": code("written", 0, 3) + "\n"})
+	// Checkout: the commit was made in the worktree one session worked in.
+	tree := filepath.Join(t.TempDir(), "tree")
+	repo.git(time.Now(), "worktree", "add", "-q", "-b", "side", tree)
+	execTx(t, f.catalog.DB, `UPDATE workspace_sightings SET location='`+tree+`' WHERE workspace_id='worktree'`)
+	edit("worktree", "tree.go", 8.02, code("tree", 0, 2))
+	edit("main", "tree.go", 8, code("main", 0, 2))
+	byCheckout := (&gitRepository{t, tree}).commit(7.99, "Tree", map[string]string{"tree.go": "package tree\n"})
+	// No signal: the nearest, as a candidate.
+	edit("neither", "plain.go", 4.02, code("neither", 0, 2))
+	edit("near", "plain.go", 4, code("near", 0, 2))
+	nearest := repo.commit(3.99, "Plain", map[string]string{"plain.go": "package plain\n"})
+	f.refresh()
+
+	rows, err := queryMaps(f.catalog.DB, `SELECT workspace_id,hash,confidence,json_extract(evidence_json,'$.chosen_by') chosen_by FROM session_commit_links ORDER BY workspace_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, row := range rows {
+		got[firstString(row["workspace_id"])] = fmt.Sprintf("%s %v %v", firstString(row["hash"])[:7], row["confidence"], row["chosen_by"])
+	}
+	want := map[string]string{
+		"writer":   byLines[:7] + " 0.8 lines",
+		"worktree": byCheckout[:7] + " 0.9 checkout",
+		"near":     nearest[:7] + " 0.5 nearest",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("contested links:\n got %v\nwant %v", got, want)
+	}
+}
+
+func TestReadAddedLines(t *testing.T) {
+	hash := strings.Repeat("a", 40)
+	output := "\x1e" + hash + "\n\ndiff --git app/main.go app/main.go\nindex 1..2 100644\n--- app/main.go\n+++ app/main.go\n@@ -1 +1,2 @@\n-removed := old(1)\n" +
+		"+added := value(1)\n++++ looks like a header but is content\n diff --git context line\ndiff --git gone.go gone.go\ndeleted file mode 100644\n--- gone.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone := value(2)\n"
+	files := readAddedLines(output)[hash]
+	want := lineSet{}
+	fingerprintLines("added := value(1)\n+++ looks like a header but is content", want)
+	if len(files) != 1 || fmt.Sprint(files["app/main.go"]) != fmt.Sprint(want) {
+		t.Fatalf("added lines: %v", files)
+	}
+}

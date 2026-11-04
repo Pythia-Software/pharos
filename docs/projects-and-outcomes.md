@@ -227,14 +227,19 @@ Mac recorded that still exist.
   on the next day.
 - **What it reads.** `git log --branches --remotes --tags --no-renames
   --numstat` since a day before the earliest session edit: each commit's
-  hash, parent count, author and commit times, and lines per file.
+  hash, parent count, author and commit times, and lines per file. For a
+  commit several sessions could have made, also its diff and the HEAD
+  reflog of the candidates' checkouts. The diff's added lines are
+  fingerprinted and compared in memory, never stored.
 - **Commits linked to the session.** A link comes either from a hash the
   session's own `git commit` printed (direct, confidence 1.0) or by
   inference: the commit is not a merge, its author time falls in the
   session's edit window (plus an hour of grace), and it touches a file the
   session had edited by then. When several sessions qualify, the commit goes
-  to the one still editing its files, or that stopped nearest before it,
-  then to the tightest window (CodeBurn's rule), at confidence 0.5; a tie
+  to the one whose checkout's reflog made it (0.9), else to the one whose
+  kept lines it adds the most of (0.8), comparing line fingerprints in
+  memory; else to the one still editing its files, or that stopped nearest
+  before it, then to the tightest window (CodeBurn's rule), at 0.5; a tie
   links nothing. A 0.5 link is kept as a candidate but counts toward no
   session's commits or label (see [Commit-linking
   calibration](#commit-linking-calibration)). Every link stores its
@@ -315,7 +320,9 @@ A "Not checked" state is never negative evidence.
 | Hash printed by `git commit` in the session's own tool output, and the commit exists locally | 1.0 |
 | Hash printed by `git commit`, but the commit is not in the local repository | Not linked; it stays a Tier 1 fact (`recorded_commits`) |
 | Inferred: author time in the edit window plus an hour, touching the session's edited files, not a merge, and the only containing session | 0.7 |
-| Inferred, and of several overlapping sessions the one editing nearest the commit (then the tightest window) | 0.5, a candidate: stored with its evidence, never counted |
+| Inferred, of several overlapping sessions, the one whose checkout's reflog made the commit | 0.9 |
+| Inferred, of several, the one whose kept lines the commit adds the most of | 0.8 |
+| Inferred, of several, the one editing nearest the commit (then the tightest window) | 0.5, a candidate: stored with its evidence, never counted |
 | Inferred, and tied for the tightest window | Not linked |
 | Inferred from time alone (no file overlap) | Not linked |
 
@@ -332,11 +339,11 @@ calibration, with read-only git in this Mac's 47 recorded repositories
   with its reason: git could not read 2 repositories (477 sessions), no
   checkout was recorded on this Mac (265), or the recorded checkouts are
   gone (241).
-- **Speed.** A first pass over every repository took 1 m 53 s (2 m 2 s
-  beside a frontend build). The largest,
-  a TL1 experiment repository with about 4,100 linked commits, took 66 s of
-  git. A pass with nothing changed took 1.3 s and ran no `git log`
-  or write.
+- **Speed.** A first pass over every repository took 2 m 21 s, 28 s of it
+  reading the diffs of contested commits (1 m 53 s without). The largest, a
+  TL1 experiment repository with about 4,100 linked commits, took 66 s of
+  git. A pass with nothing changed took under 1.3 s and ran no `git log` or
+  write.
 - **Grace.** Of 787 commits whose session printed the hash and had edits,
   186 were authored during the edits, 313 within 10 minutes after the last
   edit, 140 within the hour, 48 within four hours, 87 later and 13 before
@@ -347,26 +354,41 @@ calibration, with read-only git in this Mac's 47 recorded repositories
 
   | Case | Commits |
   |---|---|
-  | The printing session edited a shared file in the window: inference picked it | 650 of 971 |
-  | ... at 0.7 (the only candidate) | 392 of 392 |
-  | ... at 0.5 (nearest of several) | 258 of 577 (45%) |
+  | The printing session edited a shared file in the window: inference picked it | 916 of 971 (94%) |
+  | ... the only candidate (0.7) | 392 of 392 |
+  | ... of several, by the checkout that made it (0.9) | 13 of 13 |
+  | ... of several, by the lines it adds (0.8) | 499 of 542 (92%) |
+  | ... of several, nearest the commit (0.5, not counted) | 12 of 22 |
   | The printing session made no edits ("Create PR", "Review changes") | 730 |
   | Authored outside the printing session's window plus grace | 145 |
   | A merge commit (never inferred) | 77 |
   | Sharing no file the printing session edited | 34 |
 
-  The first rule, the tightest window alone, picked the printing session
-  in 59% of the 971. A session that edited a file once, an hour earlier,
-  has the tightest window but did not make the commit. Ranking first by
-  how recently each session edited the commit's files raised that to 67%,
-  and still left 0.5 links wrong more often than right, so they do not
-  count. When the printing session made no edits, a 0.7 link goes to the
+  When the printing session made no edits, an inferred link goes to the
   session that did, which is the session whose work the commit holds.
-- **Labels.** Of 7,187 sessions with changes: Landed 1,577, Committed 339,
-  Changed and kept 4,955, Reworked 252 (9 counted commits were reverted), Changed
-  (too recent) 64, with 40,175 No changes and 16 Unknown. Counting 0.5
-  links would have made 498 more sessions Landed on evidence that is
-  wrong more often than right.
+- **Telling contested commits apart.** 577 of the 971 could have been made
+  by several sessions. Each way of choosing among them, on its own:
+
+  | Signal | Right | Wrong | Undecided |
+  |---|---|---|---|
+  | The tightest window (the brief's rule) | 59% of the 971 overall | | |
+  | Nearest edit, then tightest window | 258 | 319 | 0 |
+  | Lines the commit adds that the session kept | 512 | 43 | 22 |
+  | The checkout whose reflog made it | 13 | 0 | 564 |
+  | The session's recorded branch holds it | 0 | 0 | 577 |
+
+  A session that edited a file once, an hour earlier, has the tightest
+  window but did not make the commit, so nearest edit comes first; it is
+  still wrong more often than right, so a link it alone decides is a
+  candidate and counts toward nothing. The lines a commit adds name its
+  session 92% of the time and decide 96% of contested commits. Reflogs
+  are exact but rarely there: they expire after 90 days and go with a
+  deleted worktree. The branch decided nothing, since recorded branches
+  are deleted after merging or hold every older mainline commit, so it is
+  not read.
+- **Labels.** Of 7,187 sessions with changes: Landed 2,217, Committed 268,
+  Changed and kept 4,388, Reworked 252 (9 counted commits were reverted),
+  Changed (too recent) 62, with 40,175 No changes and 16 Unknown.
 
 ## Rework calibration
 
@@ -594,7 +616,12 @@ head in, and writes `main_merge_*`. Its properties:
   commit was made on, branches are usually deleted after merging, and
   Claude Code stores only a workspace's last branch. Inference uses the
   edit window and shared files instead, and the branch a printed commit
-  names is kept only as evidence.
+  names is kept only as evidence. Tried as a tie-breaker between sessions,
+  the recorded branch decided none of 577 contested commits.
+- **The tightest window:** on its own it picked the right session 59% of
+  the time. Contested commits are decided first by the checkout that made
+  them and the lines they add, and the window only orders what is left, as
+  an uncounted candidate.
 - **Shallow clones and size:** a shallow clone is not a reason to skip a
   repository. Only a mainline answer it cannot give is unknown. There is no
   size budget: the log is bounded by time (since the earliest session edit)
