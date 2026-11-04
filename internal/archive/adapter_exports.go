@@ -456,10 +456,26 @@ func chatGPTSelected(conversation chatGPTConversation, children map[string][]str
 			}
 			return known[id]
 		}
+		// latest is the latest time on a node's path, so a message without
+		// one takes its branch's.
+		times := map[string]string{}
+		var latest func(string) string
+		latest = func(id string) string {
+			if at, ok := times[id]; ok {
+				return at
+			}
+			times[id] = ""
+			node, ok := conversation.Mapping[id]
+			if !ok {
+				return ""
+			}
+			times[id] = max(iso(node.Message["create_time"]), latest(node.Parent))
+			return times[id]
+		}
 		leaf = ""
 		newest := ""
 		for _, id := range slices.Sorted(maps.Keys(conversation.Mapping)) {
-			at := iso(conversation.Mapping[id].Message["create_time"])
+			at := latest(id)
 			if conversation.Mapping[id].Message != nil && !below(id) && (leaf == "" || at >= newest) {
 				leaf, newest = id, at
 			}

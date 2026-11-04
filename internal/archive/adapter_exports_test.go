@@ -248,6 +248,11 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 	if got := chatGPTSelected(tied, chatGPTChildren(tied.Mapping)); !got["a"] || !got["z"] {
 		t.Fatalf("selected %v", got)
 	}
+	// A message without a time takes its branch's.
+	untimed := chatGPTConversation{Mapping: map[string]chatGPTNode{"q": timed("", 1), "old": timed("q", 100), "new": timed("q", 200), "tail": {Parent: "new", Message: map[string]any{}}}}
+	if got := chatGPTSelected(untimed, chatGPTChildren(untimed.Mapping)); !got["tail"] || got["old"] {
+		t.Fatalf("with an untimed last message: selected %v", got)
+	}
 
 	// Without a current node, the newest leaf's branch is selected.
 	selected := []string{}
