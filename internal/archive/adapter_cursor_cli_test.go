@@ -37,7 +37,8 @@ type cursorCLIChatSpec struct {
 // cursorCLIConversation is a chat in the shapes this Mac's holds: the CLI's
 // system prompt and context, a timed prompt, a reply with encrypted thinking
 // and a failed shell call, an edit and a closing reply. An older root holds a
-// reply that was rewound, and another a prefix of the latest.
+// reply that was rewound, with the model it ran on, and another a prefix of
+// the latest.
 func cursorCLIConversation() cursorCLIChatSpec {
 	cursor := func(model string) map[string]any {
 		return map[string]any{"cursor": map[string]any{"modelName": model}}
@@ -60,7 +61,7 @@ func cursorCLIConversation() cursorCLIChatSpec {
 		map[string]any{"role": "tool", "id": "t2", "content": []any{map[string]any{"type": "tool-result", "toolCallId": "call2", "toolName": "StrReplace", "result": "ok"}},
 			"providerOptions": outcome(map[string]any{"success": map[string]any{"localExecutionTimeMs": 5}})},
 		map[string]any{"role": "assistant", "id": "a3", "content": []any{map[string]any{"type": "text", "text": "Fixed."}}},
-		map[string]any{"role": "assistant", "id": "r1", "content": []any{map[string]any{"type": "text", "text": "Abandoned reply."}}},
+		map[string]any{"role": "assistant", "id": "r1", "content": []any{map[string]any{"type": "text", "text": "Abandoned reply.", "providerOptions": cursor("cursor-old")}}},
 	}
 	return cursorCLIChatSpec{
 		agent: cursorCLIChatA, folder: "/work/app", messages: messages,
@@ -197,7 +198,8 @@ func TestCursorCLIChatKeepsItsTurnsAndTools(t *testing.T) {
 		t.Fatalf("records = %v", records)
 	}
 	record := records[cursorCLIChatA]
-	if record.SourceKind != "cursor-cli" || record.Title != "Fix the build" || record.Location != "/work/app" || record.Metadata["mode"] != "agent" || len(record.Conversations) != 1 {
+	// What was rewound is neither the work's outcome nor its model.
+	if record.SourceKind != "cursor-cli" || record.Title != "Fix the build" || record.Outcome != "Fixed." || record.Location != "/work/app" || record.Metadata["mode"] != "agent" || len(record.Conversations) != 1 {
 		t.Fatalf("record = %+v", record)
 	}
 	conversation := record.Conversations[0]
@@ -242,7 +244,9 @@ func TestCursorCLIChatKeepsItsTurnsAndTools(t *testing.T) {
 }
 
 // A message whose blob the CLI no longer holds makes the chat partial, and
-// what was indexed from it stays.
+// what was indexed from it stays: one the latest root lists, one only an
+// older root does, and the latest root itself. So does a message an older
+// root repeats.
 func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 	c, _ := testCatalog(t)
 	root := filepath.Join(t.TempDir(), ".cursor")
@@ -262,6 +266,55 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 	ingestSource(t, c, source)
 	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before || countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Fixed.'`) != 1 {
 		t.Fatalf("messages %d, before %d", after, before)
+	}
+	rewound := cursorCLIBlob([]byte(jsonText(cursorCLIConversation().messages[8])))
+	cursorCLIStore(t, dir, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM blobs WHERE id=?`, rewound)
+		return err
+	})
+	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" || !slices.Contains(record.Unread, rewound[:16]) {
+		t.Fatalf("without an older root's message: coverage %s, unread %v", record.Coverage, record.Unread)
+	}
+	ingestSource(t, c, source)
+	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before {
+		t.Fatalf("without an older root's message: messages %d, before %d", after, before)
+	}
+	// The latest root is gone, alone: the longest one left orders what it
+	// lists.
+	c, _ = testCatalog(t)
+	root = filepath.Join(t.TempDir(), ".cursor")
+	dir = cursorCLIWriteChat(t, root, cursorCLIConversation())
+	source = cursorCLISource(root)
+	ingestSource(t, c, source)
+	var latest string
+	cursorCLIStore(t, dir, func(db *sql.DB) error {
+		var value string
+		if err := db.QueryRow(`SELECT value FROM meta`).Scan(&value); err != nil {
+			return err
+		}
+		raw, _ := hex.DecodeString(value)
+		latest = firstString(mapValueDefault(parseJSONValue(string(raw)))["latestRootBlobId"])
+		_, err := db.Exec(`DELETE FROM blobs WHERE id=?`, latest)
+		return err
+	})
+	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" || record.Unread != nil || !record.Messages[0].Selected {
+		t.Fatalf("without the latest root: coverage %s, unread %v", record.Coverage, record.Unread)
+	}
+	ingestSource(t, c, source)
+	if after := countRows(t, c, `SELECT COUNT(*) FROM messages`); after != before {
+		t.Fatalf("without the latest root: messages %d, before %d", after, before)
+	}
+
+	// A prompt sent twice, then rewound to before the second.
+	c, _ = testCatalog(t)
+	root = filepath.Join(t.TempDir(), ".cursor")
+	chat := cursorCLIConversation()
+	chat.roots = [][]int{{0, 1, 2, 3, 2}, {0, 1, 2, 3}}
+	cursorCLIWriteChat(t, root, chat)
+	source = cursorCLISource(root)
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Fix the build'`); n != 2 {
+		t.Fatalf("a prompt an older root repeats: %d copies", n)
 	}
 }
 
@@ -315,6 +368,11 @@ func TestCursorCLICaptureHoldsOnlyTheChats(t *testing.T) {
 	secret := func(text string) bool {
 		return strings.Contains(text, cursorCLISecret) || strings.Contains(strings.ToLower(text), hex.EncodeToString([]byte(cursorCLISecret)))
 	}
+	// Metadata naming the key twice, as JSON allows.
+	cursorCLIStore(t, filepath.Join(root, "chats", hashBytes([]byte("/work/docs"))[:32], cursorCLIChatB), func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE meta SET value=hex(substr(CAST(unhex(value) AS TEXT), 1, length(CAST(unhex(value) AS TEXT))-1) || ?)`, `,"blobEncryptionKey":"`+cursorCLISecret+`"}`)
+		return err
+	})
 	c, config := testCatalog(t)
 	config.Sources = []SourceConfig{source}
 	ingestSource(t, c, source)

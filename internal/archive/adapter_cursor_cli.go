@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,15 +36,26 @@ const cursorCLIExtractor = "cursor-cli-v1"
 func (a *cursorCLIAdapter) partExtractor() string { return cursorCLIExtractor }
 
 // cursorCLICaptureTables are what a capture keeps of a chat: its blobs, and
-// its metadata without the encryption key. Metadata that is not hex-encoded
-// JSON cannot be cleared of it, so is left out; so are tables a later
-// release adds.
+// of its metadata only what is read (cursorCLIMetaKeys), so never the
+// encryption key, however it is written. Metadata that is not hex-encoded
+// JSON is left out; so are tables a later release adds.
 var cursorCLICaptureTables = map[string]captureTable{
 	"blobs": {},
 	"meta": {
-		columns: `key, lower(hex(json_remove(CAST(unhex(value) AS TEXT), '$.blobEncryptionKey')))`,
+		columns: `key, lower(hex(json_object(` + cursorCLIMetaColumns() + `)))`,
 		where:   `json_valid(CAST(unhex(value) AS TEXT))`,
 	},
+}
+
+// cursorCLIMetaKeys are the keys of a chat's metadata that are read.
+var cursorCLIMetaKeys = []string{"agentId", "latestRootBlobId", "name", "createdAt", "mode", "lastUsedModel"}
+
+func cursorCLIMetaColumns() string {
+	columns := []string{}
+	for _, key := range cursorCLIMetaKeys {
+		columns = append(columns, fmt.Sprintf(`'%s', json_extract(CAST(unhex(value) AS TEXT), '$.%s')`, key, key))
+	}
+	return strings.Join(columns, ", ")
 }
 
 // cursorCLIChat is a chat's storage: its database and the meta.json beside
@@ -252,7 +264,7 @@ type cursorCLIRoot struct {
 // cursorCLIParseRoot reads a root (protoFields): field 1 lists its
 // messages' blob IDs, 5 the context meter (tokens used, then the window)
 // and 9 the folder's URI. A blob that is not a root, as it lists anything but
-// messages first, is reported as nil.
+// message IDs or no message the chat holds, is reported as nil.
 func cursorCLIParseRoot(data []byte, isMessage func(string) bool) *cursorCLIRoot {
 	fields := protoFields(data)
 	root := &cursorCLIRoot{}
@@ -263,7 +275,7 @@ func cursorCLIParseRoot(data []byte, isMessage func(string) bool) *cursorCLIRoot
 		}
 		root.messages = append(root.messages, hex.EncodeToString(id))
 	}
-	if len(root.messages) == 0 || !isMessage(root.messages[0]) {
+	if !slices.ContainsFunc(root.messages, isMessage) {
 		return nil
 	}
 	if meter, ok := firstProto(fields[5]).([]byte); ok {
@@ -341,21 +353,6 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	isMessage := func(id string) bool { data := blobs[id]; return len(data) > 0 && data[0] == '{' }
 	latest := firstString(meta["latestRootBlobId"])
 	root := cursorCLIParseRoot(blobs[latest], func(string) bool { return true })
-	if root == nil {
-		root = &cursorCLIRoot{}
-	}
-	// The latest root's messages, in order; a message repeated in it is told
-	// apart by its occurrence. Then those only older roots hold, from the
-	// shortest root: rewound or compacted away, so no longer selected.
-	messages, seen := []cursorCLIMessage{}, map[string]int{}
-	for _, blob := range root.messages {
-		seen[blob]++
-		id := blob[:min(16, len(blob))]
-		if seen[blob] > 1 {
-			id += "#" + strconv.Itoa(seen[blob])
-		}
-		messages = append(messages, cursorCLIMessage{id: id, blob: blob, selected: true})
-	}
 	older := []*cursorCLIRoot{}
 	for id, data := range blobs {
 		if id == latest || isMessage(id) {
@@ -371,11 +368,36 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 		}
 		return strings.Join(older[i].messages, "") < strings.Join(older[j].messages, "")
 	})
+	// Without its latest root, a chat's newest messages are unknown: what was
+	// indexed of it is kept, and the longest root left stands for the latest.
+	lost := latest != "" && root == nil
+	if lost && len(older) > 0 {
+		root, older = older[len(older)-1], older[:len(older)-1]
+	} else if root == nil {
+		root = &cursorCLIRoot{}
+	}
+	// The latest root's messages, in order; a message repeated in it is told
+	// apart by its occurrence. Then those only older roots hold, from the
+	// shortest root: rewound or compacted away, so no longer selected.
+	messages, held := []cursorCLIMessage{}, map[string]int{}
+	place := func(blob string, occurrence int, selected bool) {
+		held[blob] = occurrence
+		id := blob[:min(16, len(blob))]
+		if occurrence > 1 {
+			id += "#" + strconv.Itoa(occurrence)
+		}
+		messages = append(messages, cursorCLIMessage{id: id, blob: blob, selected: selected})
+	}
+	for _, blob := range root.messages {
+		place(blob, held[blob]+1, true)
+	}
+	// An older root's message whose blob is gone is unread, as one the
+	// latest root lists is.
 	for _, candidate := range older {
+		occurrences := map[string]int{}
 		for _, blob := range candidate.messages {
-			if seen[blob] == 0 && isMessage(blob) {
-				seen[blob] = 1
-				messages = append(messages, cursorCLIMessage{id: blob[:min(16, len(blob))], blob: blob})
+			if occurrences[blob]++; occurrences[blob] > held[blob] && (isMessage(blob) || len(blobs[blob]) == 0) {
+				place(blob, occurrences[blob], false)
 			}
 		}
 	}
@@ -437,7 +459,7 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 		case "assistant":
 			for index, part := range parts {
 				part := mapValueDefault(part)
-				if name := firstString(mapValueDefault(mapValueDefault(part["providerOptions"])["cursor"])["modelName"]); name != "" {
+				if name := firstString(mapValueDefault(mapValueDefault(part["providerOptions"])["cursor"])["modelName"]); name != "" && message.selected {
 					model = name
 				}
 				item := base
@@ -502,6 +524,10 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 			}
 		}
 	}
+	if lost {
+		// Unread names nothing, so every message the read lacks is kept.
+		conversation.Coverage, conversation.Unread = "partial", nil
+	}
 	if conversation.Model = model; conversation.Model == "" {
 		conversation.Model = firstString(mapValueDefault(meta)["lastUsedModel"])
 		if conversation.Model == "default" {
@@ -513,7 +539,13 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	if location == "" && strings.HasPrefix(root.folder, "file://") {
 		location, _ = vscodeWorkspaceLocation(map[string]any{"folder": root.folder})
 	}
-	purpose, outcome := agentPurposeOutcome(conversation.Messages)
+	selected := []MessageRecord{}
+	for _, message := range conversation.Messages {
+		if message.Selected {
+			selected = append(selected, message)
+		}
+	}
+	purpose, outcome := agentPurposeOutcome(selected)
 	title := firstString(meta["name"], extra["title"])
 	if !meaningfulWorkspaceTitle(title, agent) {
 		title = defaultString(purpose, "Cursor "+short(agent))
