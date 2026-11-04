@@ -216,8 +216,8 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 		os.Remove(temporary)
 		return nil, err
 	}
-	if keep := captureTables(c.source.Kind); keep != nil {
-		if err := keepOnlyTables(c.ctx, temporary, keep); err != nil {
+	if keep, scrub := captureTables(c.source.Kind); keep != nil {
+		if err := keepOnlyTables(c.ctx, temporary, keep, scrub); err != nil {
 			os.Remove(temporary)
 			return nil, err
 		}
@@ -290,19 +290,23 @@ func (c *sourceCapture) retain(sourcePath string, generations []capturedVersion)
 }
 
 // captureTables are the tables a capture of a source kind keeps, or nil to
-// keep them all. A kind whose database also holds credentials keeps only the
-// tables its adapter reads.
-func captureTables(kind string) map[string]bool {
-	if strings.EqualFold(kind, "opencode") {
-		return opencodeCaptureTables
+// keep them all, and the statements that then remove the rows of a kept
+// table it does not read. A kind whose database also holds credentials
+// keeps only the tables, or rows, its adapter reads.
+func captureTables(kind string) (map[string]bool, map[string][]string) {
+	switch strings.ToLower(kind) {
+	case "opencode":
+		return opencodeCaptureTables, nil
+	case "cursor":
+		return cursorCaptureTables, cursorCaptureScrub
 	}
-	return nil
+	return nil, nil
 }
 
 // keepOnlyTables drops every table and view of the snapshot at path that
-// keep does not name, then vacuums it, so no page of a dropped table is left
-// in the file.
-func keepOnlyTables(ctx context.Context, path string, keep map[string]bool) error {
+// keep does not name, runs a kept table's scrub statements, then vacuums
+// it, so no page of a dropped table or row is left in the file.
+func keepOnlyTables(ctx context.Context, path string, keep map[string]bool, scrub map[string][]string) error {
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?_pragma=journal_mode(off)&_pragma=synchronous(off)")
 	if err != nil {
 		return err
@@ -316,6 +320,14 @@ func keepOnlyTables(ctx context.Context, path string, keep map[string]bool) erro
 	for _, row := range rows {
 		name := firstString(row["name"])
 		if keep[name] {
+			if firstString(row["type"]) != "table" {
+				continue
+			}
+			for _, statement := range scrub[name] {
+				if _, err := db.ExecContext(ctx, statement); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		quoted, err := quoteRecordIdentifier(name)

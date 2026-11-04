@@ -169,6 +169,26 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			rel, _ := filepath.Rel(source.Path, file)
 			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
 		}
+	case "cursor":
+		// The global database and each window's, without their other rows
+		// (captureTables), and the workspace.json naming a window's folder:
+		// not the rest of the user folder, which holds settings and other
+		// extensions' state.
+		databases, files, err := (&cursorAdapter{baseAdapter: baseAdapter{config: source}}).captureInputs()
+		if err != nil {
+			return plan, fmt.Errorf("Cursor chats are unavailable: %w", err)
+		}
+		for _, database := range databases {
+			rel, _ := filepath.Rel(source.Path, database)
+			if !info.IsDir() {
+				rel = filepath.Base(source.Path)
+			}
+			plan.databases = append(plan.databases, captureItem{database, filepath.ToSlash(rel)})
+		}
+		for _, file := range files {
+			rel, _ := filepath.Rel(source.Path, file)
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
+		}
 	case "opencode":
 		// Each database, without the tables that hold credentials and
 		// settings (captureTables).

@@ -1,0 +1,927 @@
+package archive
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+)
+
+// cursorAdapter reads Cursor's chats (composers) from a Cursor user folder:
+// ~/Library/Application Support/Cursor/User, or its global database. Cursor
+// keeps every composer in globalStorage/state.vscdb, in its cursorDiskKV
+// table: composerData:<id> holds a composer, bubbleId:<id>:<bubble> each of
+// its messages, and the composer or, from Cursor 3, composerConvHeaders:<id>:
+// <chunk> their order. A subagent is a composer whose subagentInfo names the
+// composer that started it. A window's own state.vscdb lists its composers,
+// which places the composers that do not name their folder themselves. The
+// same databases hold Cursor's sign-in tokens, settings and each composer's
+// encryption keys, which are neither read nor captured (cursorCaptureScrub).
+type cursorAdapter struct {
+	baseAdapter
+	// selected, when set, limits reading to these composers, in groups whose
+	// root is among them (snapshotSessions).
+	selected map[string]bool
+}
+
+// cursorExtractor versions the parser; bump it when parsing changes.
+const cursorExtractor = "cursor-v1"
+
+func (a *cursorAdapter) partExtractor() string { return cursorExtractor }
+
+// cursorCaptureTables are the tables a capture keeps; every other table,
+// including any a later release adds, is left out.
+var cursorCaptureTables = map[string]bool{"ItemTable": true, "cursorDiskKV": true}
+
+// cursorCaptureScrub keeps, of those tables, only the rows the adapter
+// reads: each composer, its messages and their order, and a window's list of
+// its composers. Every other key is left out, among them Cursor's sign-in
+// tokens (cursorAuth/*) and settings, and each composer loses its
+// encryption keys and the encrypted state they open. A composer that is not
+// JSON cannot be scrubbed, so is left out too.
+var cursorCaptureScrub = map[string][]string{
+	"ItemTable": {`DELETE FROM ItemTable WHERE key IS NOT 'composer.composerData'`},
+	"cursorDiskKV": {
+		`DELETE FROM cursorDiskKV WHERE key IS NULL OR NOT (key GLOB 'composerData:*' OR key GLOB 'bubbleId:*' OR key GLOB 'composerConvHeaders:*')`,
+		`DELETE FROM cursorDiskKV WHERE key GLOB 'composerData:*' AND value IS NOT NULL AND NOT json_valid(CAST(value AS TEXT))`,
+		`UPDATE cursorDiskKV SET value = json_remove(CAST(value AS TEXT), '$.blobEncryptionKey', '$.speculativeSummarizationEncryptionKey', '$.conversationState') WHERE key GLOB 'composerData:*' AND value IS NOT NULL`,
+	},
+}
+
+// globalDatabase is the database holding the composers: the source itself
+// when it is a database, else globalStorage/state.vscdb.
+func (a *cursorAdapter) globalDatabase() (string, error) {
+	info, err := os.Stat(a.config.Path)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return a.config.Path, nil
+	}
+	return filepath.Join(a.config.Path, "globalStorage", "state.vscdb"), nil
+}
+
+// cursorWindow is a window's storage: its database and the workspace.json
+// naming its folder, each "" when absent.
+type cursorWindow struct{ database, workspace string }
+
+// windows lists the windows' storage of a user folder.
+func (a *cursorAdapter) windows() ([]cursorWindow, error) {
+	if info, err := os.Stat(a.config.Path); err != nil || !info.IsDir() {
+		return nil, err
+	}
+	storage := filepath.Join(a.config.Path, "workspaceStorage")
+	entries, err := os.ReadDir(storage)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	windows := []cursorWindow{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		window := cursorWindow{}
+		for name, field := range map[string]*string{"state.vscdb": &window.database, "workspace.json": &window.workspace} {
+			file := filepath.Join(storage, entry.Name(), name)
+			if info, err := a.files().Stat(file); err == nil && info.Mode().IsRegular() {
+				*field = file
+			} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+		}
+		if window.database != "" {
+			windows = append(windows, window)
+		}
+	}
+	return windows, nil
+}
+
+// captureInputs are what a capture copies: the databases (scrubbed, see
+// cursorCaptureScrub) and the windows' workspace.json.
+func (a *cursorAdapter) captureInputs() (databases, files []string, err error) {
+	global, err := a.globalDatabase()
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := os.Stat(global); err == nil {
+		databases = append(databases, global)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, err
+	}
+	windows, err := a.windows()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, window := range windows {
+		databases = append(databases, window.database)
+		if window.workspace != "" {
+			files = append(files, window.workspace)
+		}
+	}
+	return databases, files, nil
+}
+
+func (a *cursorAdapter) Fingerprint() (string, error) {
+	databases, files, err := a.captureInputs()
+	if err != nil {
+		return "", err
+	}
+	rows := []string{}
+	for _, database := range databases {
+		rows = append(rows, fmt.Sprintf("%s:%d", a.original(database), a.databaseVersion(database)))
+	}
+	for _, file := range files {
+		if info, err := a.files().Stat(file); err == nil {
+			rows = append(rows, fmt.Sprintf("%s:%d:%d", a.original(file), info.Size(), info.ModTime().UnixNano()))
+		}
+	}
+	return cursorExtractor + ":" + hashBytes([]byte(strings.Join(rows, "\n"))), nil
+}
+
+func (a *cursorAdapter) Discover(emit func(WorkspaceRecord) error) error {
+	return a.discoverParts(nil, func(record *WorkspaceRecord, _ []sourcePart) error {
+		if record == nil {
+			return nil
+		}
+		return emit(*record)
+	})
+}
+
+func (a *cursorAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	plan, err := a.planParts()
+	if err != nil {
+		return err
+	}
+	return plan.discover(a.context(), unchanged, emit)
+}
+
+// cursorPlace is where a composer was run: a folder, and the remote host
+// holding it for a remote window.
+type cursorPlace struct{ location, remote string }
+
+// cursorComposer is a composer's identity and how far it has changed.
+type cursorComposer struct {
+	id, parent string
+	// version is the latest of its own timestamps, in milliseconds, and
+	// signal what else changes when a message does.
+	version int64
+	bubbles int64
+	signal  string
+	place   cursorPlace
+}
+
+// cursorHead is what planning reads of a composer.
+type cursorHead struct {
+	CreatedAt     any `json:"createdAt"`
+	LastUpdatedAt any `json:"lastUpdatedAt"`
+	Checkpoint    any `json:"conversationCheckpointLastUpdatedAt"`
+	SubagentInfo  struct {
+		Parent any `json:"parentComposerId"`
+	} `json:"subagentInfo"`
+	Workspace struct {
+		URI map[string]any `json:"uri"`
+	} `json:"workspaceIdentifier"`
+}
+
+// open opens a database for reading in one transaction.
+func (a *cursorAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
+	readable, err := a.files().Database(database)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := openReadOnlySQLite(readable)
+	if err != nil {
+		return nil, nil, err
+	}
+	tx, err := db.BeginTx(a.context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	return db, tx, nil
+}
+
+// places reads which folder each window's composers were run in, from the
+// window's list of them. A window that cannot be read is reported.
+func (a *cursorAdapter) places() (map[string]cursorPlace, []error) {
+	places := map[string]cursorPlace{}
+	windows, err := a.windows()
+	if err != nil {
+		return places, []error{err}
+	}
+	var failures []error
+	for _, window := range windows {
+		place := cursorPlace{}
+		if window.workspace != "" {
+			manifest, _, err := a.files().ReadJSONVersion(window.workspace)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				failures = append(failures, err)
+				continue
+			}
+			place.location, place.remote = vscodeWorkspaceLocation(mapValueDefault(manifest))
+		}
+		if place.location == "" {
+			continue
+		}
+		ids, err := a.windowComposers(window.database)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("Cursor window %s: %w", a.original(window.database), err))
+			continue
+		}
+		for _, id := range ids {
+			if _, seen := places[id]; !seen {
+				places[id] = place
+			}
+		}
+	}
+	return places, failures
+}
+
+// windowComposers lists the composers a window's database names.
+func (a *cursorAdapter) windowComposers(database string) ([]string, error) {
+	db, tx, err := a.open(database)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	defer tx.Rollback()
+	tables, err := tableNames(tx)
+	if err != nil || !tables["ItemTable"] {
+		return nil, err
+	}
+	var value []byte
+	err = tx.QueryRowContext(a.context(), `SELECT value FROM ItemTable WHERE key='composer.composerData'`).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	var list struct {
+		AllComposers []struct {
+			ComposerID string `json:"composerId"`
+		} `json:"allComposers"`
+	}
+	if err := json.Unmarshal(value, &list); err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, composer := range list.AllComposers {
+		if composer.ComposerID != "" {
+			ids = append(ids, composer.ComposerID)
+		}
+	}
+	return ids, nil
+}
+
+// cursorURIPlace is the place a composer's workspace URI names.
+func cursorURIPlace(uri map[string]any) cursorPlace {
+	if external, _ := uri["external"].(string); external != "" {
+		location, remote := vscodeWorkspaceLocation(map[string]any{"folder": external})
+		return cursorPlace{location, remote}
+	}
+	switch firstString(uri["scheme"]) {
+	case "file":
+		return cursorPlace{location: firstString(uri["fsPath"], uri["path"])}
+	case "vscode-remote":
+		return cursorPlace{location: firstString(uri["path"]), remote: firstString(uri["authority"])}
+	}
+	return cursorPlace{}
+}
+
+// composers lists the global database's composers.
+func (a *cursorAdapter) composers(database string, places map[string]cursorPlace) ([]cursorComposer, error) {
+	db, tx, err := a.open(database)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	defer tx.Rollback()
+	tables, err := tableNames(tx)
+	if err != nil || !tables["cursorDiskKV"] {
+		return nil, err
+	}
+	// What a composer's messages and their order add up to, without reading
+	// them: a message changing changes its size.
+	sizes := map[string]string{}
+	counts := map[string]int64{}
+	for _, prefix := range []string{"bubbleId:", "composerConvHeaders:"} {
+		rows, err := tx.QueryContext(a.context(), `SELECT substr(key, ?1, instr(substr(key, ?1), ':') - 1) AS composer, COUNT(*), COALESCE(SUM(octet_length(value)), 0)
+			FROM cursorDiskKV WHERE key GLOB ?2 GROUP BY composer`, len(prefix)+1, prefix+"*")
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			var count, bytes int64
+			if err := rows.Scan(&id, &count, &bytes); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			sizes[id] += fmt.Sprintf("%s%d:%d;", prefix, count, bytes)
+			if prefix == "bubbleId:" {
+				counts[id] = count
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.QueryContext(a.context(), `SELECT substr(key, 14), value FROM cursorDiskKV WHERE key GLOB 'composerData:*' AND value IS NOT NULL ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	composers := []cursorComposer{}
+	for rows.Next() {
+		var id string
+		var value []byte
+		if err := rows.Scan(&id, &value); err != nil {
+			return nil, err
+		}
+		digest := sha256.Sum256(value)
+		composer := cursorComposer{id: id, bubbles: counts[id]}
+		var head cursorHead
+		// A composer that is not JSON is still planned, so reading it reports
+		// it.
+		if json.Unmarshal(value, &head) == nil {
+			for _, at := range []any{head.CreatedAt, head.LastUpdatedAt, head.Checkpoint} {
+				if ms, ok := number(at); ok {
+					composer.version = max(composer.version, int64(ms))
+				}
+			}
+			composer.parent = firstString(head.SubagentInfo.Parent)
+			composer.place = cursorURIPlace(head.Workspace.URI)
+		}
+		if composer.place.location == "" {
+			composer.place = places[id]
+		}
+		composer.signal = hex.EncodeToString(digest[:8]) + ":" + sizes[id] + composer.place.location + "\x1f" + composer.place.remote
+		composers = append(composers, composer)
+	}
+	return composers, rows.Err()
+}
+
+// planParts plans one group per composer that started its own work, holding
+// it and the subagents it started; each composer is one part.
+func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
+	database, err := a.globalDatabase()
+	if err != nil {
+		return nil, err
+	}
+	plan := &sourceWorkPlan{continueOnError: true}
+	if _, err := a.files().Stat(database); errors.Is(err, os.ErrNotExist) {
+		return plan, nil
+	}
+	places, failures := a.places()
+	composers, err := a.composers(database, places)
+	if err != nil {
+		failures = append(failures, err)
+	}
+	byID := map[string]cursorComposer{}
+	for _, composer := range composers {
+		byID[composer.id] = composer
+	}
+	root := func(id string) string {
+		seen := map[string]bool{}
+		for byID[id].parent != "" && !seen[id] {
+			seen[id] = true
+			if _, ok := byID[byID[id].parent]; !ok {
+				break
+			}
+			id = byID[id].parent
+		}
+		return id
+	}
+	groups := map[string][]cursorComposer{}
+	roots := []string{}
+	for _, composer := range composers {
+		top := root(composer.id)
+		if groups[top] == nil {
+			roots = append(roots, top)
+		}
+		groups[top] = append(groups[top], composer)
+	}
+	origin := a.original(database)
+	for _, top := range roots {
+		members := groups[top]
+		if a.selected != nil {
+			if !a.selected[top] {
+				continue
+			}
+			members = slices.DeleteFunc(slices.Clone(members), func(member cursorComposer) bool { return !a.selected[member.id] })
+		}
+		// The root first, then its subagents a level at a time, each level by
+		// ID, so a subagent follows the one that started it.
+		levels := map[string]int{}
+		for _, member := range members {
+			id, seen := member.id, map[string]bool{}
+			for id != top && !seen[id] {
+				seen[id] = true
+				id = byID[id].parent
+				levels[member.id]++
+			}
+		}
+		sort.SliceStable(members, func(i, j int) bool { return levels[members[i].id] < levels[members[j].id] })
+		parts := make([]sourcePart, 0, len(members))
+		for _, member := range members {
+			parts = append(parts, sourcePart{item: origin + "#" + member.id, size: member.bubbles, version: member.version * 1e6, signal: member.signal})
+		}
+		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
+			record, err := a.read(database, members)
+			if err != nil {
+				return err
+			}
+			return emit(record, parts)
+		}})
+	}
+	plan.discoveryError = errors.Join(failures...)
+	return plan, nil
+}
+
+// snapshotSessions lists the composers in a database snapshot. A superseded
+// snapshot's that no newer one holds were deleted in Cursor, and are read
+// from it alone.
+func (a *cursorAdapter) snapshotSessions(ctx context.Context, file string) (map[string]bool, error) {
+	db, err := openReadOnlySQLite(file)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	tables, err := tableNames(db)
+	if err != nil || !tables["cursorDiskKV"] {
+		return map[string]bool{}, err
+	}
+	rows, err := queryMapsContext(ctx, db, `SELECT substr(key, 14) AS id FROM cursorDiskKV WHERE key GLOB 'composerData:*' AND value IS NOT NULL`)
+	ids := map[string]bool{}
+	for _, row := range rows {
+		ids[firstString(row["id"])] = true
+	}
+	return ids, err
+}
+
+func (a *cursorAdapter) olderReader(file string, view *captureView, selected map[string]bool) Adapter {
+	config := a.config
+	config.Path = file
+	return &cursorAdapter{baseAdapter: baseAdapter{config: config, capability: a.capability, view: view}, selected: selected}
+}
+
+// readGroup reads, as indexing does, the group whose parts begin as parts
+// do; nothing when that composer is gone.
+func (a *cursorAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	plan, err := a.planParts()
+	if err != nil || len(parts) == 0 {
+		return nil, nil, err
+	}
+	for _, group := range plan.groups {
+		if group.parts[0].item != parts[0].item {
+			continue
+		}
+		var record *WorkspaceRecord
+		var read []sourcePart
+		err := group.read(func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
+		return record, read, err
+	}
+	return nil, nil, plan.discoveryError
+}
+
+// cursorThread is a composer as read: its data and its messages in order.
+type cursorThread struct {
+	member   cursorComposer
+	data     map[string]any
+	bubbles  []map[string]any
+	complete bool
+	// calls are the tool calls of its own messages, by call ID.
+	calls map[string]bool
+}
+
+// read reads a composer and its subagents in one transaction.
+func (a *cursorAdapter) read(database string, members []cursorComposer) (*WorkspaceRecord, error) {
+	db, tx, err := a.open(database)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	defer tx.Rollback()
+	if _, err := tableNames(tx); err != nil {
+		return nil, err
+	}
+	// Live, the version is read once the transaction has begun reading, so
+	// it is no older than what was read.
+	version := a.databaseVersion(database)
+	origin := a.original(database)
+	threads := []*cursorThread{}
+	byID := map[string]*cursorThread{}
+	for _, member := range members {
+		thread, err := a.thread(tx, member)
+		if err != nil {
+			return nil, err
+		}
+		if thread == nil {
+			continue
+		}
+		info := mapValueDefault(thread.data["subagentInfo"])
+		// A fork starts with a copy of its parent's messages, which are the
+		// parent's.
+		if parent := byID[firstString(info["forkedFromComposerId"])]; parent != nil {
+			if inherited, ok := number(info["conversationLengthAtSpawn"]); ok && inherited > 0 {
+				n := int(inherited)
+				if n <= len(thread.bubbles) && n <= len(parent.bubbles) && slices.EqualFunc(thread.bubbles[:n], parent.bubbles[:n], func(x, y map[string]any) bool { return firstString(x["bubbleId"]) == firstString(y["bubbleId"]) }) {
+					thread.bubbles = thread.bubbles[n:]
+				}
+			}
+		}
+		thread.calls = map[string]bool{}
+		for _, bubble := range thread.bubbles {
+			if call, _ := mapValueDefault(bubble["toolFormerData"])["toolCallId"].(string); call != "" {
+				thread.calls[call] = true
+			}
+		}
+		threads = append(threads, thread)
+		byID[member.id] = thread
+	}
+	var record *WorkspaceRecord
+	depth := map[string]int{}
+	echoes := map[string]bool{}
+	for _, thread := range threads {
+		member := thread.member
+		info := mapValueDefault(thread.data["subagentInfo"])
+		spawn, _ := info["toolCallId"].(string)
+		if member.parent != "" && byID[member.parent] != nil {
+			if echoes[member.parent] {
+				echoes[member.id] = true
+				continue
+			}
+			// A fork's copy of its parent's messages starts its own copies of
+			// the subagents those messages started: a subagent the call that
+			// started it does not belong to is one of these.
+			owned := false
+			for _, other := range threads {
+				owned = owned || other.member.id != member.parent && other.calls[spawn]
+			}
+			if spawn != "" && !byID[member.parent].calls[spawn] && owned {
+				echoes[member.id] = true
+				continue
+			}
+		}
+		conversation := a.conversation(origin, thread, spawn != "")
+		if conversation == nil {
+			continue
+		}
+		if member.parent != "" && byID[member.parent] != nil {
+			conversation.ParentNativeID = member.parent
+			conversation.AgentNickname, conversation.AgentPath = firstString(thread.data["name"]), firstString(info["subagentTypeName"])
+			if spawn != "" {
+				depth[member.id] = depth[member.parent] + 1
+				conversation.AgentDepth = max(depth[member.id], 1)
+			}
+		}
+		if record == nil {
+			purpose, outcome := agentPurposeOutcome(conversation.Messages)
+			title := firstString(thread.data["name"])
+			if !meaningfulWorkspaceTitle(title, member.id) {
+				title = defaultString(purpose, "Cursor "+short(member.id))
+			}
+			metadata := map[string]any{}
+			if mode := firstString(thread.data["unifiedMode"]); mode != "" {
+				metadata["mode"] = mode
+			}
+			repository := map[string]any(nil)
+			if member.place.remote != "" {
+				metadata["remote"] = member.place.remote
+				repository = repositoryFromName(member.place.location, "")
+			} else if member.place.location != "" {
+				repository = a.repository(member.place.location, "")
+			}
+			record = &WorkspaceRecord{SourceID: member.id, SourceKind: "cursor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: conversation.EndedAt,
+				Location: member.place.location, Repository: repository, Metadata: metadata}
+		}
+		record.Conversations = append(record.Conversations, *conversation)
+	}
+	if record == nil {
+		return nil, nil
+	}
+	observe(record, version)
+	return record, nil
+}
+
+// thread reads a composer and its messages, in the order its headers give:
+// the composer's own list, or from Cursor 3 its chunks of headers, or, from
+// releases before either, the messages it holds itself. A message a header
+// names that is not there makes the composer partial.
+func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread, error) {
+	var value []byte
+	err := tx.QueryRowContext(a.context(), `SELECT value FROM cursorDiskKV WHERE key=?`, "composerData:"+member.id).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && value == nil {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	thread := &cursorThread{member: member, complete: true}
+	if err := json.Unmarshal(value, &thread.data); err != nil || thread.data == nil {
+		return nil, fmt.Errorf("Cursor composer %s: %v", member.id, defaultString(errorText(err), "not an object"))
+	}
+	if inline, ok := thread.data["conversation"].([]any); ok && len(inline) > 0 {
+		for _, raw := range inline {
+			if bubble := mapValue(raw); bubble != nil {
+				thread.bubbles = append(thread.bubbles, bubble)
+			}
+		}
+		return thread, nil
+	}
+	headers, _ := thread.data["fullConversationHeadersOnly"].([]any)
+	if log := mapValue(thread.data["headerLog"]); len(headers) == 0 && log != nil {
+		chunks, _ := number(log["chunkCount"])
+		for chunk := 0; chunk < int(chunks); chunk++ {
+			var raw []byte
+			err := tx.QueryRowContext(a.context(), `SELECT value FROM cursorDiskKV WHERE key=?`, fmt.Sprintf("composerConvHeaders:%s:%06d", member.id, chunk)).Scan(&raw)
+			if errors.Is(err, sql.ErrNoRows) {
+				thread.complete = false
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+			var list []any
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return nil, fmt.Errorf("Cursor composer %s, headers %d: %w", member.id, chunk, err)
+			}
+			headers = append(headers, list...)
+		}
+		if count, ok := number(log["count"]); ok && int(count) > len(headers) {
+			thread.complete = false
+		}
+	}
+	if len(headers) == 0 {
+		return thread, nil
+	}
+	prefix := "bubbleId:" + member.id + ":"
+	rows, err := tx.QueryContext(a.context(), `SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?`, prefix, "bubbleId:"+member.id+";")
+	if err != nil {
+		return nil, err
+	}
+	stored := map[string][]byte{}
+	for rows.Next() {
+		var key string
+		var raw []byte
+		if err := rows.Scan(&key, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stored[strings.TrimPrefix(key, prefix)] = raw
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, raw := range headers {
+		id, _ := mapValueDefault(raw)["bubbleId"].(string)
+		var bubble map[string]any
+		if data := stored[id]; data == nil || json.Unmarshal(data, &bubble) != nil || bubble == nil {
+			thread.complete = false
+			continue
+		}
+		bubble["bubbleId"] = id
+		thread.bubbles = append(thread.bubbles, bubble)
+	}
+	return thread, nil
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// conversation builds a composer's conversation from its messages; nil when
+// it has none. spawned marks a subagent a tool call started, whose prompt is
+// its parent's.
+func (a *cursorAdapter) conversation(origin string, thread *cursorThread, spawned bool) *ConversationRecord {
+	data, id := thread.data, thread.member.id
+	model := firstString(mapValueDefault(data["modelConfig"])["modelName"])
+	if model == "" {
+		for _, bubble := range thread.bubbles {
+			if model = firstString(mapValueDefault(bubble["modelInfo"])["modelName"]); model != "" {
+				break
+			}
+		}
+	}
+	started := iso(data["createdAt"])
+	conversation := &ConversationRecord{NativeID: id, Provider: "cursor", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cursor", Model: model, StartedAt: started}
+	if !thread.complete {
+		conversation.Coverage = "partial"
+	}
+	context := map[string]any{}
+	for key, field := range map[string]string{"context_tokens_used": "contextTokensUsed", "context_token_limit": "contextTokenLimit"} {
+		if value, ok := number(data[field]); ok && value > 0 {
+			context[key] = value
+		}
+	}
+	if fork := firstString(mapValueDefault(data["subagentInfo"])["forkedFromComposerId"]); fork != "" {
+		context["forked_from"] = fork
+	}
+	if len(context) > 0 {
+		conversation.NativeContext = context
+	}
+	at := started
+	for _, bubble := range thread.bubbles {
+		bubbleID, _ := bubble["bubbleId"].(string)
+		if bubbleID == "" {
+			continue
+		}
+		// A message's own time; else, before Cursor recorded one, when its
+		// request was sent; else the time of the message before it.
+		if created := iso(firstNonNil(bubble["createdAt"], mapValueDefault(bubble["timingInfo"])["clientRpcSendTime"])); created != "" {
+			at = created
+		}
+		base := MessageRecord{NativeID: bubbleID, Model: defaultString(mapValueDefault(bubble["modelInfo"])["modelName"], model), CreatedAt: at,
+			EvidenceLocator: fmt.Sprintf("%s#%s:%s", origin, id, bubbleID), Selected: true,
+			// The bubble's ID stands in for its raw text, so text quoting usage
+			// JSON is never read as token usage.
+			RawText: jsonText(map[string]any{"type": "cursor_bubble", "id": bubbleID})}
+		add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
+		text, _ := bubble["text"].(string)
+		kind, _ := number(bubble["type"])
+		switch kind {
+		case 1:
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			item := base
+			item.Role, item.Kind, item.Text = "user", "message", text
+			if spawned {
+				item.Role, item.Sender = agentRole, "agent:"+firstString(mapValueDefault(data["subagentInfo"])["parentComposerId"])
+			}
+			add(item)
+		case 2:
+			if thought, _ := mapValueDefault(bubble["thinking"])["text"].(string); strings.TrimSpace(thought) != "" {
+				item := base
+				item.NativeID = bubbleID + ":thinking"
+				add(reasoningRecord(item, thought, "text", ""))
+			}
+			if strings.TrimSpace(text) != "" {
+				item := base
+				item.Role, item.Kind, item.Text = "assistant", "message", text
+				add(item)
+			}
+			if tool := mapValue(bubble["toolFormerData"]); tool != nil {
+				cursorTool(base, bubble, tool, add)
+			}
+			if failure := firstString(mapValueDefault(bubble["errorDetails"])["message"]); failure != "" {
+				item := base
+				item.NativeID, item.Role, item.Kind, item.Text = bubbleID+":error", "system", "error", failure
+				add(item)
+			}
+			// Before Cursor 3, a request's last reply holds its token count.
+			tokens := mapValueDefault(bubble["tokenCount"])
+			input, _ := number(tokens["inputTokens"])
+			output, _ := number(tokens["outputTokens"])
+			if input > 0 || output > 0 {
+				item := base
+				item.NativeID, item.Role, item.Kind, item.RawText = bubbleID+":usage", "system", "metadata", ""
+				item.Text = jsonText(map[string]any{"type": "token_usage", "usage": map[string]any{"input_tokens": input, "output_tokens": output}, "usage_message_id": bubbleID})
+				add(item)
+			}
+		}
+		if completed := iso(bubble["completedAtMs"]); completed != "" {
+			at = max(at, completed)
+		}
+	}
+	if len(conversation.Messages) == 0 {
+		return nil
+	}
+	conversation.EndedAt = at
+	if updated := iso(data["lastUpdatedAt"]); updated > at {
+		conversation.EndedAt = updated
+	}
+	return conversation
+}
+
+// cursorTool adds a tool bubble's call and, once it has run, its result.
+func cursorTool(base MessageRecord, bubble, tool map[string]any, add func(MessageRecord)) {
+	name, _ := tool["name"].(string)
+	if name == "" {
+		return
+	}
+	callID, _ := tool["toolCallId"].(string)
+	callID = defaultString(callID, base.NativeID)
+	// The model's arguments, else, in Cursor 3 where they are often left out,
+	// what Cursor ran.
+	input := cursorJSON(tool["rawArgs"])
+	if object, ok := input.(map[string]any); input == nil || ok && len(object) == 0 {
+		input = firstNonNil(cursorJSON(tool["params"]), input)
+	}
+	delegated := matchesFold(name, "task", "task_v2")
+	call := base
+	call.NativeID, call.CallID, call.Role, call.Kind = base.NativeID+":call", callID, "assistant", "tool_call"
+	if delegated {
+		call.Kind = "delegation"
+	}
+	call.Text = jsonText(map[string]any{"tool": name, "input": input})
+	add(call)
+	status := firstString(tool["status"])
+	if status != "completed" && status != "error" && status != "cancelled" {
+		return
+	}
+	result := base
+	result.NativeID, result.CallID, result.Role, result.Kind = base.NativeID+":result", callID, "tool", "tool_result"
+	if delegated {
+		result.Kind = "delegation_result"
+	}
+	if completed := iso(bubble["completedAtMs"]); completed != "" {
+		result.CreatedAt = completed
+	}
+	content := cursorJSON(tool["result"])
+	details := map[string]any{}
+	if output := mapValue(content); output != nil {
+		if exit, ok := number(firstNonNil(output["exitCode"], output["exitCodeV2"])); ok {
+			details["exit_code"] = exit
+		}
+	}
+	extra := mapValueDefault(cursorJSON(tool["additionalData"]))
+	if started, ok := number(firstNonNil(bubble["startedAtMs"], extra["startedAtMs"])); ok {
+		if completed, ok := number(bubble["completedAtMs"]); ok && completed >= started {
+			details["duration_ms"] = completed - started
+		}
+	}
+	if subagent := firstString(extra["subagentComposerId"]); subagent != "" {
+		details["subagent"] = subagent
+	}
+	if status == "cancelled" {
+		details["cancelled"] = true
+	}
+	if status == "error" {
+		failure := mapValueDefault(cursorJSON(tool["error"]))
+		if text := firstString(failure["modelVisibleErrorMessage"], failure["clientVisibleErrorMessage"]); text != "" {
+			details["error"] = text
+			if content == nil {
+				content = text
+			}
+		}
+	}
+	payload := map[string]any{"tool": name, "content": content, "is_error": status == "error"}
+	if len(details) > 0 {
+		payload["details"] = details
+	}
+	result.Text = jsonText(payload)
+	add(result)
+}
+
+// cursorJSON is a field Cursor stores as JSON text, decoded; an object as
+// it is; nil when empty.
+func cursorJSON(value any) any {
+	text, ok := value.(string)
+	if !ok {
+		return value
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	var decoded any
+	if json.Unmarshal([]byte(text), &decoded) != nil {
+		return text
+	}
+	return decoded
+}
+
+// cursorProbeStats measures a global database for the probe: its composers
+// and when they were first and last active.
+func cursorProbeStats(database string) (probeStats, error) {
+	stats := probeStats{}
+	info, err := os.Stat(database)
+	if err != nil {
+		return stats, err
+	}
+	db, err := openReadOnlySQLite(database)
+	if err != nil {
+		return stats, err
+	}
+	defer db.Close()
+	tables, err := tableNames(db)
+	if err != nil || !tables["cursorDiskKV"] {
+		return stats, err
+	}
+	var oldest, newest sql.NullInt64
+	// Composers with a message: drafts and empty chats have none.
+	if err := db.QueryRow(`SELECT COUNT(*), MIN(json_extract(v, '$.createdAt')), MAX(COALESCE(json_extract(v, '$.lastUpdatedAt'), json_extract(v, '$.createdAt')))
+		FROM (SELECT CAST(value AS TEXT) AS v FROM cursorDiskKV WHERE key GLOB 'composerData:*' AND value IS NOT NULL)
+		WHERE json_valid(v) AND COALESCE(json_array_length(v, '$.fullConversationHeadersOnly'), 0) + COALESCE(json_extract(v, '$.headerLog.count'), 0) + COALESCE(json_array_length(v, '$.conversation'), 0) > 0`).Scan(&stats.sessions, &oldest, &newest); err != nil {
+		return stats, err
+	}
+	stats.files, stats.bytes = 1, info.Size()
+	if oldest.Valid {
+		stats.oldest, stats.newest = time.UnixMilli(oldest.Int64), time.UnixMilli(newest.Int64)
+	}
+	return stats, nil
+}
