@@ -44,6 +44,11 @@ func zedRows() []zedRow {
 	result := func(id, name, content string, failed bool) map[string]any {
 		return map[string]any{"tool_use_id": id, "tool_name": name, "is_error": failed, "content": map[string]any{"Text": content}}
 	}
+	// A release writes a result's content as a list.
+	listed := func(result map[string]any) map[string]any {
+		result["content"] = []any{result["content"]}
+		return result
+	}
 	usage := func(input, output, read, created int) map[string]any {
 		return map[string]any{"input_tokens": input, "output_tokens": output, "cache_read_input_tokens": read, "cache_creation_input_tokens": created}
 	}
@@ -57,11 +62,12 @@ func zedRows() []zedRow {
 					map[string]any{"Thinking": map[string]any{"text": "Run make first.", "signature": "sig"}},
 					text("Running make."),
 					use("call1", "terminal", map[string]any{"command": "make", "cd": "app"}),
-					use("call2", "edit_file", map[string]any{"path": "app/main.go"}),
+					// A release tags a call's input with its type.
+					use("call2", "edit_file", map[string]any{"type": "json", "value": map[string]any{"path": "app/main.go"}}),
 					use("call3", "spawn_agent", map[string]any{"prompt": "Check the tests"}),
 				},
 				"tool_results": map[string]any{
-					"call1": result("call1", "terminal", "Command \"make\" failed with exit code 2.\n\n```\nmain.go:3: error\n```", false),
+					"call1": listed(result("call1", "terminal", "Command \"make\" failed with exit code 2.\n\n```\nmain.go:3: error\n```", false)),
 					"call2": result("call2", "edit_file", "Edited app/main.go", false),
 					"call3": result("call3", "spawn_agent", "Tests pass.", false),
 				},
@@ -98,6 +104,8 @@ func zedRows() []zedRow {
 			map[string]any{"id": 1, "role": "assistant", "segments": []any{map[string]any{"type": "thinking", "text": "Read it.", "signature": nil}, map[string]any{"type": "text", "text": "It parses flags."}},
 				"tool_uses":    []any{map[string]any{"id": "old1", "name": "read_file", "input": map[string]any{"path": "a.go"}}},
 				"tool_results": []any{map[string]any{"tool_use_id": "old1", "is_error": false, "content": "package a"}}},
+			// The oldest threads keep a message's text whole.
+			map[string]any{"id": 2, "role": "assistant", "text": "It also reads env."},
 		},
 		"request_token_usage":    []any{map[string]any{}, usage(40, 10, 0, 0)},
 		"cumulative_token_usage": usage(40, 10, 0, 0),
@@ -217,7 +225,7 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	if jsonText(failed["details"]) != `{"exit_code":2}` || messages[4].CallID != "call1" || failed["tool"] != "terminal" {
 		t.Fatalf("failed command = %s", messages[4].Text)
 	}
-	if edited["details"] != nil || jsonText(listed["details"]) != `{"exit_code":0}` {
+	if edited["details"] != nil || jsonText(listed["details"]) != `{"exit_code":0}` || !strings.Contains(messages[5].Text, `"input":{"path":"app/main.go"}`) {
 		t.Fatalf("edit = %s, listing = %s", messages[6].Text, messages[14].Text)
 	}
 	// Each turn's last request, then what the thread's sum adds.
@@ -236,8 +244,14 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	}
 	// A thread of releases before the agent.
 	legacy := records[zedLegacyID]
-	if got := cursorKinds(legacy.Conversations[0].Messages); legacy.Title != "Old question" || got != "user:message assistant:reasoning assistant:message assistant:tool_call tool:tool_result system:metadata" {
+	if got := cursorKinds(legacy.Conversations[0].Messages); legacy.Title != "Old question" || got != "user:message assistant:reasoning assistant:message assistant:tool_call tool:tool_result system:metadata assistant:message" {
 		t.Fatalf("legacy thread = %s: %s", legacy.Title, got)
+	}
+	// A command's result that isn't text says nothing of how it ended.
+	var unread MessageRecord
+	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message })
+	if strings.Contains(unread.Text, "exit_code") {
+		t.Fatalf("a result without text = %s", unread.Text)
 	}
 }
 
@@ -266,11 +280,20 @@ func TestZedReadsOnlyTheThreadThatChanged(t *testing.T) {
 	// Zed saves a thread whole, with the time it saved it.
 	legacy := zedRows()[2]
 	legacy.updated = "2025-06-02T09:00:00.000000+00:00"
-	legacy.data["messages"] = append(legacy.data["messages"].([]any), map[string]any{"id": 2, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "And b.go?"}}})
+	legacy.data["messages"] = append(legacy.data["messages"].([]any), map[string]any{"id": 3, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "And b.go?"}}})
 	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, legacy); return nil })
 	parsed := ingestSource(t, c, source).Parsed
 	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='And b.go?'`); n != 1 || parsed != 1 {
 		t.Fatalf("after a new message: %d copies, %d groups parsed", n, parsed)
+	}
+	// A rename keeps the thread's time, and here its size.
+	zedWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE threads SET summary='Old answers?' WHERE id=?`, zedLegacyID)
+		return err
+	})
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE source_kind='zed' AND title='Old answers?'`); n != 1 {
+		t.Fatal("a renamed thread kept its title")
 	}
 }
 
@@ -433,7 +456,7 @@ func TestZedThreadDeletedBeforeIndexingIsKept(t *testing.T) {
 	runCapture(t, config)
 	legacy := zedRows()[2]
 	legacy.updated = "2025-06-02T09:00:00.000000+00:00"
-	legacy.data["messages"] = append(legacy.data["messages"].([]any), map[string]any{"id": 2, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "And b.go?"}}})
+	legacy.data["messages"] = append(legacy.data["messages"].([]any), map[string]any{"id": 3, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "And b.go?"}}})
 	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, legacy); return nil })
 	c, _ = testCatalog(t)
 	ingestSource(t, c, source)

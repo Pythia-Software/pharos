@@ -96,8 +96,8 @@ func (a *zedAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(
 
 // zedThread is a thread's row: its identity and how far it has changed.
 type zedThread struct {
-	id, parent, updated, dataType string
-	size                          int64
+	id, parent, updated, dataType, summary string
+	size                                   int64
 }
 
 // open opens the database for reading in one transaction.
@@ -156,7 +156,7 @@ func (a *zedAdapter) threads(database string) ([]zedThread, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(a.context(), `SELECT id, `+parent+`, updated_at, data_type, length(data) FROM threads ORDER BY id`)
+	rows, err := tx.QueryContext(a.context(), `SELECT id, `+parent+`, updated_at, data_type, length(data), summary FROM threads ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func (a *zedAdapter) threads(database string) ([]zedThread, error) {
 	threads := []zedThread{}
 	for rows.Next() {
 		var thread zedThread
-		if err := rows.Scan(&thread.id, &thread.parent, &thread.updated, &thread.dataType, &thread.size); err != nil {
+		if err := rows.Scan(&thread.id, &thread.parent, &thread.updated, &thread.dataType, &thread.size, &thread.summary); err != nil {
 			return nil, err
 		}
 		threads = append(threads, thread)
@@ -246,8 +246,10 @@ func (a *zedAdapter) planParts() (*sourceWorkPlan, error) {
 		sort.SliceStable(members, func(i, j int) bool { return levels[members[i].id] < levels[members[j].id] })
 		parts := make([]sourcePart, 0, len(members))
 		for _, member := range members {
+			// Renaming a thread leaves its time as it was, and can leave its
+			// size; its title is also in summary.
 			parts = append(parts, sourcePart{item: a.original(database) + "#" + member.id, size: member.size, version: zedTime(member.updated),
-				signal: fmt.Sprintf("%s:%s:%d:%s", member.updated, member.dataType, member.size, member.parent)})
+				signal: fmt.Sprintf("%s:%s:%d:%s:%s", member.updated, member.dataType, member.size, member.parent, hashBytes([]byte(member.summary))[:16])})
 		}
 		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
 			record, damaged, err := a.read(database, top, members)
@@ -541,7 +543,7 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 					add(reasoningRecord(record, "", "", "redacted"))
 				} else if use := mapValue(content["ToolUse"]); use != nil {
 					call := firstString(use["id"])
-					a.tool(record, call, firstString(use["name"]), firstNonNil(use["input"], use["raw_input"]), mapValue(results[call]), add)
+					a.tool(record, call, firstString(use["name"]), zedToolInput(firstNonNil(use["input"], use["raw_input"])), mapValue(results[call]), add)
 				}
 			}
 		}
@@ -581,7 +583,12 @@ func (a *zedAdapter) legacyMessages(messages []any, usage any, base MessageRecor
 			result := mapValueDefault(raw)
 			results[firstString(result["tool_use_id"])] = result
 		}
-		for part, raw := range sliceOf(message["segments"]) {
+		segments := sliceOf(message["segments"])
+		// The oldest threads keep a message's text whole.
+		if text, ok := message["text"].(string); ok && len(segments) == 0 {
+			segments = []any{map[string]any{"type": "text", "text": text}}
+		}
+		for part, raw := range segments {
 			segment := mapValueDefault(raw)
 			record := item
 			record.NativeID = native + ":" + strconv.Itoa(part)
@@ -640,7 +647,7 @@ func (a *zedAdapter) tool(base MessageRecord, call, name string, input any, resu
 		if match := zedExit.FindStringSubmatch(content); match != nil {
 			exit, _ := strconv.Atoi(match[1])
 			payload["details"] = map[string]any{"exit_code": exit}
-		} else if !failed && !strings.Contains(content, "timed out") && !strings.Contains(content, "terminated unexpectedly") && !strings.Contains(content, "stopped this command") {
+		} else if !failed && content != "" && !strings.Contains(content, "timed out") && !strings.Contains(content, "terminated unexpectedly") && !strings.Contains(content, "stopped this command") {
 			payload["details"] = map[string]any{"exit_code": 0}
 		}
 	}
@@ -662,13 +669,33 @@ func zedUserText(content any) string {
 }
 
 // zedToolContent is a tool result's text: Zed writes it as text, as
-// {"Text": …}, or as {"type": "text", "text": …}.
+// {"Text": …} or {"type": "text", "text": …}, or as a list of those.
 func zedToolContent(content any) string {
 	if text, ok := content.(string); ok {
 		return text
 	}
+	if list, ok := content.([]any); ok {
+		texts := []string{}
+		for _, item := range list {
+			if text := zedToolContent(item); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
 	value := mapValueDefault(content)
 	return firstString(value["Text"], value["text"])
+}
+
+// zedToolInput is a call's input, which a release tags with its type:
+// {"type": "json", "value": …}.
+func zedToolInput(input any) any {
+	if value := mapValue(input); len(value) == 2 && value["type"] != nil {
+		if inner, ok := value["value"]; ok {
+			return inner
+		}
+	}
+	return input
 }
 
 // zedTokenUsage is a request's usage, in the shape token accounting reads,
