@@ -359,9 +359,9 @@ const renderers: RenderRegistry<Row> = {
     const outcome = outcomeDisplay(value);
     return <span className={`qt-outcome ${outcome.id}`} title={String(row.outcome_why ?? outcome.description)}>{outcome.label}</span>;
   },
-  // A Git count is not applicable to a folder, which is not zero.
+  // A Git count is not applicable to a folder, and not checked is not zero.
   git_count({ value, row }: CellContext<Row>) {
-    const fact = gitFactDisplay(value, row.project_kind);
+    const fact = gitFactDisplay(value, row.project_kind, row.git_check, row.git_check_reason);
     return fact.muted ? <span className="qt-muted" title={fact.title}>{fact.text}</span> : fact.text;
   },
   run_state({ value }: CellContext<Row>) {

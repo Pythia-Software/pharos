@@ -182,6 +182,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 			failure = errors.Join(failure, err)
 		}
+		meter.report(activityWork{Phase: "linking commits"})
+		if err := s.Catalog.refreshSessionGit(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Commit links: %v\n", err)
+			failure = errors.Join(failure, err)
+		}
 		meter.finish(ctx.Err() == nil)
 		meter.model = "analysis-v1:findings"
 		meter.report(activityWork{Phase: "refreshing findings"})

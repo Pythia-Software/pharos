@@ -665,25 +665,60 @@ func bytesValue(value any) []byte {
 // facts: a change younger than its rework window is too recent to judge, and
 // one whose edits could not be read line by line (kept_lines NULL) is never
 // judged, so whether it was kept is unknown.
+// Local Git (session_git, outcome_git.go) adds Landed and Committed, and a
+// revert is rework; a session that committed without editing has changes.
 func outcomeLabelSQL(w string) string {
-	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 THEN 'unknown' WHEN so.files_changed=0 THEN 'no_changes'
-		WHEN so.heavily_reworked=1 THEN 'reworked' WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN 'changed_recent'
-		WHEN so.kept_lines IS NULL THEN 'unknown' ELSE 'changed_kept' END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'unknown')`
+	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 AND COALESCE(sg.linked_commits,0)=0 THEN 'unknown'
+		WHEN so.files_changed=0 AND COALESCE(sg.linked_commits,0)=0 THEN 'no_changes'
+		WHEN so.heavily_reworked=1 OR sg.reverted_commits>0 THEN 'reworked' WHEN sg.landed_commits>0 THEN 'landed' WHEN sg.linked_commits>0 THEN 'committed'
+		WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN 'changed_recent'
+		WHEN so.kept_lines IS NULL THEN 'unknown' ELSE 'changed_kept' END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id WHERE so.workspace_id=` + w + `.id),'unknown')`
 }
 
 // outcomeWhySQL says what decided the label, and from which evidence tier.
 func outcomeWhySQL(w string) string {
-	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 THEN 'This source records no tool calls, so its changes are unknown.'
-		WHEN so.files_changed=0 THEN 'No files edited (transcript).'
+	commits := func(count string) string { return "CASE " + count + " WHEN 1 THEN 'commit' ELSE 'commits' END" }
+	files := "CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END"
+	return `COALESCE((SELECT CASE WHEN so.tool_calls_recorded=0 AND COALESCE(sg.linked_commits,0)=0 THEN 'This source records no tool calls, so its changes are unknown.'
+		WHEN so.files_changed=0 AND COALESCE(sg.linked_commits,0)=0 THEN 'No files edited (transcript).'
+		WHEN sg.reverted_commits>0 THEN printf('A later commit reverted %d of its %d linked %s (local Git).',sg.reverted_commits,sg.linked_commits,` + commits("sg.linked_commits") + `)
 		WHEN so.heavily_reworked=1 THEN printf('Later workspaces removed %d of the %d lines it added within %d days (transcript).',so.rework_removed_lines,so.kept_lines,so.rework_days)
+		WHEN sg.landed_commits>0 THEN printf('%d of its %d linked %s reached mainline (local Git).',sg.landed_commits,sg.linked_commits,` + commits("sg.linked_commits") + `)
+		WHEN sg.linked_commits>0 AND sg.mainline_unknown=sg.linked_commits THEN printf('%d linked %s; mainline could not be checked (local Git).',sg.linked_commits,` + commits("sg.linked_commits") + `)
+		WHEN sg.linked_commits>0 THEN printf('%d linked %s, not on mainline (local Git).',sg.linked_commits,` + commits("sg.linked_commits") + `)
 		WHEN julianday(so.last_edit_at)>julianday('now')-so.rework_days THEN printf('%d %s changed; rework can be judged after %s (transcript).',so.files_changed,
-			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,date(so.last_edit_at,printf('+%d days',so.rework_days)))
-		WHEN so.kept_lines IS NULL THEN printf('%d %s changed; its edits could not be read line by line, so rework was not judged (transcript).',so.files_changed,
-			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END)
+			` + files + `,date(so.last_edit_at,printf('+%d days',so.rework_days)))
+		WHEN so.kept_lines IS NULL THEN printf('%d %s changed; its edits could not be read line by line, so rework was not judged (transcript).',so.files_changed,` + files + `)
 		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later workspaces removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
-			CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_removed_lines,so.kept_lines,so.rework_days)
-		ELSE printf('%d %s changed; no later workspace removed its lines within %d days (transcript).',so.files_changed,CASE so.files_changed WHEN 1 THEN 'file' ELSE 'files' END,so.rework_days)
-		END FROM session_outcomes so WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
+			` + files + `,so.rework_removed_lines,so.kept_lines,so.rework_days)
+		ELSE printf('%d %s changed; no later workspace removed its lines within %d days (transcript).',so.files_changed,` + files + `,so.rework_days)
+		END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
+}
+
+// gitCheckSQL is whether local Git was asked about workspace w's session:
+// checked, not_checked (with gitCheckReasonSQL) or, outside a repository or
+// for a session that changed nothing in one, not_applicable.
+func gitCheckSQL(w string) string {
+	return `COALESCE((SELECT sg.status FROM session_git sg WHERE sg.workspace_id=` + w + `.id),CASE WHEN ` + gitAwaitedSQL(w) + ` THEN 'not_checked' ELSE 'not_applicable' END)`
+}
+
+func gitCheckReasonSQL(w string) string {
+	return `CASE WHEN EXISTS(SELECT 1 FROM session_git sg WHERE sg.workspace_id=` + w + `.id) THEN (SELECT sg.reason FROM session_git sg WHERE sg.workspace_id=` + w + `.id)
+		WHEN ` + gitAwaitedSQL(w) + ` THEN 'Not checked yet.' END`
+}
+
+// gitAwaitedSQL is true for a repository session local Git has yet to ask
+// about. Local Git applies only to a session that changed files or printed a
+// commit, outside the mirrors that repeat another session.
+func gitAwaitedSQL(w string) string {
+	return projectKindSQL(w) + `='repository' AND ` + w + `.id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
+		AND NOT EXISTS(SELECT 1 FROM session_outcomes so WHERE so.workspace_id=` + w + `.id AND so.files_changed=0 AND so.commits_json='[]')`
+}
+
+// gitFactSQL reads one Tier 2 count of workspace w's session, empty unless
+// local Git was checked.
+func gitFactSQL(w, expr string) string {
+	return "(SELECT " + expr + " FROM session_git sg WHERE sg.workspace_id=" + w + ".id AND sg.status='checked')"
 }
 
 // outcomeFactSQL reads one stored fact of workspace w's session.

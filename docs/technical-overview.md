@@ -269,6 +269,16 @@ sessions `session_outcome_dirty` marks, into `session_files` and
 `session_outcomes`; the Library reads the label from them
 (`outcome_label`, `outcome_why`, `web/src/outcomes.ts`).
 
+Tier 2 (`outcome_git.go`) links those sessions to commits in this Mac's
+checkouts, from a hash the session printed or inferred from its edit window
+and files, and marks which reached mainline or were reverted. It runs only
+read-only git, at low priority, after the tool summaries in background
+stages (never on a request), and skips a repository whose refs and sessions
+are unchanged (`git_repository_scans`). It stores facts, not content, in
+`git_commits`, `session_commit_links` and `session_git`; the Library reads
+`git_check`, `linked_commits` and `landed_commits`, and a repository Git
+could not check reads "Not checked" with the reason.
+
 ## UI feedback
 
 The **Send feedback** header tool reuses element annotations for optional bug

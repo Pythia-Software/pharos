@@ -31,6 +31,42 @@ import (
 )
 
 func TestOutcomesProbe(t *testing.T) {
+	catalog := outcomesProbeCatalog(t)
+	ctx := context.Background()
+	started := time.Now()
+	if err := catalog.refreshSessionOutcomes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("derived every session in %s", time.Since(started).Round(time.Millisecond))
+	report := func(query string) {
+		t.Helper()
+		rows, err := queryMaps(catalog.DB, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			t.Logf("%v", row)
+		}
+	}
+	report(`SELECT ` + outcomeLabelSQL("w") + ` label,COUNT(*) sessions FROM workspaces w WHERE w.id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) GROUP BY 1 ORDER BY 2 DESC`)
+	report(`SELECT COUNT(*) edited,SUM(kept_lines IS NULL) unread,SUM(heavily_reworked) reworked,SUM(rework_removed_lines>0) any_removed,
+		ROUND(1.0*SUM(heavily_reworked)/COUNT(*),3) reworked_share FROM session_outcomes WHERE files_changed>0
+		AND workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)`)
+	report(`SELECT SUM(LENGTH(kept_lines)+LENGTH(removed_lines)) fingerprint_bytes,COUNT(*) session_files FROM session_files`)
+
+	// One new session's worth of work: the most recent sessions marked again.
+	execTx(t, catalog.DB, `INSERT INTO session_outcome_dirty SELECT id FROM workspaces ORDER BY activity_at DESC LIMIT 10`)
+	started = time.Now()
+	if err := catalog.refreshSessionOutcomes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("derived the 10 latest sessions again in %s", time.Since(started).Round(time.Millisecond))
+}
+
+// outcomesProbeCatalog is a test catalog holding the extract
+// PHAROS_OUTCOMES_SOURCE names.
+func outcomesProbeCatalog(t *testing.T) *Catalog {
+	t.Helper()
 	source := os.Getenv("PHAROS_OUTCOMES_SOURCE")
 	if source == "" {
 		t.Skip("set PHAROS_OUTCOMES_SOURCE to an extract of a catalog backup")
@@ -70,33 +106,5 @@ func TestOutcomesProbe(t *testing.T) {
 	}
 	exec(`DETACH DATABASE extract`)
 	conn.Close()
-
-	started := time.Now()
-	if err := catalog.refreshSessionOutcomes(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("derived every session in %s", time.Since(started).Round(time.Millisecond))
-	report := func(query string) {
-		t.Helper()
-		rows, err := queryMaps(catalog.DB, query)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, row := range rows {
-			t.Logf("%v", row)
-		}
-	}
-	report(`SELECT ` + outcomeLabelSQL("w") + ` label,COUNT(*) sessions FROM workspaces w WHERE w.id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) GROUP BY 1 ORDER BY 2 DESC`)
-	report(`SELECT COUNT(*) edited,SUM(kept_lines IS NULL) unread,SUM(heavily_reworked) reworked,SUM(rework_removed_lines>0) any_removed,
-		ROUND(1.0*SUM(heavily_reworked)/COUNT(*),3) reworked_share FROM session_outcomes WHERE files_changed>0
-		AND workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)`)
-	report(`SELECT SUM(LENGTH(kept_lines)+LENGTH(removed_lines)) fingerprint_bytes,COUNT(*) session_files FROM session_files`)
-
-	// One new session's worth of work: the most recent sessions marked again.
-	execTx(t, catalog.DB, `INSERT INTO session_outcome_dirty SELECT id FROM workspaces ORDER BY activity_at DESC LIMIT 10`)
-	started = time.Now()
-	if err := catalog.refreshSessionOutcomes(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("derived the 10 latest sessions again in %s", time.Since(started).Round(time.Millisecond))
+	return catalog
 }

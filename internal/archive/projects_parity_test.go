@@ -27,7 +27,8 @@ var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_
 var projectDatasetsWithoutRows = []string{"agent_events", "agent_event_messages", "agent_event_rates", "skill_usages"}
 
 // projectServer serves a fixture library with its tool summaries and writing
-// classification built, as the background builds leave them.
+// classification built and local Git asked, as the background builds leave
+// them.
 func projectServer(t *testing.T, library projectLibrary) *Server {
 	t.Helper()
 	if err := library.catalog.ensureToolRollup(context.Background()); err != nil {
@@ -38,6 +39,9 @@ func projectServer(t *testing.T, library projectLibrary) *Server {
 		t.Fatal(err)
 	}
 	if err := library.catalog.RebuildAuthorship(t.Context(), want); err != nil {
+		t.Fatal(err)
+	}
+	if err := library.catalog.refreshSessionGit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	return testServer(t, library.config, library.catalog)
@@ -151,11 +155,16 @@ func TestProjectParityWithoutGit(t *testing.T) {
 		t.Fatalf("library projects: %#v", kinds)
 	}
 	// Every session has an outcome, and no Git count reads as zero outside a
-	// repository: the Claude sessions edited nothing, and the export cannot tell.
+	// repository, nor as not checked: local Git does not apply. The Claude
+	// sessions edited nothing, and the export cannot tell.
 	outcomes := map[string]int{}
-	for _, row := range queryProjects(t, server, "library", "project_kind", "outcome_label", "pr_count", "branch_count", "source_kind") {
-		if row["pr_count"] != nil || row["branch_count"] != nil {
+	for _, row := range queryProjects(t, server, "library", "project_kind", "outcome_label", "pr_count", "branch_count", "source_kind",
+		"git_check", "git_check_reason", "linked_commits", "landed_commits") {
+		if row["pr_count"] != nil || row["branch_count"] != nil || row["linked_commits"] != nil || row["landed_commits"] != nil {
 			t.Fatalf("a Git count outside a repository: %#v", row)
+		}
+		if row["git_check"] != "not_applicable" || row["git_check_reason"] != nil {
+			t.Fatalf("local Git outside a repository: %#v", row)
 		}
 		outcomes[firstString(row["source_kind"])+"|"+firstString(row["outcome_label"])]++
 	}
@@ -178,6 +187,9 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	// The session without a folder and the ChatGPT export.
 	if integer(projects["conversations_without_project"]) != 2 {
 		t.Fatalf("conversations without a project: %#v", projects["conversations_without_project"])
+	}
+	if count := countRows(t, library.catalog, `SELECT COUNT(*) FROM session_git`) + countRows(t, library.catalog, `SELECT COUNT(*) FROM git_repository_scans`); count != 0 {
+		t.Fatalf("local Git ran without a repository: %d rows", count)
 	}
 	if repositories := callProjectTool(t, library.catalog, "list_repositories", map[string]any{}); integer(repositories["total"]) != 0 {
 		t.Fatalf("list_repositories without Git: %#v", repositories)

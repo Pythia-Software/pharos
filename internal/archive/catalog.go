@@ -286,6 +286,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureOutcomes(); err != nil {
 		return fmt.Errorf("initialize outcomes: %w", err)
 	}
+	if err := c.ensureOutcomeGit(); err != nil {
+		return fmt.Errorf("initialize outcome git: %w", err)
+	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
 	}
