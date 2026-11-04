@@ -86,6 +86,18 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	if kinds[notes+"|folder"] != 1 || kinds["|none"] != 2 || len(kinds) != 4 {
 		t.Fatalf("library projects: %#v", kinds)
 	}
+	// Every session has an outcome, and no Git count reads as zero outside a
+	// repository: the Claude sessions edited nothing, and the export cannot tell.
+	outcomes := map[string]int{}
+	for _, row := range queryProjects(t, server, "library", "project_kind", "outcome_label", "pr_count", "branch_count", "source_kind") {
+		if row["pr_count"] != nil || row["branch_count"] != nil {
+			t.Fatalf("a Git count outside a repository: %#v", row)
+		}
+		outcomes[firstString(row["source_kind"])+"|"+firstString(row["outcome_label"])]++
+	}
+	if outcomes["claude|no_changes"] != 4 || outcomes["chatgpt|unknown"] != 1 {
+		t.Fatalf("library outcomes: %#v", outcomes)
+	}
 	usage := map[string]bool{}
 	for _, row := range queryProjects(t, server, "rhythm") {
 		usage[firstString(row["project_name"])] = true

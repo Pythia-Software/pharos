@@ -123,30 +123,65 @@ Each outcome fact is labelled with the tier it came from.
 
 ### Tier 1: from the transcript
 
-- **Files changed.** Each path the session created, edited or deleted, with
-  lines added and removed, read from `tool_calls`. The ledger already
-  records `file_path`, `path_absolute`, `lines_added` and `lines_removed` for
-  Claude Code (Edit, Write, MultiEdit) and Codex (`apply_patch`).
-  Antigravity records paths but no line counts, so its counts are
-  "Not recorded" rather than zero.
-- **Commands and how they ended.** `tool_calls.status`, `exit_code` and
-  `command_category`.
-- **Verified after the last edit.** Whether a command whose
-  `command_category` is `test`, `build` or `lint` ran after the session's
-  last file edit, and how it ended.
-- **Rework.** Whether a later session in any harness edited the same file
-  within N days. N is configurable and defaults to 14. A session with
-  rework has at least one of its files re-edited. "Heavily re-edited" means
-  a later session's removed lines on those files reach half of this
-  session's added lines, or more than half of its files were re-edited.
-  Both thresholds are calibrated in the Tier 1 PR against real libraries,
-  and its report records the measurement.
-- **Commit, branch and PR evidence in tool output.** These are lines like
-  `[main 1a2b3c4] message` from `git commit`, `To … main -> main` from
-  `git push`, and pull request URLs from `gh pr create`. A `git commit`
-  output line with a hash is direct evidence, even when Pharos cannot open
-  the repository. Today only the MCP `trace_worktree` tool parses such
-  text, at query time; Tier 1 stores it.
+A **session** is a workspace, a Library row: a Claude Code or Codex session,
+a Conductor workspace. Its delegated agents' calls are its own.
+
+- **Files changed.** Each file a successful edit call changed, read from
+  `tool_calls` (Claude Code's Edit, Write and MultiEdit, Codex's
+  `apply_patch`, Antigravity's edits). Files in temporary directories and
+  the agent's own home (plans, memory) are left out. A file in a repository
+  is identified by repository and repository-relative path, so every
+  checkout and worktree of a repository shares it; any other file by its
+  absolute path. Lines added and removed come from the ledger; Antigravity
+  records none, so its counts are empty ("Not recorded"), not zero. Edits a
+  shell command makes (`sed -i`, redirections) are not counted.
+- **Verified after the last edit.** How the last command whose
+  `command_category` is `test` or `build` after the session's last edit
+  ended: passed, failed, or no result; "not run" when none ran. The ledger
+  has no lint category, so linters count only when they run as a build.
+- **Rework.** Which of the lines this session added and kept a later
+  session in any harness removed. A later session counts when it edited one
+  of the same files after this session's last edit of it, starting within N
+  days of it. N is the library setting `outcome_rework_days`, 14 by default.
+  The session is "Reworked" when later sessions removed at least half of
+  those lines. Lines come from each edit's input as the transcript holds it:
+  an Edit's old and new text, a Write's whole file, a patch's `-` and `+`
+  lines. A line removed and added again (moved or reindented) is unchanged,
+  and only lines of 8 or more characters, trimmed, count, so a brace or a
+  blank line says nothing. A later Write removes whatever of the session's
+  lines the new file no longer has. A mirror of another workspace
+  (`tool_mirror_workspaces`, such as a Conductor workspace's copy of its
+  Claude session) repeats that workspace's edits and is never rework. A
+  session whose edits cannot be read line by line (an input the transcript
+  did not keep) is not judged, and its "why" says so. Editing the same files
+  again is not rework: continued work on a file usually adds to it. The
+  calibration is under [Rework calibration](#rework-calibration).
+- **Commit, branch and PR evidence in tool output.** From the output of a
+  successful `git commit` (`[main 1a2b3c4] …`, giving hash and branch),
+  `git push` (`a..b  main -> main`, `* [new branch]`), and `gh pr create`
+  (the pull request URL). Only these commands' output is read. A hash here
+  is Tier 1 evidence: it is stored, but "Committed" waits for local Git to
+  confirm it (Tier 2).
+
+Storage: `session_files` (one row per session and file: path, repository,
+first and last edit, edits, lines, and fingerprints of the lines it added
+and kept and of the lines it removed) and `session_outcomes` (one row per
+session: the facts above, the rework judgement and the window it used).
+They are derived in the tools stage, after the tool ledger, for the
+sessions whose calls changed (`session_outcome_dirty`, filled by triggers on
+`tool_calls` and `workspaces`). Each pass then judges rework again, once,
+for those sessions and every earlier session sharing a file with them,
+before or after the change, whose window reaches it
+(`session_rework_dirty`). A new rule version or rework window derives every
+session again. The label is read
+from the stored facts, so a change stops being too recent to judge with no
+write. The Library shows the label (`outcome_label`, with `outcome_why`),
+files changed, lines, verification, recorded commits and reworked files.
+
+A line fingerprint is the first 6 bytes of the SHA-256 of the trimmed line:
+enough to compare sets of lines without collisions that matter, and not the
+line. Pharos stores no diff and no file content for outcomes; the
+transcript it was read from already holds the text.
 
 ### Tier 2: from local git (repositories only, read-only)
 
@@ -185,7 +220,7 @@ decided it and its tier.
 | Committed | Committed, not on mainline (yet). | Not used. |
 | Changed and kept | Edits with no commit evidence, and no later rework within N days. | Edits with no later rework within N days. |
 | Changed, too recent | Edits less than N days ago, so rework cannot be judged yet. | Same. |
-| Reworked | Its changes were reverted, or the same files were heavily re-edited within N days. | The same files were heavily re-edited within N days. |
+| Reworked | Its changes were reverted, or later sessions removed at least half of the lines it added within N days. | Later sessions removed at least half of the lines it added within N days. |
 | No changes | The session changed no files. Research, review and questions are normal. | Same. |
 | Unknown | Not enough evidence, for example a harness that records no tool calls. | Same. |
 
@@ -218,6 +253,83 @@ A "Not checked" state is never negative evidence.
 | Inferred: author time in the window, on the recorded branch, touching the session's edited files, and the only containing session | 0.7 |
 | Inferred, and the tightest of several overlapping sessions | 0.5 |
 | Inferred from time alone (no file overlap) | Not linked |
+
+## Rework calibration
+
+Measured on 2026-11-03 against a copy of a real library (the euclid backup
+of 2026-11-01, opened immutable and read-only): 139,310 successful edits in
+9,210 sessions, 4,060 of them with edits outside mirrors.
+
+**The first rule failed.** The rule as first written counted a session as
+"Reworked" when more than half of its files were edited again by a later
+session within N days, or when one later session removed at least half as
+many lines as it added. It marked 61.9% of the sessions with edits
+"Reworked" at N=14 (52% to 73% across N of 7 to 30 and shares of a quarter
+to three quarters). The files criterion alone marked 54.5%, the lines
+criterion 44.7%. Re-editing is how work continues, not a sign it failed:
+
+- 47.1% of the files a session edited were edited again by a later session.
+  Of those, 53% were edited again within a day, 80.5% within 7 days, 86.8%
+  within 14 and 91.9% within 30.
+- A few files draw most of the work: one file was edited by 619 sessions,
+  and 92 files by 20 or more.
+- 196,453 pairs of edits by different sessions came one after the other,
+  against 2,716 from sessions running in parallel.
+- A later session's removed lines are not this session's lines: per file
+  edited again, removed over added was 0.05 at the 25th percentile, 0.25 at
+  the median, 1.0 at the 75th and 3.25 at the 90th.
+
+Counting files and lines cannot tell continued work from rework, and a
+label on most work that reads as failure breaks "no label implies the
+session was bad".
+
+**The rule shipped: line survival.** Rework is now the share of the lines a
+session added and kept that later sessions removed. On the same library,
+4,002 sessions added lines that count:
+
+| Window | Any line removed later | Removed ≥ 25% | Removed ≥ 50% | Removed ≥ 75% |
+|---|---|---|---|---|
+| 7 days | 42.2% | 7.8% | 3.7% | 2.2% |
+| 14 days | 45.7% | 9.7% | 4.8% | 2.8% |
+| 30 days | 48.5% | 11.2% | 5.7% | 3.3% |
+
+The median session loses none of its lines and the 90th percentile 24% at
+14 days. 75% of sessions had a file edited again within 14 days, and for
+39% of those no later session removed any of their lines. Small sessions
+are reworked more often: 13.0% of sessions adding 1 to 9 lines, 5.7% of
+10 to 49, 2.1% of 50 or more. That is expected, since one replaced line is
+a whole small change.
+
+N stays 14: going from 14 to 30 days adds less than one session in a
+hundred, and at 7 days a change made before a weekend and replaced the
+week after would read as kept. The half-share stays because it is the
+plain reading of "most of it was redone", and it marks about one session
+in twenty.
+
+Limits:
+
+- A later Write of a whole file counts every line of the session's that the
+  new file lacks. When the session itself wrote the file whole, all the
+  file's lines count as its own, including lines from earlier sessions.
+- Edits made by shell commands (`sed -i`, redirections) are not read.
+- A revert by Git is Tier 2 and comes in PR 3.
+
+**The shipped code on the same library.** The Go probe
+`outcomes_probe_test.go` (`-tags probe`) derives outcomes from an extract of
+the backup (the command is in its header). Of 53,328 sessions, it labelled
+40,774 "No changes", 6,252 "Changed and kept", 248 "Reworked", 88 "Changed,
+too recent" and 16 "Unknown" (chat exports). That is 3.8% of the 6,588
+sessions with edits, counting Conductor workspaces and sessions outside
+mirrors that the first measurement left out. 1,883 of them lost at least one
+line to a later session. Every session's edits could be read line by line.
+The fingerprints take 6.0 MB for 52,244 session files.
+
+Speed: deriving every session took 27 seconds, and deriving the 10 latest
+sessions again took 36 ms. A first version judged rework inside each batch,
+so a file edited by hundreds of sessions was judged again by every batch
+that touched it. Batches grew from 56 ms to over 700 ms, and the full pass
+ran for more than 75 minutes before it was stopped. Facts are now derived
+first and rework judged once per marked session (`session_rework_dirty`).
 
 ## What Pharos never does with git
 
