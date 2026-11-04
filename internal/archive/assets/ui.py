@@ -251,7 +251,7 @@ APP_HTML = r'''<!doctype html>
     .event-link-gutter path{fill:none;stroke:var(--event-link);stroke-width:1.6;stroke-linecap:round;opacity:.75}.event-link-gutter path.is-weak{stroke-dasharray:4 3}.event-link-gutter path.is-selected{stroke-width:2.4;opacity:1}
     .show-events.has-link-focus mark.is-linked:not(.link-focus),.show-events.has-link-focus mark.event-target:not(.link-focus){opacity:.55}
     .show-events .link-focus:is(mark,.event-link-note),.show-events .link-selected:is(mark,.event-link-note){outline:2px solid var(--event-link);outline-offset:1px}
-    .show-events .link-reveal{background:var(--attention-mark)!important;color:var(--attention-ink)!important;transition:background .6s}
+    .show-events .link-reveal:is(mark,.event-link-note){outline-width:4px;outline-offset:3px;transition:outline-width .6s,outline-offset .6s}
     .show-events [data-agent-events] .agent-event{background:color-mix(in srgb,var(--event-hue) 24%,transparent);border-radius:2px;padding:1px 0;-webkit-box-decoration-break:clone;box-decoration-break:clone;cursor:help}
     .show-events [data-agent-events] .agent-event:hover{background:color-mix(in srgb,var(--event-hue) 40%,transparent)}
     .show-events [data-agent-events] .event-context{text-decoration:underline dotted color-mix(in srgb,var(--muted) 80%,transparent);text-underline-offset:3px;cursor:help}
