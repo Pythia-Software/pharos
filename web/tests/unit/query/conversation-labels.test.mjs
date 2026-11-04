@@ -1,5 +1,32 @@
 import assert from 'node:assert/strict';
+import {messageLabelFingerprintCache} from '../../../src/message-label-results-model';
 import {test} from 'node:test';
+
+test('fingerprint requests share work, retain recently visited pages and reload evicted conversations',async()=>{
+ const calls=[],cache=messageLabelFingerprintCache(async id=>{calls.push(id);return id;},2);
+ const a=cache.read('a');assert.equal(cache.read('a'),a);await a;
+ await cache.read('b');await cache.read('a');await cache.read('c');
+ await cache.read('a');await cache.read('b');
+ assert.deepEqual(calls,['a','b','c','b']);
+});
+
+test('fingerprint refresh invalidates off-screen entries and failed reads can retry',async()=>{
+ let version=0,failed=true;
+ const cache=messageLabelFingerprintCache(async id=>{if(id==='retry'&&failed)throw new Error('Unavailable');return version;});
+ assert.equal(await cache.read('offscreen'),0);version=1;cache.clear();
+ assert.equal(await cache.read('offscreen'),1);
+ await assert.rejects(cache.read('retry'),/Unavailable/);failed=false;
+ assert.equal(await cache.read('retry'),1);
+});
+
+test('a pre-refresh fingerprint failure leaves the replacement request cached',async()=>{
+ let rejectFirst,requests=0;
+ const cache=messageLabelFingerprintCache(()=>++requests===1?new Promise((resolve,reject)=>{rejectFirst=reject;}):Promise.resolve('current'));
+ const old=cache.read('same');await Promise.resolve();cache.clear();
+ const current=cache.read('same');assert.equal(await current,'current');
+ rejectFirst(new Error('Old request failed'));await assert.rejects(old);
+ assert.equal(cache.read('same'),current);assert.equal(requests,2);
+});
 
 import {timelinePreviewText} from '../../../src/timeline-preview.ts';
 

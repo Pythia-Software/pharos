@@ -3,6 +3,22 @@ import type {HostQueryOptions} from '@pythia-software/query-table-react';
 import {recordKeywordHostQuery} from './host-query-state';
 import type {FieldDef} from '@pythia-software/query-table-core';
 export const messageLabelResultParameters=['label_results'];
+// Retain only a few result pages. A refresh clears even off-screen ribbons;
+// an older failed request must not evict its newer replacement.
+export function messageLabelFingerprintCache<Value>(load:(id:string)=>Promise<Value>,limit=80){
+ const entries=new Map<string,Promise<Value>>();
+ return {
+  read(id:string):Promise<Value>{
+   const found=entries.get(id);
+   if(found){entries.delete(id);entries.set(id,found);return found;}
+   const pending=Promise.resolve().then(()=>load(id));entries.set(id,pending);
+   pending.catch(()=>{if(entries.get(id)===pending)entries.delete(id);});
+   while(entries.size>limit)entries.delete(entries.keys().next().value!);
+   return pending;
+  },
+  clear(){entries.clear();},
+ };
+}
 export function messageLabelConversationQuery(source:QueryState):QueryState {
  return {...EMPTY_QUERY,limit:40,fitToScreen:true,grouping:{source:{...(source.grouping?.source??source),offset:0,aggregations:[]},keys:['fingerprint'],summaries:[
  {id:'conversation_title',op:'row',field:'title',label:'Conversation'},{id:'conversation_workspace',op:'row',field:'workspace_id',label:'Workspace'},

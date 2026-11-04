@@ -3,14 +3,21 @@ import type {QueryTableApi} from '@pythia-software/query-table-react';
 import {CompactFingerprint} from './label-compact-fingerprint';
 import {shortLabel,stateColor,type LabelConversation,type Taxonomy} from './conversation-labels';
 import {conversationRowURL} from './usage-row-model';
-import {labelResultsMode} from './message-label-results-model';
+import {labelResultsMode,messageLabelFingerprintCache} from './message-label-results-model';
 import {onDatasetRefresh} from './dataset-refresh';
 import './message-label-results.css';
 type Row=Record<string,any>;
-const cache=new Map<string,Promise<{conversation:LabelConversation;taxonomy:Taxonomy;truncated:boolean}>>();
-function load(id:string){let pending=cache.get(id);if(!pending){pending=fetch('/api/labels/conversations/'+encodeURIComponent(id)).then(async response=>{if(!response.ok)throw new Error('Fingerprint unavailable');return response.json();});cache.set(id,pending);pending.catch(()=>cache.delete(id));}return pending;}
+const cache=messageLabelFingerprintCache<{conversation:LabelConversation;taxonomy:Taxonomy;truncated:boolean}>(async id=>{
+ const response=await fetch('/api/labels/conversations/'+encodeURIComponent(id));
+ if(!response.ok)throw new Error('Fingerprint unavailable');return response.json();
+});
+let observing=false;
+function load(id:string){
+ if(!observing){observing=true;onDatasetRefresh('message_labels',()=>cache.clear());}
+ return cache.read(id);
+}
 export function MessageLabelFingerprint({id}:{id:string}){
- const [revision,setRevision]=useState(0);useEffect(()=>onDatasetRefresh('message_labels',()=>{cache.delete(id);setRevision(n=>n+1);}),[id]);
+ const [revision,setRevision]=useState(0);useEffect(()=>onDatasetRefresh('message_labels',()=>setRevision(n=>n+1)),[]);
  const [value,setValue]=useState<Awaited<ReturnType<typeof load>>>(),[error,setError]=useState('');
  useEffect(()=>{let current=true;setValue(undefined);setError('');if(id)load(id).then(data=>{if(current)setValue(data);},err=>{if(current)setError(err.message);});return()=>{current=false;};},[id,revision]);
  return <div className="message-label-fingerprint" title={value?.truncated?'Fingerprint uses a bounded retained-message sample':error||undefined}>{value?<CompactFingerprint conversation={value.conversation} taxonomy={value.taxonomy} stretch/>:<span className="muted">{error||'Loading ribbon…'}</span>}</div>;
