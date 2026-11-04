@@ -987,8 +987,9 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 
 // apply merges a batch's results into its messages. A batch the worker
 // rejected, or that kept crashing workers, is split and sent again one item
-// at a time, so one bad item fails only its own message (which stays
-// pending for a later run) and the rest are labeled.
+// at a time. A single item that crashed outside isolation is also retried:
+// another request in flight may have killed its worker. Only an isolated
+// single crash fails its message, which stays pending for a later run.
 func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish func(*labelsJob)) error {
 	r.stats.Infer += result.took
 	if result.err != nil {
@@ -1011,6 +1012,10 @@ func (r *labelsRun) apply(result labelsBatchResult, ready *[]labelsBatch, finish
 			} else {
 				*ready = append(*ready, singles...)
 			}
+			return nil
+		}
+		if errors.Is(result.err, labelrt.ErrWorkerExited) && !result.batch.isolated {
+			*ready = append([]labelsBatch{{seqs: result.batch.seqs, isolated: true}}, *ready...)
 			return nil
 		}
 		message := result.batch.seqs[0].message
