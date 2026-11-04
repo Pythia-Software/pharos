@@ -21,10 +21,9 @@ import (
 // interval. So the sampler is not a loop and starts no goroutine.
 //
 // CPU is the change in user plus system time over the wall time between
-// samples. On macOS active descendants have separate rows and only own CPU
-// counts, avoiding double counting on exit. Work that starts and exits between
-// samples cannot be measured. Without a process tree, exited child time is
-// included in the parent. CPU is displayed as a percentage of
+// samples. On macOS active descendants have separate rows; reaped child
+// time is included in the parent after deducting CPU already sampled from
+// that child. CPU is displayed as a percentage of
 // one core. Memory is the physical footprint, what Activity Monitor shows.
 // Disk is the change in bytes the process read and wrote over the same
 // wall time (its own: the kernel keeps no count for exited children).
@@ -65,14 +64,13 @@ type processUsage struct {
 
 // resourceProcess is one process a snapshot asks about.
 type resourceProcess struct {
-	PID int
+	PID    int
+	Parent int
 	// Role is service, broker, or the process name of a lease (cli:ingest).
 	Role string
 	// Library is the registered library a broker reading belongs to.
 	Library, LibraryName string
-	// OwnOnly leaves out the time of exited children: the broker's children
-	// are the services it reads itself, and a service that exits after
-	// hours would otherwise count its whole life again as one interval.
+	// OwnOnly is for callers that intentionally want only this process's CPU.
 	OwnOnly bool
 }
 
@@ -89,6 +87,12 @@ type resourceSampler struct {
 type resourceTrack struct {
 	at, asked time.Time
 	usage     processUsage
+	// The first reading separates child CPU before and after the interval
+	// when a sampled child is later reaped by its parent.
+	firstAt       time.Time
+	firstCPU      float64
+	parent        int
+	reapedCovered bool
 	// percent is the CPU over the interval that ended at at, and disk its
 	// bytes per second; nil after the first reading.
 	percent, disk *float64
@@ -126,8 +130,12 @@ type resourceSummary struct {
 	CPUPercent         *float64 `json:"cpu_percent"`
 	MemoryBytes        uint64   `json:"memory_bytes"`
 	DiskBytesPerSecond *float64 `json:"disk_bytes_per_second"`
-	SampledAt          string   `json:"sampled_at"`
-	Basis              string   `json:"basis"`
+	// A process without a second sample has no rate yet. Keep the measured part
+	// visible, and say explicitly when it is a lower bound.
+	CPUPartial  bool   `json:"cpu_partial"`
+	DiskPartial bool   `json:"disk_partial"`
+	SampledAt   string `json:"sampled_at"`
+	Basis       string `json:"basis"`
 	// Approximate is true when a reading is the process's own report (off
 	// macOS) rather than the kernel's.
 	Approximate bool `json:"approximate"`
@@ -140,13 +148,29 @@ type resourceSummary struct {
 // resourceSampleInterval. A process that cannot be read (it exited, or
 // belongs to another user) is left out.
 func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading {
+	return r.sampleWithTable(processes, resourceProcessTable())
+}
+
+func (r *resourceSampler) sampleWithTable(processes []resourceProcess, table []processNode) []resourceReading {
 	if r == nil {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
-	processes = expandResourceProcesses(processes, resourceProcessTable())
+	processes = expandResourceProcesses(processes, table)
+	// A service snapshot can keep naming a worker after it exits. Only the
+	// current OS table establishes liveness for reaped-child accounting.
+	present := make(map[int]bool, len(table))
+	if table == nil {
+		for _, process := range processes {
+			present[process.PID] = true
+		}
+	} else {
+		for _, node := range table {
+			present[node.PID] = true
+		}
+	}
 	readings := []resourceReading{}
 	seen := map[int]bool{}
 	for _, process := range processes {
@@ -155,12 +179,29 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 		}
 		seen[process.PID] = true
 		track := r.byPID[process.PID]
+		if table != nil && !present[process.PID] && track != nil {
+			// A cached snapshot can still request a reaped worker. Keep its
+			// counters for the parent, but do not show it as a live process.
+			track.asked = now
+			continue
+		}
 		if track == nil || now.Sub(track.at) >= resourceSampleInterval {
 			r.reads++
 			usage, err := r.read(process.PID)
+			previous := track
+			parent := process.Parent
+			if !present[process.PID] && previous != nil && (err != nil || previous.usage.Started == usage.Started) {
+				parent = previous.parent
+			}
 			switch {
 			case err != nil:
-				track = &resourceTrack{at: now, err: err}
+				// Keep the last good counters for the parent's next sample;
+				// this process can still be in a cached snapshot's roots.
+				track = &resourceTrack{at: now, err: err, parent: parent}
+				if previous != nil {
+					track.usage, track.firstAt, track.firstCPU = previous.usage, previous.firstAt, previous.firstCPU
+					track.reapedCovered = previous.reapedCovered
+				}
 			case track == nil || track.err != nil || track.usage.Started != usage.Started:
 				track = &resourceTrack{at: now, usage: usage}
 			case now.Sub(track.at) > resourceStaleGap:
@@ -173,6 +214,8 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 				children := usage.ChildCPUSeconds - track.usage.ChildCPUSeconds
 				if process.OwnOnly {
 					children = 0
+				} else {
+					children -= r.reapedChildOverlap(process.PID, children, track.at, present)
 				}
 				if children > elapsed*cores {
 					// A child that ran longer than this interval could
@@ -186,8 +229,13 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 				if previous := track.usage; usage.DiskKnown && previous.DiskKnown && usage.DiskBytes >= previous.DiskBytes {
 					disk = new(float64(usage.DiskBytes-previous.DiskBytes) / elapsed)
 				}
-				track = &resourceTrack{at: now, usage: usage, percent: &percent, disk: disk}
+				track = &resourceTrack{at: now, usage: usage, percent: &percent, disk: disk,
+					firstAt: previous.firstAt, firstCPU: previous.firstCPU, parent: parent}
 			}
+			if track.firstAt.IsZero() && err == nil {
+				track.firstAt, track.firstCPU = now, usage.CPUSeconds+usage.ChildCPUSeconds
+			}
+			track.parent = parent
 			r.byPID[process.PID] = track
 		}
 		track.asked = now
@@ -209,6 +257,62 @@ func (r *resourceSampler) sample(processes []resourceProcess) []resourceReading 
 	return readings
 }
 
+// reapedChildOverlap removes only CPU already counted in a child's own
+// samples. A helper first seen in this interval contributes its initial CPU
+// through the parent's reaped-child counter; an older child contributes only
+// CPU after its last sample. The parent's counter advances only on reap.
+func (r *resourceSampler) reapedChildOverlap(parent int, childCPU float64, since time.Time, present map[int]bool) float64 {
+	if childCPU <= 0 {
+		return 0
+	}
+	remaining, overlap := childCPU, 0.0
+	children := map[int][]int{}
+	for pid, child := range r.byPID {
+		if !present[pid] && !child.reapedCovered && !child.firstAt.IsZero() {
+			children[child.parent] = append(children[child.parent], pid)
+		}
+	}
+	for _, pids := range children {
+		slices.Sort(pids)
+	}
+	// A reaped child transfers the CPU of descendants it reaped to its
+	// parent. Its last sample may predate their exit, so include any
+	// outstanding sampled descendants before comparing with that transfer.
+	var subtree func(int, map[int]bool) (float64, float64, []int)
+	subtree = func(pid int, visited map[int]bool) (float64, float64, []int) {
+		if visited[pid] {
+			return 0, 0, nil
+		}
+		visited[pid] = true
+		child := r.byPID[pid]
+		total := child.usage.CPUSeconds + child.usage.ChildCPUSeconds
+		counted := total - child.firstCPU
+		if !child.firstAt.After(since) {
+			counted = total
+		}
+		members := []int{pid}
+		for _, descendant := range children[pid] {
+			part, alreadyCounted, ids := subtree(descendant, visited)
+			total += part
+			counted += alreadyCounted
+			members = append(members, ids...)
+		}
+		return total, counted, members
+	}
+	for _, pid := range children[parent] {
+		total, counted, members := subtree(pid, map[int]bool{})
+		if total > remaining+1e-6 {
+			continue
+		}
+		remaining -= total
+		overlap += counted
+		for _, member := range members {
+			r.byPID[member].reapedCovered = true
+		}
+	}
+	return overlap
+}
+
 // processNode is the OS process tree entry needed to find active workers.
 type processNode struct {
 	PID, Parent int
@@ -216,21 +320,20 @@ type processNode struct {
 }
 
 // expandResourceProcesses attributes descendants to their nearest known Pharos
-// process. Read only own CPU when the tree is available: reaped child counters
-// would count a worker a second time after its separate row disappears.
+// process. Keep the direct parent so reaped child CPU can be reconciled.
 func expandResourceProcesses(roots []resourceProcess, table []processNode) []resourceProcess {
 	if table == nil {
 		return roots
 	}
 	processes := append([]resourceProcess(nil), roots...)
 	known := map[int]resourceProcess{}
-	present := map[int]bool{}
+	parents := map[int]int{}
 	for _, node := range table {
-		present[node.PID] = true
+		parents[node.PID] = node.Parent
 	}
 	for i := range processes {
-		if present[processes[i].PID] {
-			processes[i].OwnOnly = true
+		if parent, ok := parents[processes[i].PID]; ok {
+			processes[i].Parent = parent
 		}
 		known[processes[i].PID] = processes[i]
 	}
@@ -241,7 +344,7 @@ func expandResourceProcesses(roots []resourceProcess, table []processNode) []res
 				continue
 			}
 			if parent, ok := known[node.Parent]; ok {
-				child := resourceProcess{PID: node.PID, Role: "worker:" + node.Name, Library: parent.Library, LibraryName: parent.LibraryName, OwnOnly: true}
+				child := resourceProcess{PID: node.PID, Parent: node.Parent, Role: "worker:" + node.Name, Library: parent.Library, LibraryName: parent.LibraryName}
 				known[node.PID] = child
 				processes = append(processes, child)
 				changed = true
@@ -258,21 +361,24 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 		return nil
 	}
 	summary := &resourceSummary{Processes: readings, Basis: readings[0].Basis}
-	// CPU is totalled only when every process has a figure: a total that
-	// silently left out one just starting would read low. Memory always is.
-	cpu, disk := new(0.0), new(0.0)
+	// New workers need two samples for a rate. Do not clear the whole
+	// machine's rate every time one starts; report the measured lower bound.
+	cpu, disk := 0.0, 0.0
+	cpuCount, diskCount := 0, 0
 	var memory uint64
 	var at time.Time
 	for _, reading := range readings {
 		if reading.cpu == nil {
-			cpu = nil
-		} else if cpu != nil {
-			*cpu += *reading.cpu
+			summary.CPUPartial = true
+		} else {
+			cpu += *reading.cpu
+			cpuCount++
 		}
 		if reading.disk == nil {
-			disk = nil
-		} else if disk != nil {
-			*disk += *reading.disk
+			summary.DiskPartial = true
+		} else {
+			disk += *reading.disk
+			diskCount++
 		}
 		memory += reading.memory
 		if reading.at.After(at) {
@@ -285,13 +391,20 @@ func summarizeResources(subject string, readings []resourceReading) *resourceSum
 			summary.Basis = "mixed"
 		}
 	}
-	if cpu != nil {
+	var cpuRate, diskRate *float64
+	if cpuCount > 0 {
 		// A total, like each figure, never exceeds every core (§10).
-		*cpu = min(*cpu, 100*float64(resourceCores()))
+		cpuRate = new(min(cpu, 100*float64(resourceCores())))
 	}
-	summary.CPUPercent, summary.MemoryBytes, summary.SampledAt = roundedPercent(cpu), roundedBytes(memory), formatTime(at)
-	summary.DiskBytesPerSecond = roundedRate(disk)
-	summary.Label = subject + " is using " + loadWords(cpu, memory)
+	if diskCount > 0 {
+		diskRate = &disk
+	}
+	summary.CPUPercent, summary.MemoryBytes, summary.SampledAt = roundedPercent(cpuRate), roundedBytes(memory), formatTime(at)
+	summary.DiskBytesPerSecond = roundedRate(diskRate)
+	summary.Label = subject + " is using " + loadWords(cpuRate, memory)
+	if summary.CPUPartial && cpuRate != nil {
+		summary.Label += " (CPU is a lower bound while a process is being measured)"
+	}
 	if summary.Approximate {
 		summary.Label += " (approximate)"
 	}

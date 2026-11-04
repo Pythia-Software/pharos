@@ -23,8 +23,9 @@ var queryV3MaxRows = querytable.MaxLimit
 func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
 	groups := 10_000
 	// Usage has one compact fact per execution/day/model. The built-in Work
-	// preset must cover a library with more than 10,000 workspaces.
-	if schema.Name == "pharos_usage" {
+	// preset and message-label conversation results must cover libraries with
+	// more than 10,000 workspaces or conversations.
+	if schema.Name == "pharos_usage" || schema.Name == "pharos_message_labels" {
 		groups = 100_000
 	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",
@@ -133,7 +134,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if q.Grouping != nil {
 		where = q.Source.Where
 	}
-	table, sqlBacked := sqlDatasetFor(dataset)
+	table, sqlBacked := s.Catalog.sqlDatasetFor(dataset)
 	var rows []map[string]any
 	var required []string
 	var find *libraryFindSet
@@ -258,7 +259,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	// ephemeral CTE B-trees otherwise write pages even with a temp cache. Keep the
 	// full raw tool ledger and message payloads on the spill-capable path. The
 	// executor still enforces the same staging-byte budget before any copy.
-	memoryScratch := dataset == "tools" || dataset == "skill_usages" || !sqlBacked && len(rows) <= 100_000
+	memoryScratch := dataset == "tools" || dataset == "skill_usages" || dataset == "message_labels" && !slices.Contains(required, "text") || !sqlBacked && len(rows) <= 100_000
 	mode := 1
 	if memoryScratch {
 		mode = 2

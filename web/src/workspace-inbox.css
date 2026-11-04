@@ -45,6 +45,11 @@
 .workspace-inbox.navigator-hidden .workspace-overview { width: 0; border: 0; }
 .workspace-nav-backdrop { display: none; }
 .workspace-inbox.merged :is(.workspace-overview,.workspace-reader-bar,.workspace-nav-bar,.delegation-panel) { display: none; }
+.workspace-inbox.merged .delegation-panel.delegation-single { display: block; }
+.conversation-timeline-active > .conversation-panel { display: none; }
+.workspace-reader-content.conversation-timeline-active { padding-right: 0; }
+body:has(#detail.active .conversation-timeline-active) :is(.conversation-map,.conversation-map-window,.conversation-find,.conversation-find-rail) { display: none !important; }
+.delegation-single .delegation-toolbar { justify-content: flex-start; }
 .workspace-inbox .workspace-reader-content > .workspace-overview-content { max-width: none; margin: 0; padding: 24px 22px 0; }
 .workspace-inbox.merged .archive-details { display: block; }
 .workspace-inbox-overview :is(.conversation-map,.conversation-map-window,.token-map,.conversation-find,.conversation-find-rail) { display: none !important; }
@@ -52,13 +57,12 @@
 .workspace-inbox-viewing .conversation-find { right: 14px; top: calc(var(--conversation-rail-top) + 8px); width: min(470px,calc(var(--workspace-reader-width) - 40px)); max-width: calc(100vw - 32px); }
 .workspace-inbox.compact .delegation-panel { margin: 12px 0; }
 .workspace-inbox.compact .delegation-toolbar { gap: 8px; }
-.workspace-inbox.compact .delegation-toggle { width: 100%; min-height: 24px; }
+.workspace-inbox.compact .delegation-heading { width: 100%; min-height: 24px; }
 .workspace-inbox.compact .delegation-tabs { width: 100%; box-sizing: border-box; }
 .workspace-inbox.compact .delegation-controls-spacer { display: none; }
 .workspace-inbox.compact .delegation-overview-label { flex-direction: column; align-items: start; gap: 3px; }
 .workspace-inbox.compact .delegation-overview-label small, .workspace-inbox.compact .delegation-evidence-note { display: none; }
 .workspace-inbox.compact .delegation-overview-bounds { flex-wrap: wrap; font-size: 9px; gap: 3px; }
-.workspace-inbox.compact .delegation-window { line-height: 1.5; }
 .workspace-inbox.compact .delegation-legend { gap: 5px 8px; font-size: 9px; }
 .workspace-inbox.compact .delegation-lane-scroll { max-height: none; }
 .workspace-inbox.compact .delegation-axis,.workspace-inbox.compact .delegation-lane { grid-template-columns: minmax(140px,45%) minmax(0,1fr); min-width: 0; }

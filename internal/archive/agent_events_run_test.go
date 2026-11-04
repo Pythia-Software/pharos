@@ -265,6 +265,43 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	}
 }
 
+func TestAgentEventsLiveThreadTarget(t *testing.T) {
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	override(t, &agentEventsChunkRows, 1)
+	override(t, &labelerThreadCheck, time.Duration(0))
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	var observed []int
+	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{ThreadTarget: func() LabelerSettings {
+		if catalog.labelers != nil {
+			threads, _, _ := catalog.labelers.Usage()
+			if len(observed) == 0 || observed[len(observed)-1] != threads {
+				observed = append(observed, threads)
+			}
+		}
+		target := labels
+		target.Threads = 1
+		if slices.Contains(observed, 1) {
+			target.Threads = 4
+		}
+		if slices.Contains(observed, 4) {
+			target.Threads = 2
+		}
+		return target
+	}})
+	if err != nil || !stats.Complete || stats.ConversationsFailed != 0 || stats.Candidates == 0 {
+		t.Fatalf("changing cores: %+v %v", stats, err)
+	}
+	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{1, 4, 2}) {
+		t.Fatalf("worker thread targets: %v", threads)
+	}
+	again, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	if err != nil || !again.Complete || again.MessagesScored != 0 {
+		t.Fatalf("changing cores left work pending: %+v %v", again, err)
+	}
+}
+
 func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	catalog := agentEventsCatalog(t)
 	labels, settings := agentEventsTestSettings(t)

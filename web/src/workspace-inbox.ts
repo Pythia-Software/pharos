@@ -11,7 +11,7 @@ type InboxProps = {
   overview: HTMLElement[];
   reader: HTMLElement;
   onOverview: () => void;
-  onCompact: (compact: boolean) => void;
+  onLayout: (compact: boolean, splitReader: boolean) => void;
 };
 export type WorkspaceInbox = {
   workspace: string;
@@ -92,6 +92,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   let hidden = !readViewState("sidebar_visible", true);
   let sheet = false;
   let lastCompact = false;
+  let lastSplitReader = false;
   let overviewScroll = 0;
   let navScroll = 0;
   let disposed = false;
@@ -142,9 +143,10 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
       document.documentElement.style.setProperty("--conversation-rail-top", `${Math.ceil(top + 5)}px`);
       document.documentElement.style.setProperty("--workspace-reader-width", `${viewer.clientWidth}px`);
     }
-    if (compact !== lastCompact) {
+    if (compact !== lastCompact || split !== lastSplitReader) {
       lastCompact = compact;
-      props.onCompact(compact);
+      lastSplitReader = split;
+      props.onLayout(compact, split);
     }
   }
   const restoreView = () => {width=sidebarWidth(Number(readViewState("sidebar_width",String(width))));hidden=!readViewState("sidebar_visible",!hidden);update();};

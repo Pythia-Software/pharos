@@ -9,6 +9,9 @@ import { logSourceIds } from "./logs-model";
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
+  label_results: field("label_results",["analyze/query/message_labels"],"enum","Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.",["cards","table"],"cards"),
+  timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
+  reader_view: field("reader_view",["work"],"enum","Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.",["conversation","timeline"],"conversation"),
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
   thinking: field("thinking",["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],"json","Thinking dashboard applied filters and presentation. All controls share one range; dates are half-open ISO bounds."),
   disclosures: field("disclosures", ["*"], "json", "Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded."),
@@ -47,11 +50,11 @@ export const viewFields: Record<string, ViewField> = {
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
   card_filters: field("card_filters", ["cards"], "boolean", "Show the card filters.", undefined, false),
   findings_rank: field("findings_rank", ["findings", "findings/table"], "enum", "Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.", ["", "usd", "tokens", "minutes", "failures"]),
-  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions collects review questions for an agent in separate prompts.", ["efficiency", "safety"], "efficiency"),
-  safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action review lifecycle. Copying a prompt moves selected reviews to handed_off.", ["open", "handed_off", "dismissed"], "open"),
-  safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action reviews by their stable repository, machine, or unresolved workspace target.", undefined, ""),
-  safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order risky action reviews by latest activity, call count, or new execution evidence. Ties use latest activity, then stable review ID.", safetyRanks, "recent"),
-  safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a safety case by stable ID; evidence and source links live inside Details.", undefined, ""),
+  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate, in separate prompts.", ["efficiency", "safety"], "efficiency"),
+  safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action notice lifecycle. Copying a prompt moves selected notices to handed_off; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
+  safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
+  safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
+  safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
@@ -76,6 +79,7 @@ export const viewFields: Record<string, ViewField> = {
   habits_weeks: field("habits_weeks", ["analyze/habits"], "enum", "Weeks the Habits activity calendar shows, ending with today's week.", ["13", "26", "53"], "53"),
   habits_punchcard: field("habits_punchcard", ["analyze/habits"], "enum", "Whose time the Habits weekday × hour punchcard shows: you, agents you started (with you or unattended), agents you started while you're away (unattended), automatic agent runs, or agents you started minus you.", ["you", "agents", "unattended", "automated", "difference"], "you"),
   habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
+  habits_shape_days: field("habits_shape_days", ["analyze/habits"], "enum", "Number of recent days shown in the Habits Your days chart.", ["7", "14", "28", "56", "90"], "28"),
   habits_day: field("habits_day", ["analyze/habits"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };
@@ -117,7 +121,7 @@ viewFields.carbon.details={
   grid:"Key from the shared carbon factors grids, or custom with nonnegative customGrid in g CO2e/kWh.",
 };
 export const attentionTargets = [
-  { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action review card or its open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
+  { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action notice's open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
   { pattern: "page", pages: ["*"], description: "Main page content." },
   { pattern: "control:<field>", pages: ["*"], description: "A registered view field or control wrapper." },
   { pattern: "control:chart:<label>", pages: ["analyze/*"], description: "Chart control identified by its lower-case accessible label, with spaces replaced by hyphens (metric, breakdown, scale)." },
@@ -179,6 +183,7 @@ export function encodeViewValue(field: ViewField, value: unknown): string {
 // Existing composite owners implement their published codecs directly. Every
 // other host field must have a discovered useViewState/read/write binding.
 export const delegatedViewFields: Record<string,{file:string; symbol:string}> = {
+  label_results:{file:"web/src/message-label-results-model.ts",symbol:"messageLabelHostQuery"},
   dashboard_timezone:{file:"web/src/usage-dashboard-model.ts",symbol:"readDashboardLink"},
   carbon:{file:"internal/archive/assets/carbon.js",symbol:"syncSettingsURL"},
   parallelism:{file:"web/src/concurrency.tsx",symbol:"routeParameter"},

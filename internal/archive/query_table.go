@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
+	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -212,7 +212,7 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 			limit = parsed
 		}
 	}
-	if table, ok := sqlDatasetFor(dataset); ok {
+	if table, ok := s.Catalog.sqlDatasetFor(dataset); ok {
 		record, e := s.recordSearch(r.Context(), dataset, r.URL.Query())
 		if e != nil {
 			writeError(w, e, http.StatusBadRequest)
@@ -278,7 +278,7 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 		return
 	}
 	var result map[string]querytable.FieldStat
-	if table, ok := sqlDatasetFor(dataset); ok {
+	if table, ok := s.Catalog.sqlDatasetFor(dataset); ok {
 		record, e := s.recordSearch(r.Context(), dataset, r.URL.Query())
 		if e != nil {
 			writeError(w, e, http.StatusBadRequest)
@@ -352,7 +352,7 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		return
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	if table, ok := sqlDatasetFor(dataset); ok {
+	if table, ok := s.Catalog.sqlDatasetFor(dataset); ok {
 		s.postSQLQueryTable(w, r, dataset, operation, table, schema, decoder)
 		return
 	}
@@ -458,7 +458,7 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 		c.ensureAuthorship()
 		return nil
 	}
-	if dataset == "agent_events" || dataset == "agent_event_messages" {
+	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
 		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	if dataset == "model_requests" {

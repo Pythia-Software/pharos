@@ -237,3 +237,17 @@
 .query-role-values i { display:inline-block; width:4px; height:4px; flex:none; border-radius:1px; }
 .query-cover-columns .query-timeline-point { position:absolute; left:50%; width:4px; height:4px; border-radius:50%; transform:translate(-50%,50%); }
 .query-cover-columns>.query-timeline-reference { height:0; position:absolute; left:0; right:0; border-top:1px dashed var(--muted); pointer-events:none; }
+/* A grid cover: an activity grid or heatmap filling the cover, with its key and what it shows. */
+.compact-grid { display:flex; flex-direction:column; gap:5px; flex:1 1 auto; min-height:0; }
+.compact-grid-plot { display:grid; flex:1 1 auto; min-height:0; }
+.compact-grid-cell { min-width:0; min-height:0; border-radius:1px; }
+.compact-grid-label { align-self:center; height:0; display:flex; align-items:center; justify-content:flex-end; padding-right:5px; font-size:9px; line-height:1; color:var(--muted); white-space:nowrap; }
+.compact-grid-tick { justify-self:center; width:0; display:flex; justify-content:center; padding-top:3px; font-size:9px; line-height:1; color:var(--muted); white-space:nowrap; }
+/* The outermost labels stay inside the cover. */
+.compact-grid-tick.is-first { justify-self:start; justify-content:flex-start; }
+.compact-grid-tick.is-last { justify-self:end; justify-content:flex-end; }
+.compact-grid-key { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; font-size:9px; color:var(--muted); }
+.compact-grid-legend { display:flex; align-items:center; gap:5px; flex:none; }
+.compact-grid-ramp { width:40px; height:6px; border-radius:2px; background:linear-gradient(90deg,var(--panel),var(--sea)); }
+.compact-grid-ramp.compact-grid-diverging { background:linear-gradient(90deg,var(--sea),var(--panel),var(--warn)); }
+.compact-grid-caption { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
