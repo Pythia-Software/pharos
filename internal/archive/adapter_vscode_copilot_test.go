@@ -434,3 +434,19 @@ func TestVSCodeCopilotFolderChangeIsReadWithoutANewTurn(t *testing.T) {
 		})
 	}
 }
+
+// A source moved from live to retained reads and back reads the same
+// session version again: a change of folder alone is read each time.
+func TestVSCodeCopilotLiveAndRetainedReadsAgree(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := vscodeFixture(t)
+	manifest := filepath.Join(root, "workspaceStorage", "a1", "workspace.json")
+	for index, retained := range []bool{false, true, false} {
+		folder := fmt.Sprintf("/work/app-%d", index)
+		writeSourceFile(t, manifest, `{"folder":"file://`+folder+`"}`)
+		ingestSource(t, c, SourceConfig{Name: "vscode", Kind: "vscode-copilot", Path: root, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": retained}})
+		if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE location='`+folder+`'`); n != 1 {
+			t.Fatalf("read %d (retained %v): workspaces at %s: %d", index, retained, folder, n)
+		}
+	}
+}

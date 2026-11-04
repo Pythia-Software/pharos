@@ -3,6 +3,8 @@ package archive
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,22 +202,30 @@ func (a *vscodeCopilotAdapter) planParts() (*sourceWorkPlan, error) {
 			continue
 		}
 		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
-			record, read, err := a.parseSession(session)
+			record, read, digest, err := a.parseSession(session)
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", session.file, err)
 			}
 			// The copy read may be older than one read before, in a window
 			// that is gone or cannot be listed; its evidence makes ingest keep
-			// the newer (guardCapture), as it does for a capture. The session
-			// file alone is the evidence, so a change of folder is still read.
+			// the newer (guardCapture), as it does for a capture. It is the
+			// identity a retained read of the same session file has
+			// (retainedRecordIdentity), so a source moved between live and
+			// retained reads reads the same version again, and workspace.json
+			// is no part of it, so a change of folder alone is read.
 			if record != nil && a.view == nil {
 				values := []string{}
 				for _, part := range read {
 					if !part.metadata {
-						values = append(values, fmt.Sprintf("%s:%d:%d", part.item, part.size, part.version))
+						values = append(values, part.item, part.signal)
 					}
 				}
-				record.EvidenceIdentity = hashBytes([]byte(strings.Join(values, "\n")))
+				for _, part := range read {
+					if !part.metadata {
+						values = append(values, part.item, digest)
+					}
+				}
+				record.EvidenceIdentity = hashBytes([]byte(jsonText(values)))
 			}
 			return emit(record, read)
 		}})
@@ -224,44 +234,51 @@ func (a *vscodeCopilotAdapter) planParts() (*sourceWorkPlan, error) {
 	return plan, nil
 }
 
-func (a *vscodeCopilotAdapter) parseSession(session vscodeSession) (*WorkspaceRecord, []sourcePart, error) {
+// parseSession reads a session, and the SHA-256 of its file's bytes.
+func (a *vscodeCopilotAdapter) parseSession(session vscodeSession) (*WorkspaceRecord, []sourcePart, string, error) {
 	read := []sourcePart{}
 	file, err := a.files().Open(session.file)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil
+		return nil, nil, "", nil
 	} else if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
+	hash := sha256.New()
+	reader := io.TeeReader(file, hash)
 	var value map[string]any
 	if strings.HasSuffix(session.file, ".jsonl") {
-		value, err = vscodeReplay(file)
+		value, err = vscodeReplay(reader)
 	} else {
 		var decoded any
-		if decoded, err = decodeJSONValue(file); err == nil {
+		if decoded, err = decodeJSONValue(reader); err == nil {
 			if value = mapValue(decoded); value == nil {
 				err = errors.New("not a JSON object")
 			}
 		}
 	}
-	if err != nil {
-		return nil, nil, err
+	if err == nil {
+		_, err = io.Copy(io.Discard, reader)
 	}
+	if err != nil {
+		return nil, nil, "", err
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
 	// A session cut short or from another release would replace what was
 	// indexed with nothing.
 	if _, ok := value["requests"].([]any); !ok {
-		return nil, nil, errors.New("no list of requests")
+		return nil, nil, "", errors.New("no list of requests")
 	}
 	read = append(read, sourcePart{item: a.original(session.file), size: info.Size(), version: info.ModTime().UnixNano()})
 	location, remote := "", ""
 	if session.workspace != "" {
 		manifest, version, err := a.files().ReadJSONVersion(session.workspace)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		if err == nil {
 			location, remote = vscodeWorkspaceLocation(mapValueDefault(manifest))
@@ -272,12 +289,12 @@ func (a *vscodeCopilotAdapter) parseSession(session vscodeSession) (*WorkspaceRe
 	}
 	record := a.record(session, value, location, remote)
 	if record == nil {
-		return nil, read, nil
+		return nil, read, digest, nil
 	}
 	// The session file alone versions the session; workspace.json is
 	// metadata (sourcePart.metadata).
 	observe(record, info.ModTime().UnixNano())
-	return record, read, nil
+	return record, read, digest, nil
 }
 
 // vscodeDeleted marks a value a journal deletes.
