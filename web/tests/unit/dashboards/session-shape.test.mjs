@@ -1,6 +1,5 @@
 // Session Shape: the catalog's rules, its bands, and the dashboard's own
-// panels (percentile ranks, the active-time bins, the archetype mix and the
-// signal table's trailing range).
+// panels (the signal table's trailing range).
 import test from "node:test";
 import assert from "node:assert/strict";
 import document from "../../../../schemas/session_shape.schema.json";
@@ -10,7 +9,7 @@ import { trendQuery } from "../../../src/dashboard-trend-model";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
-import { archetypeMix, mixFirstClauses, mixOther, mixRepositoryClauses, mixShownRepositories, readPercentiles, binClauses, binEdgeLabel, binLabel, binPosition, dayTotals, durationEdges, formatSeconds, formatSignal, nearestRankOffset, signalDefinitions, signalParts, signalRows, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
+import { dayTotals, formatSeconds, formatSignal, signalDefinitions, signalParts, signalRows, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
 import { viewFields } from "../../../src/view-contract";
 
 const field = name => document.fields.find(item => item.name === name);
@@ -68,67 +67,10 @@ test("rates pool their parts over the sessions with the evidence they need, neve
   assert.ok(trend.query.aggregations.some(clause => clause.groupBy.includes("length_band")));
 });
 
-test("percentiles take the nearest rank, as the dataset's own do", () => {
-  assert.equal(nearestRankOffset(0, 0.5), null);
-  assert.equal(nearestRankOffset(1, 0.9), 0);
-  assert.equal(nearestRankOffset(10, 0.5), 4);
-  assert.equal(nearestRankOffset(10, 0.9), 8);
-  assert.equal(nearestRankOffset(11, 0.9), 9);
+test("durations read as people say them", () => {
   assert.equal(formatSeconds(42), "42 s");
   assert.equal(formatSeconds(720), "12 min");
   assert.equal(formatSeconds(4800), "1 h 20 min");
-});
-
-test("active-time bins count each session once and place the median and p90 within them", () => {
-  const values = [0, 29, 30, 299, 300, 3600, 40000, null];
-  const rows = values.map((active_seconds, index) => session(`s${index}`, { active_seconds }));
-  const metrics = core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, aggregations: binClauses("active_seconds", durationEdges) }, schemas.session_shape, { now }).metrics;
-  const counts = metrics.map(metric => metric.buckets[0].value);
-  assert.equal(counts.reduce((sum, value) => sum + value, 0), 7, "a session without timestamps is in no bin");
-  assert.deepEqual([counts[0], counts[1], counts[3], counts[4], counts[8], counts[11]], [2, 1, 1, 1, 1, 1]);
-  assert.equal(binLabel(durationEdges, 3), "2 min–5 min");
-  assert.deepEqual([binEdgeLabel(durationEdges, 0), binEdgeLabel(durationEdges, 3), binEdgeLabel(durationEdges, 11)], ["0 s", "2 min", "8 h+"]);
-  assert.equal(binPosition(durationEdges, 0), 0);
-  assert.equal(binPosition(durationEdges, 15), 0.5);
-  assert.equal(binPosition(durationEdges, 60), 2);
-  assert.ok(Math.abs(binPosition(durationEdges, 3600 * Math.SQRT2) - 8.5) < 1e-9, "log-interpolated within a bin");
-  assert.equal(binPosition(durationEdges, 1e9), durationEdges.length);
-});
-
-test("the archetype mix reads every session exactly however many repositories there are, folding the rest into Other", () => {
-  // Twelve repositories: more than are shown, and their archetype pairs more
-  // than one grouped request returns whole.
-  const rows = [];
-  for (let repository = 0; repository < 12; repository++) for (let index = 0; index <= repository; index++)
-    rows.push(session(`r${repository}-${index}`, { repository_name: repository === 11 ? null : `repo-${repository}`, archetype: index % 2 ? "quick" : "deep" }));
-  const run = clauses => core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, aggregations: clauses }, schemas.session_shape, { now }).metrics;
-  const [totals, repositories] = run(mixFirstClauses());
-  const shown = mixShownRepositories(repositories);
-  assert.equal(shown.folded, true);
-  assert.deepEqual(shown.repositories, ["", "repo-10", "repo-9", "repo-8", "repo-7", "repo-6", "repo-5", "repo-4", "repo-3"], "the largest first, one fewer so the last row is Other");
-  const mix = archetypeMix(totals.buckets, shown.repositories, run(mixRepositoryClauses(shown.repositories)).map(metric => metric.buckets), shown.folded);
-  assert.deepEqual(mix.map(row => [row.key, row.total]), [["", 12], ["repo-10", 11], ["repo-9", 10], ["repo-8", 9], ["repo-7", 8], ["repo-6", 7], ["repo-5", 6], ["repo-4", 5], ["repo-3", 4], [mixOther, 6]]);
-  assert.deepEqual(mix.at(-1).counts, { deep: 4, quick: 2 }, "Other is repo-0 to repo-2: every session counted once");
-  assert.equal(mix.reduce((sum, row) => sum + row.total, 0), rows.length);
-  // Ten or fewer repositories are all shown, with no Other.
-  const few = mixShownRepositories({ buckets: [{ keys: ["a"], value: 2 }, { keys: [null], value: 1 }], groupCount: 2 });
-  assert.deepEqual([few.repositories, few.folded], [["a", ""], false]);
-  assert.deepEqual(archetypeMix([{ keys: ["quick"], value: 3 }], few.repositories, [[{ keys: ["quick"], value: 2 }], [{ keys: ["quick"], value: 1 }]], false).map(row => row.key), ["a", ""]);
-});
-
-test("percentiles read again when sessions change between requests, and a missing rank is no value", async () => {
-  // The count changes once between the total and the ranks, then holds.
-  const totals = [10, 11, 11, 11];
-  let call = 0;
-  const reads = [];
-  const read = async offset => { const total = totals[Math.min(call++, totals.length - 1)]; reads.push([offset, total]); return { value: offset * 10, total }; };
-  const first = await readPercentiles(read, [0.5, 0.9]);
-  assert.deepEqual(first, { n: 11, values: [50, 90] });
-  // A rank past the rows that remain returns no value rather than throwing.
-  assert.deepEqual(await readPercentiles(async offset => ({ value: offset ? null : 1, total: 4 }), [0.5]), { n: 4, values: [null] });
-  // Sessions that never settle are an error the panel shows.
-  let n = 0;
-  await assert.rejects(readPercentiles(async () => ({ value: 1, total: ++n }), [0.5]), /changed while they were read/);
 });
 
 test("the signal table compares the last seven days with the eight weeks before and says no detectable change inside them", () => {
