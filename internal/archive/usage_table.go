@@ -166,6 +166,7 @@ func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribu
 			row["root_model_family"] = modelFamily(firstString(root["model"]))
 			row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
 			row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[session])
+			row["delegated_parent_session_id"] = nilIfEmpty(lineage.delegatedParents[session])
 			if depth, known := lineage.delegatedDepth[session]; known {
 				row["delegated_run_depth"] = depth
 				if depth > 0 {
