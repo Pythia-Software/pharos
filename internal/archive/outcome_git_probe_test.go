@@ -141,6 +141,7 @@ func TestSessionGitProbe(t *testing.T) {
 		titles[firstString(row["id"])] = firstString(row["source_kind"]) + ":" + firstString(row["title"])
 	}
 	samples := map[string]int{}
+	signal := map[string]int{}
 	for _, repository := range slices.Sorted(maps.Keys(byRepository)) {
 		dir, _ := gitCheckout(locations[repository])
 		if dir == "" {
@@ -160,7 +161,8 @@ func TestSessionGitProbe(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		withPrinted := linkCommits(sessions, members, repository, commits)
+		after := "--since=" + since.Add(-24*time.Hour).Format(time.RFC3339)
+		withPrinted, _ := linkCommits(sessions, members, repository, commits, nil)
 		blind := map[string]*gitSession{}
 		for id, session := range sessions {
 			copied := *session
@@ -169,7 +171,8 @@ func TestSessionGitProbe(t *testing.T) {
 		}
 		inferred := map[string][]string{}
 		confidence := map[string]float64{}
-		for _, link := range linkCommits(blind, members, repository, commits) {
+		blindLinks, signals := inferLinks(ctx, dir, after, blind, members, repository, commits)
+		for _, link := range blindLinks {
 			inferred[link.Hash] = append(inferred[link.Hash], link.Session)
 			confidence[link.Hash] = link.Confidence
 		}
@@ -197,6 +200,30 @@ func TestSessionGitProbe(t *testing.T) {
 			if commit.Parents > 1 {
 				why = "a merge"
 			}
+			// Each signal on its own, for a contested commit the printing
+			// session could have made.
+			if candidates := commitCandidates(blind, members, repository, commit); len(candidates) > 1 && slices.ContainsFunc(candidates, func(c linkCandidate) bool { return c.id == link.Session }) {
+				ids := []string{}
+				for _, candidate := range candidates {
+					ids = append(ids, candidate.id)
+				}
+				checkout, lines := signals.picks(link.Hash, repository, blind, ids)
+				nearest := ""
+				if linkOrder(candidates[0], candidates[1]) != 0 {
+					nearest = candidates[0].id
+				}
+				for name, pick := range map[string]string{"checkout": checkout, "lines": lines, "nearest": nearest} {
+					switch {
+					case pick == "":
+						signal[name+" abstains"]++
+					case pick == link.Session:
+						signal[name+" right"]++
+					default:
+						signal[name+" wrong"]++
+					}
+				}
+				signal["contested"]++
+			}
 			switch got := inferred[link.Hash]; {
 			case len(got) == 0:
 				outcome["inference finds no session: "+why]++
@@ -221,6 +248,9 @@ func TestSessionGitProbe(t *testing.T) {
 				}
 			}
 		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(signal)) {
+		t.Logf("contested printed commits, %s: %d", name, signal[name])
 	}
 	keys := slices.Collect(maps.Keys(outcome))
 	sort.Strings(keys)

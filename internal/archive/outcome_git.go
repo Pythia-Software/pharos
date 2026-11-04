@@ -42,8 +42,9 @@ var outcomeGitGrace = time.Hour
 // outcomeGitCounted is the least confidence of a link that counts toward a
 // session's commits and label. Measured against printed hashes, a commit
 // inferred for the only session that could have made it was right every
-// time, and one given to the nearest of several sessions less than half the
-// time: those links are kept, with their evidence, as candidates only.
+// time, one of several told apart by its checkout or lines 92% of the time
+// or better, and one given to the nearest of several about half the time:
+// those links are kept, with their evidence, as candidates only.
 const outcomeGitCounted = 0.7
 
 // Timeouts for one repository's commands. A slow repository is "not
@@ -102,17 +103,20 @@ func (c *Catalog) ensureOutcomeGit() error {
 	return err
 }
 
-// gitSession is a session as linking reads it: its edit window, the files
-// it edited in each repository and the hashes its own git commit printed.
 // editSpan is when a session first and last edited a file.
 type editSpan struct{ First, Last time.Time }
 
+// gitSession is a session as linking reads it: its edit window, the files
+// it edited in each repository and the lines it kept in them, the hashes its
+// own git commit printed, and its checkouts on this Mac.
 type gitSession struct {
 	ID          string
 	First, Last time.Time
 	Timed       bool
 	Files       map[string]map[string]editSpan
+	Kept        map[string]map[string]lineSet
 	Printed     []outcomeCommit
+	Locations   []string
 	key         []string
 }
 
@@ -261,7 +265,7 @@ func (c *Catalog) readGitSessions(ctx context.Context) (map[string]*gitSession, 
 		}
 	}
 	for _, row := range rows {
-		session := &gitSession{ID: firstString(row["workspace_id"]), Files: map[string]map[string]editSpan{}}
+		session := &gitSession{ID: firstString(row["workspace_id"]), Files: map[string]map[string]editSpan{}, Kept: map[string]map[string]lineSet{}}
 		first, firstOK := parseTime(firstString(row["first_edit_at"]))
 		last, lastOK := parseTime(firstString(row["last_edit_at"]))
 		session.First, session.Last, session.Timed = first, last, firstOK && lastOK
@@ -272,7 +276,7 @@ func (c *Catalog) readGitSessions(ctx context.Context) (map[string]*gitSession, 
 			add(firstString(row["repository_id"]), session.ID)
 		}
 	}
-	files, err := queryMapsContext(ctx, c.DB, "SELECT workspace_id,repository_id,path,first_edit_at,last_edit_at FROM session_files WHERE repository_id IS NOT NULL ORDER BY workspace_id,repository_id,path")
+	files, err := queryMapsContext(ctx, c.DB, "SELECT workspace_id,repository_id,path,first_edit_at,last_edit_at,kept_lines FROM session_files WHERE repository_id IS NOT NULL ORDER BY workspace_id,repository_id,path")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -293,11 +297,27 @@ func (c *Catalog) readGitSessions(ctx context.Context) (map[string]*gitSession, 
 			span.Last = last
 		}
 		session.Files[repository][firstString(row["path"])] = span
+		if kept := firstString(row["kept_lines"]); kept != "" {
+			if session.Kept[repository] == nil {
+				session.Kept[repository] = map[string]lineSet{}
+			}
+			session.Kept[repository][firstString(row["path"])] = unpackLines([]byte(kept))
+		}
 		session.key = append(session.key, repository+":"+firstString(row["path"])+":"+firstString(row["last_edit_at"]))
 		add(repository, session.ID)
 	}
 	for _, members := range byRepository {
 		slices.Sort(members)
+	}
+	sightings, err := queryMapsContext(ctx, c.DB, "SELECT workspace_id,location FROM workspace_sightings WHERE host_id=? AND COALESCE(location,'')<>'' ORDER BY workspace_id,location", currentHost().ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, row := range sightings {
+		if session := sessions[firstString(row["workspace_id"])]; session != nil && !slices.Contains(session.Locations, firstString(row["location"])) {
+			session.Locations = append(session.Locations, firstString(row["location"]))
+			session.key = append(session.key, "at:"+firstString(row["location"]))
+		}
 	}
 	return sessions, byRepository, nil
 }
@@ -377,7 +397,7 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
 	}
 	scan := gitScan{Status: "checked", Commits: commits}
-	scan.Links = linkCommits(sessions, members, repository, commits)
+	scan.Links, _ = inferLinks(ctx, dir, after, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = commits[link.Hash]
@@ -454,15 +474,33 @@ func readGitCommits(ctx context.Context, dir, after string) (map[string]*gitComm
 	return commits, nil
 }
 
+// inferLinks links a repository's commits, reading signals for the
+// contested ones; it returns the links and the signals it read.
+func inferLinks(ctx context.Context, dir, after string, sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit) ([]gitLink, *gitSignals) {
+	links, contested := linkCommits(sessions, members, repository, commits, nil)
+	if len(contested) == 0 {
+		return links, nil
+	}
+	signals := readGitSignals(ctx, dir, sessions, contested)
+	links, _ = linkCommits(sessions, members, repository, commits, signals)
+	return links, signals
+}
+
 // linkCommits links a repository's commits to its sessions:
 //   - a hash the session's own git commit printed links directly (1.0);
-//   - any other commit, outside merges, links to the session whose edit
-//     window (plus outcomeGitGrace) holds its author time and that edited one
-//     of its files: 0.7 when it is the only such session, 0.5 when of several
-//     it was editing nearest the commit (then had the tightest window). Time
-//     alone links nothing.
-func linkCommits(sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit) []gitLink {
+//   - any other commit, outside merges, links to a session whose edit window
+//     (plus outcomeGitGrace) holds its author time and that edited one of its
+//     files: 0.7 when it is the only such session. Time alone links nothing.
+//
+// A commit several sessions could have made is contested. With signals
+// (outcome_git_signals.go), it goes to the one candidate the checkout that
+// made it or the lines it adds point to, in that order, at that signal's
+// confidence; else to the candidate editing its files nearest the commit,
+// then with the tightest window, at 0.5. linkCommits
+// returns the contested commits and their candidates, for reading signals.
+func linkCommits(sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit, signals *gitSignals) ([]gitLink, map[string][]string) {
 	links := []gitLink{}
+	contested := map[string][]string{}
 	direct := map[string]bool{}
 	for _, id := range members {
 		for _, printed := range sessions[id].Printed {
@@ -488,60 +526,88 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 		if direct[hash] || commit.Parents > 1 {
 			continue
 		}
-		type candidate struct {
-			id        string
-			gap, span time.Duration
-			shared    []string
-		}
-		candidates := []candidate{}
-		for _, id := range members {
-			session := sessions[id]
-			if !session.Timed || commit.Author.Before(session.First) || commit.Author.After(session.Last.Add(outcomeGitGrace)) {
-				continue
-			}
-			// A shared file is one the session had edited by the commit;
-			// the gap is how long since it last had, zero while it still was.
-			shared, gap := []string{}, time.Duration(-1)
-			for path := range commit.Files {
-				if span, ok := session.Files[repository][path]; ok && !commit.Author.Before(span.First) {
-					shared = append(shared, path)
-					if since := max(commit.Author.Sub(span.Last), 0); gap < 0 || since < gap {
-						gap = since
-					}
-				}
-			}
-			if len(shared) > 0 {
-				slices.Sort(shared)
-				candidates = append(candidates, candidate{id, gap, session.Last.Sub(session.First), shared})
-			}
-		}
+		candidates := commitCandidates(sessions, members, repository, commit)
 		if len(candidates) == 0 {
 			continue
 		}
-		// The session still editing the commit's files when it was made, or
-		// that stopped nearest before it, then the tightest window: a
-		// session that edited once an hour before has the tightest window
-		// but did not make the commit.
-		order := func(a, b candidate) int {
-			if a.gap != b.gap {
-				return cmp.Compare(a.gap, b.gap)
-			}
-			return cmp.Compare(a.span, b.span)
-		}
-		slices.SortStableFunc(candidates, order)
-		confidence := 0.7
+		chosen, confidence, by := candidates[0], 0.7, ""
 		if len(candidates) > 1 {
-			if order(candidates[0], candidates[1]) == 0 {
-				continue
+			ids := make([]string, len(candidates))
+			for index, candidate := range candidates {
+				ids[index] = candidate.id
 			}
-			confidence = 0.5
+			contested[hash] = ids
+			checkout, lines := signals.picks(hash, repository, sessions, ids)
+			for index, pick := range []string{checkout, lines} {
+				if pick != "" {
+					chosen = candidates[slices.Index(ids, pick)]
+					confidence, by = linkTieBreaks[index].confidence, linkTieBreaks[index].name
+					break
+				}
+			}
+			if by == "" {
+				if linkOrder(candidates[0], candidates[1]) == 0 {
+					continue
+				}
+				confidence, by = 0.5, "nearest"
+			}
 		}
-		chosen := candidates[0]
 		evidence := map[string]any{"author_at": commit.Author.Format(time.RFC3339), "shared_files": len(chosen.shared), "files": chosen.shared[:min(len(chosen.shared), 5)],
 			"window": []string{sessions[chosen.id].First.Format(time.RFC3339), sessions[chosen.id].Last.Format(time.RFC3339)}, "candidates": len(candidates)}
+		if by != "" {
+			evidence["chosen_by"] = by
+		}
 		links = append(links, gitLink{Session: chosen.id, Hash: hash, Method: "inferred", Confidence: confidence, Evidence: evidence})
 	}
-	return links
+	return links, contested
+}
+
+// linkCandidate is a session that could have made a commit: how long since
+// it last edited one of the commit's files (zero while it still was), its
+// edit window's span, and the files they share.
+type linkCandidate struct {
+	id        string
+	gap, span time.Duration
+	shared    []string
+}
+
+// linkOrder puts first the session still editing the commit's files when it
+// was made, or that stopped nearest before it, then the tightest window: a
+// session that edited once an hour before has the tightest window but did
+// not make the commit.
+func linkOrder(a, b linkCandidate) int {
+	if a.gap != b.gap {
+		return cmp.Compare(a.gap, b.gap)
+	}
+	return cmp.Compare(a.span, b.span)
+}
+
+// commitCandidates lists the sessions that could have made a commit, in
+// linkOrder.
+func commitCandidates(sessions map[string]*gitSession, members []string, repository string, commit *gitCommit) []linkCandidate {
+	candidates := []linkCandidate{}
+	for _, id := range members {
+		session := sessions[id]
+		if !session.Timed || commit.Author.Before(session.First) || commit.Author.After(session.Last.Add(outcomeGitGrace)) {
+			continue
+		}
+		// A shared file is one the session had edited by the commit.
+		shared, gap := []string{}, time.Duration(-1)
+		for path := range commit.Files {
+			if span, ok := session.Files[repository][path]; ok && !commit.Author.Before(span.First) {
+				shared = append(shared, path)
+				if since := max(commit.Author.Sub(span.Last), 0); gap < 0 || since < gap {
+					gap = since
+				}
+			}
+		}
+		if len(shared) > 0 {
+			slices.Sort(shared)
+			candidates = append(candidates, linkCandidate{id, gap, session.Last.Sub(session.First), shared})
+		}
+	}
+	slices.SortStableFunc(candidates, linkOrder)
+	return candidates
 }
 
 // resolveAbbreviated finds the one scanned commit an abbreviated hash names.
