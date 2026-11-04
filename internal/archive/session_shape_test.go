@@ -393,6 +393,15 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	if facts, _, err = c.sessionShapeOf(t.Context(), "cv-2"); err != nil || !facts.HasAuthorship || shapeValue(facts.TypedHumanMessages) != int64(2) {
 		t.Fatal("classified prompts were not counted", err)
 	}
+
+	// A checkpoint that reports no input still marks the request rows as
+	// cumulative: the session has no context peak.
+	seedShapeConversation(t, c, "cv-3", "ws-2", "codex", "gpt-5", "user message 0 hi",
+		`metadata metadata 6 {"payload":{"info":{"last_token_usage":{"cached_input_tokens":0,"input_tokens":0,"total_tokens":9310},"model_context_window":258400},"type":"token_count"},"type":"event_msg"}`)
+	execTx(t, c.DB, `INSERT INTO model_requests(id,conversation_id,sequence,requested_at,input_tokens) VALUES('r4','cv-3',0,'2026-10-20T10:00:06.000Z',589917016)`)
+	if facts, _, err = c.sessionShapeOf(t.Context(), "cv-3"); err != nil || facts.ContextPeakTokens != nil || facts.ContextPeakRatio != nil {
+		t.Fatal("a zero checkpoint let a cumulative row set the peak", err, shapeValue(facts.ContextPeakTokens))
+	}
 }
 
 // Mirrors and aliases produce one row; delegated runs carry their root.
