@@ -409,6 +409,8 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  // Spend by branch: the coverage split above the compared branches.
+  { name: "Analyze spend by branch dashboard", url: "/analyze?analyze_topic=branches", ready: `.usage-branches-dashboard ${analysisReady}` },
   // Outcomes: the chart and its panels, each read from the outcomes dataset.
   { name: "Analyze outcomes dashboard", url: "/analyze?analyze_topic=outcomes", ready: `.usage-outcomes-dashboard ${overTimeReady}`,
     check: async page => {

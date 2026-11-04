@@ -29,4 +29,6 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   agent_experience: { metric: "events", split: "family_group", ...daily },
   // Spend by outcome over time: sessions are sparser than usage, so weeks.
   outcomes: { metric: "cost", split: "outcome_label", period: "week", nonzero: true },
+  // The branches that took the most spend, compared.
+  branches: { view: "compare", metric: "cost", split: "branch" },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

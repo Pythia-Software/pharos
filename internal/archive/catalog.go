@@ -257,6 +257,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureOutcomeGit(); err != nil {
 		return fmt.Errorf("initialize outcome git: %w", err)
 	}
+	if err := c.ensureBranchUsage(); err != nil {
+		return fmt.Errorf("initialize branch usage: %w", err)
+	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
 	}

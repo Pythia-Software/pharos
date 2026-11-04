@@ -90,6 +90,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosRhythmSchema(), nil
 	case "outcomes":
 		return PharosOutcomesSchema(), nil
+	case "branch_usage":
+		return PharosBranchUsageSchema(), nil
 	case "agent_events":
 		return PharosAgentEventsSchema(), nil
 	case "agent_event_messages":
@@ -620,6 +622,8 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		// What its cells read besides their own value: a project's kind and
 		// whether and why local Git checked it.
 		required = []string{"workspace_id", "started_at", "project_kind", "git_check", "git_check_reason"}
+	case "branch_usage":
+		required = []string{"workspace_id", "usage_at"}
 	case "skill_usages":
 		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
 	case "agent_events", "agent_event_messages", "message_labels":

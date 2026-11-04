@@ -19,6 +19,7 @@ import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import outcomes from "../../../../schemas/outcomes.schema.json";
+import branchUsage from "../../../../schemas/branch_usage.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
@@ -243,7 +244,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, outcomes };
+  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, outcomes, branch_usage: branchUsage };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -273,7 +274,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, outcomes };
+  const schemas = {message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, outcomes, branch_usage: branchUsage };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
