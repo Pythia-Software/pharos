@@ -17,7 +17,7 @@ import { answerQuery } from "../../support/query-server.mjs";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { archetypes, bandBreakdowns, sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
-import { dayTotals, formatSeconds, formatSignal, signalDefinitions, signalParts, signalRows, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
+import { dayTotals, formatSeconds, formatSignal, signalDefinitions, signalParts, signalRows, signalTablePopulation, signalTableStart, signalVerdict, withoutDates } from "../../../src/session-shape-model";
 import { viewFields } from "../../../src/view-contract";
 
 const field = name => document.fields.find(item => item.name === name);
@@ -121,6 +121,13 @@ test("the signal table's parts execute over session rows, and its population dro
   for (const definition of signalDefinitions) for (const part of [definition.numerator, definition.denominator, definition.evidence]) assert.ok(signalParts.some(item => item.id === part), `${definition.id} needs ${part}`);
   const where = [{ field: "started_at", op: ">=", value: "2026-10-01" }, { field: "repository_name", op: "=", value: "pharos" }, { field: "day", op: "<", value: "2026-11-01" }];
   assert.deepEqual(withoutDates(where), [{ field: "repository_name", op: "=", value: "pharos" }]);
+  // Its window bounds started_at, with operators the field's schema enables:
+  // the service rejects a range on the text field day.
+  const population = signalTablePopulation(where, "2026-10-31");
+  assert.deepEqual(population.slice(0, 1), [{ field: "repository_name", op: "=", value: "pharos" }]);
+  assert.deepEqual(population.slice(1).map(term => [term.field, term.op, new Date(term.value).getTime()]),
+    [["started_at", ">=", new Date("2026-08-30T00:00:00").getTime()], ["started_at", "<", new Date("2026-11-01T00:00:00").getTime()]]);
+  for (const term of population) assert.ok(core.opsForField(document.fields.find(field => field.name === term.field)).includes(term.op), `${term.field} ${term.op}`);
 });
 
 // ----- Cards: each card's cover is the dashboard state it opens --------------
