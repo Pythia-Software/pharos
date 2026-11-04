@@ -264,15 +264,23 @@ The main chart's catalog is described in
 [dashboard analysis](dashboard-analysis.md#the-catalogs).
 
 **Cards.** The Card Library's Session Shape category
-(`session-shape-card-recipes.ts`) has sixteen cards, each opening the
-dashboard on the state its cover draws: length and archetype mix over time,
-archetype share, active time, turn cycle, autonomy and peak context
-distributions, failure, steering, one-shot and verification rates beside
-their sample sizes, the failure-rate trend, a weekday cycle and active time
-against tool calls. A rate card's coverage flags are in its `where`, so they
-arrive as the dashboard's filters. Two cards show part of the sessions on
-purpose: failure rate for steered sessions (`archetype != automated`) and
-session length without Antigravity CLI (`harness != antigravity-cli`).
+(`session-shape-card-recipes.ts`) has thirteen cards, each opening the
+dashboard on the state its cover draws. Automated sessions are most of
+them, so most cards count only the sessions a person typed in
+(`archetype != automated`), which arrives as a dashboard filter.
+
+- Usage: where sessions come from (by harness), your sessions by kind each
+  day, how long your sessions are (length band shares), and where your
+  active hours go (by repository).
+- Shape: active time by session kind, turn cycle and autonomy by provider,
+  each a box on a log axis, and peak context by model.
+- Failures: failure rate by model (synthetic turns left out) and by session
+  kind, and the failure rate over time.
+- Verified handbacks by repository, and when you start sessions (weekday).
+
+A log axis cannot place zero, so the active time and autonomy cards leave
+out sessions with none. Steering load has no card: correction cues are
+rare enough that nearly every group reads 0%.
 
 The dashboard counts each session or root conversation as a group, so
 `session_shape` queries get the same 100,000-group budget as `usage`
