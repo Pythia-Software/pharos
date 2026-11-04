@@ -196,6 +196,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		"vscode-copilot": vscodeUserDirs,
 		"cursor":         {cursorUserDir},
 		"cursor-cli":     {".cursor/chats"}, // the editor's extensions are in .cursor too
+		"zed":            {zedUserDir + "/threads"},
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
@@ -241,7 +242,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli"} {
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli", "zed"} {
 		if tool, exists := found[kind]; exists {
 			tools = append(tools, tool)
 		}
@@ -291,6 +292,14 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 		dir := filepath.Join(home, ".local", "share", "opencode")
 		if databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
 			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "opencode", resolved) == nil {
+				status.NewSources++
+			}
+		}
+	}
+	if status.HostFileExists && (kinds == nil || kinds["zed"]) {
+		dir := filepath.Join(home, filepath.FromSlash(zedUserDir))
+		if stats, err := zedProbeStats(filepath.Join(dir, filepath.FromSlash(zedDatabase))); err == nil && stats.sessions > 0 {
+			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "zed", resolved) == nil {
 				status.NewSources++
 			}
 		}
@@ -414,6 +423,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	})
 	timed("cursor", func() { run.cursor(filepath.Join(home, filepath.FromSlash(cursorUserDir)), "default location") })
 	timed("cursor-cli", func() { run.cursorCLI(filepath.Join(home, ".cursor"), "default location") })
+	timed("zed", func() { run.zed(filepath.Join(home, filepath.FromSlash(zedUserDir)), "default location") })
 	timed("antigravity", func() {
 		for _, dir := range antigravityDirs(home) {
 			foundBy := "~/.gemini/antigravity* directory"
@@ -495,6 +505,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.cursor(path, foundBy)
 		case "cursor-cli":
 			run.cursorCLI(path, foundBy)
+		case "zed":
+			run.zed(path, foundBy)
 		case "antigravity":
 			run.antigravity(path, foundBy)
 		case "conductor":
@@ -864,6 +876,32 @@ func (r *probeRun) opencode(dir, foundBy string) {
 			var found probeStats
 			found, err = opencodeProbeStats(database)
 			stats.add(found)
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// zed finds Zed's data folder and counts the threads of its agent.
+func (r *probeRun) zed(dir, foundBy string) {
+	candidate, resolved := r.locate("zed", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", ""
+	if candidate.Status == "found" {
+		database, err := (&zedAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).database()
+		if err == nil && database == "" {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"zed", candidate.DisplayPath, foundBy, "no threads/threads.db"})
+			return
+		}
+		stats := probeStats{}
+		if err == nil {
+			stats, err = zedProbeStats(database)
+		}
+		if err == nil && stats.sessions == 0 {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"zed", candidate.DisplayPath, foundBy, "no threads"})
+			return
 		}
 		stats.apply(candidate, err)
 	}

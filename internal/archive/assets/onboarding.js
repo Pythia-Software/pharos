@@ -1,6 +1,6 @@
 // Source choice and consent stay separate from discovery and DOM rendering.
 function createPharosSourceWizard() {
-  const supported=['claude','codex','conductor','tl1','antigravity','copilot','opencode','cline','vscode-copilot','cursor','cursor-cli'];
+  const supported=['claude','codex','conductor','tl1','antigravity','copilot','opencode','cline','vscode-copilot','cursor','cursor-cli','zed'];
   const key=c=>c.kind+'\0'+c.path;
   return {
     tools:[], detected:[], detectionReady:false, locations:[], report:null, decisions:new Map(), names:{},
@@ -40,7 +40,7 @@ function createPharosSourceWizard() {
 (() => {
   'use strict';
   const DISMISSED = 'pharos-onboarding-dismissed:';
-  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', 'claude-ai': 'Claude.ai', copilot: 'Copilot CLI', opencode: 'OpenCode', cline: 'Cline', 'vscode-copilot': 'VS Code Copilot', cursor: 'Cursor', 'cursor-cli': 'Cursor CLI', antigravity: 'Antigravity'};
+  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', 'claude-ai': 'Claude.ai', copilot: 'Copilot CLI', opencode: 'OpenCode', cline: 'Cline', 'vscode-copilot': 'VS Code Copilot', cursor: 'Cursor', 'cursor-cli': 'Cursor CLI', zed: 'Zed', antigravity: 'Antigravity'};
   const CSS = `
 .source-setup-open .application-body{overflow:hidden}
 .source-setup-open .application-body>:not(#pharosOnboarding){display:none!important}

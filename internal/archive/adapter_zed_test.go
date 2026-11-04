@@ -1,0 +1,492 @@
+package archive
+
+import (
+	"database/sql"
+	"errors"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/klauspost/compress/zstd"
+)
+
+// zedSecret stands for whatever a later release keeps beside the threads; no
+// capture may hold it.
+const zedSecret = "zed-secret-do-not-capture"
+
+const (
+	zedThreadID   = "d0000000-0000-4000-8000-000000000001"
+	zedSubagentID = "d0000000-0000-4000-8000-000000000002"
+	zedLegacyID   = "d0000000-0000-4000-8000-000000000003"
+	zedPromptID   = "e0000000-0000-4000-8000-000000000001"
+	zedFollowUpID = "e0000000-0000-4000-8000-000000000002"
+)
+
+// zedRow is a threads row.
+type zedRow struct {
+	id, parent, summary, updated, dataType, folders string
+	data                                            map[string]any
+}
+
+// zedRows are the threads in the shapes Zed writes: its agent's thread,
+// compressed, with two turns (thinking, a failed command, an edit, a
+// subagent, a redacted thought, each turn's usage and the thread's sum); the
+// subagent's thread, uncompressed; and a thread of releases before the
+// agent, whose messages have roles.
+func zedRows() []zedRow {
+	text := func(value string) map[string]any { return map[string]any{"Text": value} }
+	use := func(id, name string, input map[string]any) map[string]any {
+		return map[string]any{"ToolUse": map[string]any{"id": id, "name": name, "raw_input": jsonText(input), "input": input, "is_input_complete": true}}
+	}
+	result := func(id, name, content string, failed bool) map[string]any {
+		return map[string]any{"tool_use_id": id, "tool_name": name, "is_error": failed, "content": map[string]any{"Text": content}}
+	}
+	usage := func(input, output, read, created int) map[string]any {
+		return map[string]any{"input_tokens": input, "output_tokens": output, "cache_read_input_tokens": read, "cache_creation_input_tokens": created}
+	}
+	thread := map[string]any{
+		"title": "Fix the build",
+		"messages": []any{
+			map[string]any{"User": map[string]any{"id": zedPromptID, "content": []any{text("Fix the build in [@main.go](file:///work/app/main.go)"),
+				map[string]any{"Mention": map[string]any{"uri": map[string]any{"File": map[string]any{"abs_path": "/work/app/main.go"}}, "content": "package main"}}}}},
+			map[string]any{"Agent": map[string]any{
+				"content": []any{
+					map[string]any{"Thinking": map[string]any{"text": "Run make first.", "signature": "sig"}},
+					text("Running make."),
+					use("call1", "terminal", map[string]any{"command": "make", "cd": "app"}),
+					use("call2", "edit_file", map[string]any{"path": "app/main.go"}),
+					use("call3", "spawn_agent", map[string]any{"prompt": "Check the tests"}),
+				},
+				"tool_results": map[string]any{
+					"call1": result("call1", "terminal", "Command \"make\" failed with exit code 2.\n\n```\nmain.go:3: error\n```", false),
+					"call2": result("call2", "edit_file", "Edited app/main.go", false),
+					"call3": result("call3", "spawn_agent", "Tests pass.", false),
+				},
+			}},
+			"Resume",
+			map[string]any{"Agent": map[string]any{"content": []any{map[string]any{"RedactedThinking": "opaque"}, text("Fixed.")}, "tool_results": map[string]any{}}},
+			map[string]any{"User": map[string]any{"id": zedFollowUpID, "content": []any{text("Now the docs")}}},
+			map[string]any{"Agent": map[string]any{"content": []any{use("call4", "terminal", map[string]any{"command": "ls docs"})},
+				"tool_results": map[string]any{"call4": result("call4", "terminal", "```\nREADME.md\n```", false)}}},
+			map[string]any{"Agent": map[string]any{"content": []any{text("Done.")}, "tool_results": map[string]any{}}},
+		},
+		"updated_at":               "2026-11-04T16:20:00Z",
+		"model":                    map[string]any{"provider": "anthropic", "model": "claude-sonnet-4-5"},
+		"profile":                  "write",
+		"request_token_usage":      map[string]any{zedPromptID: usage(100, 50, 10, 5), zedFollowUpID: usage(80, 20, 0, 0)},
+		"cumulative_token_usage":   usage(300, 120, 30, 5),
+		"initial_project_snapshot": map[string]any{"worktree_snapshots": []any{map[string]any{"worktree_path": "/work/app"}}},
+		"version":                  "0.3.0",
+	}
+	subagent := map[string]any{
+		"title": "Check the tests",
+		"messages": []any{
+			map[string]any{"User": map[string]any{"id": "e0000000-0000-4000-8000-000000000003", "content": []any{text("Check the tests")}}},
+			map[string]any{"Agent": map[string]any{"content": []any{text("Tests pass.")}, "tool_results": map[string]any{}}},
+		},
+		"updated_at":       "2026-11-04T16:19:00Z",
+		"subagent_context": map[string]any{"parent_thread_id": zedThreadID},
+		"version":          "0.3.0",
+	}
+	legacy := map[string]any{
+		"version": "0.2.0", "summary": "Old question",
+		"messages": []any{
+			map[string]any{"id": 0, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "What does a.go do?"}}, "tool_uses": []any{}, "tool_results": []any{}},
+			map[string]any{"id": 1, "role": "assistant", "segments": []any{map[string]any{"type": "thinking", "text": "Read it.", "signature": nil}, map[string]any{"type": "text", "text": "It parses flags."}},
+				"tool_uses":    []any{map[string]any{"id": "old1", "name": "read_file", "input": map[string]any{"path": "a.go"}}},
+				"tool_results": []any{map[string]any{"tool_use_id": "old1", "is_error": false, "content": "package a"}}},
+		},
+		"request_token_usage":    []any{map[string]any{}, usage(40, 10, 0, 0)},
+		"cumulative_token_usage": usage(40, 10, 0, 0),
+	}
+	return []zedRow{
+		{id: zedThreadID, summary: "Fix the build", updated: "2026-11-04T16:20:00.000000+00:00", dataType: "zstd", folders: "/work/app", data: thread},
+		{id: zedSubagentID, parent: zedThreadID, summary: "Check the tests", updated: "2026-11-04T16:19:00.000000+00:00", dataType: "json", folders: "/work/app", data: subagent},
+		{id: zedLegacyID, summary: "Old question", updated: "2025-06-01T09:00:00.000000+00:00", dataType: "json", data: legacy},
+	}
+}
+
+// zedPut writes threads rows: data compressed when the row says so.
+func zedPut(t *testing.T, db *sql.DB, rows ...zedRow) {
+	t.Helper()
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	for _, row := range rows {
+		data := []byte(jsonText(row.data))
+		if row.dataType == "zstd" {
+			data = encoder.EncodeAll(data, nil)
+		}
+		var parent any
+		if row.parent != "" {
+			parent = row.parent
+		}
+		if _, err := db.Exec(`INSERT OR REPLACE INTO threads(id, summary, updated_at, data_type, data, parent_id, folder_paths, folder_paths_order, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			row.id, row.summary, row.updated, row.dataType, data, parent, row.folders, "0", "2026-11-04T16:17:00.000000+00:00"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// zedFixture writes Zed's data folder: the threads database, with a table a
+// later release might add beside it, and Zed's settings.
+func zedFixture(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "Zed")
+	if err := os.MkdirAll(filepath.Join(root, "threads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, filepath.FromSlash(zedDatabase)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, summary TEXT NOT NULL, updated_at TEXT NOT NULL, data_type TEXT NOT NULL, data BLOB NOT NULL,
+		parent_id TEXT, folder_paths TEXT, folder_paths_order TEXT, created_at TEXT);
+		CREATE TABLE credentials (key TEXT, value TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO credentials VALUES('token', ?)`, zedSecret); err != nil {
+		t.Fatal(err)
+	}
+	zedPut(t, db, zedRows()...)
+	writeSourceFile(t, filepath.Join(root, "settings.json"), `{"token":"`+zedSecret+`"}`)
+	return root
+}
+
+func zedSource(root string) SourceConfig {
+	return SourceConfig{Name: "zed", Kind: "zed", Path: root, Account: "local", Enabled: true}
+}
+
+func zedRecords(t *testing.T, root string) map[string]WorkspaceRecord {
+	t.Helper()
+	adapter, err := MakeAdapter(zedSource(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := map[string]WorkspaceRecord{}
+	if err := adapter.Discover(func(record WorkspaceRecord) error { records[record.SourceID] = record; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+// zedWrite changes the fixture's threads database.
+func zedWrite(t *testing.T, root string, write func(db *sql.DB) error) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(root, filepath.FromSlash(zedDatabase)))
+	if err == nil {
+		err = write(db)
+		db.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
+	records := zedRecords(t, zedFixture(t))
+	if len(records) != 2 {
+		t.Fatalf("records = %v", records)
+	}
+	record := records[zedThreadID]
+	if record.SourceKind != "zed" || record.Title != "Fix the build" || record.Location != "/work/app" || record.Outcome != "Done." || record.Metadata["profile"] != "write" || len(record.Conversations) != 2 {
+		t.Fatalf("record = %+v", record)
+	}
+	thread := record.Conversations[0]
+	if thread.NativeID != zedThreadID || thread.Provider != "zed" || thread.Harness != "zed" || thread.Model != "claude-sonnet-4-5" || thread.NativeContext["model_provider"] != "anthropic" ||
+		thread.StartedAt != "2026-11-04T16:17:00.000Z" || thread.EndedAt != "2026-11-04T16:20:00.000Z" {
+		t.Fatalf("thread = %+v", thread)
+	}
+	// What a mention brought in is not the prompt; "Resume" is not a turn.
+	want := "user:message assistant:reasoning assistant:message assistant:tool_call tool:tool_result assistant:tool_call tool:tool_result assistant:delegation tool:delegation_result assistant:metadata assistant:message system:metadata " +
+		"user:message assistant:tool_call tool:tool_result assistant:message system:metadata system:metadata"
+	if got := cursorKinds(thread.Messages); got != want {
+		t.Fatalf("kinds = %s\nwant    %s", got, want)
+	}
+	messages := thread.Messages
+	if messages[0].Text != "Fix the build in [@main.go](file:///work/app/main.go)" || messages[0].NativeID != zedPromptID {
+		t.Fatalf("prompt = %+v", messages[0])
+	}
+	failed, edited, listed := mapValueDefault(parseJSONValue(messages[4].Text)), mapValueDefault(parseJSONValue(messages[6].Text)), mapValueDefault(parseJSONValue(messages[14].Text))
+	if jsonText(failed["details"]) != `{"exit_code":2}` || messages[4].CallID != "call1" || failed["tool"] != "terminal" {
+		t.Fatalf("failed command = %s", messages[4].Text)
+	}
+	if edited["details"] != nil || jsonText(listed["details"]) != `{"exit_code":0}` {
+		t.Fatalf("edit = %s, listing = %s", messages[6].Text, messages[14].Text)
+	}
+	// Each turn's last request, then what the thread's sum adds.
+	usage := func(message MessageRecord) string {
+		return jsonText(mapValueDefault(parseJSONValue(message.Text))["usage"])
+	}
+	if usage(messages[11]) != `{"cache_creation_input_tokens":5,"cache_read_input_tokens":10,"input_tokens":100,"output_tokens":50}` ||
+		usage(messages[16]) != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":80,"output_tokens":20}` ||
+		usage(messages[17]) != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"input_tokens":120,"output_tokens":50}` {
+		t.Fatalf("usage = %s / %s / %s", messages[11].Text, messages[16].Text, messages[17].Text)
+	}
+	// The subagent's prompt is its parent's.
+	subagent := record.Conversations[1]
+	if subagent.NativeID != zedSubagentID || subagent.ParentNativeID != zedThreadID || subagent.AgentDepth != 1 || subagent.Messages[0].Role != agentRole {
+		t.Fatalf("subagent = %+v", subagent)
+	}
+	// A thread of releases before the agent.
+	legacy := records[zedLegacyID]
+	if got := cursorKinds(legacy.Conversations[0].Messages); legacy.Title != "Old question" || got != "user:message assistant:reasoning assistant:message assistant:tool_call tool:tool_result system:metadata" {
+		t.Fatalf("legacy thread = %s: %s", legacy.Title, got)
+	}
+}
+
+// A thread's usage is its sum of every request, once.
+func TestZedUsageCountsTheThreadOnce(t *testing.T) {
+	c, _ := testCatalog(t)
+	ingestSource(t, c, zedSource(zedFixture(t)))
+	var output, read int
+	if err := c.DB.QueryRow(`SELECT COALESCE(SUM(u.output_tokens),0), COALESCE(SUM(u.cache_read_input_tokens),0) FROM agent_session_usage u
+		JOIN agent_sessions s ON s.id=u.agent_session_id JOIN conversations v ON v.id=s.conversation_id WHERE v.native_id=?`, zedThreadID).Scan(&output, &read); err != nil {
+		t.Fatal(err)
+	}
+	if output != 120 || read != 30 {
+		t.Fatalf("output %d, cache reads %d", output, read)
+	}
+}
+
+func TestZedReadsOnlyTheThreadThatChanged(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := zedFixture(t)
+	source := zedSource(root)
+	ingestSource(t, c, source)
+	if parsed := ingestSource(t, c, source).Parsed; parsed != 0 {
+		t.Fatalf("unchanged: %d threads parsed", parsed)
+	}
+	// Zed saves a thread whole, with the time it saved it.
+	legacy := zedRows()[2]
+	legacy.updated = "2025-06-02T09:00:00.000000+00:00"
+	legacy.data["messages"] = append(legacy.data["messages"].([]any), map[string]any{"id": 2, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "And b.go?"}}})
+	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, legacy); return nil })
+	parsed := ingestSource(t, c, source).Parsed
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='And b.go?'`); n != 1 || parsed != 1 {
+		t.Fatalf("after a new message: %d copies, %d groups parsed", n, parsed)
+	}
+}
+
+// A thread that cannot be decoded is reported, and the others are read.
+func TestZedDamagedThreadLeavesTheOthers(t *testing.T) {
+	root := zedFixture(t)
+	zedWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`UPDATE threads SET data=X'28B52FFD00' WHERE id=?`, zedThreadID)
+		return err
+	})
+	adapter, err := MakeAdapter(zedSource(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := map[string]bool{}
+	err = adapter.Discover(func(record WorkspaceRecord) error { records[record.SourceID] = true; return nil })
+	if err == nil || records[zedThreadID] || !records[zedLegacyID] {
+		t.Fatalf("read %v, error %v", records, err)
+	}
+}
+
+func TestZedCaptureHoldsOnlyTheThreads(t *testing.T) {
+	useHost(t, "host-a")
+	root := zedFixture(t)
+	source := zedSource(root)
+	plan, err := planCapture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, item := range append(plan.databases, plan.files...) {
+		got = append(got, item.rel)
+	}
+	if strings.Join(got, ",") != zedDatabase {
+		t.Fatalf("capture plan = %v", got)
+	}
+	c, config := testCatalog(t)
+	config.Sources = []SourceConfig{source}
+	ingestSource(t, c, source)
+	stopped := 0
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage != "snapshot-written" {
+			return nil
+		}
+		stopped++
+		if strings.Contains(capturedText(t, config.CaptureRoot), zedSecret) {
+			t.Errorf("a capture stopped at %s holds what Zed keeps beside its threads", rel)
+		}
+		return errors.New("stopped")
+	})
+	runCapture(t, config)
+	captureFault = nil
+	if stopped == 0 {
+		t.Fatal("no snapshot was written")
+	}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	if strings.Contains(capturedText(t, config.CaptureRoot), zedSecret) {
+		t.Fatal("the capture holds what Zed keeps beside its threads")
+	}
+	messages := func(c *Catalog) int {
+		return countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.provider='zed'`)
+	}
+	live := messages(c)
+	useHost(t, "host-b")
+	other, _ := testCatalog(t)
+	indexCaptures(t, other, config.CaptureRoot, "host-a")
+	if captured := messages(other); captured != live || live == 0 {
+		t.Fatalf("captured %d messages, live %d", captured, live)
+	}
+
+	// With rows exported from each snapshot as well.
+	useHost(t, "host-a")
+	_, recordedConfig := testCatalog(t)
+	source.Options = map[string]any{"sqlite_record_capture": true}
+	recordedConfig.Sources = []SourceConfig{source}
+	if result := runCapture(t, recordedConfig); !result.OK {
+		t.Fatalf("capture = %+v", result)
+	}
+	if strings.Contains(capturedText(t, recordedConfig.CaptureRoot), zedSecret) {
+		t.Fatal("the rows exported from a capture hold what Zed keeps beside its threads")
+	}
+	useHost(t, "host-b")
+	exported, _ := testCatalog(t)
+	indexCaptures(t, exported, recordedConfig.CaptureRoot, "host-a")
+	if got := messages(exported); got != live {
+		t.Fatalf("from a capture with rows exported: %d messages, live %d", got, live)
+	}
+}
+
+// A thread deleted in Zed before its last capture was indexed is indexed from
+// an older capture, and one indexed newer is not rolled back.
+func TestZedThreadDeletedBeforeIndexingIsKept(t *testing.T) {
+	useHost(t, "host-a")
+	root := zedFixture(t)
+	source := zedSource(root)
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	zedWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM threads WHERE id IN (?, ?)`, zedLegacyID, zedSubagentID)
+		return err
+	})
+	runCapture(t, config)
+	useHost(t, "host-b")
+	c, _ := testCatalog(t)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	live, _ := testCatalog(t)
+	ingestSource(t, live, zedSource(zedFixture(t)))
+	if got, want := cursorShape(t, c), cursorShape(t, live); got != want {
+		t.Fatalf("salvaged %s, read live %s", got, want)
+	}
+	if n := countRows(t, c, `SELECT COUNT(DISTINCT workspace_id) FROM conversations WHERE native_id IN (?, ?)`, zedThreadID, zedSubagentID); n != 1 {
+		t.Fatalf("the subagent left its thread's workspace: %d", n)
+	}
+
+	useHost(t, "host-a")
+	root = zedFixture(t)
+	source = zedSource(root)
+	config = captureTestConfig(t, source)
+	runCapture(t, config)
+	legacy := zedRows()[2]
+	legacy.updated = "2025-06-02T09:00:00.000000+00:00"
+	legacy.data["messages"] = append(legacy.data["messages"].([]any), map[string]any{"id": 2, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "And b.go?"}}})
+	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, legacy); return nil })
+	c, _ = testCatalog(t)
+	ingestSource(t, c, source)
+	zedWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM threads WHERE id=?`, zedLegacyID)
+		return err
+	})
+	runCapture(t, config)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='And b.go?'`); n != 1 {
+		t.Fatalf("the thread was rolled back: %d", n)
+	}
+}
+
+// A subagent whose thread Zed deleted stays in that thread's workspace, which
+// keeps its name.
+func TestZedSubagentKeepsItsDeletedThreadsWork(t *testing.T) {
+	c, _ := testCatalog(t)
+	root := zedFixture(t)
+	source := zedSource(root)
+	ingestSource(t, c, source)
+	var workspace string
+	if err := c.DB.QueryRow(`SELECT workspace_id FROM conversations WHERE native_id=?`, zedSubagentID).Scan(&workspace); err != nil {
+		t.Fatal(err)
+	}
+	zedWrite(t, root, func(db *sql.DB) error {
+		_, err := db.Exec(`DELETE FROM threads WHERE id=?`, zedThreadID)
+		return err
+	})
+	if record := zedRecords(t, root)[zedThreadID]; record.Title != "Zed "+short(zedThreadID) || record.Purpose != "" || len(record.Conversations) != 1 {
+		t.Fatalf("without its thread: %+v", record)
+	}
+	// The subagent goes on.
+	subagent := zedRows()[1]
+	subagent.updated = "2026-11-04T16:30:00.000000+00:00"
+	subagent.data["messages"] = append(subagent.data["messages"].([]any), map[string]any{"Agent": map[string]any{"content": []any{map[string]any{"Text": "And the docs build."}}, "tool_results": map[string]any{}}})
+	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, subagent); return nil })
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE native_id=? AND workspace_id=?`, zedSubagentID, workspace); n != 1 {
+		t.Fatal("the subagent left its thread's workspace")
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='And the docs build.'`); n != 1 {
+		t.Fatal("the subagent was not read again")
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM workspace_names WHERE workspace_id=? AND source_title='Fix the build'`, workspace); n != 1 {
+		t.Fatal("the work lost its name")
+	}
+}
+
+func TestZedThreadIsVerifiedLive(t *testing.T) {
+	c, _ := testCatalog(t)
+	source := zedSource(zedFixture(t))
+	ingestSource(t, c, source)
+	if result := c.auditUnit(t.Context(), firstSyncUnit(t, c, source), "manual", 0); result.Outcome != "passed" {
+		t.Fatalf("verification: %+v", result)
+	}
+}
+
+// Zed is found and counted by the probe, offered to a Mac set up before
+// Pharos read it, and chosen in guided setup; a data folder without threads
+// is not offered.
+func TestZedIsFoundAndSetUp(t *testing.T) {
+	home := probeHome(t)
+	useHost(t, "host-a")
+	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, filepath.FromSlash(zedUserDir), "settings.json"), "{}")
+	for _, candidate := range probeSources(home, Config{}, nil).Candidates {
+		if candidate.Kind == "zed" {
+			t.Fatalf("a folder without threads was offered: %+v", candidate)
+		}
+	}
+	if tools := probeTools(home, Config{}); strings.Contains(jsonText(tools), `"zed"`) {
+		t.Fatalf("a folder without threads was found: %v", tools)
+	}
+	fixture := zedFixture(t)
+	if err := os.MkdirAll(filepath.Join(home, filepath.FromSlash(zedUserDir), "threads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(fixture, filepath.FromSlash(zedDatabase)), filepath.Join(home, filepath.FromSlash(zedUserDir), filepath.FromSlash(zedDatabase))); err != nil {
+		t.Fatal(err)
+	}
+	candidate := candidateNamed(t, probeSources(home, Config{}, nil), "zed")
+	if candidate.Kind != "zed" || candidate.Status != "found" || candidate.Count != 3 || candidate.Unit != "session" || !candidate.Recommended {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	server := probeServer(t, probeLibrary(t, ""))
+	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"accept":["claude"]}`); code != 200 {
+		t.Fatalf("accept = %d %v", code, result)
+	}
+	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["new_sources"] != float64(1) {
+		t.Fatalf("status of a Mac set up before Zed = %v", status)
+	}
+	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["zed"],"accept":["zed"]}`); code != 200 || jsonText(result["added"]) != `["zed"]` {
+		t.Fatalf("accept Zed = %d %v", code, result)
+	}
+}

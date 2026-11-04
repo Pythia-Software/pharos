@@ -1279,6 +1279,7 @@ func knownRecordTable(kind, name string) bool {
 		"tl1":         {"tasks", "task_attempts", "transcript_summaries", "resource_usage", "tool_usage", "handoffs", "candidates", "task_flavors", "task_events", "review_findings", "human_responses", "human_comments"},
 		"codex":       {"threads"},
 		"opencode":    {"session_v2", "session_message", "session_part", "project"},
+		"zed":         {"threads"},
 	}
 	return slices.Contains(known[strings.ToLower(kind)], name)
 }

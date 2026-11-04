@@ -34,7 +34,7 @@ func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (P
 	kinds := map[string]bool{}
 	for _, kind := range *selection.Kinds {
 		switch kind {
-		case "claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli":
+		case "claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot", "cursor", "cursor-cli", "zed":
 			kinds[kind] = true
 		default:
 			return ProbeReport{}, probeRequestError{fmt.Errorf("unsupported source kind %q", kind)}

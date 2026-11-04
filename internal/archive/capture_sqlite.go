@@ -316,6 +316,8 @@ func captureTables(kind string) map[string]captureTable {
 		return cursorCaptureTables
 	case "cursor-cli":
 		return cursorCLICaptureTables
+	case "zed":
+		return zedCaptureTables
 	}
 	return nil
 }
