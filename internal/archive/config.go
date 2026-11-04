@@ -67,7 +67,10 @@ type Config struct {
 	// unchanged before the file is stored compressed; 0 keeps latest files
 	// uncompressed (docs/capture-compression.md).
 	CaptureCompressAfterDays int
-	CaptureRecoveryID        string
+	// OutcomeReworkDays is how long after a session's last edit a later
+	// session's edits to its files count as rework (outcomes.go).
+	OutcomeReworkDays int
+	CaptureRecoveryID string
 
 	// Labels configures the local message labeler (docs/local-labeler.md),
 	// off unless labels_enabled is set.
@@ -91,7 +94,7 @@ func defaultConfig(path string) Config {
 		Host: "127.0.0.1", Port: 8765, PackageCapBytes: defaultCap,
 		UpcomingDays: 23, EligibleDays: 30, SnoozeDays: 14, StagingCapBytes: 2_000_000_000,
 		CPUIDLECeiling: .35, IOMBPSCeiling: 25, YieldPollSeconds: 2,
-		CaptureRoot: filepath.Join(root, "captures"), CaptureGenerations: 1, CaptureCompressAfterDays: 14,
+		CaptureRoot: filepath.Join(root, "captures"), CaptureGenerations: 1, CaptureCompressAfterDays: 14, OutcomeReworkDays: defaultReworkDays,
 		WorkEngine: "classic", BackgroundCPUs: runtime.NumCPU(),
 	}
 }
@@ -194,6 +197,9 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.CaptureRoot = resolvePath(base, stringValue(root, "capture_root", captureRoot))
 	config.CaptureGenerations = intValue(root, "capture_snapshot_generations", config.CaptureGenerations)
 	config.CaptureCompressAfterDays = max(intValue(root, "capture_compress_after_days", config.CaptureCompressAfterDays), 0)
+	if days := intValue(root, "outcome_rework_days", config.OutcomeReworkDays); days > 0 {
+		config.OutcomeReworkDays = days
+	}
 	config.VolumeID = stringValue(root, "volume_id", "")
 	config.APIToken = stringValue(root, "api_token", os.Getenv("PHAROS_API_TOKEN"))
 	config.Executable = resolvePath(base, stringValue(root, "executable", ""))

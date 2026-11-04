@@ -913,6 +913,15 @@ capture_snapshot_generations = 1
 capture_compress_after_days = 14
 ```
 
+Session outcomes ([projects-and-outcomes.md](projects-and-outcomes.md)) judge
+rework within a window after each session's last edit:
+
+```toml
+# Days after a session's last edit in which a later session's edits to the
+# same files count as rework. Changing it judges every session again.
+outcome_rework_days = 14
+```
+
 Outside a library the default is beside the catalog rather than under
 `archive_root`, because that drive may be absent. For the same reason the parent
 of `capture_root` must already exist: a missing mount point under `/Volumes` is

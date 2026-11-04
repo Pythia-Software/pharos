@@ -133,6 +133,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.ReworkDays = config.OutcomeReworkDays
 		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	server.resourceBrokerOwned = os.Getenv("PHAROS_RESOURCE_OWNER") == "broker"

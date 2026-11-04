@@ -29,8 +29,10 @@ type Catalog struct {
 	reads              *sql.DB
 	RepositoryAliases  map[string]string
 	RepositorySeparate []string
-	captureRootMu      sync.RWMutex
-	captureRoot        string
+	// ReworkDays is the library's outcome_rework_days (outcomes.go).
+	ReworkDays    int
+	captureRootMu sync.RWMutex
+	captureRoot   string
 	// evidenceOnly restricts offline rebuild enrichment to imported catalog rows.
 	// Set once before replay; live paths and unselected captures are unavailable.
 	evidenceOnly bool
@@ -279,6 +281,9 @@ func (c *Catalog) Initialize() error {
 	// The analysis triggers read the project columns.
 	if err := c.migrateProjects(); err != nil {
 		return fmt.Errorf("initialize projects: %w", err)
+	}
+	if err := c.ensureOutcomes(); err != nil {
+		return fmt.Errorf("initialize outcomes: %w", err)
 	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)

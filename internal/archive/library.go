@@ -708,7 +708,21 @@ func libraryExtraColumns(derived map[string]string) []libraryColumn {
 		{"project_kind", projectKindSQL("w")},
 		{"canonical_remote", "r.canonical_remote"},
 		{"file_edit_count", derived["changed_file_count"]},
-		{"branch_count", "CASE WHEN w.branch IS NULL OR TRIM(w.branch)='' THEN 0 ELSE 1 END"},
+		// Branches and pull requests are Git facts: without any, a folder or
+		// no project has none to count, which is not applicable rather than
+		// zero. Git data a session did record always shows.
+		{"branch_count", "CASE WHEN TRIM(COALESCE(w.branch,''))<>'' THEN 1 WHEN pj.id IS NULL THEN NULL ELSE 0 END"},
+		{"pr_count", "CASE WHEN " + derived["pr_count"] + ">0 THEN " + derived["pr_count"] + " WHEN pj.id IS NULL THEN NULL ELSE 0 END"},
+		// The session's outcome (outcomes.go): its label, what decided it,
+		// and its Tier 1 facts.
+		{"outcome_label", outcomeLabelSQL("w")},
+		{"outcome_why", outcomeWhySQL("w")},
+		{"files_changed", outcomeFactSQL("w", "so.files_changed")},
+		{"lines_added", outcomeFactSQL("w", "so.lines_added")},
+		{"lines_removed", outcomeFactSQL("w", "so.lines_removed")},
+		{"verification", outcomeFactSQL("w", "so.verification")},
+		{"recorded_commits", outcomeFactSQL("w", "json_array_length(so.commits_json)")},
+		{"reworked_files", outcomeFactSQL("w", "so.reworked_files")},
 	}
 }
 
@@ -785,11 +799,16 @@ func libraryRowSelect(value func(libraryColumn) string, fields libraryFields) st
 	derived := map[string]string{}
 	for _, column := range libraryColumns {
 		derived[column.name] = value(column)
-		if fields.has(column.name) {
+	}
+	extras := libraryExtraColumns(derived)
+	for _, column := range libraryColumns {
+		// An extra column of the same name reads the stored one itself.
+		redefined := slices.ContainsFunc(extras, func(extra libraryColumn) bool { return extra.name == column.name })
+		if fields.has(column.name) && !redefined {
 			columns = append(columns, derived[column.name]+" "+column.name)
 		}
 	}
-	for _, column := range libraryExtraColumns(derived) {
+	for _, column := range extras {
 		if fields.has(column.name) {
 			columns = append(columns, column.expr+" "+column.name)
 		}
