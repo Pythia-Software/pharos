@@ -69,8 +69,8 @@ func copilotFixture(t *testing.T) string {
 	writeSourceFile(t, filepath.Join(sessions, "sess-1", "workspace.yaml"), copilotWorkspace)
 	writeSourceFile(t, filepath.Join(sessions, "sess-1", "rewind-file-snapshots", "backups", "abc"), "file contents")
 	writeSourceFile(t, filepath.Join(sessions, "sess-0.jsonl"), copilotLegacy)
-	// An upgraded session's flat log is replaced by its folder.
-	writeSourceFile(t, filepath.Join(sessions, "sess-1.jsonl"), strings.ReplaceAll(copilotLegacy, "sess-0", "sess-1"))
+	// An upgraded session's flat log, which its folder's log repeats.
+	writeSourceFile(t, filepath.Join(sessions, "sess-1.jsonl"), strings.Join(strings.SplitAfter(copilotSessionEvents, "\n")[:3], ""))
 	// A session started and left before anything was said has no log.
 	writeSourceFile(t, filepath.Join(sessions, "sess-2", "workspace.yaml"), "id: sess-2\n")
 	writeSourceFile(t, filepath.Join(root, "config.json"), `{"token":"secret"}`)
@@ -194,13 +194,15 @@ func TestCopilotUsageCountsEachRequestOnce(t *testing.T) {
 }
 
 // copilotUpgraded is a session begun by a release that wrote no receipts and
-// resumed by one that does: each shutdown totals the whole session.
+// resumed by one that does: each shutdown totals the whole session. Its
+// request is reported twice, first in part, and a prompt quotes usage JSON.
 const copilotUpgraded = `{"type":"session.start","data":{"sessionId":"sess-3","copilotVersion":"0.0.330"},"id":"m1","timestamp":"2026-01-02T10:00:00.000Z"}
 {"type":"user.message","data":{"content":"Hello"},"id":"m2","timestamp":"2026-01-02T10:00:01.000Z"}
 {"type":"assistant.message","data":{"messageId":"b1","content":"Hi","model":"claude-sonnet-4.5"},"id":"m3","timestamp":"2026-01-02T10:00:02.000Z"}
 {"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":300,"outputTokens":20,"cacheReadTokens":100,"cacheWriteTokens":0}}}},"id":"m4","timestamp":"2026-01-02T10:00:03.000Z"}
 {"type":"session.resume","data":{},"id":"m5","timestamp":"2026-01-03T10:00:00.000Z"}
-{"type":"user.message","data":{"content":"Again"},"id":"m6","timestamp":"2026-01-03T10:00:01.000Z"}
+{"type":"user.message","data":{"content":"{\"usage\":{\"input_tokens\":1000,\"output_tokens\":200}}"},"id":"m6","timestamp":"2026-01-03T10:00:01.000Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"cacheReadTokens":80,"apiCallId":"api-9"}},"id":"m7a","timestamp":"2026-01-03T10:00:01.500Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"claude-sonnet-4.5","inputTokens":90,"outputTokens":10,"cacheReadTokens":80,"cacheWriteTokens":0,"apiCallId":"api-9"}},"id":"m7","timestamp":"2026-01-03T10:00:02.000Z"}
 {"type":"assistant.message","data":{"messageId":"b2","content":"Hi again","model":"claude-sonnet-4.5","apiCallId":"api-9"},"id":"m8","timestamp":"2026-01-03T10:00:02.100Z"}
 {"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.5":{"usage":{"inputTokens":390,"outputTokens":30,"cacheReadTokens":180,"cacheWriteTokens":0}}}},"id":"m9","timestamp":"2026-01-03T10:00:03.000Z"}
@@ -213,7 +215,8 @@ func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
 	total := func() int {
 		return countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`)
 	}
-	// The receiptless leg's 320 plus the receipt's 100.
+	// The receiptless leg's 320 plus the receipt's 100, and nothing from the
+	// quoted JSON.
 	writeSourceFile(t, filepath.Join(root, "session-state", "sess-3", "events.jsonl"), copilotUpgraded)
 	ingestSource(t, c, source)
 	if got := total(); got != 420 {
@@ -242,26 +245,58 @@ func TestCopilotUsageBeyondReceiptsIsKeptOnce(t *testing.T) {
 // A capture can copy a session's log before an append and its
 // workspace.yaml after; reading that capture must not undo the append.
 func TestCopilotCaptureOfAnOlderLogLeavesTheNewerOne(t *testing.T) {
-	useHost(t, "host-a")
-	c, config := testCatalog(t)
-	root := copilotFixture(t)
-	source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true}
-	config.Sources = []SourceConfig{source}
-	session := filepath.Join(root, "session-state", "sess-1")
-	later := time.Now().Add(time.Hour)
-	if err := os.Chtimes(filepath.Join(session, "workspace.yaml"), later, later); err != nil {
-		t.Fatal(err)
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "capture", true: "capture kept until indexed"}[pending], func(t *testing.T) {
+			useHost(t, "host-a")
+			root := copilotFixture(t)
+			source := SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true}
+			session := filepath.Join(root, "session-state", "sess-1")
+			c, config := testCatalog(t)
+			config.Sources, config.PendingCapture = []SourceConfig{source}, pending
+			// The yaml copied after the log, with a later time.
+			later := time.Now().Add(time.Hour)
+			if err := os.Chtimes(filepath.Join(session, "workspace.yaml"), later, later); err != nil {
+				t.Fatal(err)
+			}
+			if result := runCapture(t, config); !result.OK {
+				t.Fatalf("capture = %+v", result)
+			}
+			log := filepath.Join(session, "events.jsonl")
+			appendSourceFile(t, log, `{"type":"assistant.message","data":{"messageId":"a5","model":"gpt-6-luna","content":"You're welcome.","toolRequests":[]},"id":"e25","timestamp":"2026-11-03T15:05:02.000Z"}`+"\n")
+			appended := time.Now().Add(30 * time.Minute)
+			if err := os.Chtimes(log, appended, appended); err != nil {
+				t.Fatal(err)
+			}
+			useHost(t, "host-a")
+			ingestSource(t, c, source)
+			// Another Mac sharing the library reads this Mac's capture.
+			useHost(t, "host-b")
+			indexCaptures(t, c, config.CaptureRoot, "host-a")
+			if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='a5'`); n != 1 {
+				t.Fatalf("the appended reply was removed: %d", n)
+			}
+		})
 	}
-	if result := runCapture(t, config); !result.OK {
-		t.Fatalf("capture = %+v", result)
+}
+
+// One session's flat log and folder log are read together: the folder's need
+// not repeat the turns the flat one holds.
+func TestCopilotFlatAndFolderLogsOfOneSessionAreReadTogether(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "session-state")
+	writeSourceFile(t, filepath.Join(sessions, "sess-5.jsonl"), strings.ReplaceAll(copilotLegacy, "sess-0", "sess-5"))
+	writeSourceFile(t, filepath.Join(sessions, "sess-5", "events.jsonl"), `{"type":"session.resume","data":{},"id":"r1","timestamp":"2026-01-03T10:00:00.000Z"}
+{"type":"user.message","data":{"content":"Again"},"id":"r2","timestamp":"2026-01-03T10:00:01.000Z"}
+`)
+	records := discoverCopilot(t, root)
+	texts := []string{}
+	for _, message := range records["sess-5"].Conversations[0].Messages {
+		if message.Kind == "message" {
+			texts = append(texts, message.Text)
+		}
 	}
-	appendSourceFile(t, filepath.Join(session, "events.jsonl"), `{"type":"assistant.message","data":{"messageId":"a5","model":"gpt-6-luna","content":"You're welcome.","toolRequests":[]},"id":"e25","timestamp":"2026-11-03T15:05:02.000Z"}`+"\n")
-	ingestSource(t, c, source)
-	// Another Mac sharing the library reads this Mac's capture.
-	useHost(t, "host-b")
-	indexCaptures(t, c, config.CaptureRoot, "host-a")
-	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id='a5'`); n != 1 {
-		t.Fatalf("the appended reply was removed: %d", n)
+	if strings.Join(texts, "|") != "Hello|Hi|Again" {
+		t.Fatalf("messages = %v", texts)
 	}
 }
 
@@ -310,7 +345,7 @@ func TestCopilotCaptureHoldsOnlyTheSessions(t *testing.T) {
 	for _, item := range plan.files {
 		got = append(got, item.rel)
 	}
-	if strings.Join(got, ",") != "session-state/sess-0.jsonl,session-state/sess-1/events.jsonl,session-state/sess-1/workspace.yaml" {
+	if strings.Join(got, ",") != "session-state/sess-0.jsonl,session-state/sess-1.jsonl,session-state/sess-1/events.jsonl,session-state/sess-1/workspace.yaml" {
 		t.Fatalf("capture plan = %v", got)
 	}
 }
@@ -340,7 +375,7 @@ func TestCopilotSessionsAreCapturedIndexedElsewhereAndFollowed(t *testing.T) {
 		t.Fatalf("captured %d messages, live %d", captured, live)
 	}
 
-	// A session still running gains events; only its files, the log and
+	// A session still running gains events; only its files, its logs and
 	// workspace.yaml, are read again.
 	useHost(t, "host-a")
 	log := filepath.Join(root, "session-state", "sess-1", "events.jsonl")
@@ -355,7 +390,7 @@ func TestCopilotSessionsAreCapturedIndexedElsewhereAndFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed := ingestSource(t, c, source).Parsed
-	if got := messages(c); got != live+1 || parsed != 2 {
+	if got := messages(c); got != live+1 || parsed != 3 {
 		t.Fatalf("after the append: %d messages (was %d), %d files parsed", got, live, parsed)
 	}
 }

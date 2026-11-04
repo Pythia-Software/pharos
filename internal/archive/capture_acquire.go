@@ -463,9 +463,10 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 	if view == nil || view.evidenceRevision == "" || record == nil || record.EvidenceIdentity != "" {
 		return
 	}
-	selected := map[string]bool{}
+	selected, metadata := map[string]bool{}, map[string]bool{}
 	for _, p := range parts {
 		selected[p.item] = true
+		metadata[p.item] = p.metadata
 	}
 	for _, conversation := range record.Conversations {
 		selected[conversation.Origin] = true
@@ -478,7 +479,7 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 		// A compressed rollout is selected by the plain path it stands for.
 		if selected[f.Path] || selected[plainRollout(f.Path)] {
 			values = append(values, f.Path, f.SHA256)
-			if f.ObservedNS > record.Observed {
+			if f.ObservedNS > record.Observed && !metadata[f.Path] {
 				observe(record, f.ObservedNS)
 			}
 		}

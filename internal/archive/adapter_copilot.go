@@ -34,11 +34,12 @@ func (a *copilotAdapter) sessionsDir() string {
 	return a.config.Path
 }
 
-// copilotSession is one session's event log and, when present, its
-// workspace.yaml.
-type copilotSession struct{ id, events, workspace string }
+// copilotSession is one session's event log, when present its workspace.yaml,
+// and the flat log an older release wrote for it before it had a folder.
+type copilotSession struct{ id, events, workspace, flat string }
 
-// sessions lists the sessions, a folder's log over a flat log of the same ID.
+// sessions lists the sessions. A session with both a folder and a flat log
+// is read from both: the folder's log need not repeat what the flat one holds.
 func (a *copilotAdapter) sessions() ([]copilotSession, error) {
 	dir := a.sessionsDir()
 	entries, err := os.ReadDir(dir)
@@ -61,9 +62,16 @@ func (a *copilotAdapter) sessions() ([]copilotSession, error) {
 				session.workspace = filepath.Join(dir, name, "workspace.yaml")
 			}
 			byID[name] = session
-		} else if id, ok := strings.CutSuffix(name, ".jsonl"); ok && entry.Type().IsRegular() {
-			if _, found := byID[id]; !found {
-				byID[id] = copilotSession{id: id, events: filepath.Join(dir, name)}
+		}
+	}
+	for _, entry := range entries {
+		if id, ok := strings.CutSuffix(entry.Name(), ".jsonl"); ok && entry.Type().IsRegular() {
+			flat := filepath.Join(dir, entry.Name())
+			if session, found := byID[id]; found {
+				session.flat = flat
+				byID[id] = session
+			} else {
+				byID[id] = copilotSession{id: id, events: flat}
 			}
 		}
 	}
@@ -83,11 +91,13 @@ func (a *copilotAdapter) captureFiles() ([]string, error) {
 	}
 	files := []string{}
 	for _, session := range sessions {
-		files = append(files, session.events)
-		if session.workspace != "" {
-			files = append(files, session.workspace)
+		for _, file := range []string{session.flat, session.events, session.workspace} {
+			if file != "" {
+				files = append(files, file)
+			}
 		}
 	}
+	sort.Strings(files)
 	return files, nil
 }
 
@@ -134,7 +144,7 @@ func (a *copilotAdapter) planParts() (*sourceWorkPlan, error) {
 	var failures []error
 	for _, session := range sessions {
 		parts := []sourcePart{}
-		for _, file := range []string{session.events, session.workspace} {
+		for _, file := range []string{session.flat, session.events, session.workspace} {
 			if file == "" {
 				continue
 			}
@@ -178,29 +188,57 @@ func (a *copilotAdapter) parseSession(session copilotSession) (*WorkspaceRecord,
 			read = append(read, part)
 		}
 	}
-	file, err := a.files().OpenContent(session.events)
-	if errors.Is(err, os.ErrNotExist) {
+	// The flat log first, then the folder's events it does not already hold.
+	events, seen, version := []map[string]any{}, map[string]bool{}, int64(0)
+	logs := []sourcePart{}
+	for _, path := range []string{session.flat, session.events} {
+		if path == "" {
+			continue
+		}
+		read, part, err := a.readLog(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return nil, nil, err
+		}
+		logs = append(logs, part)
+		version = max(version, part.version)
+		for _, event := range read {
+			if id := firstString(event["id"]); id != "" {
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+			}
+			event["_origin"] = part.item
+			events = append(events, event)
+		}
+	}
+	if len(logs) == 0 {
 		return nil, read, nil
-	} else if err != nil {
-		return nil, nil, err
 	}
-	defer file.Close()
-	info, _ := file.Stat()
-	part := sourcePart{item: a.original(session.events), size: info.Size(), version: info.ModTime().UnixNano()}
-	events, err := readJSONLines(file, file.readLimit())
-	if err != nil {
-		return nil, nil, err
-	}
-	read = append([]sourcePart{part}, read...)
+	read = append(logs, read...)
 	record := a.record(session, events, workspace)
 	if record == nil {
 		return nil, read, nil
 	}
-	// The log alone versions the session. A capture can copy the log before
+	// The logs alone version the session. A capture can copy a log before
 	// an append and workspace.yaml after it; taking the newer yaml's time
 	// would let that older log replace the newer one.
-	observe(record, part.version)
+	observe(record, version)
 	return record, read, nil
+}
+
+// readLog reads an event log and its part.
+func (a *copilotAdapter) readLog(path string) ([]map[string]any, sourcePart, error) {
+	file, err := a.files().OpenContent(path)
+	if err != nil {
+		return nil, sourcePart{}, err
+	}
+	defer file.Close()
+	info, _ := file.Stat()
+	events, err := readJSONLines(file, file.readLimit())
+	return events, sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}, err
 }
 
 func (a *copilotAdapter) readWorkspace(path string) (map[string]string, sourcePart, error) {
@@ -211,7 +249,7 @@ func (a *copilotAdapter) readWorkspace(path string) (map[string]string, sourcePa
 	defer file.Close()
 	info, _ := file.Stat()
 	values, err := copilotWorkspaceYAML(file)
-	return values, sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}, err
+	return values, sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano(), metadata: true}, err
 }
 
 // copilotWorkspaceYAML reads workspace.yaml's top-level scalars, the only
@@ -299,9 +337,30 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			}
 		}
 	}
-	// Usage per model in receipts so far, and in receipts before the last
-	// shutdown.
-	receipted, beforeShutdown := map[string]map[string]float64{}, map[string]map[string]float64{}
+	// Receipts by request: a request reported again updates its one record,
+	// as token accounting reads it. beforeShutdown is their usage per model
+	// at the last shutdown.
+	type receipt struct {
+		agent *copilotAgent
+		index int
+		model string
+		usage map[string]any
+	}
+	receipts, byRequest := []*receipt{}, map[string]*receipt{}
+	receipted := func() map[string]map[string]float64 {
+		sums := map[string]map[string]float64{}
+		for _, r := range receipts {
+			if sums[r.model] == nil {
+				sums[r.model] = map[string]float64{}
+			}
+			for key, value := range r.usage {
+				n, _ := number(value)
+				sums[r.model][key] += n
+			}
+		}
+		return sums
+	}
+	beforeShutdown := map[string]map[string]float64{}
 	var lastShutdown map[string]any
 	shutdownAt, shutdownLine := "", int64(0)
 	started, ended := "", ""
@@ -325,7 +384,10 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		}
 		line := integer(event["_line"])
 		eventID := defaultString(event["id"], fmt.Sprintf("line-%d", line))
-		base := MessageRecord{NativeID: eventID, Model: agent.model, Effort: agent.effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), Selected: true}
+		// The event's type and ID stand in for its raw text, so text quoting
+		// usage JSON is never read as token usage.
+		base := MessageRecord{NativeID: eventID, Model: agent.model, Effort: agent.effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", defaultString(firstString(event["_origin"]), origin), line), Selected: true,
+			RawText: jsonText(map[string]any{"type": kind, "id": eventID})}
 		add := func(message MessageRecord) int {
 			agent.conversation.Messages = append(agent.conversation.Messages, message)
 			return len(agent.conversation.Messages) - 1
@@ -452,30 +514,29 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			usage := mapValueDefault(data["usage"])
 			agent.model = firstString(usage["model"], agent.model)
 			agent.effort = updatedEffort(agent.effort, usage)
-			counts := receipted[agent.model]
-			if counts == nil {
-				counts = map[string]float64{}
-				receipted[agent.model] = counts
+			request := firstString(usage["apiCallId"], usage["providerCallId"])
+			r := byRequest[agentID+"\x00"+request]
+			if r == nil {
+				item := base
+				item.RawText = ""
+				if message := paidFor[agentID+"\x00"+firstString(usage["apiCallId"])]; message != "" {
+					item.NativeID = message + ":usage"
+				}
+				item.Model, item.Effort = agent.model, agent.effort
+				item.Role, item.Kind = "system", "metadata"
+				r = &receipt{agent: agent, index: add(item), model: agent.model, usage: map[string]any{}}
+				receipts = append(receipts, r)
+				if request != "" {
+					byRequest[agentID+"\x00"+request] = r
+				}
 			}
-			for key, value := range copilotTokenUsage(usage) {
-				n, _ := number(value)
-				counts[key] += n
-			}
-			item := base
-			if message := paidFor[agentID+"\x00"+firstString(usage["apiCallId"])]; message != "" {
-				item.NativeID = message + ":usage"
-			}
-			item.Model, item.Effort = agent.model, agent.effort
-			item.Role, item.Kind = "system", "metadata"
-			item.Text = jsonText(map[string]any{"type": "token_usage", "usage": copilotTokenUsage(usage), "usage_message_id": firstString(usage["apiCallId"], usage["providerCallId"], eventID)})
-			add(item)
+			// A later report of a request supersedes the fields it carries.
+			maps.Copy(r.usage, copilotTokenUsage(usage))
+			r.agent.conversation.Messages[r.index].Text = jsonText(map[string]any{"type": "token_usage", "usage": r.usage, "usage_message_id": defaultString(request, eventID)})
 		case "session.shutdown":
 			// Each shutdown totals the whole session so far, receipts included.
 			lastShutdown, shutdownAt, shutdownLine = data, timestamp, line
-			beforeShutdown = map[string]map[string]float64{}
-			for model, counts := range receipted {
-				beforeShutdown[model] = maps.Clone(counts)
-			}
+			beforeShutdown = receipted()
 		case "session.error", "assistant.error", "error":
 			item := base
 			item.Role, item.Kind, item.Text = "system", "error", firstString(data["message"], data["error"], jsonText(data))
