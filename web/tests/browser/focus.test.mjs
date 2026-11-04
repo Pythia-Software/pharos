@@ -1558,8 +1558,26 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   }});
   await page.emulateMedia({reducedMotion:motion});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const hintVisible=()=>editor.evaluate(element=>{
+    const hint=getComputedStyle(element,'::after');
+    return !['none','normal','""'].includes(hint.content)&&hint.display!=='none'&&hint.visibility==='visible';
+  });
+  assert.ok(await hintVisible(),'the empty, unfocused composer offers an invitation');
+  await shot('empty-invitation');
+  await editor.focus();
+  assert.equal(await hintVisible(),false,'focus hides the invitation before any typing');
+  await shot('focused-empty');
+  await editor.fill('An unsent draft');
+  await page.locator('.pharos-model-trigger').focus();
+  assert.equal(await hintVisible(),false,'a blurred draft must not regain a placeholder');
+  await editor.fill('');
+  assert.equal(await hintVisible(),false,'deleting the draft while focused keeps the invitation hidden');
+  await page.locator('.pharos-model-trigger').focus();
+  assert.ok(await hintVisible(),'leaving an empty composer restores the invitation');
   await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true}),editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  assert.equal(await hintVisible(),false,'opening the modal focuses a clear editor');
   const finishMotion=()=>modal.evaluate(async element=>{
     for(;;){
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));

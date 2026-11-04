@@ -12,6 +12,38 @@ import { loadClassicScript, plain } from './helpers/classic-script.mjs';
 const model = loadClassicScript('ask-model.js',{TextEncoder,TextDecoder});
 const prompt = loadClassicScript('ask-prompt.js');
 
+test('prompt invitations rotate after idle time and restart the wait after editing or hiding',()=>{
+  const items=['A','B','C','D','E'].map(text=>({id:text,text}));
+  const hints=prompt.askPromptHints(()=>0),first=hints.update(items,items.slice(0,2)),seen=new Set([first]);
+  assert.equal(hints.advance(11999,false),first);
+  const next=hints.advance(1,false);assert.notEqual(next,first);seen.add(next);
+  hints.advance(11000,false);
+  assert.equal(hints.advance(60000,true),next,'focus, drafts, hidden surfaces and reduced motion hold the current invitation');
+  assert.equal(hints.advance(11999,false),next,'returning to idle starts a fresh reading period');
+  let current=hints.advance(1,false);seen.add(current);
+  for(let count=0;current!==first&&count<10;count++){current=hints.advance(12000,false);seen.add(current);}
+  assert.equal(current,first,'the invitations wrap around');
+  assert.deepEqual([...seen].sort(),['C','D','E'],'only questions outside the visible cards rotate');
+  assert.ok(seen.has(prompt.askPromptHints(()=>.99).update(items,items.slice(0,2))),'new surfaces can start at a different question');
+});
+
+test('prompt invitations follow suggestion visibility and refresh without repeating visible question text',()=>{
+  const items=['A','B','C','D'].map(text=>({id:text,text}));
+  const hints=prompt.askPromptHints(()=>0),fallback=hints.current();
+  assert.equal(hints.update(items,items.slice(0,2)),'C');
+  hints.advance(11000,false);
+  assert.equal(hints.update(items,items.slice(0,2)),'C','a redraw preserves the current question');
+  assert.equal(hints.advance(1000,false),'D','a redraw preserves the reading period');
+  assert.equal(hints.update(items,[items[3]]),'A','a question coming into view is replaced immediately');
+  assert.equal(hints.advance(11999,false),'A','replacement starts a fresh reading period');
+  assert.equal(hints.update(items,[...items,{id:'copy',text:'A'}]),fallback,'no spare question uses the generic invitation');
+  assert.equal(hints.update(items),'A','hiding suggestions makes the whole slate available');
+  assert.equal(hints.update([{id:'new',text:'A refreshed question'}]),'A refreshed question','refresh retires questions from the old slate');
+  assert.equal(hints.update([]),fallback,'an empty library uses the generic invitation');
+  assert.equal(hints.advance(60000,false),fallback);
+  assert.equal(hints.update([{id:'first',text:'Same question'},{id:'second',text:'Same question'}],[{id:'first',text:'Same question'}]),fallback,'duplicate question text is excluded regardless of identity');
+});
+
 test('Ask dialog starts a quarter down the window and grows around its original center',()=>{
   const layout=options=>plain(model.askDialogLayout({emptyHeight:194,...options}));
   const empty=layout({viewportHeight:1070,contentHeight:194});

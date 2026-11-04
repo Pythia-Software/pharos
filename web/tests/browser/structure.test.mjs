@@ -765,20 +765,32 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     }));
     assert.equal(clipped,false,'suggestion questions fit their cards');
   };
+  const distinctHint=async()=>{
+    const {hint,visible,questions}=await page.evaluate(()=>({
+      hint:document.getElementById('pharos-question').dataset.placeholder,
+      visible:[...document.querySelectorAll('.pharos-suggestion[data-reading] .pharos-idea-text')].map(label=>label.textContent),
+      questions:[...document.querySelectorAll('.pharos-idea-text')].map(label=>label.textContent),
+    }));
+    assert.ok(questions.includes(hint)&&!visible.includes(hint),'the placeholder uses a question outside the visible suggestion cards');
+  };
   for(const width of [320,2133]){
     await page.setViewportSize({width,height:1070});await settled();
     assert.deepEqual(await layoutProblems(page),[]);
     await readable();
+    await distinctHint();
     await shot(`expanded-${width}`);
   }
   for(let step=0;step<2;step++){
     await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('.pharos-idea-viewport').hasAttribute('data-moving'));
     await readable();
+    await distinctHint();
   }
   await suggestions.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.pharos-idea-announcement')?.textContent==='Prompt suggestions refreshed.');
   assert.ok(calls.some(call=>call.path==='/api/ask/suggestions'&&call.query.get('seed')==='1'),'Refresh asks the library for another slate');
   await readable();
+  await distinctHint();
   const card=viewport.locator('[data-reading]').filter({hasText:'repository'}).first();
   const prompt=await card.locator('.pharos-idea-text').textContent();
   await card.click();
