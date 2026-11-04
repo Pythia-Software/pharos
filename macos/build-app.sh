@@ -20,9 +20,7 @@ if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
 fi
 # Swift does not honor SDKROOT alone. Select the compatible SDK explicitly
 # before building; the macOS 27 CLT SDK needs an unavailable SwiftUI plugin.
-if [ -z "${SDKROOT:-}" ]; then
-    SDKROOT=$(xcrun --sdk macosx26.5 --show-sdk-path)
-fi
+SDKROOT=$(/bin/sh "$ROOT/macos/swift-toolchain.sh" sdk)
 export SDKROOT
 OUT=${1:-"$ROOT/dist"}
 APP="$OUT/Pharos.app"
@@ -82,7 +80,7 @@ for goarch in $GOARCHES; do
     echo "Building the labeling worker ($arch)…"
     (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
     echo "Building the Swift wrapper ($arch)…"
-    swiftc -sdk "$SDKROOT" -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
+    /bin/sh "$ROOT/macos/swift-toolchain.sh" compile -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
         -framework DiskArbitration -framework Security -F "$SPARKLE" -framework Sparkle \
         -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
         "$ROOT/macos/PharosApp.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/Launch.swift" \
