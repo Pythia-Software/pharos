@@ -90,7 +90,11 @@ func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, []error, error) {
 		}
 		for id, file := range files {
 			info, err := a.files().Stat(file)
-			if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				// A copy that cannot be looked up may be the newest.
+				failures = append(failures, err)
 				continue
 			}
 			// The same session in two windows' storage is read from the copy

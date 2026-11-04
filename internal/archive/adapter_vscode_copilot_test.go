@@ -387,17 +387,20 @@ func TestVSCodeCopilotOlderCopyNeverReplacesTheNewer(t *testing.T) {
 	}
 	ingestSource(t, c, source)
 	before := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`)
-	locked := filepath.Join(root, "workspaceStorage", "a1", "chatSessions")
-	if err := os.Chmod(locked, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(locked, 0o755) })
-	if _, err := os.ReadDir(locked); err == nil {
-		t.Skip("running with access to every folder")
-	}
-	adapter, _ := MakeAdapter(source)
-	c.Ingest(adapter, nil)
-	if after := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`); after != before || before == 0 {
-		t.Fatalf("the second request's messages: %d, before %d", after, before)
+	// A folder that cannot be listed, or whose files cannot be looked up.
+	for _, mode := range []os.FileMode{0, 0o444} {
+		locked := filepath.Join(root, "workspaceStorage", "a1", "chatSessions")
+		if err := os.Chmod(locked, mode); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		if _, err := os.Stat(filepath.Join(locked, vscodeSessionID+".jsonl")); err == nil {
+			t.Skip("running with access to every folder")
+		}
+		adapter, _ := MakeAdapter(source)
+		c.Ingest(adapter, nil)
+		if after := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE native_id LIKE 'request_b%'`); after != before || before == 0 {
+			t.Fatalf("mode %o: the second request's messages: %d, before %d", mode, after, before)
+		}
 	}
 }
