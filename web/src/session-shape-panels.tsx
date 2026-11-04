@@ -122,7 +122,7 @@ export function revealDefinitions() {
   window.dispatchEvent(new Event("pharos:uri-changed"));
 }
 const definitionMeasures = ["failed_calls", "rejections", "interrupts", "hook_blocks", "identical_retries", "thrash_retries", "one_shot_rate", "churned_files", "mid_task_compactions", "context_peak", "context_pressure",
-  "corrections", "steering_load", "verification", "long_unprompted_runs", "ended_on_failure", "autonomy", "turn_cycle", "active_time"];
+  "corrections", "steering_load", "verification", "long_unprompted_runs", "ended_on_failure", "autonomy", "calls_per_words", "turn_cycle", "active_time"];
 export function SessionShapeDefinitions() {
   return <section className="session-shape-panel session-shape-definitions" id={definitionsSection}>
     <header><h3>Definitions</h3>

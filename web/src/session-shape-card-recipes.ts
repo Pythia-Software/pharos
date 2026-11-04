@@ -52,6 +52,22 @@ function rate(id: string, title: string, description: string, metric: string, sp
     cover: { mode: "result", metricId: value.id, kind: "bar-horizontal", maxGroups: 10, showOther: false }, ...extra });
 }
 
+// A measure of your sessions as a sparkline: its value over each trailing
+// seven complete days, pooled as the catalog pools it (summed parts, or a
+// daily average of a total), at each of the last 31 days.
+function sparkline(id: string, title: string, description: string, metric: string, labels: { value: string; point: string }, note: string, extra: Partial<QueryRecipe> = {}): QueryRecipe {
+  const measure = catalog.measures[metric], [top, bottom] = measure.ratio?.map(ratioPart) ?? [];
+  const part = (item: { op: string; field?: string }) => ({ op: item.op as "sum" | "count", ...item.field ? { field: item.field } : {} });
+  const value = top ? part(top) : part({ op: measure.op, field: measure.field }), per = bottom ? part(bottom) : undefined;
+  const daily: AggregationClause = { id: `ss_${metric}_trend`, op: value.op, ...value.field ? { field: value.field } : {}, ...per ? { expression: `SUM([${value.field}])/NULLIF(${per.op === "count" ? "COUNT" : "SUM"}([${per.field}]),0)` } : {},
+    groupBy: ["day"], groupLimit: 10000, label: `${measure.label} by day` };
+  return session({ id, title, description, unit: measure.unit, days: [30, 90], action: `Explore ${measure.label.toLowerCase()} over time`, where: [steered, ...measure.where ?? []],
+    note: `Each point pools seven complete local days; today is left out until it is complete. ${note} ${steeredNote}`, measures: [daily], cover: trendCover(daily.id),
+    trend: { value, ...per ? { per } : { perDay: true }, count: { op: "count" }, lookback: 7, completeDays: true, ...measure.format?.kind === "percent" ? { format: "percent" as const } : {},
+      valueLabel: `${labels.value} · 7 days`, pointValueLabel: labels.point, trendLabel: "7d", sample: "sessions",
+      detail: `Each point: ${per ? `${labels.point} pooled over` : `the daily average of`} its trailing seven complete local days. The norm is the mean of the prior 30 endpoints.` }, ...extra });
+}
+
 const lengthNote = "Length counts every message of the session's own stream; a delegated run is its own session.";
 const archetypeNote = "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more).";
 // Sessions a person typed in: most sessions are automated runs, which would
@@ -83,7 +99,7 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
   session({ id: "session-turn-cycle", title: "Turn cycle by provider", description: "Each session's median wait from your message to the agent's next one, over the last {days} days; log axis.", idea: "rhythm-07", unit: "seconds", action: "Compare turn cycles", ...turnCycle,
     note: "A session's turn cycle is the median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Only sessions with a turn cycle count; providers with fewer than three are left out.",
     cover: box("ss_turn_cycle", 3) }),
-  session({ id: "session-autonomy", title: "Autonomy by provider", description: "Tool calls per message you typed, in each of your sessions over the last {days} days; log axis.", idea: "models-02", unit: "calls per message", action: "Compare autonomy",
+  session({ id: "session-autonomy", title: "Tool calls per typed message, by provider", description: "Each session's tool calls divided by the messages you typed in it, over the last {days} days; log axis.", idea: "models-02", unit: "calls per typed message", action: "Compare tool calls per typed message",
     ...autonomy, where: [...autonomy.where, positive("autonomy"), steered], note: `${coverage.both} Sessions without a tool call are left out. ${steeredNote} Providers with fewer than three sessions are left out.`, cover: box("ss_autonomy", 3) }),
   // Failures: by model, by session kind, over time.
   rate("session-model-failure-rates", "Failure rate by model", "Failed tool calls divided by all tool calls, by model, over the last {days} days.", "failure_rate", "model_family", "model failure rates", ["Failed calls", "Tool calls"],
@@ -103,10 +119,26 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     cover: { mode: "result", metricId: hours.id, kind: "bar-horizontal", maxGroups: 10, showOther: true } }),
   rate("session-repository-verification", "Verified handbacks by repository", "Handbacks after an edit with a test or build after the last edit, over the last {days} days.", "verification", "repository_name", "verified handbacks", ["Verified handbacks", "Handbacks after an edit"],
     `Verified handbacks divided by handbacks after an edit, pooled. Read-only commands are not verification. ${coverage.both}`, 20, { idea: "verification-03" }),
+  // Your sessions over time, without a breakdown.
+  sparkline("session-count-trend", "Your sessions a day", "Sessions you typed in, a day, averaged over each trailing seven complete days.", "sessions", { value: "sessions a day", point: "sessions a day" },
+    "A session counts on the day it starts."),
+  sparkline("session-hours-trend", "Your active hours a day", "Active hours of the sessions you typed in, a day, averaged over each trailing seven complete days.", "active_hours", { value: "active hours a day", point: "active hours a day" },
+    "Active time adds the gaps between consecutive messages of 300 seconds or less, on the day the session starts."),
+  sparkline("session-autonomy-trend", "Tool calls per typed message over time", "Tool calls over the messages you typed, pooled over each trailing seven complete days.", "autonomy", { value: "calls per typed message", point: "calls per typed message" },
+    coverage.both),
+  sparkline("session-turn-cycle-trend", "Turn cycle over time", "The mean of your sessions' median turn cycles, over each trailing seven complete days.", "turn_cycle", { value: "seconds, session median", point: "seconds" },
+    "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count."),
+  sparkline("session-context-trend", "Peak context over time", "The mean of your sessions' largest request as a share of the model's context window, over each trailing seven complete days.", "context_peak", { value: "peak context share", point: "peak context share" },
+    coverage.window),
   // Context, and when you work.
   session({ id: "session-model-context", title: "Peak context by model", description: "Each session's largest request as a share of its model's context window, over the last {days} days.", idea: "context-02", unit: "percent", action: "Compare peak context", ...contextPeak,
     note: `${coverage.window} Models with fewer than ten sessions are left out.`, cover: box("ss_context_peak", 10, 8) }),
   weekday("session-weekday", "When you start sessions", "Sessions you typed in, started each day, by weekday, over the last {days} days, including idle days.", "sessions / day", { id: "ss_weekday_sessions", op: "count", groupBy: [], label: "Sessions per day" },
     { dataset: "session_shape", field: "started_at", category: "sessions", idea: "rhythm-01", where: [steered], action: "Explore when sessions start",
       note: `Each box compares complete local days of the same weekday, Monday through Sunday; days without a session count as zero. The first partial day and today are left out. Uses the device timezone. ${steeredNote}` }),
+  // The range still picks sessions by their start; each one folds by the day
+  // of its last message.
+  { ...weekday("session-last-weekday", "When you last interact, by weekday", "Sessions you typed in, by the weekday of their last message, over the last {days} days, including idle days.", "sessions / day", { id: "ss_last_weekday_sessions", op: "count", groupBy: [], label: "Sessions per day" },
+    { dataset: "session_shape", field: "last_message_at", category: "sessions", idea: "rhythm-01", where: [steered], action: "Explore when sessions end",
+      note: `Each box compares complete local days of the same weekday, Monday through Sunday, placing each session by its last message; days without one count as zero. Sessions are those started in the range. Uses the device timezone. ${steeredNote}` }), field: "started_at" },
 ];

@@ -1,5 +1,6 @@
 import catalog from "../../pricing/model_colors.json";
 import { activities, activityPresentation } from "./machine-activity-data";
+import { orderedValues } from "./session-shape-bands";
 
 type Provider = keyof typeof catalog.providers;
 type ModelStyle = { provider: Provider; class: string; color: string };
@@ -10,7 +11,7 @@ const sources = catalog.sources as Record<string, SourceStyle>;
 const providerOrder: Provider[] = ["anthropic", "google", "openai", "other"];
 export const otherSeriesColor = "#85909b";
 const allocated = new Map<string, string>();
-const reserved = new Set([otherSeriesColor, ...Object.values(models).map(model => model.color), ...Object.values(sources).map(source => source.color), ...Object.values(catalog.providers).map(provider => provider.color)]);
+const reserved = new Set([otherSeriesColor, ...Object.values(orderedValues).flatMap(ordered => ordered.colors),...Object.values(models).map(model => model.color), ...Object.values(sources).map(source => source.color), ...Object.values(catalog.providers).map(provider => provider.color)]);
 
 export function modelColorKey(name: string): string {
   return name.trim().toLowerCase().replace(/^claude-/, "").replace(/(-1m|\[1m\])$/, "").replace(/-\d{8}$/, "");
@@ -66,6 +67,13 @@ export const hourOfDayColors = [
 ];
 export const hourOfDayColor = (hour: number) => Number.isInteger(hour) && hour >= 0 && hour < 24 ? hourOfDayColors[hour] : otherSeriesColor;
 
+// Scopes whose series follow their palette's order rather than their size:
+// legends, stacks and slices then read lowest to highest.
+const sortedScopes = new Set(["level_band", "model_family", "provider", "effort", "model_effort", ...Object.keys(orderedValues)]);
+export const orderedScope = (scope: string) => sortedScopes.has(scope.startsWith("root_") ? scope.slice(5) : scope);
+// Scopes whose values are steps of one scale (a ramp, low to high), so
+// slices and bars keep that order too, unlike models or providers.
+export const steppedScope = (scope: string) => scope === "effort" || scope === "level_band" || Object.hasOwn(orderedValues, scope);
 export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
   if (scope.startsWith("root_")) scope = scope.slice(5);
   // Daily covers key series by their displayed label; Machine Time's palette applies to either.
@@ -83,6 +91,11 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     const colors = ["#eee7fa", "#dac9f2", "#c3a7e7", "#a982d8", "#8d60c3", "#7443a9", "#5c2e8c", "#45206d"];
     const index = levels.indexOf(name.toLowerCase());
     return { color: index < 0 ? otherSeriesColor : colors[index], order: `${index < 0 ? 99 : index}:${name}` };
+  }
+  if (Object.hasOwn(orderedValues, scope)) {
+    // Ordered values, by value or by their label, take their step of a ramp.
+    const ordered = orderedValues[scope], index = ordered.order.findIndex(value => value === name || ordered.labels[value] === name);
+    return index < 0 ? { color: otherSeriesColor, order: `99:${name}` } : { color: ordered.colors[index], order: String(index) };
   }
   if (scope === "level_band") {
     // Agents active at once, named by their displayed label ("2 at once"). The busiest band is the

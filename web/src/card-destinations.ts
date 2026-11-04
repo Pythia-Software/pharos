@@ -160,10 +160,16 @@ const dashboards: Record<string, CardDashboard> = {
   "session-model-failure-rates": sessions("failure_rate", "model_family", { minSamples: 20 }),
   "session-kind-failure-rates": sessions("failure_rate", "archetype", { minSamples: 10 }),
   "session-failure-trend": sessions("failure_rate", "none", { view: "trend", ...trailing }),
+  "session-count-trend": sessions("sessions", "none", { view: "trend", ...trailing }),
+  "session-hours-trend": sessions("active_hours", "none", { view: "trend", ...trailing }),
+  "session-autonomy-trend": sessions("autonomy", "none", { view: "trend", ...trailing }),
+  "session-turn-cycle-trend": sessions("turn_cycle", "none", { view: "trend", ...trailing }),
+  "session-context-trend": sessions("context_peak", "none", { view: "trend", ...trailing }),
   "session-repository-hours": sessions("active_hours", "repository_name", {}),
   "session-repository-verification": sessions("verification", "repository_name", { minSamples: 20 }),
   "session-model-context": sessions("context_peak", "model_family", { view: "distribution" }),
   "session-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median" }),
+  "session-last-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median", cycleOn: "last_message" }),
 };
 
 function dashboardFor(recipe: QueryRecipe): CardDashboard {
