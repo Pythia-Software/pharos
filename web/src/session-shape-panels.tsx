@@ -5,7 +5,7 @@ import { onDatasetRefresh } from "./dataset-refresh";
 import { conversationRowURL } from "./usage-row-model";
 import { useViewState } from "./view-state";
 import { sessionShapeAnalysisCatalog as catalog } from "./session-shape-analysis-catalog";
-import { formatSeconds, dayTotals, formatSignal, sessionSignalLabels, sessionSignals, signalParts, signalRows, signalTableStart, withoutDates, type SessionSignal, type SignalRow } from "./session-shape-model";
+import { formatSeconds, dayTotals, formatSignal, sessionSignalLabels, sessionSignals, signalParts, signalRows, signalTablePopulation, type SessionSignal, type SignalRow } from "./session-shape-model";
 import "./session-shape.css";
 
 // The Session Shape dashboard's panels below its engine chart, for what the
@@ -49,7 +49,7 @@ function useSessionMetrics(where: WhereTerm[], schema: FieldSchema<any>, request
 const localDay = (time: number) => new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(time);
 const verdictText: Record<SignalRow["verdict"], string> = { within: "No detectable change", above: "Above your range", below: "Below your range", "no-history": "Not enough history", "no-evidence": "Not enough evidence" };
 export function SignalTable({ where, schema, end = localDay(Date.now()) }: { where: WhereTerm[]; schema: FieldSchema<any>; end?: string }) {
-  const population = useMemo(() => [...withoutDates(where), { field: "day", op: ">=", value: signalTableStart(end) }, { field: "day", op: "<=", value: end }] as WhereTerm[], [JSON.stringify(where), end]);
+  const population = useMemo(() => signalTablePopulation(where, end), [JSON.stringify(where), end]);
   const requests = useMemo(() => {
     const clauses = signalParts.map((part): AggregationClause => ({ id: part.id, op: "sum", expression: part.expression, groupBy: ["day"], groupLimit: 100 }));
     return [clauses.slice(0, 11), clauses.slice(11)];
@@ -122,7 +122,7 @@ export function revealDefinitions() {
   window.dispatchEvent(new Event("pharos:uri-changed"));
 }
 const definitionMeasures = ["failed_calls", "rejections", "interrupts", "hook_blocks", "identical_retries", "thrash_retries", "one_shot_rate", "churned_files", "mid_task_compactions", "context_peak", "context_pressure",
-  "corrections", "steering_load", "verification", "long_unprompted_runs", "ended_on_failure", "autonomy", "turn_cycle", "active_time"];
+  "corrections", "steering_load", "verification", "long_unprompted_runs", "ended_on_failure", "autonomy", "calls_per_words", "turn_cycle", "active_time"];
 export function SessionShapeDefinitions() {
   return <section className="session-shape-panel session-shape-definitions" id={definitionsSection}>
     <header><h3>Definitions</h3>

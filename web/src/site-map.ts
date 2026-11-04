@@ -116,7 +116,7 @@ export const chartKeys: Record<AnalysisView, string[]> = {
   compare: ["v", "view", "unit", "metric", "split", "reduce", "compareAs", "minSamples", "scale"],
   distribution: ["v", "view", "unit", "metric", "split", "minSamples", "scale"],
   scatter: ["v", "view", "unit", "metric", "metricY", "split", "scale", "scaleY"],
-  cycle: ["v", "view", "unit", "metric", "split", "cycle", "reduce", "scale"],
+  cycle: ["v", "view", "unit", "metric", "split", "cycle", "cycleOn", "reduce", "scale"],
 };
 // A chart's keys in canonical order, over the view's defaults.
 export function canonicalChart(defaults: Record<string, unknown>, change: Record<string, unknown> = {}): Record<string, unknown> {
@@ -156,7 +156,7 @@ const drawShapes: Record<AnalysisView, Shape[]> = {
   compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
   distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
   scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
-  cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("reduce", [["metric"]], ["metric", "self"])],
+  cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("cycleOn", [["cycle"]]), shape("reduce", [["metric"]], ["metric", "self"])],
 };
 // The defaults normalizeAnalysis fills multiple_periods' inputs with.
 export const fillDefaults: Record<string, unknown> = { period: analysisDefaults.period, hours: analysisDefaults.hours, days: analysisDefaults.days };
@@ -174,6 +174,7 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "reduce": return analysisReductions.map(([id]) => id);
     case "compareAs": return [...compareModes];
     case "cycle": return [...analysisCycles];
+    case "cycleOn": return Object.keys(catalog.cycleOn?.options ?? {});
     case "period": return Object.keys(chartPeriods);
     case "display": return [...analysisDisplays];
     case "rollingOp": return [...rollingOps];
@@ -621,11 +622,13 @@ export function buildSiteMap(inputs: SiteInputs) {
   const nodes: SiteNode[] = [];
   const add = (node: SiteNode) => { nodes.push(node); return node; };
   const opSets = new Map<string, { types: Set<string>; ops: string[] }>();
+  // A column without a type is text: browse_site's query page lists every
+  // column within one answer's budget.
   const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => {
     const schema = siteSchemas[name], detail = usageDetailsSchema(schema, name) ?? schema;
     return [name, { ...datasetLabel(name), schema_name: detail.name,
       properties: detail.fields.filter(field => field.property?.enabled !== false).map(field => ({ name: field.name, label: field.label ?? field.name, type: field.type, default: field.property?.default ?? false })),
-      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,label:field.label??field.name,type:field.type})), fields: datasetFields(schema, opSets) }];
+      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,label:field.label??field.name,...field.type==="text"?{}:{type:field.type}})), fields: datasetFields(schema, opSets) }];
   }));
   const opKey = (signature: string) => [...opSets.get(signature)!.types].sort().join("|");
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);

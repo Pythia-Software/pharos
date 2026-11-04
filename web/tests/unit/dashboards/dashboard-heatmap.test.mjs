@@ -37,7 +37,7 @@ test("a heatmap needs an additive measure and an ordered breakdown, and draws no
   assert.ok(!validAnalysisState(catalog, { ...asked, display: "mosaic" }));
   const state = normalizeAnalysis(catalog, asked);
   assert.deepEqual([state.display, state.share], ["heatmap", false]);
-  assert.equal(trendTitle(catalog, asked), "Share of sessions per day by autonomy band");
+  assert.equal(trendTitle(catalog, asked), "Share of sessions per day by calls per typed message band");
   assert.deepEqual(trendAdjustments(catalog, asked), []);
   // Harness has no order; a rate does not add up across groups.
   for (const change of [{ split: "harness" }, { metric: "failure_rate" }, { split: "none" }]) {

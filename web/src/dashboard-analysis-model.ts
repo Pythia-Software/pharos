@@ -93,6 +93,9 @@ export type AnalysisCatalog = {
   // (CycleKey). Without any, no cycle view; without one, that cycle is
   // offered disabled.
   cycle?: Partial<Record<CalendarCycle, CycleKey>>;
+  // Other times a cycle can fold records by (state.cycleOn), beside cycle's:
+  // a session's last message as well as its start. label names cycle's own.
+  cycleOn?: { label: string; options: Record<string, { label: string; cycle: Partial<Record<CalendarCycle, CycleKey>> }> };
   components?: Record<string, AnalysisComponents>;
   // A dataset without one of them (no hour field, say) leaves it out, and the
   // trend offers it disabled.
@@ -152,7 +155,7 @@ export type AnalysisState = {
   v?: number;
   view?: AnalysisView; unit?: string; metric: string; metricY?: string; split: string;
   reduce?: AnalysisReduce; compareAs?: "bars" | "share"; minSamples?: number;
-  scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle;
+  scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle; cycleOn?: string;
   // The trend's own settings.
   period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: AnalysisDisplay;
   share?: boolean; nonzero?: boolean; completePeriods?: boolean; norm?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
@@ -186,6 +189,8 @@ export function viewUnavailable(catalog: AnalysisCatalog, view: AnalysisView): s
   if (view === "cycle" && !Object.keys(catalog.cycle ?? {}).length) return `These ${subject} have no hours or dates to fold into a cycle`;
 }
 export const availableViews = (catalog: AnalysisCatalog) => analysisViews.filter(([view]) => !viewUnavailable(catalog, view));
+// The cycle keys a state folds by: its cycleOn time's, or the catalog's own.
+export const cycleKeys = (catalog: AnalysisCatalog, state: Pick<AnalysisState, "cycleOn">) => state.cycleOn && catalog.cycleOn?.options[state.cycleOn]?.cycle || catalog.cycle;
 export const cycleUnavailable = (catalog: AnalysisCatalog, cycle: CalendarCycle) => catalog.cycle?.[cycle] ? undefined : `These ${catalog.records.plural.toLowerCase()} have no ${cycle === "hour" ? "time of day" : "dates"} to fold`;
 
 // Why the trend cannot draw this state, if it cannot. The trend draws every
@@ -255,7 +260,8 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && (state.compareAs === undefined || oneOf(state.compareAs, compareModes))
     && (state.minSamples === undefined || Number.isInteger(state.minSamples) && state.minSamples >= 0 && state.minSamples <= 1_000_000)
     && (state.scaleY === undefined || validChartScale(state.scaleY))
-    && (state.cycle === undefined || oneOf(state.cycle, analysisCycles));
+    && (state.cycle === undefined || oneOf(state.cycle, analysisCycles))
+    && (state.cycleOn === undefined || has(catalog.cycleOn?.options ?? {}, state.cycleOn));
 }
 
 export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
@@ -315,6 +321,7 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   if (!has(catalog.measures, next.metric)) next.metric = catalog.scatter[0];
   if (next.unit !== records && !has(catalog.units, next.unit)) next.unit = records;
   if (next.view === "cycle") { next.unit = records; next.split = noSplit; if (cycleUnavailable(catalog, next.cycle)) next.cycle = next.cycle === "hour" ? "weekday" : "hour"; }
+  if (next.view !== "cycle" || !next.cycleOn || !cycleKeys(catalog, next)?.[next.cycle] || !has(catalog.cycleOn?.options ?? {}, next.cycleOn)) delete next.cycleOn;
   if (next.view === "scatter") {
     if (next.unit === records) next.unit = firstUnit;
     if (!has(catalog.measures, next.metricY) || next.metricY === next.metric) next.metricY = catalog.scatter.find(id => id !== next.metric) ?? Object.keys(catalog.measures).find(id => id !== next.metric)!;
@@ -522,7 +529,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const groupFields = state.unit === records ? recordFields : catalog.units[state.unit]?.breakdowns[state.split] ?? [];
   const chosen = recordFields.length ? state.selection : undefined;
   const selection: AnalysisQuery["selection"] = chosen?.values.length ? { values: chosen.values, excluded: chosen.excluded, fields: recordFields.length, share: shares, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
-  const cycleKey = state.view === "cycle" ? catalog.cycle![state.cycle]! : undefined;
+  const cycleKey = state.view === "cycle" ? cycleKeys(catalog, state)![state.cycle]! : undefined;
   const where = cycleKey?.kind === "recorded-date" ? completeStart(inputWhere, catalog.time, zone, now) : inputWhere;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
@@ -762,7 +769,7 @@ export function cycleResult(catalog: AnalysisCatalog, input: AnalysisState, resu
   if (result.error || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error)) {
     throw new Error(result.error ?? "Complete totals are required for an hour or weekday cycle. Choose a shorter range.");
   }
-  const hour = state.cycle === "hour", kind = catalog.cycle![state.cycle]!.kind;
+  const hour = state.cycle === "hour", kind = cycleKeys(catalog, state)![state.cycle]!.kind;
   const frame = cycleFrame(kind, result.buckets.map(bucket => bucket.keys[0]), bounds, zone);
   const values = new Map(result.buckets.map(bucket => [frame.time(bucket.keys[0]), bucket]));
   // A missing key would silently become an idle slot.
@@ -795,9 +802,10 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
   const subject = unit ? unit.plural.toLowerCase() : catalog.records.plural.toLowerCase();
   const parts = [measure.note, ...catalog.rangeNote ? [catalog.rangeNote] : [], ...catalog.request?.note ? [catalog.request.note] : []];
-  const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? catalog.cycle![state.cycle]!.kind : undefined;
+  const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? cycleKeys(catalog, state)![state.cycle]!.kind : undefined;
   if (state.view === "cycle") {
     const per = state.cycle === "hour" ? "hour" : "day";
+    if (state.cycleOn && catalog.cycleOn) parts.push(`Each ${catalog.records.label.toLowerCase()} is placed by its ${catalog.cycleOn.options[state.cycleOn].label.toLowerCase()}, not its ${catalog.cycleOn.label.toLowerCase()}; the range still picks ${subject} by their ${catalog.cycleOn.label.toLowerCase()}.`);
     parts.push(kind === "timestamp"
       ? `One observation is one whole ${per} in your time zone in the range, idle ${per}s included${idle}. ${per === "hour" ? "Partial first and last hours, and the current hour," : "A partial first day, and the current day,"} are left out. A slot opens the records of its whole ${per}s; in a range without a start, or with more than about 48 of them, it has no single drill-down. The grouped query lists the ${per === "hour" ? "hourly" : "daily"} totals.`
       : state.cycle === "hour" ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly usage cannot yet open as a grouped query, so the link opens the records.`

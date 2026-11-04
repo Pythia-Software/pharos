@@ -20,7 +20,9 @@ function weekdayDatePredicates(clause: AggregationClause, query?: QueryState): W
   // Persisted Day/Week/Month/hour dimensions can exclude whole or partial
   // dates independently of the timestamp bounds. Resolve their aliases from
   // the dataset schema and leave these edited populations to the daily chart.
-  const calendar = new Set(schema.fields.filter(item => item.group === "Time" && item.name !== field).map(item => item.name));
+  // Bounds on another timestamp, such as a session's start when it folds by
+  // its last message, pick records rather than dates; the range is observed.
+  const calendar = new Set(schema.fields.filter(item => item.group === "Time" && item.name !== field && item.type !== "datetime").map(item => item.name));
   const isCalendar = (predicate: WhereClause) => calendar.has(name(predicate) ?? "");
   const dates: WhereClause[] = [];
   const where = [...((query?.grouping?.source ?? query)?.where ?? []), ...(clause.where ?? [])];
