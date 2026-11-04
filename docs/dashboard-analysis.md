@@ -110,8 +110,9 @@ A **catalog** describes one dashboard topic: Tokens and Cost
 (`web/src/token-analysis-catalog.ts`), Tools (`tools-analysis-catalog.ts`),
 Pharos MCP (`mcp-analysis-catalog.ts`), Tool Time and Skills
 (`record-analysis-catalogs.ts`), Human Words (`human-analysis-catalog.ts`),
-Carbon (`carbon-analysis-catalog.ts`) and Parallelism
-(`parallelism-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
+Carbon (`carbon-analysis-catalog.ts`), Parallelism
+(`parallelism-analysis-catalog.ts`) and Outcomes
+(`outcomes-analysis-catalog.ts`). See [The catalogs](#the-catalogs) for
 what each offers and why.
 
 - **Measures.** Each has a label and format, and a record-level aggregate:
@@ -329,6 +330,10 @@ can:
   and its test runs over every catalog. It also reports a component
   breakdown that shares a breakdown's id, splits a measure that is not
   additive, or falls back to an unknown breakdown.
+- **Unavailable breakdowns.** A breakdown with `unavailable` is listed with
+  that reason and cannot be chosen; a state naming it draws without it, as
+  for an unknown breakdown. A dashboard sets it from the data, as Outcomes
+  does for a Git breakdown in a library local Git never checked.
 - **Implied filters and units.** A breakdown with an implied `where` is never
   offered for units. The filter would remove records from inside each unit,
   changing every unit's own value rather than only choosing which units
@@ -715,6 +720,7 @@ around it. Its default view is the one it always opened on.
 | Human Words | `writing_messages`: one classified user message | conversation; work | `typed`, `words` | `sent_at` (timestamp) | Over time |
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
+| Outcomes | `outcomes`: one session, at its start | none | `cost`, `tokens`, `files_changed`, lines | `started_at` (timestamp) | Over time |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
@@ -847,6 +853,21 @@ around it. Its default view is the one it always opened on.
   and `gap_minutes` out of the dashboard's filters. A link may open the
   ribbon with settings it has not saved; the views then follow the saved
   ones and say so.
+- **Outcomes** (`outcomes-analysis-catalog.ts`). Sessions, cost, tokens,
+  files changed and lines added and removed, rework rate (rework-removed
+  lines over kept lines, pooled), cost per kept change (cost over sessions
+  labelled Landed, Committed, or Changed and kept) and kept share, by
+  outcome label, evidence tier, project, main provider and model, harness,
+  branch (repository sessions only, an implied population) and the local
+  Git check. A session counts at its start: its first usage hour, else its
+  first edit. Its whole cost goes to the model that took most of it. The
+  dashboard draws `outcomeCatalogFor(tiers)`: a breakdown that needs a tier
+  no session reached (the local Git check, when local Git checked nothing)
+  is offered disabled with the reason, never drawn empty. A link naming it
+  is read with the full catalog and draws the default breakdown. Three
+  panels follow the chart: rework rate by project, cost per kept change by
+  main model, and how many sessions reached each evidence tier. See
+  [projects and outcomes](projects-and-outcomes.md#analyze--outcomes).
 
 Every engine dashboard, Tokens and Cost included, has a Refresh action,
 which reruns its queries (Pharos MCP's own requests arrive while it is open).
