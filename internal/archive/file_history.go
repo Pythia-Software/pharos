@@ -46,12 +46,21 @@ func (c *Catalog) FileHistory(ctx context.Context, options FileHistoryOptions) (
 	}
 	files := []map[string]any{}
 	for _, key := range keys {
+		if options.Project != "" {
+			// The project filter takes what every project filter takes: a
+			// name, a remote, a folder key or path (projectPredicate).
+			in, err := queryMapsContext(ctx, c.reader(), `SELECT 1 FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id`+projectJoin("w")+`
+				WHERE sf.file_key=? AND `+projectPredicate("w")+` LIMIT 1`, append([]any{key}, projectArgs(options.Project)...)...)
+			if err != nil {
+				return nil, err
+			}
+			if len(in) == 0 {
+				continue
+			}
+		}
 		file, err := c.fileTimeline(ctx, key, limit)
 		if err != nil {
 			return nil, err
-		}
-		if options.Project != "" && !strings.EqualFold(firstString(file["project"]), options.Project) {
-			continue
 		}
 		files = append(files, file)
 	}

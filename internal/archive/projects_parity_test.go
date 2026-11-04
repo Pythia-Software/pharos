@@ -285,6 +285,13 @@ func TestProjectParityWithoutGit(t *testing.T) {
 			t.Fatalf("an outcome without Git: %#v", row)
 		}
 	}
+	// The project is named as any project filter takes it: its name, its
+	// folder's absolute path, or part of it.
+	for _, project := range []string{library.folders["notes"], "notes"} {
+		if files := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": project})["files"].([]any); len(files) != 1 {
+			t.Fatalf("get_file_history project=%q: %#v", project, files)
+		}
+	}
 	history := callProjectTool(t, library.catalog, "get_file_history", map[string]any{"path": "plan.md", "project": notes})
 	files := history["files"].([]any)
 	if len(files) != 1 {
