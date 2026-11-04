@@ -410,14 +410,17 @@ func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
 	for _, composer := range composers {
 		byID[composer.id] = composer
 	}
+	// A group is the work its top composer started, and keeps that
+	// composer's workspace once Cursor deletes it: a subagent still names it.
 	root := func(id string) string {
 		seen := map[string]bool{}
-		for byID[id].parent != "" && !seen[id] {
+		for !seen[id] {
 			seen[id] = true
-			if _, ok := byID[byID[id].parent]; !ok {
+			composer, ok := byID[id]
+			if !ok || composer.parent == "" {
 				break
 			}
-			id = byID[id].parent
+			id = composer.parent
 		}
 		return id
 	}
@@ -457,7 +460,7 @@ func (a *cursorAdapter) planParts() (*sourceWorkPlan, error) {
 			parts = append(parts, sourcePart{item: origin + "#" + member.id, size: member.bubbles, version: member.version * 1e6, signal: member.signal})
 		}
 		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
-			record, err := a.read(database, members)
+			record, err := a.read(database, top, members)
 			if err != nil {
 				return err
 			}
@@ -530,8 +533,9 @@ type cursorThread struct {
 // complete reports whether every message the headers name was read.
 func (t *cursorThread) complete() bool { return !t.short && len(t.missing) == 0 }
 
-// read reads a composer and its subagents in one transaction.
-func (a *cursorAdapter) read(database string, members []cursorComposer) (*WorkspaceRecord, error) {
+// read reads a composer and its subagents in one transaction, as the
+// workspace of top, the composer that started their work.
+func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*WorkspaceRecord, error) {
 	db, tx, err := a.open(database)
 	if err != nil {
 		return nil, err
@@ -635,7 +639,7 @@ func (a *cursorAdapter) read(database string, members []cursorComposer) (*Worksp
 			} else if member.place.location != "" {
 				repository = a.repository(member.place.location, "")
 			}
-			record = &WorkspaceRecord{SourceID: member.id, SourceKind: "cursor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: conversation.EndedAt,
+			record = &WorkspaceRecord{SourceID: top, SourceKind: "cursor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: conversation.EndedAt,
 				Location: member.place.location, Repository: repository, Metadata: metadata}
 		}
 		record.Conversations = append(record.Conversations, *conversation)

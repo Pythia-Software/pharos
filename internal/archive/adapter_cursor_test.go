@@ -650,6 +650,31 @@ func TestCursorSalvageLeavesANewerCopy(t *testing.T) {
 	if n := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=? AND m.text LIKE '%Looks fine now.'`, cursorChild); n != 1 {
 		t.Fatalf("the subagent was rolled back: %d", n)
 	}
+
+	// Nor is a subagent whose composer was deleted while it went on: it
+	// stays in its composer's workspace, which the older capture's copy of
+	// both is checked against.
+	root = cursorFixture(t)
+	source.Path = root
+	config = captureTestConfig(t, source)
+	runCapture(t, config)
+	cursorWrite(t, root, func(db *sql.DB) error {
+		if _, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorNew+":*", "composerData:"+cursorNew); err != nil {
+			return err
+		}
+		_, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, 'Looks fine.', 'Looks fine now.') WHERE key=?`, "bubbleId:"+cursorChild+":s2")
+		return err
+	})
+	runCapture(t, config)
+	useHost(t, "host-b")
+	c, _ = testCatalog(t)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id=? AND m.text LIKE '%Looks fine now.'`, cursorChild); n != 1 {
+		t.Fatalf("the subagent of a deleted composer was rolled back: %d", n)
+	}
+	if n := countRows(t, c, `SELECT COUNT(DISTINCT workspace_id) FROM conversations WHERE native_id IN (?, ?)`, cursorNew, cursorChild); n != 1 {
+		t.Fatalf("the subagent left its composer's workspace: %d", n)
+	}
 }
 
 // Verification reads a composer as indexing does.
