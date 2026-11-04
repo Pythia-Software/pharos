@@ -9,6 +9,32 @@ import safetyDocument from '../../../schemas/safety.schema.json' with {type:'jso
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
+test('nested navigation branches restore independently in a fresh browser',{skip},async t=>{
+ const viewport={width:1024,height:900};
+ const app=await open(t,{url:'/analyze',viewport,ready:'.usage-dashboard .usage-chart'}),{page}=app;
+ const navigation=page.getByRole('complementary',{name:'Analyze navigation',exact:true});
+ const human=navigation.getByRole('link',{name:'Human Words',exact:true});
+ const tokens=navigation.getByRole('link',{name:'Tokens and Cost',exact:true});
+ const toggle=async label=>{
+  const control=navigation.getByText(label,{exact:true});
+  await control.click();await app.settled();
+ };
+ assert.equal(await human.isVisible(),false);
+ await toggle('People');await human.waitFor();
+ await toggle('People');await human.waitFor({state:'hidden'});
+ assert.equal(await tokens.isVisible(),true);
+ await toggle('Dashboards');await tokens.waitFor({state:'hidden'});
+ await toggle('Dashboards');await tokens.waitFor();
+ assert.equal(await human.isVisible(),false);
+ const fresh=await open(t,{url:path(page),viewport,ready:'.usage-dashboard .usage-chart'});
+ const restored=fresh.page.getByRole('complementary',{name:'Analyze navigation',exact:true});
+ assert.equal(await restored.getByRole('link',{name:'Human Words',exact:true}).isVisible(),false);
+ assert.equal(await restored.getByRole('link',{name:'Tokens and Cost',exact:true}).isVisible(),true);
+ await restored.getByText('People',{exact:true}).click();
+ await restored.getByRole('link',{name:'Human Words',exact:true}).waitFor();
+ await fresh.shot('nested-dashboards');
+});
+
 function jsonInspectorFixture() {
  const schema=loadSchema(mcpCallsDocument),now=Date.now(),definitions=new Map();
  const payload={'key.with.dots':{'quote"key':'needle'},events:Array.from({length:45},(_,i)=>({text:`needle ${i}`})),...Object.fromEntries(Array.from({length:240},(_,i)=>['tail'+i,i]))};

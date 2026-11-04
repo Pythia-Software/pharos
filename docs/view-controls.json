@@ -3692,22 +3692,22 @@
       "reason": "Canonical destination URLs; sidebar presentation uses nav_collapsed/nav_expanded. Navigation menu openness is transient."
     },
     {
-      "key": "3bf57696164bbb5d:0",
-      "file": "web/src/app-navigation.tsx",
-      "owner": "NavigationItems",
-      "tag": "summary",
-      "control": "onClick={event => { event.preventDefault(); toggle(page.id); }}",
-      "contract": "navigation",
-      "reason": "Canonical destination URLs; sidebar presentation uses nav_collapsed/nav_expanded. Navigation menu openness is transient."
-    },
-    {
-      "key": "819fb0edc690cffd:0",
+      "key": "8c52a7bb97a45e84:0",
       "file": "web/src/app-navigation.tsx",
       "owner": "NavigationItems",
       "tag": "details",
-      "control": "open={isNavigationSectionExpanded(expanded, page.id)}",
+      "control": "open={isNavigationSectionExpanded(expanded, page.id, depth === 0 || page.id === active)}",
       "contract": "view.nav_expanded",
-      "reason": "Sidebar branches use the controlled nav_expanded section/page map."
+      "reason": "Sidebar branches use the controlled nav_expanded section/page map. Top-level groups default open; deeper groups default to the current page's path. Explicit choices override those defaults."
+    },
+    {
+      "key": "bfe7b79c7974b849:0",
+      "file": "web/src/app-navigation.tsx",
+      "owner": "NavigationItems",
+      "tag": "summary",
+      "control": "onClick={event => { event.preventDefault(); toggle(page.id, depth === 0 || page.id === active); }}",
+      "contract": "view.nav_expanded",
+      "reason": "Toggles the existing nav_expanded section/page owner using the same current-path default as its controlled details element."
     },
     {
       "key": "9b06cfc02d250e2b:0",
