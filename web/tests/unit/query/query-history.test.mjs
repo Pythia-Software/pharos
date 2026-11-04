@@ -61,3 +61,19 @@ test("a link to another query is restored into its own entry, never pushed over 
   assert.equal(steps.observe(narrowed, url), true);
   assert.equal(history.entries.length, 3);
 });
+
+test("a navigation ends with the next query observed, however long restoration takes", () => {
+  let clock = 0;
+  const history = fakeHistory(), steps = createQueryHistory("safety", history, () => clock);
+  steps.observe(filtered, url);
+  clock += 5000; steps.observe(narrowed, url);
+  history.go(-1); steps.navigated(history.state);
+  clock += 30000;
+  assert.equal(steps.observe(filtered, url), false, "a slow restoration is still recorded, not pushed");
+  assert.equal(history.entries.length, 2, "Forward survives");
+  // A link that leaves the query as it was settles at once; the next edit is a step.
+  history.pushState(null, "", "/t?view=other"); steps.navigated(history.state);
+  assert.equal(steps.observe(filtered, url), false);
+  clock += 5000;
+  assert.equal(steps.observe(query(), url), true);
+});

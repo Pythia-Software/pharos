@@ -114,7 +114,7 @@
             },
             {
               "value": "dismissed",
-              "label": "Dismissed"
+              "label": "Closed"
             }
           ]
         }

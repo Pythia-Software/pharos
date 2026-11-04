@@ -137,6 +137,7 @@ type safetyCase struct {
 	Title       string           `json:"title"`
 	Explanation string           `json:"explanation"`
 	Questions   []string         `json:"questions"`
+	Danger      string           `json:"danger"`
 	Cart        *safetyCart      `json:"cart,omitempty"`
 }
 type safetyCart struct {
@@ -166,7 +167,7 @@ func loadSafetyCases(ctx context.Context, q queryer) ([]safetyCase, error) {
 		}
 		item := safetyCase{ID: firstString(row["id"]), Rule: firstString(row["rule"]), Target: firstString(row["target"]), Label: firstString(row["target_label"]),
 			Subject: firstString(row["subject"]), Repository: firstString(row["repository_id"]), First: firstString(row["first_seen_at"]), Last: firstString(row["last_seen_at"]),
-			Calls: int(integer(row["calls"])), Completion: int(integer(row["completion"])), State: firstString(row["state"]), Title: rule.Title, Explanation: rule.Explanation, Questions: rule.Questions, Evidence: []safetyEvidence{}}
+			Calls: int(integer(row["calls"])), Completion: int(integer(row["completion"])), State: firstString(row["state"]), Title: rule.Title, Explanation: rule.Explanation, Questions: rule.Questions, Danger: safetyDangerLabels[rule.Danger], Evidence: []safetyEvidence{}}
 		if err := json.Unmarshal([]byte(firstString(row["evidence_json"])), &item.Evidence); err != nil {
 			return nil, fmt.Errorf("read safety evidence for %s: %w", item.ID, err)
 		}

@@ -67,7 +67,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
   const places = safetyDashboardPlaces(overview?.cases ?? []);
   const checks = safetyDashboardChecks(overview?.cases ?? [], list, place, rank);
   // Ticking a check card selects every notice it summarizes, so a whole check
-  // goes into one prompt (one per location) or is dismissed at once.
+  // goes into one prompt (one per location) or is closed at once.
   const listed = useMemo(() => checks.flatMap(check => check.ids), [overview, list, place]);
   const selection = useSelection(listed);
   useEffect(() => { selection.clear(); }, [list, place]);
@@ -76,7 +76,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
     {card.state === "open" ? <>
       {card.cart ? <button className="findings-button" onClick={() => void act(card.id, { action: "cart_remove" }, "Removed from risky action prompt.")}>In prompt · Remove</button>
         : <button className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to risky action prompt for ${card.target_label}.`)}>Add to prompt</button>}
-      <button className="findings-button quiet" onClick={() => void act(card.id, { action: "dismiss" }, "Dismissed. You can bring it back at any time.")}>Dismiss</button>
+      <button className="findings-button quiet" onClick={() => void act(card.id, { action: "dismiss" }, "Acknowledged and closed. You can bring it back at any time.")}>Acknowledge and close</button>
     </> : <button className="findings-button" onClick={() => void act(card.id, { action: "restore" }, "Brought back to Open.")}>Bring back</button>}
   </div>;
   return <div className="findings-page safety-page">
@@ -114,7 +114,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           {checks.length ? <section className="safety-check-cards" aria-label="Risky actions by check">
             <SafetySelectionBar selection={selection} copy={copy} />
             <div className="safety-check-grid">{checks.map(check => <SafetyCheckCard key={check.rule} check={check} place={place} selection={selection} href={safetyCheckTableURL(check.rule, { state: list, target: place })} />)}</div>
-          </section> : <div className="findings-empty"><strong>{place ? "No notices for this location." : list === "open" ? "No open risky action notices." : list === "handed_off" ? "Nothing handed off yet." : "Nothing dismissed."}</strong><p>{place ? "Choose Everywhere to see every notice in this list." : list === "open" ? "Supported commands have not raised an open notice. Coverage and uncertainties are below." : "Your notices will appear here."}</p></div>}
+          </section> : <div className="findings-empty"><strong>{place ? "No notices for this location." : list === "open" ? "No open risky action notices." : list === "handed_off" ? "Nothing handed off yet." : "Nothing closed."}</strong><p>{place ? "Choose Everywhere to see every notice in this list." : list === "open" ? "Supported commands have not raised an open notice. Coverage and uncertainties are below." : "Your notices will appear here."}</p></div>}
           <SafetyCheckCart cart={overview.cart} onReview={next => setReview(next.target)} />
         </div>
       </>}
@@ -195,7 +195,7 @@ export function SafetyTableContext({ query, total }: { query: QueryState; total:
     <p className="findings-muted">Risky actions · {state} · {place}</p>
     <h2>{rule.title}</h2>
     <p>{rule.explanation}</p>
-    <p>{typeof total === "number" ? `${total.toLocaleString()} ${total === 1 ? "notice" : "notices"}. ` : ""}Each row is one path or resource the check selected, sorted by path, with the latest command that selected it. Tick rows to dismiss expected activity, or to copy a prompt asking your agent to investigate them.</p>
+    <p>{typeof total === "number" ? `${total.toLocaleString()} ${total === 1 ? "notice" : "notices"}. ` : ""}Each row is one path or resource the check selected, sorted by path, with the latest command that selected it. Tick rows to acknowledge and close expected activity, or to copy a prompt asking your agent to investigate them.</p>
     {rule.questions?.length ? <><h3>Questions for each notice</h3><ul>{rule.questions.map(question => <li key={question}>{question}</li>)}</ul></> : null}
   </section>;
 }
@@ -244,7 +244,7 @@ export function SafetySelectionBar({ selection, copy }: { selection: SelectionAp
     const n = ids.length;
     if (!await bulk(action, ids)) return;
     selection.clear();
-    setMessage(action === "dismiss" ? `Dismissed ${count(n)}. Bring them back at any time.` : `Brought back ${count(n)} to Open.`);
+    setMessage(action === "dismiss" ? `Acknowledged and closed ${count(n)}. Bring them back at any time.` : `Brought back ${count(n)} to Open.`);
   }
   const promptLabel = groups.length > 1 ? `Copy ${groups.length} prompts…` : "Copy prompt…";
   const addLabel = groups.length > 1 ? `Add to ${groups.length} location prompts` : groups.length === 1 ? `Add to ${groups[0]!.label} prompt` : "Add to prompt";
@@ -252,7 +252,7 @@ export function SafetySelectionBar({ selection, copy }: { selection: SelectionAp
     <SelectionToolbar selection={selection} className="safety-selection-toolbar" actions={() => <>
       <button type="button" className="findings-button primary" disabled={busy || Boolean(blocked)} onClick={copyPrompts}>{promptLabel}</button>
       <button type="button" className="findings-button" disabled={busy || Boolean(blocked)} onClick={() => void addToPrompts()}>{addLabel}</button>
-      {!plan.known || plan.selected.some(card => card.state !== "dismissed") ? <button type="button" className="findings-button" disabled={busy} onClick={() => void setState("dismiss")}>Dismiss</button> : null}
+      {!plan.known || plan.selected.some(card => card.state !== "dismissed") ? <button type="button" className="findings-button" disabled={busy} onClick={() => void setState("dismiss")}>Acknowledge and close</button> : null}
       {plan.closed ? <button type="button" className="findings-button" disabled={busy} onClick={() => void setState("restore")}>Bring back</button> : null}
     </>} />
     {ids.length ? <p className="safety-selection-note">{blocked || (groups.length > 1

@@ -88,6 +88,20 @@ func TestSafetySelection(t *testing.T) {
 			}
 		})
 	}
+	// Only an assignment the deletion sees, and only mktemp's output, makes
+	// its path temporary.
+	for _, command := range []string{`d=/Users/a/archive; rm -rf "$d"; d=$(mktemp -d)`, `d=/Users/a/archive; (d=$(mktemp -d)); rm -rf "$d"`, `d=$(mktemp -d); d=/Users/a/archive; rm -rf "$d"`} {
+		call := base
+		call.Command = command
+		if items := selectSafetyCall(call); len(items) != 1 || items[0].Rule != "boundary-delete" || items[0].Subject != "/Users/a/archive" {
+			t.Errorf("%q selected %+v", command, items)
+		}
+	}
+	call := base
+	call.Command = `d=/Users/a/mktemp-notes; rm -rf "$d"`
+	if items := selectSafetyCall(call); len(items) != 1 || items[0].Subject != "/Users/a/mktemp-notes" {
+		t.Errorf("a path naming mktemp is not temporary: %+v", items)
+	}
 	for _, command := range []string{
 		"echo 'rm -rf /Users/a/archive'", "rg 'rm -rf' docs", "cat <<'EOF'\nrm -rf /Users/a/archive\nEOF",
 		"gcloud builds submit --help", "git clean -nd", "git push origin HEAD", "git push --dry-run --force origin HEAD", "git push -n --force origin HEAD", "rsync -an --delete source/ /outside", "pkill -0 agent", "curl https://example.com", "chmod 600 local.txt",
@@ -591,6 +605,23 @@ func TestSafetyDiscoverySettings(t *testing.T) {
 	items, _ = loadSafetyCases(t.Context(), c.DB)
 	if len(items) != 1 || items[0].Cart == nil {
 		t.Fatal("disabling discovery must preserve existing reviews and basket drafts", items)
+	}
+	// A disabled check is not run, so an upgrade cannot tell its notices are
+	// noise: they stay even after leaving the basket.
+	if err := c.SafetyAction(t.Context(), items[0].ID, map[string]any{"action": "cart_remove"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`UPDATE safety_cases SET version='safety-v0'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.refreshSafety(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ = loadSafetyCases(t.Context(), c.DB); len(items) != 1 {
+		t.Fatal("an upgrade must keep a disabled check's notices", items)
+	}
+	if detail, err := c.SafetyDetail(t.Context(), items[0].ID); err != nil || detail.Danger != safetyDangerLabels[safetyRules["boundary-delete"].Danger] {
+		t.Fatal("Details names the check's danger", detail, err)
 	}
 	if err := c.SetSafetySettings(t.Context(), map[string]any{"rule_enabled": map[string]any{"credentials": false, "unknown": true}}); err == nil {
 		t.Fatal("unknown check accepted")

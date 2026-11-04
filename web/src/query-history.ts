@@ -14,21 +14,24 @@ export function queryHistoryKey(query: QueryState): string {
 type HistoryLike = Pick<History, "state" | "pushState" | "replaceState">;
 const stateField = "pharosQuery";
 
-export function createQueryHistory(dataset: string, history: HistoryLike, now = () => Date.now(), { coalesceMs = 1000, restoreMs = 2000 } = {}) {
+export function createQueryHistory(dataset: string, history: HistoryLike, now = () => Date.now(), { coalesceMs = 1000 } = {}) {
   let settled: { key: string; query: QueryState } | null = null;
-  let lastPush = -Infinity, restoringUntil = -Infinity;
+  let lastPush = -Infinity, restoring = false;
   const tagged = (key: string) => ({ ...history.state && typeof history.state === "object" ? history.state : {}, [stateField]: { dataset, key } });
   return {
-    // The query the table now shows, and how to address any query. Returns
-    // true when the edit became a new entry.
+    // The query the table shows once restoration is ready, and how to address
+    // any query. Call it after every navigation too, even when the query did
+    // not change, so the navigation settles. Returns true when the edit became
+    // a new entry.
     observe(query: QueryState, url: (query: QueryState) => string): boolean {
       const key = queryHistoryKey(query);
-      if (settled?.key === key) { settled.query = query; return false; }
+      if (settled?.key === key) { settled.query = query; restoring = false; return false; }
       const previous = settled;
       settled = { key, query };
-      // The first query, or one a navigation restored, belongs to its entry.
-      if (!previous || now() < restoringUntil) {
-        restoringUntil = -Infinity;
+      // The first query, or one a navigation restored (however long that
+      // took), belongs to its entry.
+      if (!previous || restoring) {
+        restoring = false;
         history.replaceState(tagged(key), "");
         return false;
       }
@@ -44,13 +47,14 @@ export function createQueryHistory(dataset: string, history: HistoryLike, now = 
       return true;
     },
     // Back, Forward or an in-app link moved to another entry. Its query
-    // arrives through restoration and is recorded, not pushed. An entry this
-    // table tagged names its query, so an unchanged restoration is no edit.
+    // arrives through restoration and is recorded, not pushed: the next query
+    // observed ends the navigation. An entry this table tagged names its
+    // query, so an unchanged restoration is no edit.
     navigated(state: unknown) {
       const entry = state && typeof state === "object" ? (state as Record<string, unknown>)[stateField] as { dataset?: string; key?: string } | undefined : undefined;
       lastPush = -Infinity;
       if (entry?.dataset === dataset && entry.key && entry.key === settled?.key) return;
-      restoringUntil = now() + restoreMs;
+      restoring = true;
     },
   };
 }
