@@ -46,7 +46,7 @@
 .pharos-status-position-track>i.active{background:color-mix(in srgb,var(--accent,#d8ae5e) 35%,transparent);box-shadow:inset 0 0 0 1px var(--accent,#d8ae5e)}
 .pharos-status-bar{height:5px;border-radius:3px;background:color-mix(in srgb,var(--ink,#000) 10%,transparent);margin:5px 0 3px;overflow:hidden}
 .pharos-status-bar>i{display:block;height:100%;background:var(--accent,#d8ae5e)}
-.pharos-status-load{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
+.pharos-status-load{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
 .pharos-status-load>span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0;padding:0 4px;white-space:nowrap}
 .pharos-status-load>span+span{border-left:1px solid var(--line,#ddd)}
 .pharos-status-load>span>span{display:inline-flex;align-items:center;gap:4px}
@@ -293,6 +293,7 @@
     const common = {lines: shown.map(operationLine), attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
       return {available: false, title: PANEL_TITLE, library: view?.service?.name ? {name: view.service.name, drive: '', path: ''} : null, ...common, stateLabel: view?.service?.stateLabel || null,
+        load: loadModel(view?.resources ?? view?.service?.resources, view?.lastLibrarySizes?.storage, view?.lastLibrarySizes?.wal, Boolean(view?.lastLibrarySizes)),
         message: operations.length ? null : unavailable || (view?.service?.error ? `${view.service.error}` : null)};
     }
     const drive = library.library?.drive || {};
@@ -313,7 +314,7 @@
         tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
       // Null without a schedule (an older service).
       schedule: scheduleModel(library.background, now),
-      load: loadModel(view.resources ?? library.resources, library.library?.storage_bytes),
+      load: loadModel(view.resources ?? library.resources, library.library?.storage_bytes, library.library?.wal_bytes),
       // Other libraries are only counted, in the library line ("1/3"); an
       // app operation touching no library is listed by its own label.
       others: (view.others || []).filter(other => String(other.id).startsWith('app:')).map(other => {
@@ -334,18 +335,22 @@
   // per second, and Storage what the library keeps on its drive (from the
   // last drive check). A figure not measured yet is a dash, and I/O stays
   // out for a service that does not measure it.
-  function loadModel(resources, storage = null) {
+  function loadModel(resources, storage = null, wal = null, sizesStale = false) {
     if (!resources || typeof resources !== 'object') return null;
     const known = Number.isFinite(resources.cpu_percent) || Number.isFinite(resources.memory_bytes) || resources.label;
     if (!known) return null;
     const metrics = [
-      {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}%` : '—'},
+      {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${resources.cpu_partial ? '≥' : ''}${Math.round(resources.cpu_percent)}%` : '—'},
       {id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'},
     ];
-    if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
-    metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? size(storage) : '—'});
+    if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${resources.disk_partial ? '≥' : ''}${size(resources.disk_bytes_per_second)}/s` : '—'});
+    metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
+    metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: Number.isFinite(wal) ? `${sizesStale ? 'last ' : ''}${size(wal)}` : '—'});
     const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
-    return {metrics, tooltip: [resources.label || '', ...processes].filter(Boolean).join('\n')};
+    const partial = [resources.cpu_partial ? 'CPU' : '', resources.disk_partial ? 'I/O' : ''].filter(Boolean);
+    return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate; ≥ marks a lower bound.` : '',
+      sizesStale ? 'Storage and WAL were last reported before the service stopped answering.' : 'Storage is the last drive measurement; WAL is the current catalog log size.',
+      ...processes].filter(Boolean).join('\n')};
   }
 
   function attentionModel(item) {
@@ -615,6 +620,7 @@
       if (model.message) content.append(node('p', 'pharos-error', model.message));
       else if (model.stateLabel) content.append(node('div', 'pharos-sub', model.stateLabel));
       appendNow(content, model);
+      if (model.load) content.append(loadRow(model.load));
       appendAttention(content, model.attention);
       commit(content, scrollTop);
       return;
@@ -698,7 +704,7 @@
       const cell = node('span');
       cell.dataset.key = `load:${metric.id}`;
       const label = node('span');
-      label.append(svgIcon(metric.id), metric.label);
+      label.append(svgIcon(metric.icon || metric.id), metric.label);
       cell.append(label, node('b', '', metric.value));
       row.append(cell);
     }
