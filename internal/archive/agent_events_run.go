@@ -249,6 +249,9 @@ type AgentEventsRunOptions struct {
 	// DryRun builds and frames candidates and counts them, but starts no
 	// worker and stores nothing.
 	DryRun bool
+	// ThreadTarget follows the same live core target as LabelsRunOptions.
+	// Changes take effect between scoring chunks.
+	ThreadTarget func() LabelerSettings
 	// Since, when set, leaves older messages unread: their stored rows stay,
 	// and conversations that ended before it are not looked at.
 	Since    time.Time
@@ -342,6 +345,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	reportWork(ctx, "finding agent events", "conversation", 0, len(jobs))
 
 	var runner *labelrt.Runner
+	target := labelerThreadTarget{read: opts.ThreadTarget}
 	release := func() {}
 	defer func() {
 		if runner != nil && ctx.Err() != nil {
@@ -364,6 +368,15 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			}
 		}
 		if len(framed) > 0 {
+			next := target.settings(labels)
+			if runner != nil && next.Threads != labels.Threads {
+				// The preceding chunk has finished, so no request is lost.
+				c.labelers.Kill(runner)
+				release()
+				runner, release = nil, func() {}
+				progress("agent events: changing cores per worker to %d", next.Threads)
+			}
+			labels = next
 			if runner == nil {
 				cfg := labelrt.RunnerConfig{Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
 					MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
@@ -791,7 +804,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		}
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
-	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since()})
+	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
 		return errStageContinues
@@ -827,7 +840,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 				}
 			}
 		}()
-		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since()})
+		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			op.legacyOutcome("interrupted", nil)

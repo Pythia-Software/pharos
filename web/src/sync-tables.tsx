@@ -5,7 +5,7 @@ import { inspectBucketQuery } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, QueryBuilder, MetricsPanel, ModalSurface, defaultRenderers, type RenderRegistry } from "@pythia-software/query-table-ui";
 import { clientTableStorageAdapter } from "./storage";
-import { syncTables, runTables, runKey, resultLabel, operationLabels, type SyncRecord, type SyncTable } from "./sync-table-model";
+import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, type SyncRecord, type SyncTable } from "./sync-table-model";
 
 declare global {
   interface Window {
@@ -54,6 +54,17 @@ function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: 
   </div>;
 }
 const HistoryQueryTable = React.memo(SyncQueryTable);
+
+function OperationDetails({ operation, onClose }: { operation: SyncRecord; onClose: () => void }) {
+  return <ModalSurface title={operation.label || operation.kind} onClose={onClose} className="qt-modal sync-run-dialog"><div className="qt-overlay-body">
+    <p><Timestamp value={operation.started_at} /> · {operation.state}{operation.reason ? ` · ${operation.reason}` : ""}</p>
+    {operation.subject ? <p>Subject: {operation.subject}</p> : null}
+    <p>Started by: {operation.trigger || "Unknown"}{operation.process ? ` · ${operation.process}` : ""}</p>
+    {operation.step_name ? <p>Last step: {operation.step_name}{operation.step_unit ? ` · ${format("number", operation.step_done)} ${operation.step_unit}` : ""}</p> : null}
+    {operation.error ? <p role="alert">{operation.error}</p> : null}
+    {operation.ended_at ? <p>Finished <Timestamp value={operation.ended_at} /></p> : null}
+  </div></ModalSurface>;
+}
 
 function RunDetails({ run, onClose }: { run: SyncRecord; onClose: () => void }) {
   const tables = useMemo(() => runTables(run), [run]);
@@ -112,23 +123,22 @@ export function SyncTables() {
     return () => window.removeEventListener("pharos:sync-status", update);
   }, []);
   const tables = useMemo(() => syncTables(status ?? {}), [status]);
-  const history = useMemo(() => syncTables({history: status?.history}).history, [status?.history]);
-  const selectedRun = (status?.history ?? []).find((run: SyncRecord) => runKey(run) === selected);
+  const history = useMemo(() => operationHistoryTable(status?.operation_history), [status?.operation_history]);
+  const selectedOperation = (status?.operation_history ?? []).find((operation: SyncRecord) => operation.id === selected);
+  const selectedRun = selectedOperation?.legacy_ref && (status?.history ?? []).find((run: SyncRecord) => runKey(run) === selectedOperation.legacy_ref);
   if (!status?.settings) return <p className="muted" role="status">Loading capture and index history…</p>;
-  const latest = status.history?.[0], current = live ?? status;
+  const current = live ?? status;
   return <>
     <section className="sync-panel" aria-label="Recent runs">
-      <div className="sync-section-head"><div><h3>Recent runs</h3><p className="muted">Index changes on this Mac{latest ? <> · Last run <Timestamp value={latest.finished_at} /> · {resultLabel(latest)}</> : null}</p></div>
+      <div className="sync-section-head"><div><h3>Recent runs</h3><p className="muted">Recorded asynchronous work on this Mac, including indexing, analyses, captures, backups, and maintenance.</p></div>
         {current.busy ? <span className="sync-result">{current.pause_reason || "Indexing in progress"}</span> : null}</div>
-      {latest ? <div className="sync-summary" aria-label="Last run cost">{[
-        ["Conversations indexed", format("number", latest.conversations)], ["Elapsed time", format("seconds", latest.seconds)], ["CPU time", format("seconds", latest.cpu_seconds)], ["RAM peak", format("memory", latest.rss_observed_peak_bytes)],
-      ].map(([label, value]) => <div key={label} className="sync-metric"><span>{label}</span><strong>{value}</strong></div>)}</div> : null}
       <p className="muted">These tables update only when you use Run Now or their auto-refresh.</p>
+      {status.operation_history_error ? <p role="alert">Could not load work history: {status.operation_history_error}</p> : null}
       <HistoryQueryTable table={history} label="Recent run history" onInspect={setSelected} />
-      <p className="muted">Counts cover whole indexed conversations, not just newly added messages. CPU and RAM reflect the whole Pharos process, including other work. History includes up to 200 runs on this Mac.</p>
+      <p className="muted">History shows the most recent 50 recorded operations on this Mac. Short, unchanged automatic checks may not be recorded.</p>
     </section>
     {createPortal(<section className="sync-panel"><h3>Source status</h3><SyncQueryTable table={tables.sources} label="Source status" /><p className="muted">Needs capture means changes have been indexed but the source files have not been captured yet.</p></section>, document.getElementById("syncSourceTables")!)}
     {createPortal(<Diagnostics status={status} tables={tables} />, document.getElementById("syncDiagnosticTables")!)}
-    {selectedRun ? <RunDetails key={selected} run={selectedRun} onClose={() => setSelected(null)} /> : null}
+    {selectedRun ? <RunDetails key={selected} run={selectedRun} onClose={() => setSelected(null)} /> : selectedOperation ? <OperationDetails key={selected} operation={selectedOperation} onClose={() => setSelected(null)} /> : null}
   </>;
 }

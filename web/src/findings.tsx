@@ -274,7 +274,7 @@ function Menu({ label, items, className = "", heading, align = "start", ariaLabe
 }
 
 /** A modal dialog: focus moves in, Tab stays inside, Escape closes, and focus returns to what opened it. */
-function Dialog({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
+export function Dialog({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -461,7 +461,7 @@ export function CartPanel({ cart, targets, act, onReview, safety = false }: { ca
   };
   return <aside className="findings-cart" id="findingsCart" aria-labelledby="findingsCartTitle">
     <h2 id="findingsCartTitle">{safety ? "Risky action prompts to copy" : "Efficiency prompts to copy"}</h2>
-    {!cart.length ? <p className="findings-cart-empty">{safety ? "Collect reviews for the same repository or Mac. Copy a prompt to hand them off to your agent." : "Add findings to a prompt for the repository or Mac where the change goes. Copying hands them to an agent and starts measuring each change."}</p> : null}
+    {!cart.length ? <p className="findings-cart-empty">{safety ? "Collect notices for the same repository or Mac. Copy a prompt to hand them off to your agent." : "Add findings to a prompt for the repository or Mac where the change goes. Copying hands them to an agent and starts measuring each change."}</p> : null}
     {cart.map(group => { const count = group.items.filter(ticked).length; return <section key={group.target} className={`findings-cart-group ${dragging && dragging.target !== group.target ? "drop-target" : ""}`} aria-label={`Prompt for ${group.label}`} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.preventDefault(); drop(group.target); }}>
       <div className="findings-cart-head"><h3>{group.label}</h3><span>{count} of {group.items.length} ticked</span></div>
       <ul>{group.items.map(item => <li key={item.id} draggable onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); setDragging({ id: item.id, target: group.target }); }} onDragEnd={() => setDragging(null)} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.stopPropagation(); event.preventDefault(); drop(group.target, item.id); }} className={`${ticked(item) ? "" : "unticked"} ${dragging?.id === item.id ? "dragging" : ""}`}>
@@ -479,7 +479,7 @@ export function CartPanel({ cart, targets, act, onReview, safety = false }: { ca
       <button type="button" className="findings-button primary" disabled={!count || count !== group.ticked} onClick={() => onReview(group)}>Review prompt ({count} ticked)</button>
     </section>; })}
     {dragging ? targets.filter(target => !cart.some(group => group.target === target.target)).map(target => <div key={target.target} className="findings-cart-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); drop(target.target); }}>Drop in {target.label}</div>) : null}
-    <p className="findings-cart-note">{safety ? "Risky actions and efficiency use separate prompts. After copying, these reviews leave Open and remain in Handed off." : "Risky action reviews have their own baskets in Optimize → Risky actions."}</p>
+    <p className="findings-cart-note">{safety ? "Risky actions and efficiency use separate prompts. After copying, these notices leave Open and remain in Handed off." : "Risky action notices have their own baskets in Optimize → Risky actions."}</p>
   </aside>;
 }
 
@@ -530,7 +530,7 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
       </button>
     </span>
   </>}>
-    <p className="findings-dialog-lede">{safety ? `${spelled(count, "review")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these reviews to Handed off.` : <>{spelled(count, "finding")}. Paste this into {where}. Copying it starts the before-and-after measurement for {count === 1 ? "it" : count === 2 ? "both" : `all ${count}`}.</>}</p>
+    <p className="findings-dialog-lede">{safety ? `${spelled(count, "notice")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these notices to Handed off.` : <>{spelled(count, "finding")}. Paste this into {where}. Copying it starts the before-and-after measurement for {count === 1 ? "it" : count === 2 ? "both" : `all ${count}`}.</>}</p>
     {repository ? <fieldset className="findings-handoff">
       <legend>Ask the agent to</legend>
       <div>
@@ -540,7 +540,7 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
       <p>{group.handoff_reason} <a href="/findings?view=settings" onClick={event => { event.preventDefault(); onClose(); navigate("/findings?view=settings"); }}>Change the default</a></p>
     </fieldset> : <p className="findings-handoff-note">{group.handoff_reason}</p>}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
-    {state === "done" ? <p className="findings-success" role="status">{safety ? "Copied. These reviews have been handed off. You can bring them back at any time." : <>Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</>}</p> : null}
+    {state === "done" ? <p className="findings-success" role="status">{safety ? "Copied. These notices have been handed off. You can bring them back at any time." : <>Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</>}</p> : null}
     <pre className="findings-prompt" tabIndex={0} aria-label="Prompt text">{prompt?.prompt ?? (error ? "" : "Writing the prompt…")}</pre>
   </Dialog>;
 }
@@ -913,7 +913,7 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
   }
   const position = (index: number) => checkpoints.length > 1 ? `${(index / (checkpoints.length - 1)) * 100}%` : "0%";
   return <div className="findings-page findings-settings">
-    <div className="view-heading"><div><h1>Efficiency settings</h1><p className="muted">How much evidence an efficiency pattern needs, how findings are ranked, and what change prompts ask agents to make. Saved in the library, so they apply on every Mac. Risky action reviews use separate prompts and can qualify from a single event.</p></div></div>
+    <div className="view-heading"><div><h1>Efficiency settings</h1><p className="muted">How much evidence an efficiency pattern needs, how findings are ranked, and what change prompts ask agents to make. Saved in the library, so they apply on every Mac. Risky action notices use separate prompts and can be raised by a single event.</p></div></div>
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
 
     <section className="findings-panel findings-setting" aria-labelledby="findingsThresholdTitle">

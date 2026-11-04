@@ -24,7 +24,7 @@ func queryExplorationCall(server *Server, token, method, path, body string) *htt
 	return w
 }
 
-var queryDatasets = []string{"model_requests", "library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "parallelism", "agent_events", "agent_event_messages"}
+var queryDatasets = []string{"model_requests", "library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "parallelism", "agent_events", "agent_event_messages", "message_labels"}
 
 // TestQueryDatasetsHTTP calls each query endpoint for every dataset, on one
 // catalog: capabilities and V3 budgets, typed rows, an item, metrics over
@@ -56,14 +56,14 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			limits := handshake.QueryCapabilities
 			groups := 10_000
-			if dataset == "usage" || dataset == "session_shape" {
+			if dataset == "usage" || dataset == "message_labels" || dataset == "session_shape" {
 				groups = 100_000
 			}
 			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
 				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
 			}
 			// Usage charts its compact facts by period and split with V2 metrics.
-			if groups = 2_000; dataset == "usage" {
+			if groups = 2_000; dataset == "usage" || dataset == "message_labels" {
 				groups = 100_000
 			}
 			if dataset == "tools" {

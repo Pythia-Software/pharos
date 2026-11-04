@@ -1,8 +1,8 @@
-// The delegation explorer's address on a work page: whether its sessions are
-// shown and how (table or parallel lanes), hierarchy or a ranking by one
+// The delegation explorer's address on a work page: table or timeline lanes,
+// hierarchy or a ranking by one
 // metric, collapsed sessions, the selected session and a time range. The
 // explorer and the site map (site-map.ts) both read it here.
-export const delegationTabs = ["table", "parallel"] as const;
+export const delegationTabs = ["table", "timeline"] as const;
 export const delegationModes = ["hierarchy", "rank"] as const;
 // A ranking sorts by one of the metrics the work's analysis lists, counted
 // for the session itself or with everything below it.
@@ -10,14 +10,14 @@ export const delegationScopes = ["all", "self"] as const;
 export const delegationDirections = ["desc", "asc"] as const;
 export const defaultDelegationSort = "tokens";
 export type DelegationRoute = {
-  open: boolean; tab: typeof delegationTabs[number]; mode: typeof delegationModes[number];
+  tab: typeof delegationTabs[number]; mode: typeof delegationModes[number];
   sort: string; scope: string; direction: string; collapsed: string[]; selected: string; range: [number, number] | null;
 };
 export function readDelegationRoute(params: URLSearchParams): DelegationRoute {
   const from = Number(params.get("delegation_start")), to = Number(params.get("delegation_end"));
   return {
-    open: params.get("sessions") !== "hidden",
-    tab: params.get("explorer") === "parallel" ? "parallel" : "table",
+    // Saved Parallel activity links open the standard Timeline, with their range and session intact.
+    tab: params.get("explorer") === "parallel" ? "timeline" : delegationTabs.find(tab => tab === params.get("explorer")) ?? "table",
     mode: params.get("delegation_mode") === "rank" ? "rank" : "hierarchy",
     sort: params.get("delegation_sort") || defaultDelegationSort,
     scope: params.get("delegation_scope") || delegationScopes[0],
@@ -33,6 +33,7 @@ export function readDelegationRoute(params: URLSearchParams): DelegationRoute {
 export function delegationRouteValues(route: Pick<DelegationRoute, "mode" | "sort" | "scope" | "direction" | "collapsed" | "selected" | "range">): Record<string, string> {
   const rank = route.mode === "rank";
   return {
+    sessions: "",
     delegation_mode: route.mode,
     delegation_sort: rank ? route.sort : "",
     delegation_scope: rank ? route.scope : "",

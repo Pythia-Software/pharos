@@ -9,7 +9,7 @@ import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
 import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
-import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
+import { cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 import { updateQueryWindowURL } from "../../../src/query-links";
 import { parallelismSelectionQuery, readDashboardQuery, readDashboardLink } from "../../../src/usage-dashboard-model";
@@ -268,6 +268,38 @@ test("cover visibility settings survive cover queries while destination data rem
     assert.equal(metric.display.legendPosition, "none");
     assert.deepEqual(item.query, before);
   }
+});
+
+test("cards split by a key offer a group count named for the key, and the count reaches their chart", () => {
+  const offered = id => {
+    const recipe = queryRecipes.find(recipe => recipe.id === id), item = instantiateRecipe(recipe, recipe.days?.[0] ?? 7, clock);
+    return { recipe, item, groups: cardGroupsFor(item.query, { recipe, cover: item.cover }, schemas[recipe.dataset].fields) };
+  };
+  for (const [id, noun, fallback] of [["model-cost-share", "provider/model groups", 6], ["model-cost-share-trend", "models", 15], ["repository-token-share", "repositories", 5], ["repository-model-use", "repository/provider/model groups", 6], ["usage-work", "root tasks", 6]])
+    assert.deepEqual(offered(id).groups, { noun, max: 100, fallback }, id);
+  for (const id of ["api-cost-total", "session-token-cost", "human-words-weekday", "habits-streak", "writing-hours"]) assert.equal(offered(id).groups, undefined, `${id} has no groups to count`);
+  for (const recipe of queryRecipes.filter(recipe => !recipe.retired)) {
+    const { item, groups } = offered(recipe.id);
+    if (!groups) continue;
+    assert.ok(groups.max >= (groups.fallback ?? 1), recipe.id);
+    const chart = withCardGroups(item.query, { recipe, cover: item.cover }, 3);
+    assert.equal(cardChart(chart.query, { recipe, cover: chart.cover }).clause.display.maxGroups, 3, `${recipe.id} draws the chosen count`);
+  }
+  // A saved query without a template takes the count on its own chart.
+  const query = { ...core.EMPTY_QUERY, aggregations: [{ id: "a", op: "sum", field: "total_tokens", groupBy: ["provider"], groupLimit: 2 }, { id: "b", op: "count", groupBy: ["repository_name"] }] };
+  const saved = withCardGroups(query, { metricId: "b" }, 4).query.aggregations;
+  assert.deepEqual([saved[0], saved[1].display.maxGroups], [query.aggregations[0], 4]);
+  assert.equal(withCardGroups(query, {}, 4).query.aggregations[0].groupLimit, 4, "a smaller fetch grows to the count");
+});
+
+test("a collected card keeps its own group count until reset", t => {
+  const recipe = queryRecipes.find(recipe => recipe.id === "repository-token-share"), item = instantiateRecipe(recipe, 7, clock);
+  bookmarkFixture(t, [{ id: "saved", title: item.title, url: item.url, query: item.query, templateId: `${recipe.id}:7`, cover: item.cover }]);
+  assert.equal(updateBookmark("saved", item.title, "", undefined, undefined, undefined, 9).maxGroups, 9);
+  assert.equal(updateBookmark("saved", "Renamed", "").maxGroups, 9, "other edits keep it");
+  assert.throws(() => updateBookmark("saved", item.title, "", undefined, undefined, undefined, 0), /whole number/);
+  assert.equal(Object.hasOwn(updateBookmark("saved", item.title, "", undefined, undefined, undefined, null), "maxGroups"), false);
+  assert.equal(readBookmarks()[0].cover.maxGroups, 5, "the template's count stays on its cover");
 });
 
 test("failure-rate cover and destination agree, include successful calls and expose sample size", async t => {
@@ -682,7 +714,7 @@ test("every active card opens a primary dashboard with the source population and
       if (recipe.destination.chart.unit) assert.equal(state.unit, recipe.destination.chart.unit, `${recipe.id}: observation unit`);
       assert.equal(state.view, recipe.destination.chart.view ?? "trend", `${recipe.id}: chart view`);
       assert.equal(state.metric, recipe.destination.chart.metric === "percent" ? "tokens" : recipe.destination.chart.metric === "percent_cost" ? "cost" : recipe.destination.chart.metric, recipe.id);
-      const query = analysisQuery(catalog, { ...state, view: state.view === "trend" ? "compare" : state.view }, filters, { now: clock.getTime() });
+      const query = analysisQuery(catalog, { ...state, view: ["trend", "trend_line", "trend_bar"].includes(state.view) ? "compare" : state.view }, filters, { now: clock.getTime() });
       for (const part of core.planMetricSeries(query.query, schemas[catalog.dataset], { now: clock.getTime() })?.queries ?? [query.query]) {
         const request = core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now: clock.getTime(), rows: false });
         assert.deepEqual(request.diagnostics, [], recipe.id);

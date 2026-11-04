@@ -424,6 +424,8 @@ func TestMessageLabelsSettings(t *testing.T) {
 		}
 	}
 	unchosen := max(1, server.Config().Labels.Threads)
+	labelsTarget := server.labelerThreadSettings(t.Context(), false)
+	eventsTarget := server.labelerThreadSettings(t.Context(), true)
 	for _, body := range []map[string]any{{"threads": 1}, {"agent_events_threads": 1}} {
 		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusOK {
 			t.Fatalf("threads %v: %d %s", body, response.Code, response.Body.String())
@@ -435,6 +437,11 @@ func TestMessageLabelsSettings(t *testing.T) {
 		document := read()
 		if labels, events := document["labels"].(map[string]any), document["agent_events"].(map[string]any); labels["threads"] != 1.0 || events["threads"] != float64(reloaded.AgentEvents.Threads) {
 			t.Fatalf("threads readback: %v %v", labels, events)
+		}
+		labels, events := labelsTarget(), eventsTarget()
+		if labels.Threads != reloaded.Labels.Threads || events.Threads != reloaded.AgentEvents.Threads ||
+			labels.PeerThreads != max(1, labels.Workers)*events.Threads || events.PeerThreads != max(1, labels.Workers)*labels.Threads {
+			t.Fatalf("active runs did not see the updated settings and peer budget: %+v %+v", labels, events)
 		}
 	}
 	deferred, err := catalog.freshnessDeferred(t.Context())

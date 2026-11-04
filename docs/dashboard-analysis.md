@@ -1131,3 +1131,34 @@ selections, which the sections above describe.
      cards with `analysisCatalogFor(topic, settings)`, which give Carbon's
      and Parallelism's complete catalogs outside their pages.
    - `CardAnalysis`, the stopgap that re-rendered a card's own chart, is removed.
+
+## Message labels
+
+The Message Labels catalog offers Over time - line, Over time - bar, and Compare groups, always broken
+down by Sender / Receiver, General Label or Specific Label. Repository, generation
+model, source and coverage remain filters. Old links for other views/breakdowns
+open an ontology-focused trend. Nested legend outlines show roles, general labels
+and their specific descendants.
+Category names open the same legend menu as leaves. Only, add/remove all,
+exclude and reset operate on every label within the category, including deeper
+descendants and a directly accepted parent. Category text distinguishes full,
+partial and hidden selections; actions use the existing URL-backed selection.
+The label trend always shows every matching label, including labels contributing
+only through smoothing history. Saved `seriesLimit` values do not fold this
+ontology into Other; explicit legend selections still work normally.
+Its native `message_labels` source projects the optional stored label ledger,
+with no inference on reads. Most-specific accepted labels form separate
+observations; missing classification is an explicit coverage observation.
+Distinct message trends use an interval population denominator for shares,
+so overlapping labels are drawn independently: as lines, or side-by-side bars
+within each period. The chosen view survives smoothing, cumulative display, log
+scale, saved cards and URL/CLI round trips. Older `trend` links open the line view. Hiding a
+series does not renormalize its peers.
+
+Three standard card recipes cover all messages, human input and agent thinking.
+Supporting cards and pinned chart keys open the sister native Query Table,
+grouped into conversations. Its Cards/Table presentation is a registered native
+host parameter and uses the same query, sort and pagination. Both presentations
+reuse the Thread Ribbon; Table can drill from a conversation into observations.
+See [the label experience](message-labels.md)
+for its observation grain, pending coverage and portable URL contracts.

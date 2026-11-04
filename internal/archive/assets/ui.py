@@ -225,6 +225,7 @@ APP_HTML = r'''<!doctype html>
     .labeled-text{background:none;color:inherit}
     .show-labels .message-card[data-label-family] :is(.human-written,.labeled-text),.show-labels:not(.show-events) .message-card[data-label-family] :is(.agent-event,.event-context){background:color-mix(in srgb,var(--label-hue) 24%,transparent);color:inherit;border-radius:2px;padding:1px 0;-webkit-box-decoration-break:clone;box-decoration-break:clone;cursor:help}
     .show-labels .message-card[data-label-family] :is(.human-written,.labeled-text):hover{background:color-mix(in srgb,var(--label-hue) 40%,transparent)}
+    .label-legend-group{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:5px 7px;border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);border-radius:5px;max-width:100%}.label-legend-group>strong{font-size:inherit;font-weight:600;color:var(--ink)}
     .label-legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}.label-legend[hidden]{display:none}.label-legend-item{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.label-legend-item i,.label-tip-row i{display:inline-block;flex:none;width:11px;height:11px;border-radius:2px;background:color-mix(in srgb,var(--label-hue) 24%,transparent);border:1px solid color-mix(in srgb,var(--label-hue) 60%,transparent)}.label-legend-note{color:var(--muted)}
     .label-tip{position:fixed;z-index:60;max-width:340px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 8px 24px #0003;font-size:var(--fs-sm);line-height:1.35;pointer-events:none}.label-tip[hidden]{display:none}.label-tip-segment{margin-bottom:6px;color:var(--muted);font-size:var(--fs-xs)}.label-tip-row{display:grid;grid-template-columns:11px 1fr auto;column-gap:7px;align-items:center;margin-top:4px}.label-tip-row strong{font-weight:600}.label-tip-row span{color:var(--muted);font-variant-numeric:tabular-nums}.label-tip-row p{grid-column:2/4;margin:1px 0 0;color:var(--muted);font-size:var(--fs-xs)}
     /* Agent events (agentEventsAttacher): an event's sentence in its kind group's hue, what it was about and what the agent did underlined, shown with the Agent events highlight. */
@@ -1221,7 +1222,12 @@ function transcriptHighlightControl(panel,conversation,messages){
     if(!option.available&&option.note)row.append(node('span','transcript-highlight-note',option.note));
     if(!option.legend.length)continue;
     const legend=node('div','label-legend');legend.append(node('span','label-legend-title',option.label));
-    for(const item of option.legend){const entry=node('span','label-legend-item'+(item.className?' event-legend-item '+item.className:''));if(item.family!==undefined)entry.dataset.labelFamily=item.family;entry.append(node('i'),item.name);legend.append(entry)}
+    const labelGroups=new Map();
+    for(const item of option.legend){
+      let target=legend;const role=item.family?.startsWith('P.')?'Sender':item.family?.startsWith('C.')?'Receiver':'';
+      if(role){if(!labelGroups.has(role)){const group=node('span','label-legend-group');group.setAttribute('role','group');group.setAttribute('aria-label',role);group.append(node('strong','',role));labelGroups.set(role,group);legend.append(group)}target=labelGroups.get(role)}
+      const entry=node('span','label-legend-item'+(item.className?' event-legend-item '+item.className:''));if(item.family!==undefined)entry.dataset.labelFamily=item.family;entry.append(node('i'),item.name);target.append(entry);
+    }
     if(option.note)legend.append(node('span','label-legend-note',option.note));
     legends.set(option.id,legend);box.append(legend);
   }
@@ -1514,13 +1520,13 @@ const mountExplorer=()=>{
 if(delegationExplorer||!explorer.isConnected||!window.pharosDelegation||!window.pharosInbox)return;
 host.querySelector('.conversation-choice')?.remove();
 const openOverview=()=>{rememberReader();const params=new URLSearchParams(location.search);params.delete('conversation');params.delete('message');params.delete('at');params.delete('call');history.pushState(null,'',`/work/${encodeURIComponent(id)}${params.size?'?'+params:''}`);workspaceInbox.setViewer(false);syncNavigator()};
-workspaceInbox=window.pharosInbox.mount({root,workspace:id,title:w.title,overview:[...root.children].filter(el=>el!==host),reader:host,onOverview:openOverview,onCompact:compact=>delegationExplorer?.layout(compact)});
+workspaceInbox=window.pharosInbox.mount({root,workspace:id,title:w.title,overview:[...root.children].filter(el=>el!==host),reader:host,onOverview:openOverview,onLayout:(compact,splitReader)=>delegationExplorer?.layout(compact,splitReader)});
 // One conversation with no parent reads as one page. Its sessions arrive
 // later; if they nest after all, the reader keeps the conversation open
 // beside the workspace sessions.
 const inbox=workspaceInbox;inbox.setMerged(conversations.length===1&&!conversations[0].parent_id);
 const readerIndex=activeIndex>=0?activeIndex:focusIndex>=0||matchedIndex>=0||inbox.merged?initialIndex:-1;
-delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[readerIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
+delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[readerIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,readerHost:host,splitReader:inbox.viewing&&!inbox.merged,openOverview,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
 // The bundle can arrive after an initial deep-linked reader. Rebuild that
 // reader inside the new scroll container so its rails and search use the pane.
 if(activeIndex>=0&&routeConversation()){

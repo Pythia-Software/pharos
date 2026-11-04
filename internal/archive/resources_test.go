@@ -45,9 +45,17 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	}}
 	clock := time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC)
 	sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+	sample := func(processes []resourceProcess) []resourceReading {
+		// The scripted PIDs are not in this Mac's real process table.
+		table := make([]processNode, 0, len(processes))
+		for _, process := range processes {
+			table = append(table, processNode{PID: process.PID, Parent: 1})
+		}
+		return sampler.sampleWithTable(processes, table)
+	}
 	processes := []resourceProcess{{PID: 10, Role: "service"}, {PID: 20, Role: "cli:ingest"}, {PID: 30, Role: "cli:capture"}, {PID: 10, Role: "service"}}
 
-	first := sampler.sample(processes)
+	first := sample(processes)
 	if len(first) != 2 || first[0].PID != 10 || first[1].PID != 20 || sampler.reads != 3 {
 		t.Fatalf("each PID read once, the unreadable one left out: %+v (%d reads)", first, sampler.reads)
 	}
@@ -64,7 +72,7 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 
 	// Within the interval: the same readings, no system call.
 	clock = clock.Add(resourceSampleInterval / 2)
-	if again := sampler.sample(processes[:2]); sampler.reads != 3 || again[0].SampledAt != first[0].SampledAt {
+	if again := sample(processes[:2]); sampler.reads != 3 || again[0].SampledAt != first[0].SampledAt {
 		t.Fatalf("a reading younger than the interval is reused: %d reads", sampler.reads)
 	}
 
@@ -74,7 +82,7 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	// Disk is bytes read and written per second: 10 moved 24 MB, 20 1 MB.
 	source.set(10, processUsage{CPUSeconds: 6, ChildCPUSeconds: 1.5, Footprint: 1_234_000_000, Started: 1, DiskBytes: 1.024e9, DiskKnown: true})
 	source.set(20, processUsage{CPUSeconds: 2.004, Footprint: 41e6, Started: 7, DiskBytes: 6e6, DiskKnown: true})
-	second := sampler.sample(processes[:2])
+	second := sample(processes[:2])
 	if second[0].CPUPercent == nil || *second[0].CPUPercent != 75 || *second[1].CPUPercent != 0 {
 		t.Fatalf("CPU over the interval: %+v", second)
 	}
@@ -92,24 +100,25 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 		t.Fatalf("a nearly idle process: %q", second[1].Text)
 	}
 
-	// While one process has no figure yet, the total has none either:
-	// memory only, never a CPU total that silently leaves one out.
+	// A new worker does not erase the measured CPU and I/O rates. Both
+	// totals are explicitly lower bounds until that worker has a delta.
 	clock = clock.Add(2 * time.Second)
 	source.set(30, processUsage{CPUSeconds: 1, Footprint: 10e6, Started: 3})
-	mixed := sampler.sample(processes[:3])
-	if total := summarizeResources("Pharos", mixed); len(mixed) != 3 || total.CPUPercent != nil || total.Label != "Pharos is using 1.3 GB" {
+	mixed := sample(processes[:3])
+	if total := summarizeResources("Pharos", mixed); len(mixed) != 3 || total.CPUPercent == nil || !total.CPUPartial || !total.DiskPartial ||
+		!strings.Contains(total.Label, "lower bound") || total.DiskBytesPerSecond == nil {
 		t.Fatalf("a total with a process still measuring: %+v", total)
 	}
 
 	// PID 20 exits and its number is reused: no delta across processes.
 	clock = clock.Add(2 * time.Second)
 	source.set(20, processUsage{CPUSeconds: 0.1, Footprint: 5e6, Started: 99})
-	if reused := sampler.sample(processes[1:2]); reused[0].CPUPercent != nil {
+	if reused := sample(processes[1:2]); reused[0].CPUPercent != nil {
 		t.Fatalf("a reused PID is a new process: %+v", reused)
 	}
 	// A process not asked about is forgotten after resourceForget.
 	clock = clock.Add(resourceForget + time.Second)
-	sampler.sample(processes[1:2])
+	sample(processes[1:2])
 	if _, ok := sampler.byPID[10]; ok {
 		t.Fatal("a process nobody asks about is kept forever")
 	}
@@ -122,30 +131,30 @@ func TestResourceSamplerComputesLoadFromDeltas(t *testing.T) {
 	source.set(41, processUsage{CPUSeconds: 10, Started: 5, Footprint: 1e6})
 	source.set(42, processUsage{CPUSeconds: 10, Started: 6, Footprint: 1e6})
 	children := []resourceProcess{{PID: 40, Role: "service"}, {PID: 41, Role: "service"}, {PID: 42, Role: "broker", OwnOnly: true}}
-	sampler.sample(children)
+	sample(children)
 	clock = clock.Add(2 * time.Second)
 	source.set(40, processUsage{CPUSeconds: 10.2, ChildCPUSeconds: 2400, Started: 4, Footprint: 1e6})
 	source.set(41, processUsage{CPUSeconds: 30, Started: 5, Footprint: 1e6})
 	source.set(42, processUsage{CPUSeconds: 10.1, ChildCPUSeconds: 2400, Started: 6, Footprint: 1e6})
-	jumped := sampler.sample(children)
+	jumped := sample(children)
 	if jumped[0].CPUPercent != nil || *jumped[1].CPUPercent != 400 || *jumped[2].CPUPercent != 5 {
 		t.Fatalf("child jump, clamp and own-only: %v %v %v", jumped[0].cpu, jumped[1].cpu, jumped[2].cpu)
 	}
 	clock = clock.Add(2 * time.Second)
 	source.set(40, processUsage{CPUSeconds: 10.4, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
-	if after := sampler.sample(children[:1]); after[0].CPUPercent == nil || *after[0].CPUPercent != 20 {
+	if after := sample(children[:1]); after[0].CPUPercent == nil || *after[0].CPUPercent != 20 {
 		t.Fatalf("after the jump, the next interval counts again: %+v", after)
 	}
 	// A gap longer than resourceStaleGap (no page open) is a new baseline,
 	// not an average shown as the current load.
 	clock = clock.Add(resourceStaleGap + time.Second)
 	source.set(40, processUsage{CPUSeconds: 20, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
-	if stale := sampler.sample(children[:1]); stale[0].CPUPercent != nil {
+	if stale := sample(children[:1]); stale[0].CPUPercent != nil {
 		t.Fatalf("an average over a long gap: %+v", stale)
 	}
 	clock = clock.Add(2 * time.Second)
 	source.set(40, processUsage{CPUSeconds: 20.1, ChildCPUSeconds: 2400.2, Started: 4, Footprint: 1e6})
-	if fresh := sampler.sample(children[:1]); fresh[0].CPUPercent == nil || *fresh[0].CPUPercent != 5 {
+	if fresh := sample(children[:1]); fresh[0].CPUPercent == nil || *fresh[0].CPUPercent != 5 {
 		t.Fatalf("the reading after a gap: %+v", fresh)
 	}
 
@@ -194,7 +203,7 @@ func TestProcessUsageMatchesTheKernel(t *testing.T) {
 	found := false
 	for _, process := range expandResourceProcesses([]resourceProcess{{PID: os.Getpid(), Role: "service"}}, resourceProcessTable()) {
 		if process.PID == child.Process.Pid {
-			found = process.OwnOnly && strings.HasPrefix(process.Role, "worker:")
+			found = process.Parent == os.Getpid() && strings.HasPrefix(process.Role, "worker:")
 		}
 	}
 	if !found {
@@ -261,18 +270,97 @@ func TestResourceWorkerTree(t *testing.T) {
 	clock := time.Now()
 	sampler := &resourceSampler{read: source.read, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
 	for _, p := range processes {
-		if !p.OwnOnly || (p.PID == 21 && p.Library != "b") || (p.PID == 12 && p.Library != "a") {
+		if p.OwnOnly || (p.PID == 21 && p.Library != "b") || (p.PID == 12 && p.Library != "a") {
 			t.Fatalf("attribution: %+v", p)
 		}
 		source.set(p.PID, processUsage{CPUSeconds: 1})
 	}
-	sampler.sample(processes)
+	sampler.sampleWithTable(processes, table)
 	clock = clock.Add(2 * time.Second)
 	for _, p := range processes {
-		source.set(p.PID, processUsage{CPUSeconds: 2, ChildCPUSeconds: 100})
+		source.set(p.PID, processUsage{CPUSeconds: 2})
 	}
-	summary := summarizeResources("Pharos", sampler.sample(processes))
+	summary := summarizeResources("Pharos", sampler.sampleWithTable(processes, table))
 	if summary.CPUPercent == nil || *summary.CPUPercent != 250 {
 		t.Fatalf("workers counted once: %+v", summary)
 	}
+}
+
+func TestResourceSamplerCountsReapedHelpersWithoutRepeatingLiveChildren(t *testing.T) {
+	source := &fakeUsage{procs: map[int]processUsage{10: {Started: 1, CPUSeconds: 10}, 11: {Started: 2, CPUSeconds: 5}}}
+	clock := time.Now()
+	sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+	roots := []resourceProcess{{PID: 10, Role: "service"}}
+	live := []processNode{{PID: 10, Parent: 1}, {PID: 11, Parent: 10, Name: "worker"}}
+	sampler.sampleWithTable(roots, live)
+	clock = clock.Add(2 * time.Second)
+	source.set(10, processUsage{Started: 1, CPUSeconds: 10.2})
+	source.set(11, processUsage{Started: 2, CPUSeconds: 5.4})
+	if got := summarizeResources("Pharos", sampler.sampleWithTable(roots, live)); got.CPUPercent == nil || *got.CPUPercent != 30 {
+		t.Fatalf("both live processes counted once: %+v", got)
+	}
+	// The worker exits with 6 s of lifetime CPU. Its already sampled 5.4 s
+	// must be deducted from the parent's child counter. A 0.4 s helper
+	// that lived entirely between samples contributes through that counter.
+	clock = clock.Add(2 * time.Second)
+	source.set(10, processUsage{Started: 1, CPUSeconds: 10.4, ChildCPUSeconds: 6.4})
+	if got := summarizeResources("Pharos", sampler.sampleWithTable(roots, live[:1])); got.CPUPercent == nil || *got.CPUPercent != 60 {
+		t.Fatalf("reaped worker and short helper, without old CPU: %+v", got)
+	}
+	clock = clock.Add(2 * time.Second)
+	source.set(10, processUsage{Started: 1, CPUSeconds: 10.6, ChildCPUSeconds: 6.4})
+	if got := summarizeResources("Pharos", sampler.sampleWithTable(roots, live[:1])); got.CPUPercent == nil || *got.CPUPercent != 10 {
+		t.Fatalf("reaped CPU is charged only once: %+v", got)
+	}
+	t.Run("nested workers exit together", func(t *testing.T) {
+		source := &fakeUsage{procs: map[int]processUsage{
+			10: {Started: 1, CPUSeconds: 10}, 11: {Started: 2, CPUSeconds: 5}, 12: {Started: 3, CPUSeconds: 10.2},
+		}}
+		clock := time.Now()
+		sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+		roots := []resourceProcess{{PID: 10, Role: "service"}}
+		tree := []processNode{{PID: 10, Parent: 1}, {PID: 11, Parent: 10, Name: "worker"}, {PID: 12, Parent: 11, Name: "nested"}}
+		sampler.sampleWithTable(roots, tree)
+		clock = clock.Add(2 * time.Second)
+		source.set(10, processUsage{Started: 1, CPUSeconds: 10.2})
+		source.set(11, processUsage{Started: 2, CPUSeconds: 5.2})
+		source.set(12, processUsage{Started: 3, CPUSeconds: 10.4})
+		sampler.sampleWithTable(roots, tree)
+		// The worker reaps its nested child, then the service reaps the
+		// worker. Both lifetimes arrive in the service's child counter.
+		clock = clock.Add(2 * time.Second)
+		source.set(10, processUsage{Started: 1, CPUSeconds: 10.4, ChildCPUSeconds: 16.0})
+		got := summarizeResources("Pharos", sampler.sampleWithTable(roots, tree[:1]))
+		if got.CPUPercent == nil || *got.CPUPercent != 30 {
+			t.Fatalf("the whole exited subtree has 30%% current CPU, not its lifetime: %+v", got)
+		}
+	})
+	t.Run("cached snapshot still names the exited worker", func(t *testing.T) {
+		source := &fakeUsage{procs: map[int]processUsage{
+			10: {Started: 1, CPUSeconds: 10}, 11: {Started: 2, CPUSeconds: 5.2},
+		}}
+		clock := time.Now()
+		sampler := &resourceSampler{read: source.read, basis: resourceBasisKernel, now: func() time.Time { return clock }, byPID: map[int]*resourceTrack{}}
+		// Put the cached worker first: it must not be shown as live or
+		// discard its counters before the parent is sampled.
+		roots := []resourceProcess{{PID: 11, Role: "worker:git"}, {PID: 10, Role: "service"}}
+		tree := []processNode{{PID: 10, Parent: 1}, {PID: 11, Parent: 10, Name: "git"}}
+		sampler.sampleWithTable(roots, tree)
+		clock = clock.Add(2 * time.Second)
+		source.set(10, processUsage{Started: 1, CPUSeconds: 10.2})
+		source.set(11, processUsage{Started: 2, CPUSeconds: 5.4})
+		sampler.sampleWithTable(roots, tree)
+		clock = clock.Add(2 * time.Second)
+		source.set(10, processUsage{Started: 1, CPUSeconds: 10.6, ChildCPUSeconds: 5.8})
+		source.mu.Lock()
+		delete(source.procs, 11)
+		source.mu.Unlock()
+		got := summarizeResources("Pharos", sampler.sampleWithTable(roots, tree[:1]))
+		if got.CPUPercent == nil || *got.CPUPercent != 40 {
+			t.Fatalf("an exited cached root has 40%% current CPU, not 310%%: %+v", got)
+		}
+		if len(got.Processes) != 1 || got.Processes[0].PID != 10 {
+			t.Fatalf("the cached worker is no longer live: %+v", got.Processes)
+		}
+	})
 }

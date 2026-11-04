@@ -29,6 +29,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const connectProvider = find('#pharos-connect-provider');
   const question = find('#pharos-question');
   const promptEditor=initAskPromptEditor(question);
+  const promptHints=askPromptHints();
   const picker = find('#pharos-model-menu');
   const pickerTrigger = find('.pharos-model-trigger');
   const chatHistory = find('#pharos-chat-history'),historyTrigger=find('.pharos-history-trigger'),historyList=find('.pharos-history-list');
@@ -523,10 +524,14 @@ window.initPharosAsk = function(root, {previews} = {}) {
     invitationDismissed=true;closeModal(consent,false);render();persist();find('.home-search-trigger')?.focus();
   }
   function autoFit() {
+    // Reserve the empty hint's height even while focused, so restoring it on
+    // blur cannot move a control between pointerdown and click.
+    if(question.dataset.empty==='true')question.dataset.measuringPlaceholder='';
     question.style.height = 'auto';
     const limit=Math.max(68,Math.round(window.innerHeight*.28));
     question.style.height = Math.min(limit,Math.max(68,question.scrollHeight)) + 'px';
     question.style.overflowY=question.scrollHeight>limit?'auto':'hidden';
+    delete question.dataset.measuringPlaceholder;
     scheduleThreadLayout();
   }
   function syncThreadScroll(){
@@ -596,6 +601,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     else if(!inside&&suggestions.previousElementSibling!==ai)ai.after(suggestions);
     const hidden=ai.hidden||turns.length>0||!ideas.length||(inside&&question.value.trim().length>0);
     if(suggestions.hidden!==hidden){suggestions.hidden=hidden;if(!hidden)renderIdeas();}
+    syncPromptHints();
   }
   function syncComposer() {
     const hasThread=turns.length>0;
@@ -604,7 +610,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ai.classList.toggle('pharos-has-thread',hasThread);
     syncSuggestions();
     question.disabled=openingSession!==null;
-    question.placeholder=openingSession!==null?'Loading conversation…':hasThread?'Ask a follow-up or refine your question...':'What would you like to find in your work?';
+    question.placeholder=openingSession!==null?'Loading conversation…':hasThread?'Ask a follow-up…':promptHints.current();
     syncComposerActions();
     pickerTrigger.disabled=hasThread||loadingModels||openingSession!==null;
     pickerTrigger.dataset.tooltip=hasThread?'Model selection is fixed for this chat. Clear to start with another model.':'Choose CLI, model, effort and speed';
@@ -781,7 +787,16 @@ window.initPharosAsk = function(root, {previews} = {}) {
     });
   }
   const wrapIdea=index=>ideas.length?((index%ideas.length)+ideas.length)%ideas.length:0;
-  const readingIdeas=()=>{const center=ideaStride?wrapIdea(Math.round(ideaViewport.scrollLeft/ideaStride)):ideaCenter;return Array.from({length:ideaCount},(_,index)=>ideaOrder[wrapIdea(center-Math.floor(ideaCount/2)+index)]);};
+  const readingIdeas=()=>{if(!ideas.length)return [];const center=ideaStride?wrapIdea(Math.round(ideaViewport.scrollLeft/ideaStride)):ideaCenter;return Array.from({length:ideaCount},(_,index)=>ideaOrder[wrapIdea(center-Math.floor(ideaCount/2)+index)]);};
+  function setPromptHint(hint){
+    if(turns.length||openingSession!==null||question.dataset.placeholder===hint)return;
+    question.placeholder=hint;
+    if(!ai.hidden)autoFit();
+  }
+  function syncPromptHints(){
+    const visible=suggestions.hidden||ideasHidden||!ideaViewport.clientWidth?[]:readingIdeas().map(id=>ideas[id]);
+    setPromptHint(promptHints.update(ideas,visible));
+  }
   // Replace the list in place: a refresh or a background update keeps the
   // carousel's controls and preferences.
   function showIdeas(items,announce=''){
@@ -809,6 +824,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     ideaToggle.setAttribute('aria-expanded',String(!ideasHidden));
     ideaViewport.hidden=ideaActions.hidden=ideasHidden;
     if(ideasHidden&&ideaMotion){ideaMotion.cancel();ideaMotion=null;settleIdeas();}
+    syncPromptHints();
   }
   ideaToggle.addEventListener('click',()=>{
     ideasHidden=!ideasHidden;window.pharosPrefs?.set(ideaHiddenKey,ideasHidden);
@@ -857,6 +873,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const size=height+'px';
     if(suggestions.style.getPropertyValue('--pharos-idea-height')!==size){suggestions.style.setProperty('--pharos-idea-height',size);repaint=true;}
     if(repaint)drawIdeas();
+    syncPromptHints();
   }
   function settleIdeas(){
     if(!ideaStride)return;
@@ -912,6 +929,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function rotateIdeas() {moveIdeas(ideaCount,false);}
   function advanceIdeas(now=Date.now()) {
     const delta = Math.max(0,now-ideaLastTick);ideaLastTick=now;
+    const hint=promptHints.advance(delta,document.hidden||ai.hidden||turns.length>0||openingSession!==null||question.dataset.empty!=='true'||question.matches(':focus-within')||!question.getClientRects().length||matchMedia('(prefers-reduced-motion: reduce)').matches);
+    setPromptHint(hint);
     if(!ideaHeld()){ideaElapsed+=delta;if(ideaElapsed>=ideaCycleMs)rotateIdeas();}
     updateIdeaClock();
   }
