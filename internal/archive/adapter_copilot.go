@@ -337,14 +337,15 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			}
 		}
 	}
-	// Receipts by request: a request reported again updates its one record,
-	// as token accounting reads it. beforeShutdown is their usage per model
-	// at the last shutdown.
+	// Receipts by request, under its API and its provider ID alike: a
+	// request reported again updates its one record, as token accounting
+	// reads it. beforeShutdown is their usage per model at the last shutdown.
 	type receipt struct {
-		agent *copilotAgent
-		index int
-		model string
-		usage map[string]any
+		agent   *copilotAgent
+		index   int
+		model   string
+		request string
+		usage   map[string]any
 	}
 	receipts, byRequest := []*receipt{}, map[string]*receipt{}
 	receipted := func() map[string]map[string]float64 {
@@ -362,7 +363,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 	}
 	beforeShutdown := map[string]map[string]float64{}
 	var lastShutdown map[string]any
-	shutdownAt, shutdownLine := "", int64(0)
+	shutdownAt, shutdownLocator := "", ""
 	started, ended := "", ""
 	for _, event := range events {
 		data := mapValueDefault(event["data"])
@@ -382,11 +383,18 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			agents[agentID] = agent
 			order = append(order, agentID)
 		}
-		line := integer(event["_line"])
-		eventID := defaultString(event["id"], fmt.Sprintf("line-%d", line))
+		line, log := integer(event["_line"]), defaultString(firstString(event["_origin"]), origin)
+		eventID := firstString(event["id"])
+		if eventID == "" {
+			// Both of a session's logs have a line 2.
+			eventID = fmt.Sprintf("line-%d", line)
+			if log != origin {
+				eventID = "flat:" + eventID
+			}
+		}
 		// The event's type and ID stand in for its raw text, so text quoting
 		// usage JSON is never read as token usage.
-		base := MessageRecord{NativeID: eventID, Model: agent.model, Effort: agent.effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", defaultString(firstString(event["_origin"]), origin), line), Selected: true,
+		base := MessageRecord{NativeID: eventID, Model: agent.model, Effort: agent.effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", log, line), Selected: true,
 			RawText: jsonText(map[string]any{"type": kind, "id": eventID})}
 		add := func(message MessageRecord) int {
 			agent.conversation.Messages = append(agent.conversation.Messages, message)
@@ -514,28 +522,44 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			usage := mapValueDefault(data["usage"])
 			agent.model = firstString(usage["model"], agent.model)
 			agent.effort = updatedEffort(agent.effort, usage)
-			request := firstString(usage["apiCallId"], usage["providerCallId"])
-			r := byRequest[agentID+"\x00"+request]
-			if r == nil {
-				item := base
-				item.RawText = ""
-				if message := paidFor[agentID+"\x00"+firstString(usage["apiCallId"])]; message != "" {
-					item.NativeID = message + ":usage"
-				}
-				item.Model, item.Effort = agent.model, agent.effort
-				item.Role, item.Kind = "system", "metadata"
-				r = &receipt{agent: agent, index: add(item), model: agent.model, usage: map[string]any{}}
-				receipts = append(receipts, r)
-				if request != "" {
-					byRequest[agentID+"\x00"+request] = r
+			api := firstString(usage["apiCallId"])
+			keys := []string{}
+			for _, id := range []string{api, firstString(usage["providerCallId"])} {
+				if id != "" {
+					keys = append(keys, agentID+"\x00"+id)
 				}
 			}
-			// A later report of a request supersedes the fields it carries.
+			var r *receipt
+			for _, key := range keys {
+				if r = byRequest[key]; r != nil {
+					break
+				}
+			}
+			if r == nil {
+				item := base
+				item.RawText, item.Role, item.Kind = "", "system", "metadata"
+				item.Model, item.Effort = agent.model, agent.effort
+				r = &receipt{agent: agent, index: add(item), model: agent.model, usage: map[string]any{}}
+				receipts = append(receipts, r)
+			}
+			for _, key := range keys {
+				byRequest[key] = r
+			}
+			// A later report of a request supersedes the fields it carries:
+			// its model, the message it paid for, and its tokens.
+			stored := &r.agent.conversation.Messages[r.index]
+			if message := paidFor[agentID+"\x00"+api]; message != "" {
+				stored.NativeID = message + ":usage"
+			}
+			r.request = firstString(api, r.request, usage["providerCallId"])
+			if model := firstString(usage["model"]); model != "" {
+				r.model, stored.Model = model, model
+			}
 			maps.Copy(r.usage, copilotTokenUsage(usage))
-			r.agent.conversation.Messages[r.index].Text = jsonText(map[string]any{"type": "token_usage", "usage": r.usage, "usage_message_id": defaultString(request, eventID)})
+			stored.Text = jsonText(map[string]any{"type": "token_usage", "usage": r.usage, "usage_message_id": defaultString(r.request, eventID)})
 		case "session.shutdown":
 			// Each shutdown totals the whole session so far, receipts included.
-			lastShutdown, shutdownAt, shutdownLine = data, timestamp, line
+			lastShutdown, shutdownAt, shutdownLocator = data, timestamp, base.EvidenceLocator
 			beforeShutdown = receipted()
 		case "session.error", "assistant.error", "error":
 			item := base
@@ -566,7 +590,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			if !positive {
 				continue
 			}
-			item := MessageRecord{NativeID: "usage:shutdown:" + model, Role: "system", Kind: "metadata", Model: model, CreatedAt: shutdownAt, EvidenceLocator: fmt.Sprintf("%s:%d", origin, shutdownLine), Selected: true,
+			item := MessageRecord{NativeID: "usage:shutdown:" + model, Role: "system", Kind: "metadata", Model: model, CreatedAt: shutdownAt, EvidenceLocator: shutdownLocator, Selected: true,
 				Text: jsonText(map[string]any{"type": "token_usage", "usage": residual, "source": "shutdown_residual"})}
 			main.conversation.Messages = append(main.conversation.Messages, item)
 		}
