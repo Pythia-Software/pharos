@@ -76,10 +76,13 @@
 @keyframes bg-pulse{50%{opacity:.45}}
 @media(prefers-reduced-motion:reduce){.bg-dot.busy{animation:none}}
 .bg-rule{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:14px;padding-top:10px;border-top:1px dashed var(--line);font-size:var(--fs-sm);color:var(--muted)}
-.bg-stack{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--line);margin:12px 0 6px}
-.bg-stack i{display:block;height:100%}
-.bg-legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:var(--fs-sm);color:var(--muted)}
-.bg-legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;background:var(--swatch)}
+.bg-busy{display:inline-flex;align-items:center;gap:9px;font-size:var(--fs-sm);cursor:pointer}
+.bg-busy input{appearance:none;position:relative;width:34px;height:20px;margin:0;border:1px solid var(--line);border-radius:20px;background:var(--line);cursor:pointer;flex:none}
+.bg-busy input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--ink);transition:transform .15s ease}
+.bg-busy input:checked{background:var(--accent);border-color:var(--accent)}
+.bg-busy input:checked::after{background:var(--bg);transform:translateX(14px)}
+.bg-busy input:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:2px}
+.bg-busy-row{margin:8px 0 2px}
 .bg-check{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:var(--fs-sm)}
 .bg-battery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
 .bg-battery-row{display:grid;gap:4px;font-size:var(--fs-sm);font-weight:600;min-width:0}
@@ -96,7 +99,6 @@
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
   const CADENCE_LABELS = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
   const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
-  const SWATCHES = {frequent: '#8cc6a0', hourly: 'var(--accent)', daily: '#9db1d6'};
 
   // ---- times and durations (the only words this file makes)
   const parse = value => { const time = Date.parse(value); return Number.isFinite(time) ? time : null; };
@@ -171,7 +173,7 @@
     const mode = document.settings?.mode || view.mode;
     return {mode, pause: mode === 'paused' ? pauseLength(document.settings?.paused_until || view.paused_until, now) : '',
       settings: document.settings || {}, columns, unscheduled, unscheduledRunnable, everything: view.everything?.text || '',
-      rule: document.rule || null, cost: costModel(document.cost), headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null,
+      rule: document.rule || null, headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null,
       agentEvents: document.agent_events || null};
   }
 
@@ -220,16 +222,6 @@
     return item.temporary && cadence === item.usual ? '' : cadence;
   }
 
-  // The day's cost: each cadence's share of the total, measured or
-  // projected.
-  function costModel(cost) {
-    if (!cost || !Array.isArray(cost.cadences)) return null;
-    const total = cost.cadences.reduce((sum, entry) => sum + (Number(entry.seconds) || 0), 0);
-    return {total: duration(total), peakBytes: Number(cost.peak_bytes) || 0,
-      segments: cost.cadences.map(entry => ({id: entry.id, label: entry.label, measured: Boolean(entry.measured), text: entry.text || '',
-        duration: duration(entry.seconds), share: total > 0 ? (Number(entry.seconds) || 0) / total : 0}))};
-  }
-
   // ---- rendering
   // The Agent Experience switch (web/src/agent-events-flag.ts).
   const AGENT_EVENTS_KEY = 'pharos-agent-events-v1';
@@ -261,7 +253,6 @@
     document_ = await call('/api/background/settings', body);
     render();
   }
-  const sizeText = bytes => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
 
   function select(options, value, onchange, label) {
     const element = node('select');
@@ -350,7 +341,30 @@
       } else {
         when.textContent = column.description;
       }
-      section.append(head, when);
+      section.append(head);
+      if (column.id === 'hourly' || column.id === 'daily') {
+        const hold = node('label', 'bg-busy');
+        hold.title = 'Shared by Hourly and Daily';
+        const box = node('input');
+        box.type = 'checkbox';
+        box.setAttribute('role', 'switch');
+        box.dataset.focusKey = 'busy:' + column.id;
+        box.checked = model.settings.hold_when_busy !== false;
+        box.onchange = async () => {
+          const checked = box.checked;
+          host()?.querySelectorAll('.bg-busy input').forEach(input => { input.checked = checked; });
+          try { await save({hold_when_busy: checked}); }
+          catch (error) {
+            host()?.querySelectorAll('.bg-busy input').forEach(input => { input.checked = !checked; });
+            toast(error.message);
+          }
+        };
+        hold.append(box, 'Hold while busy');
+        const row = node('div', 'bg-busy-row');
+        row.append(hold);
+        section.append(row);
+      }
+      section.append(when);
       for (const item of column.items) section.append(renderItem(item));
       columns.append(section);
     }
@@ -523,26 +537,6 @@
     }
     content.append(card);
     if (model.labels) content.append(renderLabels(model.labels, model.agentEvents));
-    if (model.cost) {
-      const cost = node('section', 'bg-card');
-      cost.append(node('h3', '', 'What it costs'),
-        node('p', 'muted', `Background work on this Mac in the last 24 hours: about ${model.cost.total} of work${model.cost.peakBytes ? `, with memory peaking at ${sizeText(model.cost.peakBytes)}` : ''}. Hourly and Daily are projected from their measured runs until they have run here.`));
-      const stack = node('div', 'bg-stack');
-      stack.setAttribute('role', 'img');
-      stack.setAttribute('aria-label', model.cost.segments.map(segment => `${segment.label} ${segment.duration}`).join(', '));
-      const legend = node('div', 'bg-legend');
-      for (const segment of model.cost.segments) {
-        const bar = node('i');
-        bar.style.width = `${(segment.share * 100).toFixed(1)}%`;
-        bar.style.background = SWATCHES[segment.id];
-        stack.append(bar);
-        const key = node('span', '', `${segment.label} ${segment.duration}${segment.text ? ` · ${segment.text}` : ''}`);
-        key.style.setProperty('--swatch', SWATCHES[segment.id]);
-        legend.append(key);
-      }
-      cost.append(stack, legend);
-      content.append(cost);
-    }
     if (model.battery) {
       const battery = node('section', 'bg-card');
       battery.dataset.card = 'battery';
@@ -562,16 +556,6 @@
       battery.append(rows, low);
       content.append(battery);
     }
-    const considerate = node('section', 'bg-card');
-    const hold = node('label', 'bg-check');
-    const box = node('input');
-    box.type = 'checkbox';
-    box.checked = model.settings.hold_when_busy !== false;
-    box.onchange = () => save({hold_when_busy: box.checked}).catch(error => toast(error.message));
-    hold.append(box, 'Hold Hourly and Daily work while this Mac is busy (other apps using most of the CPU)');
-    considerate.append(node('h3', '', 'Be considerate'), hold,
-      node('p', 'muted', 'Background work stops as soon as you eject the library or quit Pharos, and carries on where it left off.'));
-    content.append(considerate);
     target.replaceChildren(...content.childNodes);
     if (labelsFocused) target.querySelector(`#${labelsFocused}`)?.focus({preventScroll: true});
     const keyed = focusKey && target.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`);
@@ -691,6 +675,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, costModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
+    scheduleModel, itemModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

@@ -1081,9 +1081,9 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
-      "key": "f96939e6262189c2:1",
+      "key": "753c06d3723ca570:0",
       "file": "internal/archive/assets/background.js",
-      "owner": "render",
+      "owner": "renderColumns",
       "tag": "input",
       "control": "'input'",
       "contract": "settings",

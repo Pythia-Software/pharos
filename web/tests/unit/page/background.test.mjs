@@ -140,14 +140,6 @@ test("state lines: an age and the next time when current, the retry when failed,
   assert.equal(background.stateText(null, at), "");
 });
 
-test("the day's cost is each cadence's share of the total", () => {
-  const cost = plain(background.costModel(document.cost));
-  assert.equal(cost.total, "4.0 h");
-  assert.deepEqual(cost.segments.map(segment => [segment.id, Number(segment.share.toFixed(2)), segment.measured]), [["frequent", 0.75, true], ["hourly", 0.25, false], ["daily", 0, false]]);
-  assert.equal(cost.peakBytes, 9.5e9);
-  assert.equal(background.costModel(null), null);
-});
-
 test("durations and times", () => {
   assert.equal(background.duration(42), "42 s");
   assert.equal(background.duration(358), "6 min");
