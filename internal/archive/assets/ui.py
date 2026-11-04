@@ -1519,6 +1519,9 @@ const panel=host.querySelector('.conversation-panel:not(.conversation-loading)')
 if(focusReader&&!new URLSearchParams(location.search).has('reveal')&&(document.activeElement===focused||document.activeElement===document.body)){panel.tabIndex=-1;panel.focus({preventScroll:true});}
 const anchor=message||transcriptAnchor(conversationMessages(conversations[index]),{at});
 if(anchor)revealMessage(host,anchor,true,call);
+// A linked reveal (a Session signals chip, say) lands where the attention
+// runtime scrolls it; the reader's own landing would scroll it away.
+else if(new URLSearchParams(location.search).has('reveal'))window.pharosView?.refresh();
 else if(workspaceInbox){const state=readerStates.get(conversations[index].id);if(state){if(!same)[...panel.querySelectorAll('.turn-list > .turn')].forEach((turn,i)=>{if(state.turns[i])panel.materializeTurn?.(i);turn.open=Boolean(state.turns[i])});if(!same||historyMode==='replace')host.scrollTop=state.scroll}else if(!same)host.scrollTop=0}
 else panel.scrollIntoView({behavior:'smooth',block:'start'});
 };

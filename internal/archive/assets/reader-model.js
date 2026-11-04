@@ -726,10 +726,11 @@ function sessionSignalActive(search,chip){
 }
 // The URL parameters for a chip's click: the next of its messages revealed
 // (the first, unless one is revealed already), the others highlighted, and
-// any other attention cleared.
+// any other attention cleared. The reader's own landing anchors (message, at
+// and call) go too, or a reload would scroll to the earlier target instead.
 function sessionSignalAttention(search,chip){
   const params=new URLSearchParams(search),ids=chip.messageIds,index=(sessionSignalActive(search,chip)+1)%ids.length;
-  params.delete('highlight');params.delete('reveal');
+  for(const name of ['highlight','reveal','message','at','call'])params.delete(name);
   for(const id of ids.slice(0,SESSION_SIGNAL_HIGHLIGHTS))if(id!==ids[index])params.append('highlight','message:'+id);
   params.set('reveal','message:'+ids[index]);
   return params;

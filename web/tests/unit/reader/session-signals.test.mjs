@@ -24,10 +24,12 @@ test("the strip shows the signals that fired in the dashboard's order and names 
 
 test("a chip reveals its next message, highlights the rest and replaces other attention", () => {
   const [failed] = sessionSignalStrip(payload).chips;
-  const start = "?conversation=c1&highlight=message%3Aother&reveal=section%3Aarchive";
+  const start = "?conversation=c1&delegation_session=s1&message=m0&call=call-0&at=2026-11-03T10%3A00%3A00Z&highlight=message%3Aother&reveal=section%3Aarchive";
   assert.equal(sessionSignalActive(start, failed), -1);
   let params = sessionSignalAttention(start, failed);
-  assert.equal(params.get("conversation"), "c1");
+  assert.deepEqual([params.get("conversation"), params.get("delegation_session")], ["c1", "s1"]);
+  // The reader's earlier landing anchors go, so a reload lands on the reveal.
+  assert.deepEqual(["message", "call", "at"].filter(name => params.has(name)), []);
   assert.equal(params.get("reveal"), "message:m1");
   assert.deepEqual(params.getAll("highlight"), ["message:m4", "message:m7"]);
   assert.equal(sessionSignalActive(`?${params}`, failed), 0);

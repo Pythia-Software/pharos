@@ -484,9 +484,14 @@ const ROUTES = [
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
-  // A signal chip reveals its message in a collapsed turn without taking focus.
-  { name: "Transcript session signals", url: `${work}/conversation/${rootConversation}`, ready: ".session-signals .session-signal", open: page => page.locator(".session-signal").last().click(), shown: ".conversation-panel .pharos-reveal",
-    check: page => page.waitForFunction(() => !document.activeElement?.closest(".pharos-reveal") && new URL(location.href).searchParams.get("reveal")?.startsWith("message:")) },
+  // A signal chip reveals its message in a collapsed turn without taking focus,
+  // and replaces the link's earlier message anchor, so a reload lands there too.
+  { name: "Transcript session signals", url: `${work}/conversation/${rootConversation}?message=m-1`, ready: ".session-signals .session-signal", open: page => page.locator(".session-signal").last().click(), shown: ".conversation-panel .pharos-reveal",
+    check: async page => {
+      await page.waitForFunction(() => !document.activeElement?.closest(".pharos-reveal") && new URL(location.href).searchParams.get("reveal")?.startsWith("message:") && !new URL(location.href).searchParams.has("message"));
+      await page.reload();
+      await page.waitForFunction(() => { const target = document.querySelector(".conversation-panel .pharos-reveal"), box = target?.getBoundingClientRect(); return box && box.bottom > 0 && box.top < innerHeight; });
+    } },
   { name: "Quick search", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
   { name: "Analyze summary", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "Extended Quick Stats", url: "/library?view=table", preferences: { "pharos-quick-stats-v1": {metrics:['active_conversations','message_count','user_messages','assistant_messages','tool_calls','failed_tool_calls','tool_failure_rate','delegated_runs','active_repositories','tool_time_ms','agent_time_ms','active_time_ms'], windows:['5m','15m','yesterday','week','month','all']}, "pharos-usage-summary-links":true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page,"usageSummaryToggle"), shown: "#usageSummary" },

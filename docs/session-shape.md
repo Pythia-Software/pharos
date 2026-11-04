@@ -283,7 +283,10 @@ with its labels.
   dirty is derived afresh, and that never delays the reader.
 - Clicking a chip writes `reveal=message:<id>` for one of its messages and
   `highlight` for the others, at most 40. Each click moves to the next
-  message, and the chip shows which one ("2 of 3").
+  message, and the chip shows which one ("2 of 3"). The click drops the
+  reader's own landing anchors (`message`, `at`, `call`), and a link with
+  `reveal` leaves landing to the attention runtime, so a reload returns to
+  the revealed message.
 - The page's attention runtime opens the message's turn, scrolls to it and
   marks it. It never moves keyboard focus, and Clear highlights removes the
   marks.
