@@ -679,17 +679,28 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 	contested := map[string][]string{}
 	direct := map[string]bool{}
 	for _, id := range members {
-		for _, printed := range sessions[id].Printed {
-			hash := resolveAbbreviated(printed.Hash, commits)
+		link := func(printed string, evidence map[string]any) {
+			hash := resolveAbbreviated(printed, commits)
 			if hash == "" || direct[id+"\x00"+hash] {
-				continue
+				return
 			}
 			direct[id+"\x00"+hash], direct[hash] = true, true
+			links = append(links, gitLink{Session: id, Hash: hash, Method: "transcript", Confidence: 1, Evidence: evidence})
+		}
+		for _, printed := range sessions[id].Printed {
 			evidence := map[string]any{"printed": printed.Hash}
 			if printed.Branch != "" {
 				evidence["branch"] = printed.Branch
 			}
-			links = append(links, gitLink{Session: id, Hash: hash, Method: "transcript", Confidence: 1, Evidence: evidence})
+			link(printed.Hash, evidence)
+		}
+		// Its git commands' printed hashes, in the repository each ran in: a
+		// cherry-pick or revert prints one too, and so does a call a later
+		// step failed.
+		for _, op := range sessions[id].opsIn(repository) {
+			for _, printed := range op.Hashes {
+				link(printed, map[string]any{"printed": printed, "command": op.Kind})
+			}
 		}
 	}
 	hashes := make([]string, 0, len(commits))
@@ -1063,7 +1074,8 @@ var squashPullRequest = regexp.MustCompile(`\(#(\d+)\)\s*$`)
 //     the tree of a branch commit descended from it; or, like GitHub's,
 //     lists its subject as "* subject" (a subject of at least
 //     squashSubjectMinimum that no other commit has); or names the one pull
-//     request its session opened, as "Title (#N)".
+//     request its session opened, as "Title (#N)", and changed every file
+//     the commit did.
 //
 // Without a mainline, or in a shallow clone that lacks it, it stays unknown.
 func markMainline(ctx context.Context, dir, after string, commits, linked map[string]*gitCommit, pulls map[string]int, shallow bool) error {
@@ -1229,10 +1241,25 @@ func (squashes *gitSquashes) find(commit *gitCommit, pull int) (string, string) 
 	if squash := squashes.listed[commit.Subject]; commit.Subject != "" && squashes.subjects[commit.Subject] == 1 && after(squash) {
 		return squash, "listed in"
 	}
-	if squash := squashes.byPull[pull]; pull > 0 && after(squash) {
+	if squash := squashes.byPull[pull]; pull > 0 && after(squash) && squashes.changedAll(squash, commit) {
 		return squash, "pull request #" + strconv.Itoa(pull) + ","
 	}
 	return "", ""
+}
+
+// changedAll says whether a squash changed every file a commit changed. A
+// session's pull request is not tied to each of its commits: one on another
+// branch, changing files the squash did not, was not taken in by it.
+func (squashes *gitSquashes) changedAll(squash string, commit *gitCommit) bool {
+	if len(commit.Files) == 0 {
+		return false
+	}
+	for path := range commit.Files {
+		if _, ok := squashes.commits[squash].Files[path]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // linkOnce links each session once to each change: of the copies a rebase,

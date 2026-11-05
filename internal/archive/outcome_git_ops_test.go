@@ -41,6 +41,13 @@ func TestReadGitOps(t *testing.T) {
 		{"git revert --no-edit -m 1 abc", "", "revert  [] [] 0 ; "},
 		{"gh pr create --fill", "https://github.com/Acme/App/pull/7\n", "pull_request  [] [] 7 acme/app; "},
 		{`echo "git commit -m x"`, "", ""},
+		// A cd in a subshell moved only the subshell; one in the subshell the
+		// command runs in counts. Unbalanced quotes leave the directory unknown.
+		{`cd /src/app && (cd /src/lib && git status); git commit -qm App`, "", "commit repo-app [" + subject("App") + "] [] 0 ; "},
+		{`cd /src/app && echo "$(cd /src/lib && pwd)" && git commit -qm App`, "", "commit repo-app [" + subject("App") + "] [] 0 ; "},
+		{`cd /src/app && (cd /src/lib && git commit -qm Lib)`, "", "commit repo-lib [" + subject("Lib") + "] [] 0 ; "},
+		{`cd /src/lib && echo "it's (" && git commit -qm Lib`, "", "commit repo-lib [" + subject("Lib") + "] [] 0 ; "},
+		{"cd /src/lib && cat <<'EOF'\nit's\nEOF\ngit commit -qm Lib", "", "commit  [" + subject("Lib") + "] [] 0 ; "},
 	} {
 		if got := read(test.command, test.result); got != test.want {
 			t.Errorf("%q:\n got %s\nwant %s", test.command, got, test.want)

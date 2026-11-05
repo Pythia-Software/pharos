@@ -53,8 +53,8 @@ func readGitOps(call outcomeCall, resolve func(directory string) string) []gitOp
 		directory := ""
 		if option := gitDirectoryOption.FindStringSubmatch(command[match[2]:match[3]]); option != nil {
 			directory = unquoteWord(option[1])
-		} else if moves := changeDirectory.FindAllStringSubmatch(command[:match[0]+1], -1); len(moves) > 0 {
-			directory = unquoteWord(moves[len(moves)-1][1])
+		} else {
+			directory = shellDirectory(command, match[0]+1)
 		}
 		if directory != "" && resolve != nil {
 			op.Repository = resolve(directory)
@@ -84,6 +84,67 @@ func readGitOps(call outcomeCall, resolve func(directory string) string) []gitOp
 		}
 	}
 	return ops
+}
+
+// shellDirectory is the directory the last cd before end moved the shell to.
+// A cd in a subshell, ( … ) or $( … ), closed before end moved only that
+// subshell. When the quotes before end do not balance, which subshell a cd
+// was in is unknown, and it names none.
+func shellDirectory(command string, end int) string {
+	moves := changeDirectory.FindAllStringSubmatchIndex(command[:end], -1)
+	// A subshell opened at an index, and the quote it opened inside.
+	type subshell struct {
+		at    int
+		quote byte
+	}
+	// scopes[i] are where the subshells open at moves[i] opened.
+	scopes := make([][]int, len(moves))
+	open, next := []subshell{}, 0
+	opened := func() []int {
+		at := make([]int, len(open))
+		for index, shell := range open {
+			at[index] = shell.at
+		}
+		return at
+	}
+	quote := byte(0)
+	for index := 0; index < end; index++ {
+		for next < len(moves) && moves[next][2] == index {
+			scopes[next] = opened()
+			next++
+		}
+		switch char := command[index]; {
+		case quote == '\'':
+			if char == '\'' {
+				quote = 0
+			}
+		case char == '\\':
+			index++
+		case char == '$' && index+1 < end && command[index+1] == '(':
+			open, quote = append(open, subshell{index, quote}), 0
+			index++
+		case quote == '"':
+			if char == '"' {
+				quote = 0
+			}
+		case char == '\'' || char == '"':
+			quote = char
+		case char == '(':
+			open = append(open, subshell{index, 0})
+		case char == ')' && len(open) > 0:
+			open, quote = open[:len(open)-1], open[len(open)-1].quote
+		}
+	}
+	if quote != 0 {
+		return ""
+	}
+	final := opened()
+	for index := len(moves) - 1; index >= 0; index-- {
+		if scope := scopes[index]; len(scope) <= len(final) && slices.Equal(scope, final[:len(scope)]) {
+			return unquoteWord(command[moves[index][2]:moves[index][3]])
+		}
+	}
+	return ""
 }
 
 // commitSubjects fingerprints the subject a git invocation writes, from its
