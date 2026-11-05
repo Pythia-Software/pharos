@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,11 +16,13 @@ import (
 // source in its place. The functions liveSourceAccess names, with a reason,
 // are the only ones that read the OS directly.
 func TestAdaptersReadThroughTheAccessLayer(t *testing.T) {
+	// By import path, so a renamed import is caught too.
 	direct := map[string][]string{
-		"os":       {"Open", "OpenFile", "ReadFile", "Stat", "Lstat", "ReadDir"},
-		"filepath": {"Walk", "WalkDir", "Glob"},
-		"sql":      {"Open"},
-		"exec":     {"Command", "CommandContext"},
+		"os":            {"Open", "OpenFile", "ReadFile", "Stat", "Lstat", "ReadDir", "DirFS"},
+		"io/ioutil":     {"ReadFile", "ReadDir"},
+		"path/filepath": {"Walk", "WalkDir", "Glob"},
+		"database/sql":  {"Open"},
+		"os/exec":       {"Command", "CommandContext"},
 	}
 	openers := []string{"openSourceSQLite", "openReadOnlySQLite"}
 	files, err := filepath.Glob("adapter*.go")
@@ -36,21 +39,22 @@ func TestAdaptersReadThroughTheAccessLayer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, declaration := range parsed.Decls {
-			function, ok := declaration.(*ast.FuncDecl)
-			if !ok || function.Body == nil {
-				continue
+		imports := map[string]string{}
+		for _, spec := range parsed.Imports {
+			path, _ := strconv.Unquote(spec.Path.Value)
+			name := filepath.Base(path)
+			if spec.Name != nil {
+				name = spec.Name.Name
 			}
-			// sourceFiles' own methods are the access layer.
-			if function.Recv != nil && strings.Contains(types(function.Recv.List[0].Type), "sourceFiles") {
-				continue
-			}
-			ast.Inspect(function.Body, func(node ast.Node) bool {
+			imports[name] = path
+		}
+		check := func(scope string, root ast.Node) {
+			ast.Inspect(root, func(node ast.Node) bool {
 				reason := ""
 				switch value := node.(type) {
 				case *ast.SelectorExpr:
-					if pkg, ok := value.X.(*ast.Ident); ok && slices.Contains(direct[pkg.Name], value.Sel.Name) {
-						reason = pkg.Name + "." + value.Sel.Name
+					if pkg, ok := value.X.(*ast.Ident); ok && pkg.Obj == nil && slices.Contains(direct[imports[pkg.Name]], value.Sel.Name) {
+						reason = imports[pkg.Name] + "." + value.Sel.Name
 					}
 				case *ast.Ident:
 					if slices.Contains(openers, value.Name) {
@@ -62,13 +66,30 @@ func TestAdaptersReadThroughTheAccessLayer(t *testing.T) {
 					}
 				}
 				if reason != "" {
-					bypassing[function.Name.Name] = true
-					if liveSourceAccess[function.Name.Name] == "" {
-						t.Errorf("%s: %s uses %s; read the source through a.files(), or declare why in liveSourceAccess", set.Position(node.Pos()), function.Name.Name, reason)
+					bypassing[scope] = true
+					if liveSourceAccess[scope] == "" {
+						t.Errorf("%s: %s uses %s; read the source through a.files(), or declare why in liveSourceAccess", set.Position(node.Pos()), scope, reason)
 					}
 				}
 				return true
 			})
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				// A package-level value (var read = os.ReadFile) belongs to no
+				// function, so it can't be declared.
+				check("package scope of "+file, declaration)
+				continue
+			}
+			if function.Body == nil {
+				continue
+			}
+			// sourceFiles' own methods are the access layer.
+			if function.Recv != nil && strings.Contains(types(function.Recv.List[0].Type), "sourceFiles") {
+				continue
+			}
+			check(function.Name.Name, function.Body)
 		}
 	}
 	for name, reason := range liveSourceAccess {

@@ -3,7 +3,6 @@ package archive
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -298,7 +297,6 @@ func launchingRunLog(logs []antigravityRunLog, started time.Time) *antigravityRu
 	return launching
 }
 
-
 // antigravityStarted reads through the capture view, so an encoded transcript
 // is read as its original bytes, and caches the time while the transcript is
 // unchanged: print-mode detection asks on every plan.
@@ -345,10 +343,7 @@ func readAntigravityRunLog(source sourceFiles, path string, buffer []byte) (anti
 		// The CLI names logs by the local time the run started.
 		log.started, _ = time.ParseInLocation("20060102_150405", match[1], time.Local)
 	}
-	ctx := source.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := source.context()
 	if err := ctx.Err(); err != nil {
 		return log, err
 	}

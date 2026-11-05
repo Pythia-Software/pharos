@@ -237,7 +237,6 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 	return result, nil
 }
 
-
 // codexRolloutIdentity reads only the rollout's header: for an encoded
 // rollout, the decoder stops after its first block.
 func (s sourceFiles) codexRolloutIdentity(path string) (string, error) {

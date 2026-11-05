@@ -391,11 +391,16 @@ func (s sourceFiles) SQLite(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
+	return openSourceSQLite(s.context(), readable)
+}
+
+// context is the files' context, or the background one for files made
+// without it (probe's, a test's).
+func (s sourceFiles) context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
 	}
-	return openSourceSQLite(ctx, readable)
+	return s.ctx
 }
 
 // Database is a path at which SQLite can open path: the path itself for a
@@ -409,7 +414,7 @@ func (s sourceFiles) Database(path string) (string, error) {
 	if !ok {
 		return path, nil
 	}
-	return s.view.materialize(s.ctx, rel)
+	return s.view.materialize(s.context(), rel)
 }
 
 // materialize returns a path at which the captured entry rel can be opened
