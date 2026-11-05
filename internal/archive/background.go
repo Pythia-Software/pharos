@@ -1100,6 +1100,32 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			stages[stage] = true
 		}
 	}
+	// Discovery can bring earlier analyses into this pass. Include them in
+	// its remaining steps, so a prerequisite never leaves the last finished
+	// standalone task (such as Library upgrade) looking as though it is running.
+	stageItem := func(name string) string {
+		if name == "github" {
+			return "repositories"
+		}
+		if name == "findings" && slices.Contains(ids, "review") && !slices.Contains(ids, "findings") {
+			return "review"
+		}
+		return stageItems[name]
+	}
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	for name := range stages {
+		wanted[stageItem(name)] = true
+	}
+	expanded := []string{}
+	for _, item := range backgroundItems {
+		if wanted[item.ID] {
+			expanded = append(expanded, item.ID)
+		}
+	}
+	op.Plan(backgroundSteps(expanded)...)
 	findings := findingsMeasure
 	if slices.Contains(ids, "review") {
 		findings = findingsAuto
@@ -1110,6 +1136,9 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	}
 	outcome := map[string]error{}
 	err := s.finishDeferredStages(ctx, findings, stages, func(name string, work func() error) error {
+		if id := stageItem(name); id != "" {
+			next(id)
+		}
 		for _, id := range chainItems {
 			item, _ := backgroundItemByID(id)
 			if slices.Contains(item.Stages, name) || id == "review" && name == "findings" {

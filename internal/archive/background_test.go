@@ -628,6 +628,35 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	if !server.peekRequested()["writing"] {
 		t.Fatal("Run now asks the next pass for the item")
 	}
+	t.Run("manual work stays queued after a pass accepts it", func(t *testing.T) {
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": cadenceManual}}, http.StatusOK)
+		state := func() string {
+			t.Helper()
+			_, views := server.operationsDocumentViews(ctx, false)
+			view := server.backgroundView(ctx, views, nil, time.Now())
+			for _, item := range view["items"].([]map[string]any) {
+				if item["id"] == "writing" {
+					return asString(item["state"])
+				}
+			}
+			return ""
+		}
+		if got := state(); got != "queued" {
+			t.Fatalf("requested manual item: %s", got)
+		}
+		server.takeRequested()
+		_, pass := server.begin(ctx, OperationSpec{Kind: "background.update", Variant: "requested", Trigger: triggerUser})
+		pass.Plan(backgroundSteps([]string{"upgrade", "writing"})...)
+		pass.Step("Library upgrade", "", -1)
+		if got := state(); got != "queued" {
+			t.Fatalf("accepted manual item behind upgrade: %s", got)
+		}
+		pass.Finish(nil)
+		if got := state(); got != "manual" {
+			t.Fatalf("after the pass, the saved manual cadence resumes: %s", got)
+		}
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
+	})
 	post("/api/background/run", map[string]any{"item": "conversations"}, http.StatusAccepted)
 	if !server.indexRequested() {
 		t.Fatal("Run now of new conversations asks for an index whatever the schedule")
@@ -906,6 +935,21 @@ func TestBackgroundReviewBringsAlongStagesPendingWhenTheChainStarts(t *testing.T
 	}
 	if !server.runBackgroundPass(ctx, cadenceDaily, []string{"review"}, plans) {
 		t.Fatal("the pass did not run")
+	}
+	for _, view := range server.ops.views() {
+		if view.Spec.Kind != "background.update" {
+			continue
+		}
+		for _, id := range []string{"repositories", "tools", "writing", "review"} {
+			item, _ := backgroundItemByID(id)
+			if !slices.ContainsFunc(view.Plan, func(step StepPlan) bool { return step.Name == item.Label }) {
+				t.Fatalf("discovered prerequisite %s missing from pass plan: %+v", id, view.Plan)
+			}
+		}
+		review, _ := backgroundItemByID("review")
+		if view.Step.Name != review.Label || view.Step.Index != len(view.Plan) {
+			t.Fatalf("pass still shows an earlier task after its chain: %+v", view.Step)
+		}
 	}
 	var waiting int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation").Scan(&waiting); err != nil || waiting != 0 {

@@ -236,9 +236,16 @@
     const primary = [], secondary = [];
     const pass = operation.kind === 'background.update';
     if (operation.state !== 'running' && operation.state_label && operation.state_label !== operation.label) primary.push(operation.state_label);
-    const step = operation.step;
-    const position = pass && Number.isInteger(step?.index) && Number.isInteger(step?.count) && step.index > 0 && step.index <= step.count
-      ? {index: step.index, count: step.count} : null;
+    // A pass may be inside a chain stage, and authorship has its own child
+    // rebuild. Its current work and measured amount belong on the Now row.
+    let current = operation;
+    if (pass) {
+      for (let child; (child = current.children?.find(running));) current = child;
+    }
+    const step = current.step;
+    const planned = operation.step;
+    const position = pass && Number.isInteger(planned?.index) && Number.isInteger(planned?.count) && planned.index > 0 && planned.index <= planned.count
+      ? {index: planned.index, count: planned.count} : null;
     if (!pass && step?.count > 0 && step.index > 0) primary.push(`step ${step.index} of ${step.count}`);
     const amount = stepAmount(step);
     if (amount) primary.push(amount);
@@ -248,7 +255,7 @@
     if (name && !pass) secondary.push(name);
     if (step?.source && step.source !== name) secondary.push(step.source);
     const tooltip = [operation.detail, operation.on_eject].filter(Boolean).join('\n');
-    return {id: operation.id, label: pass ? name || operation.label : operation.label, cadence: pass ? CADENCE_NAMES[operation.variant] || '' : '',
+    return {id: operation.id, label: pass ? (current !== operation ? current.label : name || operation.label) : operation.label, cadence: pass ? CADENCE_NAMES[operation.variant] || '' : '',
       position, primary, secondary, time: operation.time?.label || '', tooltip,
       fraction: Number.isFinite(step?.fraction) ? step.fraction : null, state: operation.state, background: operation.priority === 'background'};
   }

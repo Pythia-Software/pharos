@@ -1423,7 +1423,9 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	inputsTook := time.Since(started)
 	reportWork(ctx, "authorship mode: "+run.reason, "message", 0, len(run.inputs))
 	classified := time.Now()
-	results, err := classifyAuthorship(ctx, c.DB, run.inputs, run.classifier)
+	// Bounded reply pages must keep moving even while other work occupies
+	// the catalog connections with writes or waits for the writer lock.
+	results, err := classifyAuthorship(ctx, c.reader(), run.inputs, run.classifier)
 	if err != nil {
 		return err
 	}
@@ -1657,7 +1659,7 @@ func authorshipContinuations(ctx context.Context, q queryer, representative map[
 // replies in the same order, so the agent index always holds exactly the
 // replies of the preceding window.
 func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]authorResult, error) {
-	return classifyInputsFrom(ctx, c.DB, inputs)
+	return classifyInputsFrom(ctx, c.reader(), inputs)
 }
 
 // classifyInputsFrom is classifyInputs reading agent replies through q.

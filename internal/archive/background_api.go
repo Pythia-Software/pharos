@@ -57,6 +57,29 @@ func runningItems(views []opView) (map[string]bool, []string) {
 	return items, order
 }
 
+// waitingItems includes items accepted by a pass but not yet reached. A
+// manual cadence describes future scheduling, not the state of an accepted
+// Run now while its prerequisites are running.
+func waitingItems(views []opView) map[string]bool {
+	waiting := map[string]bool{}
+	for _, view := range views {
+		if view.Spec.Kind != "background.update" || !liveState(view.State) {
+			continue
+		}
+		for index, step := range view.Plan {
+			if index+1 <= view.Step.Index {
+				continue
+			}
+			for _, item := range backgroundItems {
+				if item.Label == step.Name {
+					waiting[item.ID] = true
+				}
+			}
+		}
+	}
+	return waiting
+}
+
 // stoppableItems is the operation that Stop ends for each item a stoppable
 // operation is working on: a top-level one, as the snapshot offers Stop.
 func stoppableItems(views []opView) map[string]OpID {
@@ -243,6 +266,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		rows[row.Domain] = row
 	}
 	live, order := runningItems(views)
+	queued := waitingItems(views)
 	stops := stoppableItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
@@ -260,6 +284,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
+		case in.requested[item.ID] || queued[item.ID]:
+			state = "queued"
 		case item.ID == "backup" && in.backupDestination == "":
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
