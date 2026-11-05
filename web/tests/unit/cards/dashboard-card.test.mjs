@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
-import { DASHBOARD_CARD_ACTION, dashboardCardLabels, dashboardCardURL, dashboardCardSource, pageCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets, dashboardCardDescription, dashboardCardGroups } from '../../../src/dashboard-card-model';
+import { DASHBOARD_CARD_ACTION, dashboardCardLabels, dashboardCardMetadata, dashboardCardURL, dashboardCardSource, pageCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets, dashboardCardDescription, dashboardCardGroups } from '../../../src/dashboard-card-model';
+import { allAnalysisViews, validAnalysisState } from '../../../src/dashboard-analysis-model';
+import { habitsCardTargets, habitsCardTitle, readHabitsCardView } from '../../../src/habits-card';
+import { thinkingTopics, thinkingViews, thinkingBreakdowns } from '../../../src/thinking-model';
 import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
 import { dashboardDefaults } from '../../../src/dashboard-defaults';
 import { readBookmarks, updateBookmark, moveBookmark, removeBookmark } from '../../../src/bookmarks';
-import { normalizeAnalysis, analysisQuery, selectGroups, cycleResult } from '../../../src/dashboard-analysis-model';
+import { normalizeAnalysis, analysisQuery, selectGroups, cycleResult, switchView } from '../../../src/dashboard-analysis-model';
 import { trendQuery, trendSeries } from '../../../src/dashboard-trend-model';
 import { optionLabels } from '../../../src/option-labels';
 import { runAnalysisQuery } from '../../../src/analysis-request';
@@ -101,6 +104,137 @@ test('every dashboard topic retains its requested chart and dataset in a saved U
     assert.equal(restored.dataset,catalog.dataset);
     assert.deepEqual(restored.state,normalizeAnalysis(catalog,state));
   }
+});
+
+test('every dashboard creation target supplies bounded default copy from its own controls and filters', t => {
+  fixture(t);
+  const check = (url, schema) => {
+    for (const target of dashboardCardTargets(url, schema)) {
+      const copy = dashboardCardMetadata(url, target.id, schema);
+      assert.equal(target.title, copy.title, `${url}: ${target.id}`);
+      assert.ok(copy.title.trim() && copy.title.length <= 200);
+      assert.ok(copy.description.trim() && copy.description.length <= 500);
+      assert.doesNotMatch(copy.title, /undefined|\[object Object\]|Days: you|Your pace/);
+    }
+  };
+  // Discover catalogs and vocabulary rather than keeping a second list of pages.
+  // Future measures and views therefore have to produce usable defaults too.
+  for (const [topic, defaults] of Object.entries(dashboardDefaults)) {
+    const catalog = analysisCatalogs[topic], schema = schemas[catalog.dataset];
+    for (const metric of Object.keys(catalog.measures)) for (const [view] of allAnalysisViews) {
+      const state = normalizeAnalysis(catalog, { ...defaults, metric, view });
+      if (!validAnalysisState(catalog, state)) continue;
+      check(dashboardCardURL(`/analyze?analyze_topic=${topic}`, catalog, state, []), schema);
+    }
+    const filters = [{ field: 'provider', op: '=', value: 'codex' }];
+    const url = dashboardCardURL(`/analyze?analyze_topic=${topic}`, catalog, defaults, filters);
+    assert.match(dashboardCardMetadata(url, 'chart', schema).title, /codex/i);
+    assert.match(dashboardCardMetadata(url, 'chart', schema).description, /codex/i);
+  }
+  for (const topic of thinkingTopics) for (const [view] of thinkingViews) for (const [groupBy] of thinkingBreakdowns) {
+    const url = pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: topic, thinking: JSON.stringify({ view, groupBy }),
+      analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'harness', op: '=', value: 'codex' }] }) }));
+    check(url, schemas.model_requests);
+    for (const target of dashboardCardTargets(url)) assert.match(target.title, /codex/);
+  }
+});
+
+test('catalog default copy follows chart semantics, selections, time windows and predicate grammar', t => {
+  fixture(t);
+  const copy = (state, filters = []) => dashboardCardMetadata(makeURL({ ...dashboardDefaults.tokens, metric: 'tokens', split: 'provider', ...state }, filters), 'chart', schemas.usage);
+  const trend = copy({ rollingPeriods: 7, period: 'day', completePeriods: true, nonzero: true, norm: true, normPeriods: 10 });
+  assert.match(trend.title, /7-day average.*[Tt]okens per day by provider/);
+  assert.match(trend.description, /Whole periods only/);
+  assert.match(trend.description, /Zero values omitted/);
+  assert.match(trend.description, /mean of 10 earlier periods/);
+  assert.match(copy({ display: 'cumulative' }).title, /Cumulative/);
+  assert.match(copy({ share: true }).title, /Share of/);
+  assert.match(copy({ view: 'compare', unit: 'conversation', reduce: 'median' }).title, /Median per conversation/);
+  assert.match(copy({ view: 'compare', unit: 'conversation', reduce: 'count' }).title, /Number of conversations/);
+  assert.match(copy({ view: 'compare', compareAs: 'share' }).title, /Share of/);
+  assert.match(copy({ view: 'distribution', unit: 'conversation', minSamples: 5 }).description, /Minimum 5 conversations/);
+  assert.match(copy({ view: 'distribution', unit: 'conversation' }).title, /distribution per conversation/);
+  const scatter = copy({ view: 'scatter', unit: 'conversation', metricY: 'cost' });
+  assert.match(scatter.title, /vs.*cost.*per conversation/i);
+  assert.match(copy({ view: 'cycle', cycle: 'hour', reduce: 'mean' }).title, /Mean.*hour of day/);
+  assert.match(copy({ selection: { values: ['codex'], excluded: true } }).title, /Exclude provider: codex/);
+  for (const excluded of [false, true]) {
+    const selected = { ...dashboardDefaults.tokens, metric: 'tokens', split: 'provider', selection: { values: ['codex'], excluded } };
+    for (const cycle of ['hour', 'weekday']) {
+      const switched = switchView(catalog, { ...selected, cycle }, 'cycle');
+      assert.deepEqual(switched.selection, selected.selection, 'switching views retains the dormant selection');
+      assert.equal(analysisQuery(catalog, switched, []).selection, undefined, 'cycles ignore the retained selection');
+      assert.deepEqual(copy(switched), copy({ ...switched, selection: undefined }), 'cycle titles and context describe the unrestricted chart');
+    }
+    for (const view of ['trend', 'compare', 'distribution', 'scatter']) {
+      const ungrouped = normalizeAnalysis(catalog, { ...selected, view, split: 'none' });
+      assert.deepEqual(copy(ungrouped), copy({ ...ungrouped, selection: undefined }), `${view} without a breakdown ignores the retained selection`);
+      const grouped = switchView(catalog, selected, view);
+      assert.match(copy(grouped).title, excluded ? /Exclude provider: codex/ : /Only provider: codex/, `${view} still names an active selection`);
+    }
+  }
+  const part = catalog.components.type.parts[0].key;
+  assert.match(copy({ split: 'type', selection: { values: [part], excluded: false } }).title, new RegExp(`Only series: ${part}`), 'component trends still name their selected parts');
+  const predicates = [{ any: [{ field: 'provider', op: '=', value: 'codex' }, { field: 'provider', op: '=', value: 'claude' }] },
+    { field: 'repository_name', op: 'contains', value: 'pharos', negated: true }];
+  const filtered = copy({}, predicates);
+  assert.match(filtered.description, /Codex or Claude/);
+  assert.match(filtered.description, /not \(Repository contains pharos\)/);
+  assert.notEqual(copy({}).title, filtered.title);
+  const today = makeURL(dashboardDefaults.tokens, where, '/analyze?analyze_topic=tokens&analyze_window=today');
+  assert.match(dashboardCardDescription(today), /Today/);
+  assert.doesNotMatch(dashboardCardDescription(today), /\d{4}-\d{2}-\d{2}T/);
+  const long = copy({}, [{ field: 'repository_name', op: '=', value: 'long repository '.repeat(100) }]);
+  assert.ok(long.title.length <= 200 && long.description.length <= 500);
+  assert.match(long.description, /…$/);
+  const groups = makeURL(dashboardDefaults.tokens, []);
+  assert.match(dashboardCardDescription(groups, 'chart', schemas.usage, 6), /Show up to 6 groups/);
+});
+
+test('Habits defaults describe each actor and range, independently of unrelated catalog filters', t => {
+  fixture(t);
+  const base = readHabitsCardView(new URLSearchParams());
+  const url = view => dashboardCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'habits', ...view }), analysisCatalogs.habits, dashboardDefaults.habits,
+    [{ field: 'repository_name', op: '=', value: 'catalog-only' }]);
+  for (const target of habitsCardTargets) {
+    const copy = dashboardCardMetadata(url({}), target);
+    assert.equal(copy.title, habitsCardTitle(target, base));
+    assert.doesNotMatch(copy.description, /catalog-only/);
+  }
+  assert.match(dashboardCardMetadata(url({}), 'habits-calendar').title, /Your active days/);
+  assert.match(dashboardCardMetadata(url({ habits_calendar: 'agents', habits_weekends: 'hide' }), 'habits-calendar').title, /agents you started.*weekdays only/);
+  assert.match(dashboardCardDescription(url({ habits_weeks: '53' }), 'habits-calendar'), /17 weeks.*all 53 weeks/);
+  assert.match(dashboardCardDescription(url({ habits_punchcard: 'difference', habits_punchcard_days: '30' }), 'habits-punchcard'), /Past 30 days.*Agent time minus your engaged time/);
+  assert.match(dashboardCardDescription(url({ habits_shape_days: '7' }), 'habits-days'), /last 7 days/);
+  assert.match(dashboardCardMetadata(url({}), 'habits-pace').title, /work and rest/);
+});
+
+test('bespoke card context follows saved assumptions and chart controls', t => {
+  fixture(t);
+  const carbon = settings => dashboardCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'carbon', analyze_carbon: JSON.stringify(settings) }), analysisCatalogs.carbon, dashboardDefaults.carbon, []);
+  const assumptions = dashboardCardDescription(carbon({ scenario: 'high', pueScenario: 'low', grid: 'custom', customGrid: 200, inputSensitivity: 'third' }));
+  assert.match(assumptions, /Energy estimate: high/);
+  assert.match(assumptions, /Facility overhead: low/);
+  assert.match(assumptions, /Grid: 200 g CO₂e\/kWh/);
+  assert.match(assumptions, /Watershed input sensitivity/);
+  const parallel = settings => dashboardCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'parallelism', analyze_parallelism: JSON.stringify(settings) }), analysisCatalogs.parallelism, dashboardDefaults.parallelism, []);
+  const ribbonURL = parallel({ counting: 'agent', mode: 'user', gap: 15, repository: 'pharos', range: 'day', day: '2026-10-01' });
+  const ribbon = dashboardCardMetadata(ribbonURL, 'ribbon');
+  assert.match(ribbon.title, /Concurrent sessions.*pharos/);
+  assert.match(ribbon.description, /2026-10-01.*gaps up to 15 minutes/);
+  assert.match(dashboardCardDescription(ribbonURL), /Count top-level sessions.*15 minutes/);
+  const workspace = new URL(parallel({ counting: 'workspace' }), location.origin);
+  workspace.searchParams.set('analyze_chart', JSON.stringify({ ...dashboardDefaults.parallelism, split: 'provider' }));
+  assert.doesNotMatch(dashboardCardMetadata(workspace.href).title, /provider/i, 'counting controls normalize unavailable breakdowns as the chart does');
+  assert.match(dashboardCardDescription(parallel({ mode: 'model' }), 'ribbon'), /Model activity intervals/);
+  assert.doesNotMatch(dashboardCardDescription(parallel({ mode: 'model' }), 'ribbon'), /gaps/);
+  const thinking = controls => pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'thinking-detail', thinking: JSON.stringify(controls) }));
+  const time = dashboardCardMetadata(thinking({ view: 'time', period: 'hours', hours: 6, normalization: 'count', range: '7d', model: 'gpt-5', effort: 'high' }), 'thinking-distributions');
+  assert.match(time.title, /gpt-5.*high effort/);
+  assert.match(time.description, /Past 7 days.*Periods: 6 hours/);
+  assert.match(time.description, /shaded by its requests/);
+  assert.match(dashboardCardDescription(thinking({ view: 'heatmap', normalization: 'share' }), 'thinking-distributions'), /share of the group's waits/);
+  assert.match(dashboardCardDescription(thinking({ view: 'calendar', calendarRows: 'week', calendarMetric: 'ratio' }), 'thinking-distributions'), /Rows: week.*workload estimate/);
 });
 
 test('saved dashboard trend previews match smoothing, cumulative totals, shares and legend selections', async t => {
@@ -321,7 +455,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   const url = dashboardCardURL(address, analysisCatalogs.habits, dashboardDefaults.habits, []);
   assert.equal(new URL(url, location.origin).searchParams.has('habits_day'), false, 'a selected day is not part of a card');
   assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations', 'chart']);
-  assert.equal(dashboardCardTargets(url).find(target => target.id === 'habits-calendar').title, 'Days: automatic agent runs, weekdays');
+  assert.equal(dashboardCardTargets(url).find(target => target.id === 'habits-calendar').title, 'Days with automatic agent runs · weekdays only');
   assert.equal(dashboardCardWindow(url, 'habits-calendar'), 'Past 13 weeks');
   // A year's calendar draws the weeks a card can show, and says so.
   const year = dashboardCardURL(address.replace('habits_weeks=13', 'habits_weeks=53'), analysisCatalogs.habits, dashboardDefaults.habits, []);
@@ -383,7 +517,7 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'harness', op: '=', value: 'codex' }] }), highlight: 'section:x', card_id: 'thinking-compactions' });
   const overview = pageCardURL(page('thinking-overview', { range: '30d', model: 'gpt-5' })), params = new URL(overview, location.origin).searchParams;
   assert.deepEqual([params.has('highlight'), params.has('card_id'), params.get('analyze_topic')], [false, false, 'thinking-overview']);
-  assert.deepEqual(dashboardCardTargets(overview).map(target => [target.id, target.title]), [['thinking-waits', 'Model wait distribution: gpt-5'], ['thinking-compactions', 'Context compactions: gpt-5']]);
+  assert.deepEqual(dashboardCardTargets(overview).map(target => [target.id, target.title]), [['thinking-waits', 'Model wait distribution: gpt-5 · harness is codex'], ['thinking-compactions', 'Context compactions: gpt-5 · harness is codex']]);
   assert.equal(dashboardCardWindow(overview, 'thinking-waits'), 'Past 30 days');
   assert.equal(dashboardCardPresentation(overview, 'thinking-compactions').category, 'thinking');
   // Home reads the page's query filters and controls as the card's records.
@@ -420,13 +554,13 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
   // Thinking's comparison follows its view and breakdown.
   const detail = (thinking) => pageCardURL(page('thinking-detail', thinking));
   const harness = detail({ view: 'wait-box', groupBy: 'harness', range: 'all' });
-  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness']]);
+  assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness · harness is codex']]);
   assert.equal(dashboardCardWindow(harness, 'thinking-distributions'), 'All time');
   assert.deepEqual((await loadDashboardCardPreview(harness, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['harness']);
   const reasoning = detail({ view: 'reasoning', groupBy: 'repository' });
-  assert.equal(dashboardCardTargets(reasoning)[0].title, 'Reported reasoning by repository');
+  assert.equal(dashboardCardTargets(reasoning)[0].title, 'Reported reasoning by repository · harness is codex');
   assert.deepEqual((await loadDashboardCardPreview(reasoning, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['repository_name']);
-  assert.equal(dashboardCardTargets(detail({ view: 'histogram', groupBy: 'none' }))[0].title, 'Model wait distribution');
+  assert.equal(dashboardCardTargets(detail({ view: 'histogram', groupBy: 'none' }))[0].title, 'Model wait distribution · harness is codex');
   // A whole library's exact quantiles exceed the service's budget; without a breakdown the card draws a box per model.
   assert.deepEqual((await loadDashboardCardPreview(detail({ view: 'histogram', groupBy: 'none' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions')).metrics[0].clause.groupBy, ['model']);
 
@@ -449,14 +583,14 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
   // Thinking's grids draw as grids, from the response the page draws.
   const grid = async thinking => { const url = detail({ groupBy: 'model', range: '30d', ...thinking }); return [dashboardCardTargets(url)[0].title, await loadDashboardCardPreview(url, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)]; };
   const [dayTitle, days] = await grid({ view: 'calendar' });
-  assert.equal(dayTitle, 'Wait by time of day');
+  assert.equal(dayTitle, 'Wait by time of day · harness is codex');
   assert.deepEqual([days.grid.rows, days.grid.columns.length, days.grid.cells[0][9], days.grid.cells[1][14], days.grid.cells[0][0], days.grid.tone], [['10-01', '10-02'], 24, 0.5, 1, null, 'sequential']);
   assert.match(days.grid.caption, /^a, the busiest of 2 groups/);
   assert.ok(days.coverHeight > 0 && days.state === 'ready');
   const [, against] = await grid({ view: 'calendar', calendarMetric: 'ratio' });
   assert.deepEqual([against.grid.tone, against.grid.cells[0][9] < 0, against.grid.cells[1][14] > 0], ['diverging', true, true]);
   const [heatTitle, heat] = await grid({ view: 'heatmap', normalization: 'share' });
-  assert.equal(heatTitle, 'Wait heatmap by model');
+  assert.equal(heatTitle, 'Wait heatmap by model · harness is codex');
   // Shades run to the 95th percentile of the drawn cells, which the legend
   // names; the wait range no request fell in is left off.
   assert.deepEqual([heat.grid.rows, heat.grid.cells[0].map(cell => Math.round(cell * 100) / 100), heat.grid.columnTicks, heat.grid.legend], [['a', 'b'], [0.25, 0.5, 0.75, 1], [0, 2], ['0%', '40%+ of a group']]);
@@ -474,9 +608,22 @@ test('percentage-valued dashboard trends retain their selected scale independent
     assert.equal(preview.dashboardTrend.percent, false);
     assert.equal(preview.dashboardTrend.unit, 'percent');
     assert.equal(preview.dashboardTrend.scale, scale);
+    assert.equal(dashboardCardDescription(url).includes('Logarithmic scale'), scale === 'logarithmic', 'percentage-valued metrics use their selected scale');
   }
-  const url = makeURL({ ...dashboardDefaults.tokens, metric:'tokens', split:'provider', share:true }, []);
+  const selected = { ...dashboardDefaults.tokens, metric:'tokens', split:'provider', scale:'logarithmic' };
+  const url = makeURL({ ...selected, share:true }, []);
   const preview = await loadDashboardCardPreview(url,schemas.usage,undefined,local,now);
   assert.equal(preview.dashboardTrend.percent, true);
   assert.equal(preview.dashboardTrend.unit, 'percent');
+  assert.equal(readDashboardCard(url).state.scale, 'logarithmic', 'share trends retain the scale for switching back');
+  assert.doesNotMatch(dashboardCardDescription(url), /Logarithmic scale/, 'share trends draw a linear percentage axis');
+  const pie = switchView(catalog, { ...selected, share: true }, 'compare');
+  assert.equal(analysisQuery(catalog, pie, []).clause.display.kind, 'pie');
+  assert.equal(pie.scale, 'logarithmic', 'pies retain the dormant scale');
+  assert.doesNotMatch(dashboardCardDescription(makeURL(pie, [])), /Logarithmic scale/);
+  for (const view of ['trend', 'compare', 'distribution', 'scatter', 'cycle']) {
+    const active = switchView(catalog, selected, view);
+    assert.match(dashboardCardDescription(makeURL(active, [])), /Logarithmic scale/, `${view} still reports an active logarithmic axis`);
+  }
+  assert.doesNotMatch(dashboardCardDescription(makeURL({ ...selected, view: 'compare', split: 'none' }, [])), /Logarithmic scale/, 'a scalar comparison has no axis');
 });

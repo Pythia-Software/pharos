@@ -50,12 +50,15 @@
 .pharos-status-bar.waiting>i{animation:none;opacity:.5}
 @keyframes pharos-status-progress{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
 @media(prefers-reduced-motion:reduce){.pharos-status-bar.indeterminate>i{animation:none;opacity:.5}}
-.pharos-status-load{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
-.pharos-status-load>span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0;padding:0 4px;white-space:nowrap}
+.pharos-status-load{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#ddd);font-size:11px;color:var(--muted,#666)}
+.pharos-status-load>span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0;padding:0 2px;white-space:nowrap}
+.pharos-status-load>span:first-child{padding-left:0}
+.pharos-status-load>span:last-child{padding-right:0}
 .pharos-status-load>span+span{border-left:1px solid var(--line,#ddd)}
 .pharos-status-load>span>span{display:inline-flex;align-items:center;gap:4px}
 .pharos-status-load .app-icon{width:13px;height:13px;flex:none}
 .pharos-status-load b{font-size:13px;font-weight:600;color:var(--ink,#000);font-variant-numeric:tabular-nums}
+@media(max-width:480px){.pharos-status-load{font-size:10px}.pharos-status-load b{font-size:11px}.pharos-status-load .app-icon{display:none}.pharos-status-load>span{padding:0 1px}.pharos-status-load:has(>span:nth-child(6)){font-size:9px}.pharos-status-load:has(>span:nth-child(6)) b{font-size:9px}}
 /* Opacity only, with the ring on ::after: see .pharos-drive .pharos-dot.busy. */
 .pharos-status-panel .pharos-dot.pulse{position:relative;animation:pharos-status-pulse 1.6s ease-in-out infinite}
 .pharos-status-panel .pharos-dot.pulse::after{content:'';position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 5px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent);opacity:0;animation:pharos-status-ring 1.6s ease-in-out infinite}
@@ -356,27 +359,31 @@
     };
   }
 
-  // The Load row (docs/background-work.md §10): CPU, memory and disk in
+  // The Load row (docs/background-work.md §10): CPU, GPU, memory and disk in
   // one row (in the app, every Pharos process on this Mac), with the
   // server's line and each process's in the tooltip. CPU is % of one core,
   // as Activity Monitor shows it; I/O is what the processes read and write
   // per second, and Storage what the library keeps on its drive (from the
   // last drive check). A figure not measured yet is a dash, and I/O stays
-  // out for a service that does not measure it.
+  // out for a service that does not measure it. GPU uses counters from
+  // the same Pharos process tree; WAL is shown only above 1 GB.
   function loadModel(resources, storage = null, wal = null, sizesStale = false) {
     if (!resources || typeof resources !== 'object') return null;
     const known = Number.isFinite(resources.cpu_percent) || Number.isFinite(resources.memory_bytes) || resources.label;
     if (!known) return null;
     const metrics = [
       {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}%` : '—'},
-      {id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'},
     ];
+    const gpu = resources.gpu;
+    if (gpu) metrics.push({id: 'gpu', icon: 'cpu', label: 'GPU', value: Number.isFinite(gpu.utilization_percent) ? `${Math.round(gpu.utilization_percent)}%` : '—'});
+    metrics.push({id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'});
     if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
-    metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: Number.isFinite(wal) ? `${sizesStale ? 'last ' : ''}${size(wal)}` : '—'});
+    if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
     const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
     const partial = [resources.cpu_partial ? 'CPU' : '', resources.disk_partial ? 'I/O' : ''].filter(Boolean);
     return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate and may temporarily undercount usage.` : '',
+      gpu ? `GPU: GPU time from these Pharos processes and their subprocesses, as a percentage of elapsed time (capped at 100%). ${gpu.partial ? 'Some clients need another sample; the measured portion may undercount usage. ' : ''}${Number.isFinite(gpu.utilization_percent) ? '' : 'Waiting for two samples or supported process counters. '}Sampled at most once every 5 seconds.` : '',
       sizesStale ? 'Storage and WAL were last reported before the service stopped answering.' : 'Storage is the last drive measurement; WAL is the current catalog log size.',
       ...processes].filter(Boolean).join('\n')};
   }

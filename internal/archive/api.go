@@ -334,6 +334,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
 	"/assets/quick-stats.js":       {"quick-stats.js", "text/javascript; charset=utf-8"},
+	"/assets/currency.js":          {"currency.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},

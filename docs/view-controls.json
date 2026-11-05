@@ -4354,15 +4354,6 @@
       "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
-      "key": "19871f71c3d02175:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "CardGroupsField",
-      "control": "value={draft.groups} onChange={groups => update({ groups })}",
-      "contract": "editing",
-      "reason": "How many chart groups the new card shows. An unapplied authoring draft saved only with the card, never a dashboard view parameter; the dashboard keeps its own count."
-    },
-    {
       "key": "2da290a1c01e8a10:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
@@ -4397,6 +4388,15 @@
       "control": "onClick={() => dialog.current?.close()}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ff498fde464eaf4:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "CardGroupsField",
+      "control": "value={draft.groups} onChange={value => { const count = value.trim() ? Number(value) : undefined; update({ groups: value, description: draft.description === dashboardCardDescription(draft.url, draft.target, from.schema, groups) ? dashboardCardDescription(draft.url, draft.target, from.schema, validCardGroups(count) ? count : undefined) : draft.description }); }}",
+      "contract": "editing",
+      "reason": "New card group-count draft; also refreshes the unedited default description. Saved only with the card, while the dashboard retains its own group count."
     },
     {
       "key": "b4d31e6a92c6f43b:0",

@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
@@ -53,7 +54,7 @@ export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); inv
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
   if (unit === "percent") return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-  if (unit === "USD") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value >= 100 ? 0 : 2 });
+  if (unit === "USD") return formatUSD(value);
   if (unit === "ms") return value >= 3_600_000 ? `${(value / 3_600_000).toFixed(1)}h` : value >= 60_000 ? `${(value / 60_000).toFixed(1)}m` : value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }

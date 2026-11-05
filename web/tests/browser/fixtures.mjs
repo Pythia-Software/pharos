@@ -470,7 +470,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 // Resources as a service reports them (§10): itself and a Terminal command.
-const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const statusResources = (label, processes) => ({ cpu_percent: 3, gpu: { utilization_percent: 62, sampled_at: iso(0), basis: "IOAccelerator.AppUsage.accumulatedGPUTime" }, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
 const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
   { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
 const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
@@ -503,17 +503,17 @@ const idleBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
     sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
-  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
-    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min", typical: "Typically 5–8 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("writing", "Update writing estimates", "frequent", "current", { cost: { seconds: 2, runs: 7, class: "light", text: "a few seconds", typical: "Typically a few seconds" } }),
   backgroundItem("findings", "Findings", "hourly", "current"),
   backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "failed", { error: "git rev-list timed out after 5 s in ~/code/a-repository-with-a-very-long-name-that-has-to-wrap" }),
-  backgroundItem("writing", "Your writing", "hourly", "running"),
+  backgroundItem("writing", "Update writing estimates", "frequent", "running"),
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
@@ -564,7 +564,7 @@ export const busyStatus = {
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
   freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
-  library: {...idleStatus.library, wal_bytes: 64e6},
+  library: {...idleStatus.library, wal_bytes: 2e9},
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -733,7 +733,7 @@ export const defaultApi = {
   },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
-  "GET /api/authorship": { built_at: iso(3600000), running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
+  "GET /api/authorship": { built_at: iso(120000), refined_at: iso(8*3600000), provisional_messages: 12, refinement_pending: true, pending_messages: 0, refining: false, running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,

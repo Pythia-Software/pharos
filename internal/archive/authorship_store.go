@@ -101,7 +101,28 @@ func (c *Catalog) planAuthorship(ctx context.Context, results []authorResult, la
 }
 
 func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time) ([]authorshipMutation, error) {
-	parents, err := authorshipParents(ctx, c.DB, launches)
+	return c.planAuthorshipScopeMode(ctx, results, launches, since, nil)
+}
+
+// quickIDs restricts provisional writes to the queue entries read by this pass.
+// It never publishes launch links or names from incomplete historical evidence.
+func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time, quickIDs []string) ([]authorshipMutation, error) {
+	parents := map[string]string{}
+	var err error
+	if quickIDs == nil {
+		parents, err = authorshipParents(ctx, c.DB, launches)
+	} else {
+		for _, result := range results {
+			var root string
+			err := c.reader().QueryRowContext(ctx, "SELECT COALESCE(work_id,workspace_id) FROM message_authorship WHERE conversation_id=? LIMIT 1", result.Input.ConversationID).Scan(&root)
+			if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+			if err == nil && root != result.Input.WorkspaceID {
+				parents[result.Input.WorkspaceID] = root
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -111,12 +132,22 @@ func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResul
 	spans := authorshipTable{name: "message_authorship_spans", keys: 2, columns: []string{"message_id", "position", "category", "rule", "reason", "start_byte", "end_byte", "chars", "words", "source_conversation_id", "source_message_id"}}
 	launchTable := authorshipTable{name: "conversation_launches", keys: 1, columns: []string{"child_id", "parent_id", "tool_call_id", "program"}}
 	names := authorshipTable{name: "workspace_names", keys: 1, columns: []string{"workspace_id", "authored_title", "authored_message_id", "authored_hash", "authored_at", "authored_version"}}
+	state := authorshipTable{name: "authorship_message_state", keys: 1, columns: []string{"message_id", "source_hash", "version", "provisional"}}
 	named := map[string][]any{}
 	for _, launch := range launches {
 		launchTable.rows = append(launchTable.rows, []any{launch.child, launch.parent, launch.toolCall, launch.program})
 	}
 	for _, result := range results {
 		input := result.Input
+		provisional := 0
+		if quickIDs != nil {
+			provisional = 1
+		}
+		version := authorshipVersion
+		if provisional != 0 {
+			version = authorshipQuickVersion
+		}
+		state.rows = append(state.rows, []any{input.ID, authorshipSourceHash(input), version, provisional})
 		counts := countSpans(input.Text, result.Spans)
 		encoded, _ := json.Marshal(result.Spans)
 		values := []any{input.ID, input.ConversationID, input.WorkspaceID, formatTime(input.SentAt), input.SentAt.Local().Format("2006-01-02"), utf8.RuneCountInString(strings.TrimSpace(input.Text))}
@@ -138,6 +169,18 @@ func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResul
 			}
 		}
 	}
+	if quickIDs != nil {
+		plan := []authorshipMutation{}
+		for _, table := range []authorshipTable{messages, spans, state} {
+			table.filter, table.args = " WHERE message_id IN (SELECT value FROM json_each(?))", []any{jsonText(quickIDs)}
+			changes, err := table.plan(ctx, c.reader())
+			if err != nil {
+				return nil, err
+			}
+			plan = append(plan, changes...)
+		}
+		return plan, nil
+	}
 	query, args := "SELECT id FROM workspaces ORDER BY id", []any{}
 	if since != nil {
 		ids, works := []string{}, map[string]bool{}
@@ -148,6 +191,7 @@ func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResul
 		messages.filter = " WHERE message_id IN (SELECT value FROM json_each(?))"
 		messages.args = []any{jsonText(ids)}
 		spans.filter, spans.args = messages.filter, messages.args
+		state.filter, state.args = messages.filter, messages.args
 		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
 		args = []any{jsonText(sortedNameIDs(works))}
 	}
@@ -174,7 +218,7 @@ func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResul
 		}
 		names.rows = append(names.rows, values)
 	}
-	tables := []authorshipTable{launchTable, messages, spans, names}
+	tables := []authorshipTable{launchTable, messages, spans, state, names}
 	if since != nil {
 		namesIDs := []string{}
 		for _, row := range names.rows {
@@ -184,7 +228,7 @@ func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResul
 		names.args = []any{jsonText(namesIDs)}
 		// Launches are all derived again; history's are as stored, so only
 		// new runs' are written.
-		tables = []authorshipTable{launchTable, messages, spans, names}
+		tables = []authorshipTable{launchTable, messages, spans, state, names}
 	}
 	plan := []authorshipMutation{}
 	for _, table := range tables {
@@ -251,6 +295,7 @@ func (c *Catalog) publishAuthorship(ctx context.Context, generation string) erro
 // initial build even though commits are bounded.
 func executeAuthorshipMutations(ctx context.Context, tx *sql.Tx, changes []authorshipMutation, visit func(authorshipMutation, int64)) error {
 	statements := map[string]*sql.Stmt{}
+	inputsChanged := false
 	defer func() {
 		for _, statement := range statements {
 			_ = statement.Close()
@@ -270,12 +315,24 @@ func executeAuthorshipMutations(ctx context.Context, tx *sql.Tx, changes []autho
 		if err != nil {
 			return err
 		}
-		if visit != nil {
+		if visit != nil || change.table == "message_authorship" {
 			count, err := result.RowsAffected()
 			if err != nil {
 				return err
 			}
-			visit(change, count)
+			inputsChanged = inputsChanged || (change.table == "message_authorship" && count > 0)
+			if visit != nil {
+				visit(change, count)
+			}
+		}
+	}
+	// Consumers may catch up between bounded writes, including exact suffixes.
+	// Keep their schedule pending atomically with each changed input batch.
+	if inputsChanged {
+		for _, stage := range []string{"labels", "findings"} {
+			if err := markSyncDeferredStage(tx, stage); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

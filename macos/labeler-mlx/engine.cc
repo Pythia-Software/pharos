@@ -32,6 +32,12 @@ struct Model {
     Model(const char* path, const char* task, const char* source) : kestrel(std::string(task) == "kestrel") {
         if (!kestrel && std::string(task) != "jayhawk") throw std::runtime_error("unknown MLX task");
         mx::set_default_device(mx::Device::gpu);
+        // MLX's default buffer cache scales with the Mac's total memory. Mixed
+        // batch shapes otherwise retain tens of GB of unused Metal buffers.
+        // Match the manager's 3 GiB GPU reservation (a soft evaluation limit)
+        // and keep only a small reusable pool alongside the model's weights.
+        mx::set_memory_limit(size_t(3072) * 1024 * 1024);
+        mx::set_cache_limit(size_t(512) * 1024 * 1024);
         auto loaded = mx::load_safetensors(path);
         auto& meta = loaded.second;
         if (meta["format"] != "pharos-mlx-v1" || meta["architecture"] != "ettin-68m-v1" ||
@@ -167,7 +173,10 @@ int run_model(void* handle, const int32_t* ids, const int32_t* att, const int32_
         return 0;
     } catch (const std::exception& e) { *error = strdup(e.what()); return -1; }
 }
-void close_model(void* handle) { delete static_cast<Model*>(handle); }
+void close_model(void* handle) {
+    delete static_cast<Model*>(handle);
+    mx::clear_cache();
+}
 const pharos_mlx_api api{open_model, run_model, close_model};
 }
 extern "C" const pharos_mlx_api* pharos_mlx_api_v1() { return &api; }

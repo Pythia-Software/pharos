@@ -68,7 +68,7 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
 	ago := func(d time.Duration) string { return formatTime(at.Add(-d)) }
 	settings := func() backgroundSettings {
-		return backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{}}
+		return backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{"writing": cadenceHourly}, Placements: map[string]string{}}
 	}
 	// A stage with work written changed ago, last caught up completed ago.
 	pending := func(changed, completed time.Duration) deferredRow {
@@ -417,7 +417,7 @@ func TestBackgroundSearchFollowsScheduleAndRunNow(t *testing.T) {
 // opt-in item runs only when chosen.
 func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {
 	settings := backgroundSettings{Overrides: map[string]string{"writing": cadenceFrequent, "tools": cadenceDaily, "search": cadenceManual}, Placements: map[string]string{}}
-	for id, want := range map[string]string{"writing": cadenceHourly, "tools": cadenceDaily, "search": cadenceFrequent, "backup": cadenceManual} {
+	for id, want := range map[string]string{"writing": cadenceFrequent, "tools": cadenceDaily, "search": cadenceFrequent, "backup": cadenceManual} {
 		item, _ := backgroundItemByID(id)
 		if got := settings.cadence(item); got != want {
 			t.Errorf("%s runs %s, want %s", id, got, want)
@@ -500,6 +500,7 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	ctx := context.Background()
+	execSQL(t, catalog.DB, "INSERT INTO background_settings(host_id,overrides_json) VALUES("+sqlQuote(currentHost().ID)+",'{\"writing\":\"hourly\"}')")
 	stamp := func(d time.Duration) string { return sqlQuote(formatTime(time.Now().Add(-d))) }
 	execTx(t, catalog.DB, "DELETE FROM sync_deferred",
 		// Today's daily work is done.
@@ -738,7 +739,7 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		t.Fatalf("the settings were not stored: %+v", settings)
 	}
 	post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
-	if settings, _ := catalog.backgroundSettings(ctx, time.Now()); settings.cadence(writing) != cadenceHourly {
+	if settings, _ := catalog.backgroundSettings(ctx, time.Now()); settings.cadence(writing) != cadenceFrequent {
 		t.Fatal("an empty override returns an item to automatic")
 	}
 	for _, body := range []map[string]any{
@@ -951,7 +952,7 @@ func TestBatteryPolicyByPowerSource(t *testing.T) {
 // scheduled index runs less often, and Run now still runs.
 func TestBackgroundPlanFollowsTheBatteryPolicy(t *testing.T) {
 	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
-	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{"writing": cadenceHourly}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
 	settings.sync.NextAt = formatTime(at.Add(time.Minute))
 	in := backgroundInputs{runs: map[string]backgroundRunRow{}, power: powerState{Battery: true, OnBattery: true, Percent: 80},
 		deferred: map[string]deferredRow{"authorship": {generation: 2, completed: 1, changedAt: formatTime(at.Add(-time.Hour)), completedAt: formatTime(at.Add(-2 * time.Hour))}}}
@@ -1113,7 +1114,7 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 		// Your writing is hourly, and the library is not quiet.
 		pending("authorship", time.Minute), pending("findings", time.Minute),
 		"INSERT INTO background_runs(host_id,item,succeeded_at) VALUES("+host+",'preserve',"+stamp(0)+"),("+host+",'review',"+stamp(0)+")",
-		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\"}','{\"findings\":\"frequent\"}')",
+		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\",\"writing\":\"hourly\"}','{\"findings\":\"frequent\"}')",
 		setMetaSQL("findings_generation", findingsVersion+"/2026-10-26"))
 	completed := func(name string) int64 {
 		var generation int64
@@ -1219,5 +1220,29 @@ func TestBackgroundDayCostCountsFrequentPasses(t *testing.T) {
 	frequent := cost["cadences"].([]map[string]any)[0]
 	if seconds := frequent["seconds"].(float64); seconds < 59 || seconds > 61 {
 		t.Fatalf("the frequent pass is not counted: %v", frequent)
+	}
+}
+
+func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *testing.T) {
+	at := time.Date(2026, 11, 5, 4, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{"writing": cadenceDaily}}
+	in := backgroundInputs{writingPending: true, writingRefinedAt: formatTime(at.Add(-24 * time.Hour)), runs: map[string]backgroundRunRow{"writing": {succeeded: formatTime(at.Add(-time.Minute))}}}
+	plans := func() map[string]itemPlan {
+		out := map[string]itemPlan{}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			out[plan.ID] = plan
+		}
+		return out
+	}
+	p := plans()
+	if quick := p["writing"]; quick.Cadence != cadenceFrequent || quick.Due || !quick.Next.Equal(at.Add(4*time.Minute)) {
+		t.Fatalf("quick estimates ignore obsolete adaptive placement and wait for their interval: %+v", quick)
+	}
+	if daily := p["writing-refine"]; daily.Cadence != cadenceDaily || !daily.Due {
+		t.Fatalf("recent estimates suppressed daily refinement: %+v", daily)
+	}
+	in.writingRefinedAt = formatTime(at.Add(-30 * time.Minute))
+	if daily := plans()["writing-refine"]; daily.Due || daily.Pending == false || !daily.Next.After(at) {
+		t.Fatalf("completed daily work ran again: %+v", daily)
 	}
 }

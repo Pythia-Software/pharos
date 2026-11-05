@@ -4,7 +4,13 @@
 
 The reader and a library card's Browse preview highlight typed spans while their Highlight row's **Human writing** box is checked, the default (view field `reader_writing`; [In the reader](local-labeler.md#in-the-reader) describes the row).
 
-The classification is derived from retained messages into `message_authorship` (one row per user message, with characters and words per category). Manual **Index changes** and **Capture & index** refresh it when its inputs changed and wait for it to finish. Scheduled indexing leaves it pending; the background schedule's **Your writing** item then rebuilds it on its cadence (Hourly while a rebuild takes minutes; see [background updates](background-work.md#11-background-updates)), so Usage keeps the last classified totals until then. Separate source/captured-file index actions also request a background rebuild. Opening Usage or Settings builds it only when it is missing or was classified by an older version of the rules. Record writes invalidate authorship independently of tool usage, including messages containing only user text. Rebuild cost depends on both user messages and retained agent/tool text; sources stream through existing time indexes, and the agent comparison corpus is evicted outside the seven-day window.
+The classification is derived from retained messages into `message_authorship` (one row per user message, with characters and words per category). **Update writing estimates** runs on the frequent schedule (normally every five minutes), while **Refine writing history** runs on the daily schedule (normally overnight at 03:00). Manual **Index changes**, **Capture & index**, page initialization and labeling can request the same bounded estimates pass. None of those paths escalates into a full historical rebuild.
+
+An estimates pass processes at most 250 queued messages with a ten-second budget. A usable exact append checkpoint gets a two-second opportunity to run the complete incremental rules. Otherwise, the pass uses the shared per-message rules for harness context, explicit automation, attachments, code, quotes, pasted output and typing speed, plus cached templates and question provenance. It does not discover launch relationships or scan historical agent text. Unusually large messages (over 4 MiB) wait for daily refinement. Backlogs continue at the next scheduled interval; page polling cannot spend another budget recursively.
+
+Quick classifications are marked **provisional** in the reader and Writing dashboard. The dashboard separately reports its last update, queued messages, provisional estimates and last historical refinement. Totals may change overnight when copied text, repeated templates or relationships are resolved. Unchanged refined messages retain their results; a source edit becomes eligible for a new estimate.
+
+The daily pass applies the complete existing classifier to retained history, then saves its exact incremental checkpoint. It reconciles mirrors, headless launches, copied/re-sent text, reused lines and template session/day counts. Source edits and deletions enter a durable queue in the source transaction; estimate writes acknowledge only the revisions they read. Cancellation, a deadline, a restart or a concurrent source edit retains unfinished work. The exact generation, visible estimate generation and last complete historical-pass timestamp are separate, so cheap updates cannot postpone the daily job. Both jobs share one classifier lease, while downstream labels and findings are marked pending after refinement.
 
 ## Which messages count
 
@@ -131,15 +137,16 @@ new user messages. Reused launch links retain a message anchor only when the
 command belongs to the attributed parent conversation; a suppressed mirror's
 message cannot anchor a link into its representative.
 
-The full classifier remains the fallback for missing/old/interrupted state,
+For explicit exact rebuilds, the full classifier remains the fallback for
+missing/old/interrupted state,
 identity or mirror changes, launch overlap, historical edits/deletions or
 backfills, equal-time additions, and suffixes exceeding 2,000 user messages.
 A template crossing its threshold, or changing an existing template's session
 or day counts, also takes the full path: older messages' category or displayed
-reason can change. These conservative cases deliberately remain full passes;
+reason can change. Frequent estimates defer these cases to the daily pass;
+explicit exact rebuilds retain the full fallback. In the exact classifier,
 stream-local launch replay and targeted historical template replay are not
-implemented. This checkpoint work did not change classification rules or
-scheduling. Classification `authorship-v11` recognizes structured question
+implemented. Classification `authorship-v11` recognizes structured question
 replies, preserves their selected-option provenance, and recognizes scheduled
 automation heartbeats; `authorship-v12` adds that a Codex continuation is its
 root's own execution rather than a sub-agent (the rule labeling prepare

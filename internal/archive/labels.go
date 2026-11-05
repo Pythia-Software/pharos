@@ -482,7 +482,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	if err := c.ensureLabelsSchema(ctx); err != nil {
 		return stats, err
 	}
-	_, authorship, err := c.authorshipGenerations()
+	_, authorship, err := c.authorshipEstimateGenerations()
 	if err != nil {
 		return stats, err
 	}
@@ -519,7 +519,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 		if err := c.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_labels_dirty`).Scan(&dirty); err != nil {
 			return stats, err
 		}
-		_, current, err := c.authorshipGenerations()
+		_, current, err := c.authorshipEstimateGenerations()
 		if err != nil {
 			return stats, err
 		}
