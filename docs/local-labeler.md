@@ -72,6 +72,28 @@ CPU worker retain their macOS 14 minimum. The app build bundles the engine,
 `libmlx.dylib`, `libjaccl.dylib`, `mlx.metallib` and license notices, signing
 nested libraries before the app. The service never links MLX.
 
+> **TODO (high priority): shrink the bundled MLX runtime.**
+>
+> The v0.8.7 app bundles approximately **238 MB** of MLX libraries, including
+> a **214 MB `mlx.metallib`**. This addition explains virtually all of the
+> installed-size jump from v0.8.5. Go stripping and LZMA reduce the download,
+> but the large GPU runtime remains in the installed app.
+>
+> Revisit upstream's `MLX_METAL_JIT=ON` and `MinSizeRel` build options. This
+> optimization is **deferred and unverified**. Keep the prebuilt runtime
+> until the following validation is complete:
+>
+> - Build a pinned upstream release on a Mac with a compatible SDK and the
+>   Metal compiler; retain safetensors support and required license notices.
+> - Measure installed and compressed sizes, first-use shader compilation,
+>   cached startup, steady inference and memory usage.
+> - Verify Kestrel and Jayhawk predictions and decisions across batch and
+>   sequence shapes, Apple silicon generations, and supported macOS versions.
+> - Verify CPU fallback, hardened signing, notarization and a Sparkle update
+>   round trip; review the minimum GPU OS version explicitly.
+>
+> Upstream guidance: [MLX binary-size minimization](https://ml-explore.github.io/mlx/build/html/install.html#binary-size-minimization).
+
 `auto` selects MLX only for a selected FP32 ONNX model with a verified MLX
 companion. Unsupported machines or unavailable native libraries use that same
 FP32 ONNX file on CPU, with a startup diagnostic. `mlx` requires the GPU backend
