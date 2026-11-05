@@ -116,6 +116,14 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/file-history.tsx",
+      "field": "file_history_path"
+    },
+    {
+      "file": "web/src/file-history.tsx",
+      "field": "file_history_project"
+    },
+    {
       "file": "web/src/page-find.ts",
       "field": "find"
     },
@@ -5180,6 +5188,24 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
+      "key": "01ec055d8656a6ab:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FileHistoryPage",
+      "tag": "input",
+      "control": "id=\"fileHistoryPath\" value={draft} onChange={event => setDraft(event.target.value)}",
+      "contract": "editing",
+      "reason": "File History path draft; applying it writes the registered file view field (file_history_path), so the draft itself is excluded."
+    },
+    {
+      "key": "0e54f0f4e4d63e89:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FileHistoryPage",
+      "tag": "button",
+      "control": "",
+      "contract": "action",
+      "reason": "Applies the File History path draft to the file view field; the applied path is the linked view state."
+    },
+    {
       "key": "7287b211b199422d:0",
       "file": "web/src/findings.tsx",
       "owner": "AddToPrompt",
@@ -5973,6 +5999,15 @@
       "control": "onClick={event => { event.stopPropagation(); openFindHit(hit); }}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+    },
+    {
+      "key": "9be41dcee05bd7d8:0",
+      "file": "web/src/index.tsx",
+      "owner": "FindMatchCell",
+      "tag": "PageLink",
+      "control": "onClick={event => event.stopPropagation()}",
+      "contract": "navigation",
+      "reason": "Canonical File History destination URL (file, file_project) for a Library file hit."
     },
     {
       "key": "e89e5712f064fcca:0",

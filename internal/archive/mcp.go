@@ -146,7 +146,7 @@ var repositoryFilterTools = map[string]bool{"search_conversations": true, "searc
 
 // projectFilterTools are the tools whose project argument filters by project
 // (projectPredicate), a repository or a folder.
-var projectFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_text": true, "search_work": true, "query_statistics": true}
+var projectFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_text": true, "search_work": true, "query_statistics": true, "list_outcomes": true, "get_file_history": true}
 
 func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	return callMCPContext(context.Background(), catalog, name, args)
@@ -187,6 +187,10 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 		return catalog.listRepositories(args)
 	case "list_projects":
 		return catalog.listProjects(args)
+	case "list_outcomes":
+		return catalog.listOutcomes(ctx, args)
+	case "get_file_history":
+		return catalog.getFileHistory(ctx, args)
 	case "search_conversations":
 		if metricCall(args) {
 			return catalog.queryStatistics(name, args)

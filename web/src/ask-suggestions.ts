@@ -39,7 +39,7 @@ export const askAreas: AskArea[] = [
   { id: "skills", label: "Skills and instructions", pages: ["analyze/skills", "analyze/query/skill_usages"], signals: ["skills.usage"] },
   { id: "mcp", label: "MCP servers", pages: ["analyze/mcp", "analyze/query/mcp_calls", "settings/mcp"], signals: ["mcp.calls"] },
   { id: "carbon", label: "Carbon impact", pages: ["analyze/carbon"], signals: ["carbon.usage"] },
-  { id: "recall", label: "Past work", pages: ["library", "work"], signals: ["recall.history"] },
+  { id: "recall", label: "Past work", pages: ["library", "work", "files"], signals: ["recall.history"] },
   { id: "ask-history", label: "Earlier Ask chats", pages: ["settings/ask"], signals: ["pharos.ask_history"] },
   { id: "library-health", label: "Library health", pages: ["settings", "settings/sync", "settings/sources", "settings/logs", "settings/libraries"], signals: ["pharos.freshness"] },
   { id: "backups", label: "Backups", pages: ["settings/backups"], signals: ["pharos.backups"] },

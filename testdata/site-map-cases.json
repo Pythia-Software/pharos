@@ -200,6 +200,7 @@
  "nodes": [
   {"path":"home","url":"/"},
   {"path":"ask","url":"/ask"},
+  {"path":"files","url":"/files?file=internal%2Farchive%2Fapi.go&file_project=pharos","state":{"file":"internal/archive/api.go","file_project":"pharos"}},
   {"path":"cards","url":"/cards"},
   {"path":"cards","url":"/cards?card_search=tokens&card_topic=usage&card_sort=title","state":{"card_search":"tokens","card_topic":"usage","card_sort":"title"}},
   {"path":"cards","url":"/cards?card_data=tool_calls&card_topic=all&card_kind=Ranking","state":{"card_data":"tool_calls","card_kind":"Ranking","card_topic":"all"}},

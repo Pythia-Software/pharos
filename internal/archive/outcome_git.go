@@ -29,10 +29,12 @@ import (
 // its last scan is not asked again.
 //
 // Only facts are stored: hashes, times, counts, the files a link shares and
-// how a commit was reverted. No commit message, diff or file content.
+// how a commit was reverted. No commit message, diff or file content. For
+// file history, every commit that changed a file some session edited keeps
+// that file's path and line counts (git_commit_files).
 
 // outcomeGitVersion scans every repository again when the rules change.
-const outcomeGitVersion = "1"
+const outcomeGitVersion = "2"
 
 // outcomeGitGrace is how long after a session's last edit a commit can still
 // be inferred to be its own: an agent or person commits soon after the work.
@@ -88,6 +90,13 @@ CREATE TABLE IF NOT EXISTS session_git(
   reverted_commits INTEGER NOT NULL DEFAULT 0,
   mainline_unknown INTEGER NOT NULL DEFAULT 0,
   checked_at TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS git_commit_files(
+  repository_id TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  path TEXT NOT NULL,
+  lines_added INTEGER NOT NULL,
+  lines_removed INTEGER NOT NULL,
+  PRIMARY KEY(repository_id,path,hash)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS git_repository_scans(
   repository_id TEXT NOT NULL,
   host_id TEXT NOT NULL,
@@ -95,6 +104,7 @@ CREATE TABLE IF NOT EXISTS git_repository_scans(
   status TEXT NOT NULL,
   reason TEXT,
   scanned_at TEXT NOT NULL,
+  history_since TEXT,
   PRIMARY KEY(repository_id,host_id)) WITHOUT ROWID;
 `
 
@@ -148,6 +158,12 @@ type gitScan struct {
 	Status, Reason string
 	Commits        map[string]*gitCommit
 	Links          []gitLink
+	// Edited are the repository's files some session edited: the commits
+	// that changed them are kept for file history.
+	Edited map[string]bool
+	// Since is how far back the scan read: commits before it are not
+	// stored, so file history says it covers only the time since.
+	Since time.Time
 }
 
 var errGitTimeout = errors.New("git timed out")
@@ -444,7 +460,12 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 	if err != nil {
 		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
 	}
-	scan := gitScan{Status: "checked", Commits: commits}
+	scan := gitScan{Status: "checked", Commits: commits, Edited: map[string]bool{}, Since: since.Add(-24 * time.Hour)}
+	for _, id := range members {
+		for path := range sessions[id].Files[repository] {
+			scan.Edited[path] = true
+		}
+	}
 	scan.Links, _ = inferLinks(ctx, dir, after, sessions, members, repository, commits)
 	linked := map[string]*gitCommit{}
 	for _, link := range scan.Links {
@@ -891,7 +912,20 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 			if _, err := tx.ExecContext(ctx, "DELETE FROM git_commits WHERE repository_id=?", repository); err != nil {
 				return err
 			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM git_commit_files WHERE repository_id=?", repository); err != nil {
+				return err
+			}
 			written := map[string]bool{}
+			writeCommit := func(commit *gitCommit) error {
+				var mainline any
+				if commit.OnMainline != nil {
+					mainline = boolInt(*commit.OnMainline)
+				}
+				_, err := tx.ExecContext(ctx, `INSERT INTO git_commits(repository_id,hash,author_at,committed_at,parents,files,lines_added,lines_removed,on_mainline,mainline_evidence,reverted_by,revert_evidence,ai_note)
+					VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, repository, commit.Hash, commit.Author.Format(time.RFC3339), commit.Commit.Format(time.RFC3339), commit.Parents, len(commit.Files),
+					commit.Added, commit.Removed, mainline, nilIfEmpty(commit.MainlineEvidence), nilIfEmpty(commit.RevertedBy), nilIfEmpty(commit.RevertEvidence), boolInt(commit.AINote))
+				return err
+			}
 			for _, link := range scan.Links {
 				if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO session_commit_links(workspace_id,repository_id,hash,method,confidence,evidence_json) VALUES(?,?,?,?,?,?)`,
 					link.Session, repository, link.Hash, link.Method, link.Confidence, jsonText(link.Evidence)); err != nil {
@@ -901,21 +935,41 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 					continue
 				}
 				written[link.Hash] = true
-				commit := scan.Commits[link.Hash]
-				var mainline any
-				if commit.OnMainline != nil {
-					mainline = boolInt(*commit.OnMainline)
-				}
-				if _, err := tx.ExecContext(ctx, `INSERT INTO git_commits(repository_id,hash,author_at,committed_at,parents,files,lines_added,lines_removed,on_mainline,mainline_evidence,reverted_by,revert_evidence,ai_note)
-					VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, repository, commit.Hash, commit.Author.Format(time.RFC3339), commit.Commit.Format(time.RFC3339), commit.Parents, len(commit.Files),
-					commit.Added, commit.Removed, mainline, nilIfEmpty(commit.MainlineEvidence), nilIfEmpty(commit.RevertedBy), nilIfEmpty(commit.RevertEvidence), boolInt(commit.AINote)); err != nil {
+				if err := writeCommit(scan.Commits[link.Hash]); err != nil {
 					return err
 				}
 			}
+			// Commits no session is linked to are kept too where they changed
+			// an edited file, without a mainline answer: only linked commits
+			// are asked about.
+			for hash, commit := range scan.Commits {
+				touched := false
+				for path, lines := range commit.Files {
+					if !scan.Edited[path] {
+						continue
+					}
+					touched = true
+					if _, err := tx.ExecContext(ctx, `INSERT INTO git_commit_files(repository_id,hash,path,lines_added,lines_removed) VALUES(?,?,?,?,?)`,
+						repository, hash, path, lines[0], lines[1]); err != nil {
+						return err
+					}
+				}
+				if touched && !written[hash] {
+					written[hash] = true
+					if err := writeCommit(commit); err != nil {
+						return err
+					}
+				}
+			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at) VALUES(?,?,?,?,?,?)
-			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at`,
-			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now())
+		var since any
+		if !scan.Since.IsZero() {
+			since = scan.Since.UTC().Format(time.RFC3339)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since) VALUES(?,?,?,?,?,?,?)
+			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at,
+			history_since=excluded.history_since`,
+			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since)
 		return err
 	})
 }

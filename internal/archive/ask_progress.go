@@ -30,6 +30,10 @@ func askToolActivity(tool string) string {
 		return "Reading repositories"
 	case "list_projects":
 		return "Reading projects"
+	case "list_outcomes":
+		return "Reading session outcomes"
+	case "get_file_history":
+		return "Reading a file's history"
 	case "search_conversations", "search_work":
 		return "Searching archived work"
 	case "list_metrics", "query_statistics":
