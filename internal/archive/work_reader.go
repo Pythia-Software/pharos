@@ -221,6 +221,12 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 		}
 	}
 	conversation["messages"] = messages
+	// The files its calls edited and read, each linked to its history page.
+	links, err := c.conversationFileLinks(context.Background(), workspaceID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	conversation["file_links"] = links
 	return conversation, nil
 }
 

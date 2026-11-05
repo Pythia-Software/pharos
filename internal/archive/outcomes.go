@@ -27,8 +27,10 @@ import (
 // batches touch is judged once. The label is read from the stored facts,
 // since a change stops being too recent to judge without any write.
 
-// outcomesVersion derives every session again when its rules change.
-const outcomesVersion = "4"
+// outcomesVersion derives every session again when its rules change. 5
+// keeps every edit's place in its transcript (session_file_edits) and the
+// lines each later session removed (session_file_rework).
+const outcomesVersion = "5"
 
 // defaultReworkDays is how long after a session's last edit a later session's
 // edits to the same files count as rework (outcome_rework_days).
@@ -88,6 +90,26 @@ CREATE TABLE IF NOT EXISTS session_outcomes(
   reworked_by_json TEXT NOT NULL DEFAULT '[]',
   heavily_reworked INTEGER NOT NULL DEFAULT 0,
   git_ops_json TEXT NOT NULL DEFAULT '[]') WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_file_edits(
+  workspace_id TEXT NOT NULL,
+  file_key TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  conversation_id TEXT,
+  message_id TEXT,
+  call_id TEXT,
+  edited_at TEXT,
+  lines_added INTEGER,
+  lines_removed INTEGER,
+  path TEXT NOT NULL,
+  PRIMARY KEY(workspace_id,file_key,seq)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_file_edits_message_idx ON session_file_edits(conversation_id,message_id);
+CREATE TABLE IF NOT EXISTS session_file_rework(
+  workspace_id TEXT NOT NULL,
+  file_key TEXT NOT NULL,
+  later_workspace_id TEXT NOT NULL,
+  removed_lines INTEGER NOT NULL,
+  PRIMARY KEY(workspace_id,file_key,later_workspace_id)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS session_file_rework_later_idx ON session_file_rework(later_workspace_id,file_key);
 CREATE TABLE IF NOT EXISTS session_outcome_dirty(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_rework_dirty(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS session_outcome_mirrors(workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
@@ -142,6 +164,30 @@ type outcomeCall struct {
 	Path, RepoPath, RepositoryID, Scope        string
 	LinesAdded, LinesRemoved                   *int64
 	Input, Result                              string
+	Place                                      transcriptPlace
+}
+
+// transcriptPlace is where a call sits in its session's transcript; the
+// reader opens it at /work/{workspace}?conversation=&message=&call=.
+type transcriptPlace struct {
+	Conversation string `json:"conversation,omitempty"`
+	Message      string `json:"message,omitempty"`
+	Call         string `json:"call,omitempty"`
+}
+
+// evidence adds the place to a link's evidence, so a commit opens the call
+// that printed or made it.
+func (place transcriptPlace) evidence(evidence map[string]any) map[string]any {
+	if place.Conversation != "" {
+		evidence["conversation"] = place.Conversation
+		if place.Message != "" {
+			evidence["message"] = place.Message
+		}
+		if place.Call != "" {
+			evidence["call"] = place.Call
+		}
+	}
+	return evidence
 }
 
 type sessionFile struct {
@@ -150,12 +196,22 @@ type sessionFile struct {
 	Edits                   int
 	Added, Removed          *int64
 	Lines                   fileLines
+	// Places are its edits, in call order: each call that changed it, with
+	// the path as the call wrote it and the lines that call changed.
+	Places []fileEditPlace
+}
+
+type fileEditPlace struct {
+	transcriptPlace
+	At, Path       string
+	Added, Removed *int64
 }
 
 type outcomeCommit struct {
 	Hash   string `json:"hash"`
 	Branch string `json:"branch,omitempty"`
 	At     string `json:"at,omitempty"`
+	transcriptPlace
 }
 
 // sessionFacts are a session's Tier 1 facts.
@@ -260,6 +316,7 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 				files[key] = file
 			}
 			file.Edits++
+			file.Places = append(file.Places, fileEditPlace{transcriptPlace: call.Place, At: call.StartedAt, Path: edit.Path, Added: target.LinesAdded, Removed: target.LinesRemoved})
 			if call.StartedAt != "" && (file.First == "" || laterThan(file.First, call.StartedAt)) {
 				file.First = call.StartedAt
 			}
@@ -316,7 +373,7 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 					if branch == "detached HEAD" {
 						branch = ""
 					}
-					facts.Commits = append(facts.Commits, outcomeCommit{Hash: match[2], Branch: branch, At: call.StartedAt})
+					facts.Commits = append(facts.Commits, outcomeCommit{Hash: match[2], Branch: branch, At: call.StartedAt, transcriptPlace: call.Place})
 				}
 			}
 		}
@@ -340,7 +397,7 @@ func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts 
 // outcomeCallsSQL reads a session's calls in order: an edit's input, for its
 // lines, and only the output of Git and gh commands, for their commit, push
 // and pull request lines.
-const outcomeCallsSQL = `SELECT t.tool_category,t.status,COALESCE(t.command_category,'') command_category,COALESCE(t.command,'') command,
+const outcomeCallsSQL = `SELECT t.conversation_id,COALESCE(t.call_message_id,'') call_message_id,COALESCE(t.call_id,'') call_id,t.tool_category,t.status,COALESCE(t.command_category,'') command_category,COALESCE(t.command,'') command,
 	COALESCE(t.started_at,'') started_at,COALESCE(t.ended_at,'') ended_at,COALESCE(t.path_absolute,'') path_absolute,COALESCE(t.repo_path,'') repo_path,
 	COALESCE(t.path_repository_id,'') path_repository_id,COALESCE(t.path_scope,'') path_scope,t.lines_added,t.lines_removed,
 	CASE WHEN t.command LIKE '%git%commit%' OR t.command LIKE '%cherry-pick%' OR t.command LIKE '%git%revert%' OR t.command LIKE '%git%push%' OR t.command LIKE '%gh pr create%'
@@ -377,7 +434,8 @@ func readOutcomeCalls(ctx context.Context, tx *sql.Tx, workspace string) ([]outc
 		calls[index] = outcomeCall{Category: firstString(row["tool_category"]), Status: firstString(row["status"]), CommandCategory: firstString(row["command_category"]),
 			Command: firstString(row["command"]), StartedAt: firstString(row["started_at"]), EndedAt: firstString(row["ended_at"]), Path: firstString(row["path_absolute"]), RepoPath: firstString(row["repo_path"]),
 			RepositoryID: firstString(row["path_repository_id"]), Scope: firstString(row["path_scope"]), LinesAdded: nullableInt64(row["lines_added"]),
-			LinesRemoved: nullableInt64(row["lines_removed"]), Input: firstString(row["input"]), Result: toolResultContent(firstString(row["result"]))}
+			LinesRemoved: nullableInt64(row["lines_removed"]), Input: firstString(row["input"]), Result: toolResultContent(firstString(row["result"])),
+			Place: transcriptPlace{Conversation: firstString(row["conversation_id"]), Message: firstString(row["call_message_id"]), Call: firstString(row["call_id"])}}
 	}
 	return calls, nil
 }
@@ -521,14 +579,20 @@ func deriveOutcomeBatch(ctx context.Context, tx *sql.Tx, batch []string, days in
 // deriveSessionOutcome stores one session's facts, without rework, or
 // removes them when the session is gone.
 func deriveSessionOutcome(ctx context.Context, tx *sql.Tx, workspace string, days int) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM session_files WHERE workspace_id=?", workspace); err != nil {
-		return err
+	for _, table := range []string{"session_files", "session_file_edits"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE workspace_id=?", workspace); err != nil {
+			return err
+		}
 	}
 	var source, activity string
 	err := tx.QueryRowContext(ctx, "SELECT source_kind,COALESCE(activity_at,'') FROM workspaces WHERE id=?", workspace).Scan(&source, &activity)
 	if err == sql.ErrNoRows {
-		_, err = tx.ExecContext(ctx, "DELETE FROM session_outcomes WHERE workspace_id=?", workspace)
-		return err
+		for _, table := range []string{"session_outcomes", "session_file_rework"} {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE workspace_id=?", workspace); err != nil {
+				return err
+			}
+		}
+		return nil
 	} else if err != nil {
 		return err
 	}
@@ -564,6 +628,13 @@ func deriveSessionOutcome(ctx context.Context, tx *sql.Tx, workspace string, day
 			boolInt(file.Lines.Read), packLines(file.Lines.Kept), packLines(file.Lines.Removed), boolInt(file.Lines.Rewrote)); err != nil {
 			return err
 		}
+		for seq, place := range file.Places {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO session_file_edits(workspace_id,file_key,seq,conversation_id,message_id,call_id,edited_at,lines_added,lines_removed,path)
+				VALUES(?,?,?,?,?,?,?,?,?,?)`, workspace, file.Key, seq, nilIfEmpty(place.Conversation), nilIfEmpty(place.Message), nilIfEmpty(place.Call),
+				nilIfEmpty(place.At), place.Added, place.Removed, clipText(place.Path, 500)); err != nil {
+				return err
+			}
+		}
 	}
 	recorded := len(calls) > 0 || slices.Contains(toolRecordingSources, source)
 	var first, last any
@@ -586,7 +657,9 @@ const reworkedByLimit = 20
 // sessions removed: a session that edited one of its files after it, starting
 // within the window. It is reworked when they removed at least reworkShare of
 // those lines. A mirror of another workspace (tool_mirror_workspaces) repeats
-// that workspace's edits, so it is never rework.
+// that workspace's edits, so it is never rework. Each removed line is the
+// first later session's to remove, and session_file_rework keeps how many
+// each later session removed from each file, so a page can show who did.
 func judgeRework(ctx context.Context, tx *sql.Tx, workspace string, days int) error {
 	var kept sql.NullInt64
 	if err := tx.QueryRowContext(ctx, "SELECT kept_lines FROM session_outcomes WHERE workspace_id=?", workspace).Scan(&kept); err == sql.ErrNoRows {
@@ -597,8 +670,11 @@ func judgeRework(ctx context.Context, tx *sql.Tx, workspace string, days int) er
 	rows, err := queryMapsContext(ctx, tx, `SELECT s.file_key,s.kept_lines,l.workspace_id,l.kept_lines later_kept,l.removed_lines later_removed,l.rewrote FROM session_files s
 		JOIN session_files l ON l.file_key=s.file_key AND l.workspace_id<>s.workspace_id
 		WHERE s.workspace_id=? AND s.kept_lines IS NOT NULL AND julianday(l.last_edit_at)>julianday(s.last_edit_at) AND julianday(l.first_edit_at)<=julianday(s.last_edit_at)+?
-		AND l.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) ORDER BY s.file_key,l.workspace_id`, workspace, days)
+		AND l.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) ORDER BY s.file_key,julianday(l.first_edit_at),l.workspace_id`, workspace, days)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM session_file_rework WHERE workspace_id=?", workspace); err != nil {
 		return err
 	}
 	files, gone, by := map[string]lineSet{}, map[string]lineSet{}, []string{}
@@ -609,8 +685,15 @@ func judgeRework(ctx context.Context, tx *sql.Tx, workspace string, days int) er
 		}
 		before := len(gone[key])
 		removeLater(gone[key], files[key], bytesValue(row["later_kept"]), bytesValue(row["later_removed"]), integer(row["rewrote"]) == 1)
-		if later := firstString(row["workspace_id"]); len(gone[key]) > before && !slices.Contains(by, later) {
-			by = append(by, later)
+		later := firstString(row["workspace_id"])
+		if removed := len(gone[key]) - before; removed > 0 {
+			if !slices.Contains(by, later) {
+				by = append(by, later)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO session_file_rework(workspace_id,file_key,later_workspace_id,removed_lines) VALUES(?,?,?,?)`,
+				workspace, key, later, removed); err != nil {
+				return err
+			}
 		}
 	}
 	reworkedFiles, removed := 0, 0

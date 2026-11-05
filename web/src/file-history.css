@@ -1,14 +1,44 @@
-/* File history: a file's sessions and commits, newest first. */
+/* Files: a project's tree beside a file, directory or commit, each with the
+   sessions and commits that touched it, newest first. */
 .file-history-page { min-width: 0; }
 .file-history-page code { font: var(--fs-sm)/1.45 ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
 .file-history-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 16px; }
 .file-history-form input { flex: 1 1 260px; min-width: 0; }
-.file-history-file { margin: 0 0 26px; }
-.file-history-file h2 { margin: 0 0 8px; overflow-wrap: anywhere; }
-.file-history-file h3 { margin: 14px 0 6px; font-size: var(--fs-md); }
+.files-layout { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.files-pane { min-width: 0; }
+@media (max-width: 860px) { .files-layout { grid-template-columns: minmax(0, 1fr); } }
+
+.file-tree { position: sticky; top: 8px; min-width: 0; max-height: calc(100vh - 120px); overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+@media (max-width: 860px) { .file-tree { position: static; max-height: 45vh; } }
+.file-tree-project { margin: 0 0 4px; font-weight: 600; overflow-wrap: anywhere; }
+.file-tree-source { margin: 0 0 8px; font-size: var(--fs-xs); }
+.file-tree-list { margin: 0; padding: 0 0 0 12px; list-style: none; }
+.file-tree > .file-tree-list { padding-left: 0; }
+.file-tree-list > li { min-width: 0; }
+.file-tree-dir > summary { cursor: pointer; }
+.file-tree-entry { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; max-width: 100%; padding: 1px 0; overflow-wrap: anywhere; }
+.file-tree-entry a { text-decoration: none; }
+.file-tree-entry a[aria-current="page"] { font-weight: 700; text-decoration: underline; }
+.file-tree-counts { color: var(--muted); font-size: var(--fs-xs); }
+.file-tree-gone a { color: var(--muted); font-style: italic; }
+
+.files-breadcrumbs { margin: 0 0 6px; overflow-wrap: anywhere; color: var(--muted); }
+.files-choices ul { margin: 6px 0; }
+.file-history-file, .files-directory, .files-commit { margin: 0 0 26px; }
+.file-history-file h2, .files-directory h2, .files-commit h2 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.file-history-file h3, .files-directory h3, .files-commit h3 { margin: 14px 0 6px; font-size: var(--fs-md); }
 .file-history-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .file-history-list > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .file-history-list > li:first-child { border-top: 0; }
+.file-history-list > li.file-session { display: grid; gap: 4px; }
+.file-session-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.file-session p { margin: 0; }
+.file-places { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.file-place { padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: var(--fs-xs); white-space: nowrap; text-decoration: none; }
+.file-place:hover { border-color: var(--accent); }
+.file-rework { font-size: var(--fs-sm); }
 .file-history-when { flex: none; min-width: 7em; color: var(--muted); }
-.file-history-outcome { margin-left: auto; white-space: nowrap; }
+.file-history-outcome { min-width: 0; overflow-wrap: anywhere; }
+.file-history-list > li > .file-history-outcome { margin-left: auto; }
+.file-history-list > li.file-session > .file-history-outcome { margin-left: 0; }
 .file-history-error { color: var(--bad); }

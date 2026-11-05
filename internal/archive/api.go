@@ -411,6 +411,23 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, value, http.StatusOK)
 		}
+	case path == "/api/file-tree":
+		// One directory of a project's files (file_tree.go).
+		q := r.URL.Query()
+		value, err := s.Catalog.FileTree(r.Context(), FileTreeOptions{Project: q.Get("project"), Dir: q.Get("dir"), Activity: q.Get("activity") == "1"})
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+		} else {
+			writeJSON(w, value, http.StatusOK)
+		}
+	case path == "/api/file-commit":
+		q := r.URL.Query()
+		value, err := s.Catalog.FileCommit(r.Context(), FileCommitOptions{Project: q.Get("project"), Commit: q.Get("commit")})
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+		} else {
+			writeJSON(w, value, http.StatusOK)
+		}
 	case path == "/api/library/find":
 		q := r.URL.Query()
 		options, err := textOptionsFromValues(q, "")
@@ -431,6 +448,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/work/"):
 		// /api/work/{id}, /api/work/{id}/conversations/{conversation}, and
 		// /api/work/{id}/find: the reader loads a workspace in pieces.
+		// /api/work/{id}/files lists its files and commits, linked both ways.
 		// /api/work/{id}/matches places a Search's matches in its summary.
 		parts := strings.Split(strings.TrimPrefix(path, "/api/work/"), "/")
 		var value any
@@ -446,6 +464,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":
 			value, err = nilIfNoMap(s.Catalog.WorkConversation(parts[0], parts[2]))
+		case len(parts) == 2 && parts[1] == "files":
+			// The session's files and commits (work_files.go).
+			value, err = nilIfNoMap(s.Catalog.WorkFiles(r.Context(), parts[0]))
 		case len(parts) == 2 && parts[1] == "matches":
 			matches, err := s.Catalog.WorkMatches(r.Context(), parts[0], r.URL.Query())
 			if err != nil {

@@ -96,6 +96,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/file-history.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/label-session-ribbon.tsx",
       "field": "disclosures"
     },
@@ -117,11 +121,19 @@
     },
     {
       "file": "web/src/file-history.tsx",
+      "field": "file_commit"
+    },
+    {
+      "file": "web/src/file-history.tsx",
       "field": "file_history_path"
     },
     {
       "file": "web/src/file-history.tsx",
       "field": "file_history_project"
+    },
+    {
+      "file": "web/src/file-history.tsx",
+      "field": "file_tree_dir"
     },
     {
       "file": "web/src/page-find.ts",
@@ -5204,6 +5216,26 @@
       "control": "",
       "contract": "action",
       "reason": "Applies the File History path draft to the file view field; the applied path is the linked view state."
+    },
+    {
+      "key": "e708c1f4049e224c:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FilesLink",
+      "tag": "a",
+      "control": "onClick={event => { props.onClick?.(event); const local = localPageNavigation(href, location.href, { ...event, target: event.currentTarget.target }); if (!local || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate(keepFilesView(local, location.search)); }}",
+      "contract": "navigation",
+      "reason": "Canonical Files page URLs (file_project with file, file_dir or file_commit) through the shared app router; it carries the open tree directories (disclosures) to the next address."
+    },
+    {
+      "key": "dea6549b2f73b0e5:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "TreeDirectory",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey} defaultOpen={open.has(path)}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "7287b211b199422d:0",

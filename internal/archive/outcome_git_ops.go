@@ -28,6 +28,7 @@ type gitOp struct {
 	Subjects    []string `json:"subjects,omitempty"`
 	PullRequest int      `json:"pull_request,omitempty"`
 	Forge       string   `json:"forge,omitempty"`
+	transcriptPlace
 }
 
 var (
@@ -49,7 +50,7 @@ func readGitOps(call outcomeCall, resolve func(directory string) string) []gitOp
 	command := call.Command
 	ops := []gitOp{}
 	for _, match := range gitCommitInvocation.FindAllStringSubmatchIndex(command, -1) {
-		op := gitOp{Kind: command[match[4]:match[5]], At: call.StartedAt, Until: call.EndedAt}
+		op := gitOp{Kind: command[match[4]:match[5]], At: call.StartedAt, Until: call.EndedAt, transcriptPlace: call.Place}
 		directory := ""
 		if option := gitDirectoryOption.FindStringSubmatch(command[match[2]:match[3]]); option != nil {
 			directory = unquoteWord(option[1])
@@ -80,7 +81,7 @@ func readGitOps(call outcomeCall, resolve func(directory string) string) []gitOp
 	if ghPullRequestCreate.MatchString(command) {
 		for _, found := range pullRequestURL.FindAllStringSubmatch(call.Result, -1) {
 			number, _ := strconv.Atoi(found[2])
-			ops = append(ops, gitOp{Kind: "pull_request", At: call.StartedAt, Until: call.EndedAt, PullRequest: number, Forge: strings.ToLower(found[1])})
+			ops = append(ops, gitOp{Kind: "pull_request", At: call.StartedAt, Until: call.EndedAt, PullRequest: number, Forge: strings.ToLower(found[1]), transcriptPlace: call.Place})
 		}
 	}
 	return ops

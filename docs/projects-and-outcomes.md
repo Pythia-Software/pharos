@@ -341,7 +341,7 @@ no linked commit is judged on its Tier 1 facts.
   commit's inverse patch-id (read with `--no-prefix`, since `-R` swaps the
   `a/` and `b/` prefixes).
 - **Per-commit numstat** is stored as the commit's file count and line
-  totals, and per file for file history.
+  totals, and per file for the Files page.
 - **Git AI notes** (`refs/notes/ai`) are listed and recorded as a flag on
   the commit. They are never written.
 
@@ -756,45 +756,83 @@ that touched it. Batches grew from 56 ms to over 700 ms, and the full pass
 ran for more than 75 minutes before it was stopped. Facts are now derived
 first and rework judged once per marked session (`session_rework_dirty`).
 
-## File history
+## Files, sessions and commits, linked both ways
 
-"Why is this file like this?" The File history page (`/files?file=…`,
-optionally `&file_project=…`) and the MCP tool `get_file_history` list, for
-a file:
+The Files page (`/files`) and the MCP tool `get_file_history` link a change
+in both directions: from a tool call that edited a file up to the file, its
+page, every session that changed it and its project's tree; and from a file,
+a directory or a commit down to the exact calls in each session's transcript
+that made the change.
+
+**Down from a session.** The Work page's *Files and commits* section
+(`/api/work/{id}/files`, `work_files.go`) lists each file the session
+edited: every edit as a link to its call in the transcript, the file's page,
+how many other sessions edited it, and the rework between them (whose lines
+it removed, and who removed its own). Then its linked commits, each with the
+commit's page and, where the session printed or made it, a link to that
+call. In the reader, each file chip of an edit or read call carries a
+history link to the file's page (`file_links` on the conversation, from
+`session_file_edits` and a read's repository path).
+
+**A file.** `/files?file_project=…&file=…` shows:
 
 - **Sessions:** every session that edited it through its tool calls
-  (`session_files`), newest first. Each shows its edits, the lines it added
-  and removed, whether it rewrote the whole file, its outcome label with the
-  evidence, and a link into the reader at its first edit of the file. This
-  needs no Git: a file in a plain folder gets the same timeline.
+  (`session_files`), newest first. Each shows its edits, each a link to the
+  call that made it (`session_file_edits`: the conversation, message and call
+  of every edit, a patch's every file included), the lines it added and
+  removed, whether it rewrote the whole file, its outcome label with the
+  evidence, the rework between it and other sessions on this file
+  (`session_file_rework`), and the commits it is linked to. This needs no
+  Git: a file in a plain folder gets the same timeline.
 - **Commits:** in a repository local Git checked on this Mac, every commit
   that changed the file, with its lines, mainline and revert state, and the
-  sessions linked to it. A link below the counting threshold (0.7) shows as a
-  candidate. Outside a repository the page says Git does not apply; in a
-  repository not checked here it gives the reason. Neither is an error or an
-  empty list. The scan reads Git from a day before the repository's first
-  session edit, the window commit linking needs, so the list covers only
-  that time: the page says "since" that date (`git.commits_since`), and that
-  earlier commits are not read. Reading a file's whole history would mean
-  another `git log` per edited file; it is not done.
+  sessions linked to it, each opening where it printed or made the commit
+  (link evidence keeps the call's place). A link below the counting
+  threshold (0.7) shows as a candidate. Outside a repository the page says
+  Git does not apply; in a repository not checked here it gives the reason.
+  Neither is an error or an empty list. The scan reads Git from a day before
+  the repository's first session edit, the window commit linking needs, so
+  the list covers only that time: the page says "since" that date
+  (`git.commits_since`), and that earlier commits are not read.
 
-A path can be repository-relative (`src/main.go`, matching that path in
-every repository, or the end of a longer one), a folder path
-(`~/notes/plan.md`), or an absolute path in a checkout a session edited in,
-which maps to its repository file. A patch's other files than the one its
-call recorded are found too: any of the session's edits in the checkout
-places the checkout, and the reader link opens the edit call at the file's
-first edit.
+**The tree.** Beside the file, the project's tree (`/api/file-tree`, one
+directory at a time, opened as the user goes). In a repository local Git
+checked, it is the tree at the mainline tip (`git ls-tree` at the scan,
+`git_tree_files`), with files sessions edited that the tree does not hold
+(deleted, renamed, never committed) marked; each entry counts the sessions
+that edited and the commits that changed what is under it. A directory
+(`file_dir`) lists its entries and its latest sessions and commits; a commit
+(`file_commit`, `/api/file-commit`) its files and linked sessions. Without
+Git, a folder project's tree is the files its sessions edited, and the page
+has no commits. A repository Git could not check also falls back to the
+files its sessions edited and its commits changed.
 
-**Storage.** `git_commit_files` holds, per repository, the commits that
-changed a file some session edited there or a session's linked commit
-changed, with lines added and removed. The Tier 2 scan already reads `git
-log --numstat`; it keeps rows for those paths only, so the table grows with
-the paths agents touched, not with the repository. A file an agent changed
-through a shell script has a history once the commit is linked. It stores
-hashes, paths and counts. A commit no session is linked to is written to
-`git_commits` with only its time and revert state; a replaced one (only a
-reflog holds it) is not written unless linked.
+**Addresses.** `file_project` names a project as `list_projects` does, or
+`repository:<id>` when two repositories share a name; the service picks
+that form for its links. With a project, a repository-relative path is that
+repository's file even if no session touched it (it is in the tree or a
+commit changed it). Without one, a path matches in every project:
+repository-relative (`src/main.go`, matching that path in every repository,
+or the end of a longer one), a folder path (`~/notes/plan.md`), or an
+absolute path in a checkout a session edited in, which maps to its
+repository file.
+
+**Storage.** Facts only, never content:
+
+- `session_file_edits`: per session and file, each edit's conversation,
+  message and call IDs, time, path and line counts.
+- `session_file_rework`: per session and file, the later session that
+  removed lines it added, and how many (rework judging writes it; each
+  removed line is credited to the first later session that removed it).
+- `git_commit_files`: per repository, every commit the scan read, with each
+  file's lines added and removed. Storing every path rather than only those
+  sessions edited cost about 7,000 rows more on a 450,000-row library.
+- `git_tree_files`: per repository, the paths at the tip the scan read
+  (`tree_ref`, `tree_commit` on `git_repository_scans`), up to 100,000.
+
+The scan already ran `git log --numstat`; the tree is one `git ls-tree -r
+--name-only` per scan, which runs only when the repository's refs or
+sessions change. Requests read only these tables.
 
 **Library file search** reads `session_files` as well as `change_files`, so
 Claude Code, Codex and Antigravity edits are found. Each hit opens the
@@ -900,9 +938,10 @@ If none of your sessions run in a repository, you get:
   see an empty chart, "0 PRs", "0% merged" or a red state. Where the Library
   or a query table has a git column, a folder session shows "Not a
   repository", not 0.
-- **File history:** the timeline of every session that edited a file, with
-  its lines and outcome, built from transcripts. Library file search finds
-  those files too.
+- **Files:** the timeline of every session that edited a file, with its
+  lines, outcome, each edit's place in the transcript and the rework between
+  sessions, built from transcripts, and a folder's tree of the files its
+  sessions edited. Library file search finds those files too.
 
 ## Map of existing git behaviour
 
@@ -1065,6 +1104,10 @@ head in, and writes `main_merge_*`. Its properties:
 4. **Outcome views in Analyze** (Analyze → Outcomes), then **spend by
    branch** in its own pull request.
 5. **File history timeline and MCP.**
+6. **Files, sessions and commits linked both ways:** each edit's place in
+   its transcript, rework between sessions by file, the project tree, the
+   Work page's files and commits, and history links on the reader's file
+   chips.
 
 Handoffs between parts are in `.context/projects-and-outcomes-handoff.md`
 (not committed).
