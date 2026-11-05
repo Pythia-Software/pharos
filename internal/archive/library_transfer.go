@@ -762,6 +762,25 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 			return fmt.Errorf("rebuild imported workspace: %w", err)
 		}
 	}
+	// Replies the other library counted may be copies of this one's, and the
+	// reverse (claude_usage_copies.go).
+	for _, row := range rows {
+		workspaceID := firstString(row["id"])
+		var kind string
+		if err = tx.QueryRowContext(ctx, "SELECT source_kind FROM workspaces WHERE id=?", workspaceID).Scan(&kind); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if kind != "claude" {
+			continue
+		}
+		conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
+		if err != nil {
+			return err
+		}
+		if err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
+			return fmt.Errorf("settle imported Claude usage: %w", err)
+		}
+	}
 	messages, err := queryMaps(tx, "SELECT id FROM incoming_messages")
 	if err != nil {
 		return err

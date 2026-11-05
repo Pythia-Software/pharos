@@ -404,3 +404,48 @@ func TestClaudeClaimLeavesCopiedRepliesUncounted(t *testing.T) {
 		t.Fatalf("sessions = %d, want %d", sessions, 110+220)
 	}
 }
+
+func TestClaudeFullerRecordOfAReplyCounts(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	// s1 was read before the reply's last line was written; the session that
+	// resumed it holds the reply whole.
+	original := []string{
+		claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+		claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 1)),
+	}
+	resumed := []string{
+		strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s2"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+		strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
+		claudeReply("s2", "a2", "a1", "msg_1", "req_1", text("Found"), usage(100, 10)),
+	}
+	ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed}))
+	wantLibraryTokens(t, catalog, 110)
+}
+
+func TestClaudeRepairAddsAdvisorUsageFromStoredReplies(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	advised := map[string]any{"input_tokens": 100, "output_tokens": 10, "iterations": []any{
+		map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 50, "output_tokens": 5},
+	}}
+	original := []string{
+		claudeTurn("s1", "p1", "", "user", "Plan it", nil),
+		claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Planned"), advised),
+	}
+	resumed := []string{
+		strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s2"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+		strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
+	}
+	ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed}))
+	wantLibraryTokens(t, catalog, 165)
+	// A library indexed before advisor iterations were counted.
+	unsettle(t, catalog)
+	if _, err := catalog.DB.Exec("DELETE FROM messages WHERE native_id LIKE '%:advisor:%'"); err != nil {
+		t.Fatal(err)
+	}
+	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 2 {
+		t.Fatalf("repair = %d, %v", repaired, err)
+	}
+	wantLibraryTokens(t, catalog, 165)
+}
