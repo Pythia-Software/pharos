@@ -6,7 +6,7 @@ import {withFingerprintColumn} from "./fingerprint-columns";
 import {MessageLabelDisplay,MessageLabelCards,messageLabelRenderers} from "./message-label-results";
 import {messageLabelHostQuery,messageLabelConversationQuery,labelResultsMode} from "./message-label-results-model";
 import {messageLabelsCatalog} from "./message-labels-catalog";
-import { gitFactDisplay, outcomeDisplay } from "./outcomes";
+import { branchDisplay, gitFactDisplay, outcomeDisplay } from "./outcomes";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
 import { installViewAttention, registerDetailAttentionResolver } from "./view-attention";
@@ -94,6 +94,7 @@ import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
+import outcomesDocument from "../../schemas/outcomes.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { SafetySelectionBar, SafetyTableContext } from "./safety";
@@ -107,6 +108,7 @@ import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
+import { outcomeCatalogFor, outcomeGroupLabel, outcomeRatioRows, outcomeTierCoverage, outcomeTiersReached, outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
 import { AgentEventRates } from "./agent-event-rates";
 import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
@@ -135,7 +137,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages" | "outcomes";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -205,6 +207,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   safety: loadSchema<Row>(safetyDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
+  outcomes: loadSchema<Row>(outcomesDocument),
 };
 
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
@@ -330,6 +333,10 @@ const renderers: RenderRegistry<Row> = {
     const fact = gitFactDisplay(value, row.project_kind, row.git_check, row.git_check_reason);
     return fact.muted ? <span className="qt-muted" title={fact.title}>{fact.text}</span> : fact.text;
   },
+  git_branch({ value, row }: CellContext<Row>) {
+    const branch = branchDisplay(value, row.project_kind);
+    return branch.muted ? <span className="qt-muted" title={branch.title}>{branch.text}</span> : branch.text;
+  },
   run_state({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
     return <span className={`qt-state-pill ${state}`}>{state}</span>;
@@ -400,6 +407,7 @@ const emptyMessages: Record<Dataset, string> = {
   safety: "No risky action notices match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No agent messages read for events match this query.",
+  outcomes: "No sessions match this query.",
 };
 
 // Query Table 1.0.0 still formats numeric metrics with a field renderer only for
@@ -1106,6 +1114,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
+  if (topic === "outcomes") return <OutcomesDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1353,6 +1362,83 @@ function AgentExperienceDashboard() {
       <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
       <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
     </>} />;
+}
+
+// Outcomes: sessions by what became of their changes (outcomes), counted at
+// their start. A breakdown needing local Git evidence is offered disabled with
+// its reason when no session in the library reached that tier, so a library
+// without Git draws every panel from its transcripts.
+const outcomeSummaryMetrics: AggregationClause[] = [
+  { id: "sessions", op: "count", groupBy: [] },
+  { id: "cost", op: "sum", field: "cost_usd", groupBy: [] },
+  { id: "kept", op: "sum", field: "kept_change", groupBy: [] },
+  { id: "rework", op: "sum", field: "rework_removed_lines", groupBy: [] },
+  { id: "kept_lines", op: "sum", field: "kept_lines", groupBy: [] },
+];
+const outcomeTierMetrics: AggregationClause[] = [{ id: "sessions", op: "count", groupBy: ["evidence_tier"] }];
+const outcomeReworkMetrics: AggregationClause[] = [
+  { id: "removed", op: "sum", field: "rework_removed_lines", groupBy: ["project_name"] },
+  { id: "kept", op: "sum", field: "kept_lines", groupBy: ["project_name"] },
+];
+const outcomeKeptCostMetrics: AggregationClause[] = [
+  { id: "cost", op: "sum", field: "cost_usd", groupBy: ["model_family"] },
+  { id: "kept", op: "sum", field: "kept_change", groupBy: ["model_family"] },
+];
+const outcomePercent = (value: number | null) => value == null ? "—" : `${(100 * value).toFixed(1)}%`;
+const metricBuckets = (result: { metrics: MetricResult[] }, id: string) => result.metrics.find(metric => metric.id === id)?.buckets ?? [];
+function OutcomesSummary({ where }: { where: WhereTerm[] }) {
+  const result = useMetrics("outcomes", where, outcomeSummaryMetrics);
+  const value = (id: string) => Number(metricBuckets(result, id)[0]?.value) || 0;
+  const sessions = value("sessions"), kept = value("kept"), keptLines = value("kept_lines");
+  // A sum of no priced usage is unknown, not $0.
+  const cost = metricBuckets(result, "cost")[0]?.value;
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
+  return <div className="mcp-metrics dashboard-stats" aria-label="Outcomes summary" aria-busy={result.loading}>
+    {card("Sessions", sessions.toLocaleString(), "counted at their start")}
+    {card("API cost", cost == null && sessions ? "Unpriced" : formatUSD(Number(cost) || 0), "list-price equivalent; unpriced usage excluded")}
+    {card("Kept changes", sessions ? outcomePercent(kept / sessions) : "—", `${kept.toLocaleString()} sessions landed, committed, or changed and kept`)}
+    {card("Rework rate", keptLines ? outcomePercent(value("rework") / keptLines) : "—", keptLines ? `of ${compactNumber(keptLines)} kept lines, removed by later sessions` : "no kept lines recorded")}
+  </div>;
+}
+function OutcomeRatioPanel({ title, note, where, clauses, breakdown, format, empty }: { title: string; note: string; where: WhereTerm[]; clauses: AggregationClause[]; breakdown: string; format: (row: ReturnType<typeof outcomeRatioRows>[number]) => [string, string]; empty: string }) {
+  const result = useMetrics("outcomes", where, clauses);
+  const rows = outcomeRatioRows(metricBuckets(result, clauses[0]!.id), metricBuckets(result, clauses[1]!.id), key => outcomeGroupLabel(breakdown, key));
+  return <section className="outcome-panel" aria-label={title} aria-busy={result.loading}>
+    <h3>{title}</h3>
+    <p className="muted">{note}</p>
+    {result.loading ? <p className="muted" role="status">Loading…</p> : result.error ? <p className="query-table-error" role="alert">{result.error}</p>
+      : !rows.length ? <p className="muted">{empty}</p>
+      : <table><tbody>{rows.map(row => { const [amount, detail] = format(row); return <tr key={row.key}><th scope="row">{row.label}</th><td>{amount}</td><td className="muted">{detail}</td></tr>; })}</tbody></table>}
+  </section>;
+}
+function OutcomeCoveragePanel({ where }: { where: WhereTerm[] }) {
+  const result = useMetrics("outcomes", where, outcomeTierMetrics);
+  const tiers = outcomeTierCoverage(metricBuckets(result, "sessions"));
+  return <section className="outcome-panel" aria-label="Evidence coverage" aria-busy={result.loading}>
+    <h3>Evidence coverage</h3>
+    <p className="muted">The strongest evidence each session's outcome rests on: local Git where it checked a repository on this Mac, otherwise the session's own tool calls.</p>
+    {result.loading ? <p className="muted" role="status">Loading…</p> : result.error ? <p className="query-table-error" role="alert">{result.error}</p>
+      : <table><tbody>{tiers.map(tier => <tr key={tier.tier}><th scope="row">{tier.label}</th><td>{tier.sessions.toLocaleString()}</td><td className="muted">{outcomePercent(tier.share)}</td></tr>)}</tbody></table>}
+  </section>;
+}
+function OutcomesDashboard() {
+  // Tiers are read over the whole library, so a filter never hides a breakdown.
+  const reached = useMetrics("outcomes", [], outcomeTierMetrics);
+  const catalog = outcomeCatalogFor(outcomeTiersReached(metricBuckets(reached, "sessions")));
+  return <CatalogDashboard catalog={catalog} linkCatalog={outcomesAnalysisCatalog} dataset="outcomes" name="outcomes" defaults={dashboardDefaults.outcomes}
+    summary={where => <OutcomesSummary where={where} />}
+    panels={where => <div className="outcome-panels">
+      <OutcomeRatioPanel title="Rework rate by project" where={where} clauses={outcomeReworkMetrics} breakdown="project_name" empty="No session recorded kept lines."
+        note="Of the lines each project's sessions added and kept, the share later sessions removed, pooled over the project's lines."
+        format={row => [outcomePercent(row.ratio), row.denominator ? `of ${compactNumber(row.denominator)} kept lines` : "no kept lines"]} />
+      <OutcomeRatioPanel title="Cost per kept change by model" where={where} clauses={outcomeKeptCostMetrics} breakdown="model_family" empty="No session recorded usage."
+        note="Each main model's sessions' whole cost, over those whose changes were kept."
+        format={row => {
+          const total = row.numerator == null ? "unpriced" : `${formatUSD(row.numerator)} total`;
+          return [row.ratio != null ? formatUSD(row.ratio) : row.numerator == null && row.denominator ? "Unpriced" : "—", row.denominator ? `${row.denominator.toLocaleString()} kept · ${total}` : `no kept change · ${total}`];
+        }} />
+      <OutcomeCoveragePanel where={where} />
+    </div>} />;
 }
 
 function MCPUsageDashboard() {

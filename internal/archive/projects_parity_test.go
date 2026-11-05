@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 
 // projectDatasets are the query tables that carry project_name.
 var projectDatasets = []string{"library", "usage", "agent_events", "agent_event_messages", "conversation_activity", "skill_usages",
-	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests"}
+	"writing", "writing_messages", "tool_calls", "tools", "rhythm", "parallelism", "model_requests", "outcomes"}
 
 // projectServer serves a fixture library with its tool summaries built and
 // local Git asked, as the background build leaves them.
@@ -105,6 +106,26 @@ func TestProjectParityWithoutGit(t *testing.T) {
 	}
 	if outcomes["claude|no_changes"] != 4 || outcomes["chatgpt|unknown"] != 1 {
 		t.Fatalf("library outcomes: %#v", outcomes)
+	}
+	// Analyze → Outcomes counts the same sessions with the same labels, from
+	// their transcripts: no branch, and no session at the local Git tier.
+	analyzed := map[string]int{}
+	for _, row := range queryProjects(t, server, "outcomes", "source_kind", "outcome_label", "evidence_tier", "git_check", "branch") {
+		if row["branch"] != nil || row["git_check"] != "not_applicable" || row["evidence_tier"] == "local_git" {
+			t.Fatalf("Git facts outside a repository: %#v", row)
+		}
+		analyzed[firstString(row["source_kind"])+"|"+firstString(row["outcome_label"])]++
+	}
+	if !maps.Equal(analyzed, outcomes) {
+		t.Fatalf("outcomes dataset %#v, library %#v", analyzed, outcomes)
+	}
+	// Agents reach the dashboard and its values through the site tools.
+	link, _, err := callSiteMCP(context.Background(), library.catalog, "site_link", map[string]any{"page": "analyze/outcomes", "options": map[string]any{"view": "compare", "metric": "cost_per_kept_change", "split": "evidence_tier"}})
+	if err != nil || !strings.Contains(link.(map[string]any)["url"].(string), "analyze_topic=outcomes") {
+		t.Fatalf("site_link outcomes: %v %v", link, err)
+	}
+	if values, _ := browseText(t, library.catalog, map[string]any{"path": "analyze/outcomes/filters/outcome_label"}); len(values["items"].([]any)) == 0 {
+		t.Fatalf("outcome_label values: %v", values)
 	}
 	usage := map[string]bool{}
 	for _, row := range queryProjects(t, server, "rhythm") {

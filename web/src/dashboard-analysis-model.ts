@@ -51,7 +51,11 @@ export const partField = (part: RatioPart) => ratioPart(part).field;
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
 // A breakdown with an implied where names that population in its note.
-export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string };
+// A breakdown is unavailable, with the reason, when the data cannot fill
+// it, such as a Tier 2 breakdown in a library local Git never checked: it is
+// offered disabled rather than drawn empty, and a state asking for it draws
+// without it.
+export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string; unavailable?: string };
 // A component breakdown splits a measure into its additive parts, such as
 // tokens into uncached input, cache reads and writes, and output. Its series
 // are fields, not groups of records, so only the trend draws it, and only for
@@ -268,11 +272,12 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && (state.cycle === undefined || oneOf(state.cycle, analysisCycles));
 }
 
+const offered = (catalog: AnalysisCatalog, split: string) => has(catalog.breakdowns, split) && !catalog.breakdowns[split].unavailable;
 export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => state.view === "compare" && state.split !== noSplit
   && (state.unit !== records && state.reduce === "count" || catalog.measures[state.metric].additive && state.reduce === "total");
 // The trend draws records by any breakdown, a component breakdown, or none.
-export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) || has(catalog.components ?? {}, split);
-export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
+export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || offered(catalog, split) || has(catalog.components ?? {}, split);
+export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || offered(catalog, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
 // Units add up an additive measure, and pool a ratio's parts. Distinct counts
 // and other non-additive values have no honest unit total.
 export const unitTotal = (measure: AnalysisMeasure) => measure.additive || Boolean(measure.ratio);

@@ -27,4 +27,6 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   time: { metric: "time", split: "activity", ...daily },
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
+  // Spend by outcome over time: sessions are sparser than usage, so weeks.
+  outcomes: { metric: "cost", split: "outcome_label", period: "week", nonzero: true },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

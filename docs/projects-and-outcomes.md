@@ -322,6 +322,54 @@ Each git-only fact has three distinct states, both in data and in the UI:
 
 A "Not checked" state is never negative evidence.
 
+### Analyze → Outcomes
+
+The Outcomes dashboard reads the `outcomes` dataset (`outcomes_table.go`):
+one row per session the Library lists, with mirrors folded the same way.
+A row has the session's outcome label, its evidence tier, project, branch,
+priced usage, main model and Tier 1 facts.
+
+- **When a session counts.** At its start: its first usage hour, else its
+  first edit, else its last activity. Its whole cost counts then.
+- **Cost** is priced as the Library prices it, from the same usage ledger.
+  So a session's cost here equals its Library cost.
+- **Main model.** The model that took most of the session's cost, or of its
+  tokens if none was priced. Its provider is the main provider.
+- **Evidence tier.** The strongest evidence the label rests on:
+  - Local Git (Tier 2), where local Git checked the session;
+  - Transcript (Tier 1), where the session recorded tool calls;
+  - No evidence, otherwise.
+- **Branch.** Only for a session in a repository. In the chart, the Branch
+  breakdown counts repository sessions only; a repository session without
+  one is "No branch". In the table, a folder session's branch reads "Not a
+  repository" and a session without a folder "No git data".
+
+The measures:
+
+- sessions, cost and tokens;
+- files changed, and lines added and removed;
+- rework rate: lines later sessions removed over lines kept, pooled over
+  every session's lines rather than averaged per session;
+- cost per kept change: all the sessions' cost over the sessions labelled
+  Landed, Committed, or Changed and kept. Sessions that changed nothing and
+  reworked ones count in the cost, because they are part of what a kept
+  change cost;
+- kept share: kept sessions over all sessions.
+
+The page opens on spend by outcome label over time. Below the chart are
+three panels:
+
+- rework rate by project;
+- cost per kept change by main model;
+- evidence coverage: how many sessions reached each tier.
+
+The tiers a library reached are read over the whole library, not the
+filters. A breakdown that needs a tier no session reached is offered
+disabled with its reason, and never drawn empty. Today that is the local
+Git check, whose reason reads "No session has local Git evidence: local Git
+checks only repositories on this Mac". There is no Tier 3 breakdown: Pharos
+holds no forge data for outcomes yet.
+
 ## Commit-linking rules and confidence
 
 | Evidence | Confidence |
@@ -511,11 +559,14 @@ If none of your sessions run in a repository, you get:
 - **Outcomes:** every session gets a label from its own transcript: Changed
   and kept, Changed (too recent to tell), Reworked, No changes, or
   Unknown. Each label has a "why" listing the tool calls that decided it.
-- **No empty git panels.** Git-only breakdowns (branch, commit, mainline)
-  and Tier 2 and 3 measures are disabled with the reason "No sessions in a
-  git repository". You never see an empty chart, "0 PRs", "0% merged" or a
-  red state. Where the Library has a git column, a folder session shows
-  "Not a repository", not 0.
+- **No empty git panels.** In Analyze → Outcomes, the local Git breakdown
+  is disabled with the reason "No session has local Git evidence: local Git
+  checks only repositories on this Mac". The Branch breakdown counts
+  repository sessions only. Every panel draws from transcripts, and the
+  coverage panel shows every session at Transcript or No evidence. You never
+  see an empty chart, "0 PRs", "0% merged" or a red state. Where the Library
+  or a query table has a git column, a folder session shows "Not a
+  repository", not 0.
 - **File history:** the timeline of every session that touched a path,
   built from transcripts.
 
@@ -672,7 +723,8 @@ head in, and writes `main_merge_*`. Its properties:
    fixture.
 2. **Tier 1 outcome facts and the outcome labels.**
 3. **Tier 2 local git linking, reverts and mainline.**
-4. **Outcome views in Analyze, plus spend by branch.**
+4. **Outcome views in Analyze** (Analyze → Outcomes), then **spend by
+   branch** in its own pull request.
 5. **File history timeline and MCP.**
 
 Handoffs between parts are in `.context/projects-and-outcomes-handoff.md`

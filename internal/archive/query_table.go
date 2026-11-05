@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" && dataset != "rhythm" {
+	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" && dataset != "rhythm" && dataset != "outcomes" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -122,6 +122,8 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		rows, err = c.parallelismQueryRows(ctx, fields, where...)
 	case "rhythm":
 		rows, err = c.rhythmQueryRows(ctx, fields, where...)
+	case "outcomes":
+		rows, err = c.outcomeRows(ctx)
 	default:
 		return nil, false, nil
 	}

@@ -49,6 +49,10 @@ const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id
 const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("conversation_id", "Conversations"), distinct("message_id", "Messages")];
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
+// Outcomes: one row per session; rates pooled over the group's lines and sessions.
+const outcomes: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("cost_usd", "API equivalent"), sum("kept_change", "Kept changes"),
+  ratio("idea_cost_per_kept", "SUM([cost_usd])/NULLIF(SUM([kept_change]),0)", "Cost per kept change"), ratio("idea_rework_rate", "SUM([rework_removed_lines])/NULLIF(SUM([kept_lines]),0)", "Rework rate", true)];
+
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   message_labels:[],
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
@@ -124,6 +128,12 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   agent_event_messages: [
     idea("agent_event_messages", "repos", "Compare", "Messages read by project", "Compare messages read, keyword hits and events across projects", ["project_name"], agentEventMessages),
     idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
+  ],
+  outcomes: [
+    idea("outcomes", "labels", "Compare", "By outcome", "Compare sessions and cost by what became of their changes", ["outcome_label"], outcomes),
+    idea("outcomes", "repos", "Compare", "By project", "Compare cost per kept change and rework rate across projects", ["project_name"], outcomes),
+    idea("outcomes", "models", "Compare", "By main model", "Compare cost per kept change and rework rate across sessions' main models", ["model_family"], outcomes),
+    idea("outcomes", "tiers", "Compare", "By evidence tier", "Count sessions by the strongest evidence their outcome rests on", ["evidence_tier"], outcomes),
   ],
 };
 
