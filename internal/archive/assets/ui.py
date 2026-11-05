@@ -235,24 +235,21 @@ APP_HTML = r'''<!doctype html>
     @media(prefers-color-scheme:dark){:root:not([data-theme]){--event-friction:#ff9a8a;--event-learning:#3fd6c8;--event-second-look:#fffaf0;--event-choices:#b49cff;--event-link:#f3ebdc;--event-halo:#10241b}}
     .event-friction{--event-hue:var(--event-friction)}.event-learning{--event-hue:var(--event-learning)}.event-second-look{--event-hue:var(--event-second-look)}.event-choices{--event-hue:var(--event-choices)}
     mark.agent-event,mark.event-context,mark.event-target{background:none;color:inherit;border:0;padding:0}
-    /* Two-sided events (bindEventLinks): the target underlined in link ink, both ends numbered, notes for the other end, a gutter arc between them on hover or selection. */
+    /* Two-sided events (bindEventLinks): the target underlined in link ink, both ends numbered inline (the badge names the other end), a gutter arrow from the event back to its target on hover or selection. */
     .show-events mark.event-target{text-decoration:underline 2px dashed var(--event-link);text-underline-offset:3px;background:color-mix(in srgb,var(--event-link) 7%,transparent);border-radius:2px;cursor:pointer;-webkit-box-decoration-break:clone;box-decoration-break:clone}
     .show-events [data-agent-events] .agent-event.is-linked{cursor:pointer;text-decoration:underline 1.5px solid color-mix(in srgb,var(--event-hue) 70%,transparent);text-underline-offset:3px}
-    .event-link-n,.event-link-notes,.event-link-gutter{display:none}
+    .event-link-n,.event-link-gutter{display:none}
     .event-legend-item.event-target-legend i{background:color-mix(in srgb,var(--event-link) 7%,transparent);border:0;border-bottom:2px dashed var(--event-link);border-radius:0}
-    .show-events .event-link-n{display:inline-block;min-width:15px;height:15px;padding:0 3px;margin:0 1px;border-radius:8px;font:700 9px/15px var(--sans);text-align:center;vertical-align:super;cursor:pointer;background:var(--event-hue);color:var(--event-halo);font-style:normal}
+    .show-events .event-link-n{display:inline-block;min-width:15px;height:15px;padding:0 3px;margin:0 1px;border:0;border-radius:8px;font:700 9px/15px var(--sans);text-align:center;vertical-align:super;cursor:pointer;background:var(--event-hue);color:var(--event-halo);font-style:normal}
     .show-events .event-link-n.is-target{background:var(--panel);color:var(--event-link);box-shadow:inset 0 0 0 1.5px var(--event-link)}
-    .show-events .event-link-notes{display:flex;flex-wrap:wrap;gap:4px 6px;margin:6px 0 2px}
-    .event-link-note{display:inline-flex;align-items:baseline;gap:5px;max-width:100%;padding:2px 8px 2px 6px;border:0;border-left:3px solid var(--event-hue);border-radius:0 4px 4px 0;background:color-mix(in srgb,var(--event-hue) 8%,transparent);color:var(--ink);font:var(--fs-xs)/1.35 var(--sans);text-align:left;cursor:pointer}
-    .event-link-note.is-observation{border-left-color:var(--event-link);border-left-style:dashed;background:color-mix(in srgb,var(--event-link) 6%,transparent)}
-    .event-link-note b{font-size:var(--fs-2xs)}.event-link-note i{display:none}.event-link-note small{color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 3px;font-size:var(--fs-3xs);white-space:nowrap}
-    .event-link-note span{overflow-wrap:anywhere}
+    .show-events .event-link-n:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
     .conversation-panel{position:relative}
     .show-events .event-link-gutter{display:block;position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:2}
-    .event-link-gutter path{fill:none;stroke:var(--event-link);stroke-width:1.6;stroke-linecap:round;opacity:.75}.event-link-gutter path.is-weak{stroke-dasharray:4 3}.event-link-gutter path.is-selected{stroke-width:2.4;opacity:1}
+    .event-link-gutter path{fill:none;stroke:var(--event-link);stroke-width:1.6;stroke-linecap:round;opacity:.75}.event-link-gutter path.is-weak{stroke-dasharray:4 3}.event-link-gutter path.is-selected{stroke-width:2;opacity:.95}.event-link-gutter marker path{fill:var(--event-link);stroke:none;opacity:1}
     .show-events.has-link-focus mark.is-linked:not(.link-focus),.show-events.has-link-focus mark.event-target:not(.link-focus){opacity:.55}
-    .show-events .link-focus:is(mark,.event-link-note),.show-events .link-selected:is(mark,.event-link-note){outline:2px solid var(--event-link);outline-offset:1px}
-    .show-events .link-reveal:is(mark,.event-link-note){outline-width:4px;outline-offset:3px;transition:outline-width .6s,outline-offset .6s}
+    .show-events mark.link-focus,.show-events mark.link-selected{outline:1px solid color-mix(in srgb,var(--event-link) 40%,transparent);outline-offset:1px;border-radius:2px}
+    .show-events .event-link-n.link-focus,.show-events .event-link-n.link-selected{box-shadow:0 0 0 2px var(--panel),0 0 0 3px var(--event-link)}
+    .show-events mark.link-reveal{outline-width:3px;outline-offset:2px;transition:outline-width .6s,outline-offset .6s}
     .show-events [data-agent-events] .agent-event{background:color-mix(in srgb,var(--event-hue) 24%,transparent);border-radius:2px;padding:1px 0;-webkit-box-decoration-break:clone;box-decoration-break:clone;cursor:help}
     .show-events [data-agent-events] .agent-event:hover{background:color-mix(in srgb,var(--event-hue) 40%,transparent)}
     .show-events [data-agent-events] .event-context{text-decoration:underline dotted color-mix(in srgb,var(--muted) 80%,transparent);text-underline-offset:3px;cursor:help}
@@ -1273,11 +1270,13 @@ function transcriptHighlightControl(panel,conversation,messages){
   panel.addEventListener('pointerleave',hideLabelTip);
   apply();return box;
 }
+/** The verifier's response span, only when it is a clause of its own: not inside what was said or what it was about, and not a fragment. */
+function eventFollowUp(item){const text=(item.responseText||'').trim(),said=item.sentenceText||'',about=item.subjectText||'';if(text.split(/\s+/).length<3||said.includes(text)&&text.length<said.length*.6||about.includes(text)||text.includes(said))return '';return text}
 function showEventTip(events,event){if(!events.length){hideLabelTip();return}
   if(!labelTip){labelTip=node('div','label-tip');labelTip.setAttribute('role','tooltip');document.body.append(labelTip)}
   labelTip.replaceChildren();
   for(const item of events){const row=node('div','event-tip-row '+eventGroupClass(item.group)),details=node('dl');row.append(node('i'),node('strong','',item.label),node('span','',item.probability==null?'':`${Math.round(item.probability*100)}%`));
-    for(const [name,value] of [['Said',item.sentenceText],['About',item.subjectText],['Did',item.responseText],['Points back at',item.target?.text?'“'+item.target.text+'”':'']])if(value&&(name==='Said'||value!==item.sentenceText)){details.append(node('dt','',name),node('dd','',shortText(value,180)))}
+    for(const [name,value] of [['Said',item.sentenceText],['About',item.subjectText],['What it did next',eventFollowUp(item)],['Points back at',item.target?.text?'“'+item.target.text+'”':'']])if(value&&(name==='Said'||value!==item.sentenceText)){details.append(node('dt','',name),node('dd','',shortText(value,180)))}
     row.append(details);labelTip.append(row)}
   labelTip.hidden=false;placeLabelTip(event);
 }
@@ -1307,20 +1306,21 @@ function rememberEventLinks(messages){
 const messageEventTargets=message=>eventLinkContext.get(message)?.targets||[];
 function decorateEventLinks(container,message,events,spans){
   const context=eventLinkContext.get(message);if(!context)return;
-  const byId=new Map(context.links.map(link=>[link.id,link])),observed=[],targeted=[];
+  const byId=new Map(context.links.map(link=>[link.id,link]));
   if(events?.length)for(const mark of container.querySelectorAll('mark.agent-event')){const ids=eventsAtMark(events,mark).map(event=>event.id).filter(id=>byId.has(id));if(ids.length){mark.dataset.eventLinks=ids.join(' ');mark.classList.add('is-linked')}}
   for(const mark of container.querySelectorAll('mark.event-target')){const at=/event-target-at-(\d+)/.exec(mark.className);const ids=(spans[Number(at?.[1])]?.links||[]).filter(id=>byId.has(id));if(ids.length)mark.dataset.eventTargets=ids.join(' ')}
   // One number per pair, after the last mark of its span.
   const last=new Map();for(const mark of container.querySelectorAll('mark[data-event-links],mark[data-event-targets]'))last.set(mark.dataset.eventLinks?'observation '+mark.dataset.eventLinks:'target '+mark.dataset.eventTargets,mark);
-  for(const [key,mark] of last){const [side,...ids]=key.split(' ');let after=mark;for(const id of ids){const link=byId.get(id),badge=node('sup',`event-link-n ${side==='target'?'is-target':'is-observation'} ${eventGroupClass(link.group)}`,String(link.n));badge.dataset.eventLink=id;badge.dataset.side=side;badge.title=side==='target'?`${link.label}: the agent points back at this`:`${link.label}: points back at earlier text`;after.after(badge);after=badge;(side==='target'?targeted:observed).push(link)}}
-  if(!observed.length&&!targeted.length)return;
-  const notes=node('div','event-link-notes');notes.setAttribute('role','list');notes.setAttribute('aria-label','Linked agent events');
-  const add=(link,side)=>{const note=node('button',`event-link-note is-${side} ${eventGroupClass(link.group)}`);note.type='button';note.dataset.eventLink=link.id;note.dataset.side=side;note.dataset.viewField='reader_event_link';note.setAttribute('role','listitem');
-    const where=link.target.role==='user'?'your prompt':['thinking','reasoning'].includes(link.target.kind)?'earlier thinking':'an earlier reply';
-    note.append(node('b','',String(link.n)),node('i'),side==='target'?node('span','',`${link.label} later: ${shortText(link.sentenceText,150)}`):node('span','',`About ${where}: “${shortText(link.target.text,110)}”`),node('small','',link.target.method==='quote'?(link.weak?'weak quote':'quote'):'shared words'));notes.append(note)};
-  for(const link of targeted)add(link,'target');for(const link of observed)add(link,'observation');
-  container.append(notes);
+  for(const [key,mark] of last){const [side,...ids]=key.split(' ');let after=mark;for(const id of ids){const link=byId.get(id),badge=node('button',`event-link-n ${side==='target'?'is-target':'is-observation'} ${eventGroupClass(link.group)}`,String(link.n));badge.type='button';badge.dataset.eventLink=id;badge.dataset.side=side;badge.dataset.viewField='reader_event_link';
+    badge.title=eventLinkTitle(link,side);badge.setAttribute('aria-label',badge.title);after.after(badge);after=badge}}
 }
+/** What a pair's badge says about the other end: the event's kind, where its target is and how it was found. */
+function eventLinkTitle(link,side){
+  const where=link.target.role==='user'?'your prompt':['thinking','reasoning'].includes(link.target.kind)?'earlier thinking':'an earlier reply';
+  const how=link.target.method==='quote'?(link.weak?'weak quote':'quote'):link.target.method==='file'?'named file':'shared words';
+  return side==='target'?`${link.n} · ${link.label} later points back at this (${how}): ${shortText(link.sentenceText,160)}`:`${link.n} · ${link.label}, about ${where} (${how}): “${shortText(link.target.text,120)}”`;
+}
+let eventLinkArrows=0;
 function bindEventLinks(panel,links){
   if(!links.length)return null;
   const ends=id=>panel.querySelectorAll(`[data-event-links~="${CSS.escape(id)}"],[data-event-targets~="${CSS.escape(id)}"],[data-event-link="${CSS.escape(id)}"]`);
@@ -1328,9 +1328,11 @@ function bindEventLinks(panel,links){
   let hovered=null,selected=null;
   const arc=id=>{const o=panel.querySelector(`mark[data-event-links~="${CSS.escape(id)}"]`),t=panel.querySelector(`mark[data-event-targets~="${CSS.escape(id)}"]`);if(!o||!t||!o.getClientRects().length||!t.getClientRects().length)return '';
     const box=panel.getBoundingClientRect(),a=t.getClientRects()[0],b=o.getClientRects()[0],yt=a.top-box.top+a.height/2,yo=b.top-box.top+b.height/2,x=6,lead=(el,r)=>Math.max(x+8,Math.min(r.left,(el.closest('p,li,blockquote,pre,td,.message-prose,.markdown-content')||el).getBoundingClientRect().left)-box.left-4),xt=lead(t,a),xo=lead(o,b),r=Math.min(6,Math.abs(yo-yt)/2),dir=Math.sign(yo-yt)||1;
-    return `M${xt} ${yt}H${x+r}Q${x} ${yt} ${x} ${yt+dir*r}V${yo-dir*r}Q${x} ${yo} ${x+r} ${yo}H${xo}`};
+    return `M${xo} ${yo}H${x+r}Q${x} ${yo} ${x} ${yo-dir*r}V${yt+dir*r}Q${x} ${yt} ${x+r} ${yt}H${xt}`};
+  const arrow=`event-link-arrow-${++eventLinkArrows}`;
   const draw=()=>{const box=panel.getBoundingClientRect();gutter.setAttribute('width',String(box.width));gutter.setAttribute('height',String(panel.scrollHeight));
-    gutter.replaceChildren();for(const [id,kind] of [[selected,'is-selected'],[hovered,'is-hover']]){if(!id||(kind==='is-hover'&&id===selected))continue;const d=arc(id);if(!d)continue;const link=links.find(item=>item.id===id),path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',d);path.setAttribute('class',`${kind}${link?.weak?' is-weak':''}`);gutter.append(path)}};
+    gutter.replaceChildren();gutter.insertAdjacentHTML('afterbegin',`<defs><marker id="${arrow}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>`);
+    for(const [id,kind] of [[selected,'is-selected'],[hovered,'is-hover']]){if(!id||(kind==='is-hover'&&id===selected))continue;const d=arc(id);if(!d)continue;const link=links.find(item=>item.id===id),path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',d);path.setAttribute('marker-end',`url(#${arrow})`);path.setAttribute('class',`${kind}${link?.weak?' is-weak':''}`);gutter.append(path)}};
   const focus=id=>{if(hovered===id)return;hovered=id;panel.classList.toggle('has-link-focus',!!id);panel.querySelectorAll('.link-focus').forEach(el=>el.classList.remove('link-focus'));if(id)ends(id).forEach(el=>el.classList.add('link-focus'));draw()};
   const mark=id=>{selected=id;panel.querySelectorAll('.link-selected').forEach(el=>el.classList.remove('link-selected'));if(id)ends(id).forEach(el=>el.classList.add('link-selected'));draw()};
   // Reveal one end: render its turn, open what hides it, scroll and highlight.
