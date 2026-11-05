@@ -498,6 +498,25 @@ test('dynamic message reveal materializes its target without taking keyboard foc
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
 });
 
+test('agent event links restore both ends from the URL, opening folded prose without taking focus', {skip},async t=>{
+ const filler='Some context about the async work that the person wants reviewed. '.repeat(14),prompt=`${filler}Please keep the drawer only removal flow working on phones.`;
+ const reply='I read "drawer only" as the bottom sheet. Done.',start=prompt.indexOf('drawer only');
+ const messages=[
+  {id:'link-prompt',native_id:'link-prompt',role:'user',kind:'message',text:prompt,created_at:new Date(1760000000000).toISOString()},
+  {id:'link-reply',native_id:'link-reply',role:'assistant',kind:'message',text:reply,created_at:new Date(1760000001000).toISOString(),
+   agent_events:[{id:'e-link',kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+'drawer only'.length,text:'drawer only',strong:true}}]},
+ ];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages,agent_events:{messages_read:2}})};
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-link`,ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
+ await opened.settled();
+ // The target sits past the fold of a long prompt; restoring the link opens it.
+ assert.equal(await page.locator('mark.event-target.link-selected').first().evaluate(mark=>mark.closest('.message-prose').classList.contains('prose-truncated')),false);
+ assert.ok(await page.locator('mark.agent-event.link-selected').count());
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body||!document.activeElement),true);
+ assert.ok(await page.locator('.event-link-gutter path.is-selected').count(),'the gutter connects the two ends');
+});
+
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{
  const opened=await open(t,{url:`/work/${workID}?conversation=${rootConversation}&reveal=text%3ATurn%201`,ready:'.pharos-find'});
  await opened.page.waitForFunction(()=>[...(CSS.highlights.get('pharos-landing')||[])][0]?.toString()==='Turn 1');
