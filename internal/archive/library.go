@@ -650,6 +650,12 @@ func libraryExtraColumns(derived map[string]string) []libraryColumn {
 		{"verification", outcomeFactSQL("w", "so.verification")},
 		{"recorded_commits", outcomeFactSQL("w", "json_array_length(so.commits_json)")},
 		{"reworked_files", outcomeFactSQL("w", "so.reworked_files")},
+		// Local Git (outcome_git.go): whether it was asked, and the commits
+		// linked to the session and on mainline, empty unless it was.
+		{"git_check", gitCheckSQL("w")},
+		{"git_check_reason", gitCheckReasonSQL("w")},
+		{"linked_commits", gitFactSQL("w", "sg.linked_commits")},
+		{"landed_commits", gitFactSQL("w", "sg.landed_commits")},
 	}
 }
 
