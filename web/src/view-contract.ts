@@ -4,6 +4,7 @@ import { defaultConcurrencySettings, concurrencyRangePresets } from "./concurren
 import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-search-model";
 import { safetyRanks } from "./safety-dashboard-model";
 import { logSourceIds } from "./logs-model";
+import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
@@ -41,7 +42,7 @@ export const viewFields: Record<string, ViewField> = {
   query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["1","7","30","90","180","365"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
-  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table"], "json", "Query builder collapsed state by dataset ID."),
+  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","settings/sync"], "json", "Query builder collapsed state by dataset or background table schema ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
   search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
@@ -86,6 +87,9 @@ export const viewFields: Record<string, ViewField> = {
 // These maps have viewer-dependent initial choices. Capture effective entries
 // so an empty map cannot fall back to another browser's saved preference.
 viewFields.query_layout.captureEntries=true;
+for (const schema of Object.values(syncSchemas)) {
+  viewFields[schema.name] = field(`q_${schema.name}`, ["settings/sync"], "text", `Native Query Table definition for ${schema.name}: filters, sorting, columns, grouping, metrics and pagination over the retained snapshot.`);
+}
 
 // Structured examples are exported with each field so an agent can construct
 // the same object the UI owns, without guessing names from prose descriptions.
@@ -198,6 +202,7 @@ export const delegatedViewFields: Record<string,{file:string; symbol:string}> = 
   history_search:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
   overlay:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
 };
+for (const schema of Object.values(syncSchemas)) delegatedViewFields[schema.name] = {file:"web/src/sync-tables.tsx",symbol:"useQueryTable"};
 
 for (const name of ["window_mode","window_days","window_field","window_until_field","window_dataset","window_timezone"]) delegatedViewFields[name]={file:"web/src/query-links.ts",symbol:"readRollingWindow"};
 for (const name of ["query_dashboard_chart","query_dashboard_filters","query_dashboard_window","query_opened","query_days","query_report","query_search"]) delegatedViewFields[name]={file:"web/src/usage-workspace-model.ts",symbol:"usageWorkspaceURL"};

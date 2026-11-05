@@ -10,6 +10,34 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
+test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
+ const query={...EMPTY_QUERY,where:[{field:'kind',op:'=',value:'backup.local'}],orderBy:[{field:'seconds',dir:'asc'}]};
+ const params=new URLSearchParams({q_sync_operations:encodeQuery(query),query_layout:JSON.stringify({sync_operations:true,sync_sources:false})});
+ const first=await open(t,{url:'/settings/sync?'+params,ready:'#syncHistoryTables .qt-row'});
+ const history=page=>page.getByRole('region',{name:'Recent run history',exact:true});
+ await first.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===1);
+ assert.ok(await history(first.page).getByText('Back up',{exact:true}).isVisible());
+ assert.ok(await history(first.page).getByRole('button',{name:'Expand query builder',exact:true}).isVisible());
+ assert.ok(await first.page.getByRole('region',{name:'Source status',exact:true}).getByRole('button',{name:'Add filter',exact:true}).isVisible());
+ await history(first.page).getByRole('button',{name:'Expand query builder',exact:true}).click();
+ await first.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('query_layout')).sync_operations===false);
+ const linked=path(first.page);
+ const fresh=await open(t,{url:linked,ready:'#syncHistoryTables .qt-row'});
+ await fresh.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===1);
+ assert.ok(await history(fresh.page).getByRole('button',{name:'Remove Kind filter',exact:true}).isVisible());
+ assert.ok(await history(fresh.page).getByRole('button',{name:'Collapse query builder',exact:true}).isVisible());
+ const restored=decodeQueryStrict(new URL(fresh.page.url()).searchParams.get('q_sync_operations'));
+ assert.deepEqual(restored.where,query.where);
+ assert.deepEqual(restored.orderBy,query.orderBy);
+ // Back/Forward must restore the query on the mounted page.
+ const all=new URL(fresh.page.url());all.searchParams.set('q_sync_operations',encodeQuery(EMPTY_QUERY));
+ await fresh.page.evaluate(url=>{history.pushState(null,'',url);window.dispatchEvent(new PopStateEvent('popstate'));},all.href);
+ await fresh.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===3);
+ await fresh.page.goBack();
+ await fresh.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===1);
+ assert.ok(await history(fresh.page).getByText('Back up',{exact:true}).isVisible());
+});
+
 test('saved Parallel activity links open the native Timeline and retain the selected range and session',{skip},async t=>{
  const analysis=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
  const range=[analysis.start+10000,analysis.end-10000],params=new URLSearchParams({explorer:'parallel',delegation_start:String(range[0]),delegation_end:String(range[1]),delegation_session:'s-root',delegation_labels:'off'});

@@ -507,7 +507,7 @@
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
-    intro.append(node('h3', '', 'Keep my library current'),
+    intro.append(node('h3', '', 'Task Schedule'),
       node('p', 'muted', {on: 'Everything below runs automatically. Pharos measures every run and moves work between schedules as it gets faster or slower.',
         paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs until you choose Update everything now.'}[model.mode] || ''));
     const seg = node('div', 'bg-seg');

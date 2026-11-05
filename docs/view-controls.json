@@ -248,6 +248,10 @@
       "field": "query_layout"
     },
     {
+      "file": "web/src/sync-tables.tsx",
+      "field": "query_layout"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "reader_content"
     },
@@ -7163,8 +7167,8 @@
       "owner": "SyncQueryTable",
       "tag": "MetricsPanel",
       "control": "onInspect={(bucket, clause) => { const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "74c21543f498bd83:0",
@@ -7172,17 +7176,17 @@
       "owner": "SyncQueryTable",
       "tag": "DataTable",
       "control": "onQueryChange={api.setQuery}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
-      "key": "cf14e4c3c5c1cee0:0",
+      "key": "98a927a3547e1c1f:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "SyncQueryTable",
       "tag": "QueryBuilder",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "control": "onCollapsedChange={setCollapsed}",
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "7c0248af1a26259f:0",
