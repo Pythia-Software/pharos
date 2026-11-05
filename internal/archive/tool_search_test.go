@@ -83,6 +83,10 @@ func TestToolCommandSearchIndex(t *testing.T) {
 	if _, err := catalog.DB.Exec("DELETE FROM tool_command_fts"); err != nil {
 		t.Fatal(err)
 	}
+	catalog.ops = newOpRegistry("service")
+	pass := catalog.beginPass(ctx, "maintenance.search.tools", triggerVersion)
+	defer pass.end(nil)
+	ctx = pass.context(ctx)
 	for {
 		more, err := catalog.indexToolSearchBatch(ctx)
 		if err != nil {
@@ -91,6 +95,10 @@ func TestToolCommandSearchIndex(t *testing.T) {
 		if !more {
 			break
 		}
+	}
+	step := operationStep(catalog.ops.views()[0])
+	if step == nil || step["unit"] != "tool call" || step["fraction"] != float64(1) || step["done"] != float64(toolSearchBatch+9) {
+		t.Fatalf("tool backfill lost its processed-call statistics: %+v", step)
 	}
 	ready, err := catalog.toolSearchReady(ctx)
 	if err != nil || !ready {
@@ -210,14 +218,22 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			if _, err := c.DB.Exec("DELETE FROM " + index.table); err != nil {
 				t.Fatal(err)
 			}
+			c.ops = newOpRegistry("service")
+			pass := c.beginPass(t.Context(), "maintenance.search.query", triggerVersion)
+			defer pass.end(nil)
+			progressCtx := pass.context(t.Context())
 			for {
-				more, err := c.indexQueryTextBatch(t.Context(), index)
+				more, err := c.indexQueryTextBatch(progressCtx, index)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if !more {
 					break
 				}
+			}
+			step := operationStep(c.ops.views()[0])
+			if step == nil || step["unit"] == nil || step["fraction"] != float64(1) {
+				t.Fatalf("query index backfill lost its statistics: %+v", step)
 			}
 			if dataset == "tool_calls" {
 				for {

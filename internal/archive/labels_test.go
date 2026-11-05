@@ -1208,6 +1208,7 @@ func TestMessageLabelQueryProjection(t *testing.T) {
 
 func TestMessageLabelFacts(t *testing.T) {
 	c, config := testCatalog(t)
+	c.ops = newOpRegistry("service")
 	ctx := t.Context()
 	override(t, &messageLabelFactsBatch, 1)
 	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,location,title,indexed_at) VALUES('facts-work','test','test','facts-work','/test','Label work','2026-01-01');
@@ -1242,13 +1243,22 @@ func TestMessageLabelFacts(t *testing.T) {
 	}
 	flush := func() {
 		t.Helper()
+		pass := c.beginPass(ctx, "maintenance.labels.query", triggerChained)
+		defer pass.end(nil)
+		var progress activityWork
+		runCtx := withWorkProgress(ctx, func(work activityWork) { progress = work })
 		for n := 0; n < 100; n++ {
-			count, err := c.refreshMessageLabelFacts(ctx)
+			var count int
+			var err error
+			pass.runIO(runCtx, func(ctx context.Context) { count, err = c.refreshMessageLabelFacts(ctx) })
 			if err != nil {
 				t.Fatal(err)
 			}
 			if count == 0 {
 				return
+			}
+			if progress.Unit != "conversation" || progress.Done <= 0 || progress.Total < progress.Done {
+				t.Fatalf("message-label query indexing did not report its committed conversations: %+v", progress)
 			}
 		}
 		t.Fatal("facts did not finish")

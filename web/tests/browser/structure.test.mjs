@@ -149,7 +149,8 @@ const backgroundTaskStatus = { ...busyStatus,
         {id: 'rebuild', kind: 'analysis.authorship', label: 'Classify your writing', state: 'running',
           step: {name: 'classifying authorship', unit: 'message', done: 601, total: 42918, fraction: 601 / 42918}, children: []},
       ]},
-    ]}] }],
+    ]}] }, {id: 'label-index', kind: 'maintenance.labels.query', label: 'Index message labels', state: 'running', priority: 'background',
+      step: {name: 'Indexing message labels', unit: 'conversation', done: 1200, total: null}, children: []}],
   background: { ...idleStatus.background,
     items: idleStatus.background.items.map(item => item.id === 'writing' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
     cadences: idleStatus.background.cadences.map(cadence => cadence.id === 'frequent' ? { ...cadence, state: 'running', state_label: 'Updating now' } : cadence),
@@ -279,6 +280,14 @@ const ROUTES = [
   { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/status/stream': eventStream(backgroundTaskStatus), 'GET /api/status': backgroundTaskStatus},
     open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosStatusPanel .pharos-status-position-track',
+    check: async page => {
+      const measured = page.getByRole('progressbar', {name: 'Classify your writing progress', exact: true});
+      const unmeasured = page.getByRole('progressbar', {name: 'Index message labels progress', exact: true});
+      await measured.waitFor();
+      await unmeasured.waitFor();
+      assert.notEqual(await measured.getAttribute('aria-valuenow'), null, 'measured progress is accessible');
+      assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
+    },
   },
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",

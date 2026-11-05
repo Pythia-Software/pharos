@@ -31,6 +31,7 @@ var operationReasons = map[string]string{
 	"capture-running":     "Waiting for a capture to finish",
 	"ingest-busy":         "Waiting for another index to finish",
 	"catalog-busy":        "Waiting for the catalog",
+	"interactive-query":   "Waiting for interactive queries to finish",
 	"destination-busy":    "Waiting for the destination",
 	"waiting-for-drive":   "Waiting for the drive",
 	"waiting-for-network": "Waiting for the network",

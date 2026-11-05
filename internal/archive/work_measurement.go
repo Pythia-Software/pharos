@@ -44,8 +44,13 @@ func reportWork(ctx context.Context, phase, unit string, done, total int) {
 	if ctx == nil {
 		return
 	}
+	work := activityWork{Phase: phase, Unit: unit, Done: float64(done), Total: float64(total), TotalKnown: total >= 0}
+	// Every operation observes its own workers, including scheduled stages
+	// without a SyncRun meter. An inherited callback still records run history
+	// and forecasts. Explicit mirrors on older entry points are idempotent.
+	opFrom(ctx).mirrorWork(work)
 	if report, ok := ctx.Value(workProgressKey{}).(func(activityWork)); ok {
-		report(activityWork{Phase: phase, Unit: unit, Done: float64(done), Total: float64(total), TotalKnown: total >= 0})
+		report(work)
 	}
 }
 
