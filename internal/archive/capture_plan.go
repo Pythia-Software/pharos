@@ -83,7 +83,7 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		})
 		plan.files = preferRollouts(plan.files)
 		if info.IsDir() {
-			databases, err := codexNamingDatabases(source.Path)
+			databases, err := codexNamingDatabases(context.Background(), source.Path)
 			if err != nil {
 				return plan, fmt.Errorf("Codex names are unavailable: %w", err)
 			}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sqliteLadderTest lowers the live read's wait and keeps copies in a folder
@@ -110,10 +111,15 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 		}
 		assertNoCopies(t, copies)
 	})
-	t.Run("a database another app holds locked is read from a copy", func(t *testing.T) {
-		for _, journal := range []string{"DELETE", "WAL"} {
+	t.Run("a WAL database another app holds locked is read from a copy", func(t *testing.T) {
+		for _, journal := range []string{"WAL"} {
 			path := filepath.Join(t.TempDir(), journal+".db")
 			sqliteNotes(t, path, journal)
+			// A journal left from before the database used a WAL, its
+			// header zeroed, is not a write in progress.
+			if err := os.WriteFile(path+"-journal", make([]byte, 512), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			// Exclusive locking mode keeps the lock after the commit; in
 			// WAL mode the commit stays in the WAL, which the copy folds in.
 			sqliteHolder(t, path, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
@@ -159,10 +165,20 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a write not yet in the main file is left out of the copy", func(t *testing.T) {
+	t.Run("a transaction not yet committed is left out of the copy", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "uncommitted.db")
-		sqliteNotes(t, path, "DELETE")
-		sqliteHolder(t, path, `BEGIN EXCLUSIVE`, `INSERT INTO notes VALUES('uncommitted')`)
+		sqliteNotes(t, path, "WAL")
+		// A cache this small spills the open transaction into the WAL,
+		// as frames after the last commit, which the copy must not read.
+		holder, _ := sqliteHolder(t, path, `PRAGMA locking_mode=EXCLUSIVE`, `PRAGMA cache_size=2`, `BEGIN EXCLUSIVE`)
+		for i := 0; i < 200; i++ {
+			if _, err := holder.ExecContext(context.Background(), `INSERT INTO notes VALUES(?)`, strings.Repeat("x", 2000)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if pending, err := sqlitePendingState(path); err != nil || !pending.frames {
+			t.Fatalf("%+v, %v: the fixture's transaction did not spill", pending, err)
+		}
 		db, err := openSourceSQLite(context.Background(), path)
 		if err != nil {
 			t.Fatal(err)
@@ -186,6 +202,22 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 		if pending, err := sqlitePendingState(path); err != nil || !pending.hot {
 			t.Fatalf("%+v, %v: the fixture's transaction did not spill", pending, err)
 		}
+		// So is one whose writer stopped, holding no lock, even on a
+		// read-only volume, where it would otherwise be read without locks.
+		crashed := filepath.Join(t.TempDir(), "crashed.db")
+		for _, suffix := range []string{"", "-journal"} {
+			if err := copyFileContext(context.Background(), path+suffix, crashed+suffix); err != nil {
+				t.Fatal(err)
+			}
+		}
+		override(t, &sqliteReadOnlyVolume, func(string) bool { return true })
+		if db, err := openSourceSQLite(context.Background(), crashed); err == nil {
+			db.Close()
+			t.Fatal("a database its crashed writer left half written was read")
+		} else if !errors.Is(err, errSQLiteWriteInProgress) || sqliteReadVia(crashed) != sqliteReadWaiting {
+			t.Fatalf("crashed writer: error %v via %s", err, sqliteReadVia(crashed))
+		}
+		sqliteReadOnlyVolume = func(string) bool { return false }
 		db, err := openSourceSQLite(context.Background(), path)
 		if err == nil {
 			db.Close()
@@ -217,7 +249,7 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 	})
 	t.Run("a database changing as it is copied is waited for", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "changing.db")
-		sqliteNotes(t, path, "DELETE")
+		sqliteNotes(t, path, "WAL")
 		holder, _ := sqliteHolder(t, path, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
 		copied := 0
 		override(t, &sqliteCopyHook, func(string) {
@@ -281,22 +313,27 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			assertNoCopies(t, copies)
 		}
 	})
-	t.Run("a rollback-journal database locked with no journal on disk is waited for", func(t *testing.T) {
-		// Without a journal on disk, the holder's writes reach the main
-		// file with nothing to undo them, so no copy is known to be whole.
-		path := filepath.Join(t.TempDir(), "unjournaled.db")
-		sqliteNotes(t, path, "DELETE")
-		sqliteHolder(t, path, `PRAGMA journal_mode=MEMORY`, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
-		if _, err := os.Stat(path + "-journal"); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("the fixture keeps a journal on disk: %v", err)
+	t.Run("a rollback-journal database another app holds locked is waited for", func(t *testing.T) {
+		// Nothing on disk tells an idle holder from one part way through a
+		// write: without a journal on disk (MEMORY), or after its first
+		// commit in exclusive locking mode, which SQLite stops counting.
+		for name, statements := range map[string][]string{
+			"exclusive":   {`PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`},
+			"unjournaled": {`PRAGMA journal_mode=MEMORY`, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`},
+			"uncommitted": {`BEGIN EXCLUSIVE`, `INSERT INTO notes VALUES('uncommitted')`},
+		} {
+			path := filepath.Join(t.TempDir(), name+".db")
+			sqliteNotes(t, path, "DELETE")
+			_, release := sqliteHolder(t, path, statements...)
+			if db, err := openSourceSQLite(context.Background(), path); err == nil {
+				db.Close()
+				t.Fatalf("%s: a locked rollback-journal database was read", name)
+			} else if !errors.Is(err, errSQLiteWriteInProgress) || sqliteReadVia(path) != sqliteReadWaiting {
+				t.Fatalf("%s: error %v via %s", name, err, sqliteReadVia(path))
+			}
+			assertNoCopies(t, copies)
+			release()
 		}
-		if db, err := openSourceSQLite(context.Background(), path); err == nil {
-			db.Close()
-			t.Fatal("a database written without a journal was read from a copy")
-		} else if !errors.Is(err, errSQLiteWriteInProgress) || sqliteReadVia(path) != sqliteReadWaiting {
-			t.Fatalf("error %v via %s", err, sqliteReadVia(path))
-		}
-		assertNoCopies(t, copies)
 	})
 	t.Run("a change a coarse clock hides is seen", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "coarse.db")
@@ -338,14 +375,48 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		// A process now running under an ID that made a copy before it
+		// started has reused the ID; one that started first may own it.
+		old := time.Now().Add(-time.Hour)
+		reused := exec.Command("sleep", "30")
+		if err := reused.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer reused.Process.Kill()
+		reusedCopy := filepath.Join(copies, strconv.Itoa(reused.Process.Pid)+"-left")
+		ownerCopy := filepath.Join(copies, "1-open")
+		for _, dir := range []string{reusedCopy, ownerCopy} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chtimes(reusedCopy, old, old); err != nil {
+			t.Fatal(err)
+		}
 		sweepSQLiteCopies()
 		if _, err := os.Stat(left); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("an ended process's copy is left: %v", err)
 		}
+		if _, err := os.Stat(reusedCopy); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a copy whose process ID was reused is left: %v", err)
+		}
+		if _, err := os.Stat(ownerCopy); err != nil {
+			t.Fatalf("a running process's copy was removed: %v", err)
+		}
+		os.RemoveAll(ownerCopy)
 		if _, err := os.Stat(own); err != nil {
 			t.Fatalf("this process's copy was removed: %v", err)
 		}
 		os.RemoveAll(own)
+	})
+	t.Run("a cancelled reader stops before the ladder", func(t *testing.T) {
+		root := t.TempDir()
+		sqliteNotes(t, filepath.Join(root, "state.sqlite"), "WAL")
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := codexNamingDatabases(cancelled, root); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Codex's state databases were listed for a cancelled read: %v", err)
+		}
 	})
 	t.Run("a missing database fails as before", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "missing.db")
@@ -368,7 +439,7 @@ func TestLockedSourceIsIndexedAndCapturedFromACopy(t *testing.T) {
 	root := zedFixture(t)
 	source := zedSource(root)
 	database := filepath.Join(root, filepath.FromSlash(zedDatabase))
-	_, release := sqliteHolder(t, database, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO credentials VALUES('held', 'by Zed')`)
+	_, release := sqliteHolder(t, database, `PRAGMA locking_mode=EXCLUSIVE`, `PRAGMA journal_mode=WAL`, `INSERT INTO credentials VALUES('held', 'by Zed')`)
 	c, config := testCatalog(t)
 	config.Sources = []SourceConfig{source}
 	ingestSource(t, c, source)
@@ -417,7 +488,7 @@ func TestLockedSourceIsIndexedAndCapturedFromACopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range append([]string{"CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT)",
+	for _, statement := range append([]string{"PRAGMA journal_mode=WAL", "CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT)",
 		"CREATE TABLE session_messages(id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT, sent_at TEXT, cancelled_at TEXT)"},
 		addConductorSession("s1", 2)...) {
 		if _, err := writer.Exec(statement); err != nil {

@@ -32,9 +32,13 @@ import (
 //     copy is read.
 //
 // It waits instead, failing as busy so that the reader tries again, when no
-// copy can be consistent: a hot rollback journal means a write is half done
-// in the main file, and a rollback-journal database held locked with no
-// journal on disk may be written without one (journal_mode MEMORY or OFF).
+// copy can be shown consistent. A hot rollback journal means a write is half
+// done in the main file. And a rollback-journal database held locked may be
+// mid-write with nothing on disk to show it: its holder can spill a
+// transaction into the main file without journaling it (journal_mode MEMORY
+// or OFF), and in exclusive locking mode SQLite stops counting its commits.
+// A WAL database's holder writes only whole commits to the main file, by
+// checkpoint, so a WAL database is copied.
 // Pharos's own catalog and captures are opened with openReadOnlySQLite,
 // never copied.
 func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
@@ -57,7 +61,7 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 	if stateErr != nil {
 		return nil, errors.Join(err, stateErr)
 	}
-	if pending.hot || locked && pending.rollback && !pending.journal {
+	if pending.hot || locked && pending.rollback {
 		noteSQLiteRead(path, sqliteRead{Via: sqliteReadWaiting, Cause: cause, Reason: err.Error()})
 		return nil, fmt.Errorf("%s: %w", path, errSQLiteWriteInProgress)
 	}
@@ -286,15 +290,11 @@ func copyFileContext(ctx context.Context, src, dst string) error {
 	return out.Close()
 }
 
-// sqliteCopyMaxAge is how old another live process's copy must be before it
-// is removed: no read lasts a day, so it was left by a crash and its process
-// ID reused.
-const sqliteCopyMaxAge = 24 * time.Hour
-
 var sweepSQLiteCopiesOnce sync.Once
 
 // sweepSQLiteCopies removes the copies of processes that have ended. Each
-// copy's folder is named for the process that made it.
+// copy's folder is named for the process that made it; a process with that
+// ID that started after the folder was made has reused the ID.
 func sweepSQLiteCopies() {
 	entries, err := os.ReadDir(sqliteCopyRoot)
 	if err != nil {
@@ -308,7 +308,12 @@ func sweepSQLiteCopies() {
 			continue
 		}
 		ended := syscall.Kill(pid, 0) == syscall.ESRCH
-		if info, err := entry.Info(); ended || err == nil && time.Since(info.ModTime()) > sqliteCopyMaxAge {
+		if !ended {
+			started, known := processStartTime(pid)
+			info, err := entry.Info()
+			ended = known && err == nil && started.After(info.ModTime())
+		}
+		if ended {
 			os.RemoveAll(filepath.Join(sqliteCopyRoot, entry.Name()))
 		}
 	}

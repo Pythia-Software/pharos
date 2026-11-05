@@ -630,7 +630,7 @@ func jsonlAuditDependencies(adapter *jsonlAdapter, paths []string) ([]string, []
 		} else if err != nil && !os.IsNotExist(err) {
 			return nil, nil, err
 		}
-		databases, err := codexNamingDatabases(adapter.config.Path)
+		databases, err := codexNamingDatabases(adapter.context(), adapter.config.Path)
 		return files, databases, err
 	}
 	seen := map[string]bool{}

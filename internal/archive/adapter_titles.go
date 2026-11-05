@@ -45,7 +45,7 @@ func codexStateVersion(path string) int {
 
 // Read only known metadata stores under the configured source root. Optional
 // older databases without threads.name do not turn prompt previews into names.
-func codexNamingDatabases(root string) ([]string, error) {
+func codexNamingDatabases(ctx context.Context, root string) ([]string, error) {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
 		return nil, err
@@ -60,7 +60,7 @@ func codexNamingDatabases(root string) ([]string, error) {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		db, err := openSourceSQLite(context.Background(), path)
+		db, err := openSourceSQLite(ctx, path)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +110,7 @@ func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	databases, err := codexNamingDatabases(a.config.Path)
+	databases, err := codexNamingDatabases(a.context(), a.config.Path)
 	if err != nil {
 		return nil, err
 	}
