@@ -42,6 +42,11 @@
 .habits-charts-pair .habits-scroll > svg { display: block; }
 .habits-days-chart { min-width: 0; width: 100%; }
 .habits-days-chart svg { display: block; max-width: 100%; }
+.habits-chart-inspection { min-width: 0; }
+.habits-chart-fit { height: 100%; }
+.habits-chart-inspection [data-habits-mark] { cursor: pointer; }
+.habits-chart-inspection [data-habits-mark]:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
+.usage-chart-tip.habits-chart-popover { position: fixed; z-index: 100; max-width: min(320px, calc(100vw - 16px)); }
 .habits-pace > p { margin: 2px 0 12px; color: var(--muted); font-size: var(--fs-sm); }
 .habits-pace > .habits-card-title { margin-bottom: 4px; }
 .habits-pace h3 { margin: 0 0 4px; font: 650 var(--fs-lg)/1.25 var(--serif); }

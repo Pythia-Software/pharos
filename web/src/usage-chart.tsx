@@ -11,7 +11,7 @@ import { sliceGroupState, type LegendAction } from "./chart-selection";
 import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
-import { PageLink } from "./nested-pages";
+import { ChartPopover, ChartPopoverRow } from "./chart-popover";
 import { DashboardSelect } from "./dashboard-select";
 import { SearchHelp } from "./search-help";
 
@@ -424,13 +424,12 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     {buckets.length === 5000 ? <p className="muted">Showing the latest 5,000 periods.{cumulative ? " Cumulative balances include earlier activity in the selected range." : " Narrow the date range to see earlier activity."}</p> : null}
     <div className="usage-chart-axis"><span>{buckets.length ? label(buckets[0].date) : ""}</span><span>{middle && buckets.length > 4 ? label(middle.date) : ""}</span><span>{!last ? "" : last.key !== periodKey(new Date(), period, periodCount) ? label(last.date) : period === "day" ? "today" : `this ${unit}`}</span></div>
     {picked ? <div className="usage-chart-pick-status" role="status">{picked.count} {picked.count === 1 ? "period" : "periods"} · {picked.inspect ? heading(buckets[picked.first]) : `${label(buckets[picked.first].date)} – ${label(buckets[picked.last].date)}`} · Release to {picked.inspect ? "inspect" : "filter"}</div> : null}
-    {tip && !drag ? <div className={`usage-chart-tip${tip.pinned ? " pinned" : ""}`} ref={tipRef} role={tip.pinned ? "group" : "status"} aria-label={tip.pinned ? `Details for ${heading(tip.bucket)}` : undefined}>
-      <div className="usage-chart-tip-head">{heading(tip.bucket)}</div>
+    {tip && !drag ? <ChartPopover ref={tipRef} heading={heading(tip.bucket)} pinned={tip.pinned}>
       {present(tip.bucket).length ? <ul>{present(tip.bucket).map(item => {
         const parts = [...(tip.bucket.parts?.[item.key] ?? [])].sort((left, right) => right[1] - left[1]);
         const href = tip.pinned ? seriesHref?.(chartInspectionRange(tip.bucket, period, periodCount, display, cumulativeStart ?? averagedBuckets[0]?.date), item) : undefined;
         return <li key={item.key}>
-          <span className="usage-chart-tip-row"><span className="usage-swatch" style={{ background: item.color }} />{href ? <PageLink className="usage-chart-tip-label" href={href}>{item.label}</PageLink> : <span className="usage-chart-tip-label">{item.label}</span>}<span className="usage-chart-tip-value">{format(tip.bucket.values[item.key])}</span></span>
+          <ChartPopoverRow label={item.label} value={format(tip.bucket.values[item.key])} color={item.color} href={href} />
           {parts.length ? <ul className="usage-chart-tip-parts">
             {parts.slice(0, 4).map(([name, value]) => <li key={name} className="usage-chart-tip-row"><span className="usage-chart-tip-label">{name}</span><span className="usage-chart-tip-value">{format(value)}</span></li>)}
             {parts.length > 4 ? <li className="usage-chart-tip-more">+{parts.length - 4} more</li> : null}
@@ -440,7 +439,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       {stacked && present(tip.bucket).length > 1 ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">Total</span><span className="usage-chart-tip-value">{format(total(tip.bucket))}{suffix}</span></div> : null}
       {reference ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">{reference.label}</span><span className="usage-chart-tip-value">{format(reference.value)}{suffix}</span></div> : null}
       {tip.bucket.detail ? <div className="usage-chart-tip-more">{tip.bucket.detail}</div> : null}
-    </div> : null}
+    </ChartPopover> : null}
   </div>;
 }
 

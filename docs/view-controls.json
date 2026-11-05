@@ -32,6 +32,10 @@
       "field": "card_window"
     },
     {
+      "file": "web/src/habits-chart-inspection.tsx",
+      "field": "chart_pins"
+    },
+    {
       "file": "web/src/usage-chart.tsx",
       "field": "chart_pins"
     },
@@ -5631,6 +5635,15 @@
       "control": "onClick={event => { if (event.metaKey || event.ctrlKey) return; event.preventDefault(); navigate(detailURL(win.id)); }}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
+    },
+    {
+      "key": "6ce0e6095fce172c:0",
+      "file": "web/src/habits-charts.tsx",
+      "owner": "CalendarChart",
+      "tag": "HabitsChartInspection",
+      "control": "onSelect={key => { const day = points.find(point => point.key === key)?.selection; if (day && \"day\" in day) onSelect?.(day.day === selected ? \"\" : day.day); }}",
+      "contract": "view.habits_day",
+      "reason": "Calendar inspection pins the mark through HabitsChartInspection (chart_pins) and selects the vacation-day controls through the habits_day binding."
     },
     {
       "key": "09297a595a9c5edc:0",
