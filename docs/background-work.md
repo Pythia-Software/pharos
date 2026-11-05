@@ -1658,17 +1658,25 @@ the same schedule from one declaration (`backgroundItems`):
   near a limit does not flap. Placements are stored in
   `background_settings.placements_json`.
 - **Overrides** may permanently move an item to a slower cadence or to only
-  when you ask. Adaptive items also have **Promote/Demote … for a week**
-  actions: they move one bucket faster or slower, even beyond the measured
-  placement. In Settings, dragging an adaptive item onto another cadence's
-  column does the same for any cadence, and dragging it back to its usual
-  one ends the week. The choice is stored per Mac in `background_temporary_cadences`
-  with a seven-day expiry and takes precedence over automatic placement and
-  permanent overrides until then. The usual schedule resumes at expiry or
-  when **End temporary schedule** is selected. Choosing a permanent schedule
-  ends the temporary choice too. Automatic cost measurements continue during
-  the week. Off, pause and battery rules still apply. Fixed and opt-in items
-  have no temporary moves.
+  when you ask, using its existing schedule picker. Every item also has
+  **Move to … for a week** actions for all three other columns. Dragging any
+  item onto another column does the same, including **Only when you ask**;
+  all four columns remain available when empty. The choice is stored per Mac
+  in `background_temporary_cadences` with a seven-day expiry and takes
+  precedence over automatic placement and permanent overrides until then.
+  Dragging it back to its usual column, choosing **End temporary schedule**,
+  or choosing a permanent schedule ends the temporary choice. Automatic
+  cost measurements continue during the week. Off, pause and battery rules
+  still apply. New conversations follows its chosen cadence in the automatic
+  indexing loop, using this Mac's last recorded check for Hourly and Daily;
+  saving settings never counts as a check. Search keeps its continuous
+  catch-up daemons in Frequently;
+  Hourly and Daily catch up the same projections and index backfills in a
+  background pass, and Only when you ask waits for Run now. The Library view's
+  Stop action holds and cancels projection work in either kind of pass;
+  explicit Run now resumes it. Independent index backfills keep their own
+  lifecycles. Indexes maintained
+  directly by ingestion triggers still update with their source data.
 - **Sequencing.** A pass runs the items that bring in new data (captures)
   first, then the stage items through `finishDeferredStages`, in chain
   order. Earlier stages with pending work, read from `sync_deferred` after

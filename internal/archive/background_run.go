@@ -13,6 +13,8 @@ import (
 // chain, as a child of the pass's operation.
 func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error {
 	switch id {
+	case "search":
+		return s.Catalog.backgroundSearch(ctx)
 	case "other-sources":
 		names := s.backgroundInputsFor(ctx, nil).otherSources
 		return s.backgroundCapture(ctx, op, "sources", names)

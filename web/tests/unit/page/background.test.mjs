@@ -94,8 +94,15 @@ test("a dragged item moves for a week to another cadence, and dropping it on its
   assert.equal(background.dropCadence(item, "frequent"), "frequent");
   assert.equal(background.dropCadence(item, "daily"), "daily");
   assert.equal(background.dropCadence(item, "hourly"), null, "its own column");
-  assert.equal(background.dropCadence(item, "manual"), null, "only the three cadences");
-  assert.equal(background.dropCadence({ ...item, adaptive: false }, "daily"), null, "a fixed item stays put");
+  assert.equal(background.dropCadence(item, "manual"), "manual");
+  assert.equal(background.dropCadence(item, "unknown"), null);
+  for (const properties of [{ adaptive: true }, { fixed: true }, { opt_in: true }, {}]) {
+    for (const from of ["frequent", "hourly", "daily", "manual"]) {
+      for (const to of ["frequent", "hourly", "daily", "manual"]) {
+        assert.equal(background.dropCadence({ ...item, ...properties, column: from }, to), from === to ? null : to);
+      }
+    }
+  }
   const promoted = { ...item, column: "frequent", temporary: { cadence: "frequent" } };
   assert.equal(background.dropCadence(promoted, "hourly"), "");
   assert.equal(background.dropCadence(promoted, "daily"), "daily");

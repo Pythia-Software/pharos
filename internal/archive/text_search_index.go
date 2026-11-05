@@ -54,12 +54,16 @@ func (c *Catalog) indexTextSearchBatch(ctx context.Context) (bool, error) {
 	return true, tx.Commit()
 }
 func (c *Catalog) maintainTextSearch(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	// One operation for the whole build, forgotten if there was nothing to build.
-	pass := c.beginPass(ctx, "maintenance.search.text", triggerVersion)
+	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	for {
-		if c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(ctx) != nil {
 			return
+		}
+		if pass == nil {
+			pass = c.beginPass(ctx, "maintenance.search.text", triggerVersion)
 		}
 		var more bool
 		var err error
