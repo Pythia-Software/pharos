@@ -279,6 +279,12 @@ does not dismiss an issue: the repaired unit must pass verification. Sampling
 does not certify the entire library, and a shared parser bug can still agree
 with the reference; provider fixtures remain necessary.
 
+Independent verification can discover changes before the next index pass.
+When a known unit's selected parts differ from its indexed input states, its
+check defers until indexing catches up instead of reporting index lag as
+corruption. Entirely untracked inputs are still checked for omissions; older
+captures remain eligible to verify their contribution to retained history.
+
 ## API
 
 Existing authentication applies to all endpoints. POST bodies are JSON.

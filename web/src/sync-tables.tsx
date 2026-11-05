@@ -5,6 +5,8 @@ import { inspectBucketQuery } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, QueryBuilder, MetricsPanel, ModalSurface, defaultRenderers, type RenderRegistry } from "@pythia-software/query-table-ui";
 import { clientTableStorageAdapter } from "./storage";
+import { useLocationRevision } from "./nested-pages";
+import { useViewEntry } from "./view-state";
 import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, type SyncRecord, type SyncTable } from "./sync-table-model";
 
 declare global {
@@ -33,18 +35,25 @@ const renderers: RenderRegistry<SyncRecord> = {
 };
 
 function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: string; onInspect?: (id: string) => void }) {
+  const locationRevision = useLocationRevision();
+  const active = location.pathname === "/settings/sync";
+  const [collapsed, setCollapsed] = useViewEntry("query_layout", table.schema.name, false, active);
   const storage = useMemo(() => clientTableStorageAdapter(), []);
   // Each table owns its local view. The bounded status response is its entire
   // population; no extra catalog queries or table-specific polling is needed.
-  const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, syncUrl: false, onRefresh: () => { void window.pharosSync.refresh(); } });
+  const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, active,
+    syncUrl: true, queryParameter: `q_${table.schema.name}`, onRefresh: () => { void window.pharosSync.refresh(); } });
   const ref = useRef(api); ref.current = api;
-  const stableApi = useMemo(() => new Proxy({} as QueryTableApi<SyncRecord>, { get: (_target, key) => ref.current[key as keyof QueryTableApi<SyncRecord>] }), []);
+  useEffect(() => {
+    if (!active) return;
+    void ref.current.restoreLocation(location.href).catch(() => {}); // The native API exposes restoration errors in api.error.
+  }, [active, locationRevision]);
   // Loading until this exact query's rows have arrived (or failed).
   const loading = api.execution?.rows !== "succeeded" && api.execution?.rows !== "failed";
   const fields = api.query.grouping ? api.schema!.fields : api.computed.catalogue;
   return <div className="sync-query-table pharos-query-page" role="region" aria-label={label}>
-    <QueryBuilder compact api={stableApi} fields={fields} total={api.total} running={api.loading} defaultCollapsed />
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={fields} renderers={renderers} onInspect={(bucket, clause) => {
+    <QueryBuilder compact api={api} fields={fields} total={api.total} running={api.loading} collapsed={collapsed} onCollapsedChange={setCollapsed} />
+    <MetricsPanel api={api} aggregations={api.aggregations} fields={fields} renderers={renderers} onInspect={(bucket, clause) => {
       const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query);
     }} />
     <DataTable fields={api.visibleFields} rows={api.rows} query={api.query} onQueryChange={api.setQuery} renderers={renderers} rowId={api.rowId} columnDrag={api.columnDrag} total={api.total} loading={loading}

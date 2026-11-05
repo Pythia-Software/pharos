@@ -181,15 +181,15 @@ test("analysis queries run on /metrics, grouped ones on /query-v3, shared snapsh
   const records = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", minSamples: 2 }, []);
   const units = analysisQuery(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "model_family", minSamples: 5 }, []);
   const [served] = await runAnalysisQuery("usage", schema, records.query);
-  assert.deepEqual(requests, ["/api/query/usage/metrics"]);
+  assert.deepEqual(requests, ["/api/query/usage/capabilities", "/api/query/usage/query-v3"]);
   const [grouped] = await runAnalysisQuery("usage", schema, units.query);
-  assert.deepEqual(requests.slice(1), ["/api/query/usage/capabilities", "/api/query/usage/query-v3"]);
+  assert.deepEqual(requests.slice(2), ["/api/query/usage/capabilities", "/api/query/usage/query-v3"]);
   assert.deepEqual(grouped.buckets.map(bucket => bucket.keys[0]), ["opus"]);
   assert.equal(grouped.hiddenGroups, 2);
   const [local] = await runAnalysisQuery("usage", schema, units.query, { local: { rows } });
   assert.deepEqual(local.buckets, grouped.buckets);
   assert.deepEqual((await runAnalysisQuery("usage", schema, records.query, { local: { rows, hourly: [] } }))[0].buckets, served.buckets);
-  assert.equal(requests.length, 3, "shared snapshots make no requests");
+  assert.equal(requests.length, 4, "shared snapshots make no requests");
 });
 
 test("the catalog reserves records and none, and keeps implied filters off unit breakdowns", () => {

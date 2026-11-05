@@ -70,7 +70,7 @@ test("duration and byte boxes show readable units with exact values in hover, wi
   assert.match(boxDetails("command",summary,"ms"),/Max: 6s \(6,000 ms\)/);
   assert.ok(!boxDetails("command",summary,"ms").includes("$"));
   assert.match(boxDetails("count",summary,"calls"),/Median: 2,000 · Mean: 3,000/);
-  assert.match(boxDetails("cost",summary,"USD"),/Median: \$2,000\.00/);
+  assert.match(boxDetails("cost",summary,"USD"),/Median: \$2,000 · Mean: \$3,000/);
   assert.equal(boxBytes(0),"0 B");
   assert.equal(boxBytes(1536),"1.5 KiB");
   assert.equal(boxBytes(1073741824),"1 GiB");

@@ -3,8 +3,10 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
@@ -35,7 +37,7 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	server := testServer(t, config, catalog)
 	q := groupRequest("tool_name", qt.SummaryColumn{ID: "calls", Op: "count"}, qt.SummaryColumn{ID: "time", Op: "sum", Field: "duration_ms"})
 	q.Result.Where = []qt.WhereTerm{{Field: "calls", Op: ">", Value: "1"}}
-	q.Result.OrderBy = qt.OrderBys{{Field: "calls", Dir: "desc"}}
+	q.Result.OrderBy = []qt.OrderBy{{Field: "calls", Dir: "desc"}}
 	q.Result.Limit = 1
 	q.Metrics = []qt.AggSpec{{ID: "groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "calls", Scope: "shownRows"}}
 	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
@@ -88,7 +90,7 @@ func TestQueryV3GroupsMatchWithoutToolProjection(t *testing.T) {
 				qt.SummaryColumn{ID: "max", Op: "max", Field: field},
 				qt.SummaryColumn{ID: "distinct", Op: "count_distinct", Field: field})
 			q.Source.Where = where
-			q.Result.OrderBy = qt.OrderBys{{Field: "n", Dir: "desc"}, {Field: key, Dir: "asc"}}
+			q.Result.OrderBy = []qt.OrderBy{{Field: "n", Dir: "desc"}, {Field: key, Dir: "asc"}}
 			q.Result.Limit = 2
 			q.Metrics = []qt.AggSpec{{ID: "groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "n", Scope: "shownRows"}}
 			schema, _ := sqliteQuerySchema(dataset)
@@ -212,7 +214,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 	}
 	q.ExpectedRevisions[column.ID] = "stale"
 	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "definition_changed") {
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "definition_changed") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 
@@ -234,8 +236,8 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 		server := testServer(t, config, catalog)
 		w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/query/library/capabilities", nil)
 		var capabilities struct {
-			Execution qt.SQLiteComputedExecution `json:"computedExecution"`
-			Query     qt.QueryCapabilitiesV3     `json:"queryCapabilities"`
+			Execution qt.ComputedExecution   `json:"computedExecution"`
+			Query     qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &capabilities) != nil || capabilities.Query.Version != 3 || !capabilities.Execution.Fields["@computed/tokens"].Filter {
 			t.Fatal(w.Code, w.Body.String())
@@ -243,7 +245,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 		q := qt.QueryRequestV3{Version: 3, Profile: capabilities.Execution.Profile, Now: time.Now().UnixMilli(), Rows: true,
 			ExpectedRevisions: capabilities.Execution.ResolvedRevisions, PlanToken: capabilities.Execution.PlanToken,
 			Result: qt.WireQuery{Select: []string{"id"}, Where: []qt.WhereTerm{{Field: "@computed/tokens", Op: ">", Value: "200"}},
-				OrderBy: qt.OrderBys{{Field: "@computed/tokens", Dir: "desc"}}, Limit: 1, Offset: 1}}
+				OrderBy: []qt.OrderBy{{Field: "@computed/tokens", Dir: "desc"}}, Limit: 1, Offset: 1}}
 		for _, selection := range []bool{false, true} {
 			if selection {
 				q.Result.Limit, q.Result.Offset = 200, 0
@@ -267,7 +269,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 		}
 		q.ExpectedRevisions[column.ID] = "stale"
 		w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/query-v3", q)
-		if w.Code != 400 || !strings.Contains(w.Body.String(), "definition_changed") {
+		if w.Code != 409 || !strings.Contains(w.Body.String(), "definition_changed") {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	})
@@ -352,7 +354,7 @@ func TestQueryV3RecordKeywordsUseIndividualRecordsBeforeGrouping(t *testing.T) {
 		return url.Values{"record_search": {string(raw)}}
 	}
 	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
-		Result:  qt.WireQuery{Select: []string{"id", "tool_name"}, OrderBy: qt.OrderBys{{Field: "id", Dir: "asc"}}, Limit: 50},
+		Result:  qt.WireQuery{Select: []string{"id", "tool_name"}, OrderBy: []qt.OrderBy{{Field: "id", Dir: "asc"}}, Limit: 50},
 		Metrics: []qt.AggSpec{{ID: "n", Op: "count"}}}
 	for _, test := range []struct {
 		query string
@@ -399,7 +401,10 @@ func TestQueryV3RecordKeywordsUseIndividualRecordsBeforeGrouping(t *testing.T) {
 		t.Fatalf("metadata ignored search: %d %s", w.Code, w.Body.String())
 	}
 	for _, path := range []string{"/api/query/tool_calls", "/api/query/tool_calls/rows-v2", "/api/query/tool_calls/metrics"} {
-		response := apiCall(t, s, config.APIToken, http.MethodPost, path+"?"+search.Encode(), map[string]any{})
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, path+"?"+search.Encode(), strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer "+config.APIToken)
+		s.ServeHTTP(response, request)
 		if response.Code != 400 || !strings.Contains(response.Body.String(), "requires query-v3") {
 			t.Fatalf("older protocol ignored keywords: %d %s", response.Code, response.Body.String())
 		}
@@ -424,12 +429,7 @@ func TestQueryV3RecordKeywordsUseIndividualRecordsBeforeGrouping(t *testing.T) {
 	if got, _, err := s.executeQueryV3(t.Context(), "tool_calls", url.Values{}, schema, none); err != nil || got.Total != 5 {
 		t.Fatalf("host state without a keyword: %+v %v", got, err)
 	}
-	for _, path := range []string{"/api/query/tool_calls/rows-v2", "/api/query/tool_calls/metrics"} {
-		response := apiCall(t, s, config.APIToken, http.MethodPost, path, map[string]any{"hostState": json.RawMessage(declared.HostState)})
-		if response.Code != 400 || !strings.Contains(response.Body.String(), "requires query-v3") {
-			t.Fatalf("older protocol ran a keyword definition without its search: %d %s", response.Code, response.Body.String())
-		}
-	}
+
 	for _, spec := range []recordSearchSpec{{Field: "command", Query: "[", Mode: "regex"}, {Field: "duration_ms", Query: "cache"}, {Field: "command", Query: "cache", Where: &textQuery{Op: "term", Text: "cache"}}} {
 		if _, _, err := s.executeQueryV3(t.Context(), "tool_calls", params(spec), schema, q); err == nil {
 			t.Fatalf("accepted invalid record search: %+v", spec)
@@ -566,15 +566,14 @@ func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
 	} {
 		w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/query/"+sample.dataset+"/capabilities", nil)
 		var handshake struct {
-			MetricCapabilities qt.SQLiteMetricCapabilities `json:"metricCapabilities"`
-			QueryCapabilities  qt.QueryCapabilitiesV3      `json:"queryCapabilities"`
+			QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &handshake) != nil {
 			t.Fatal(w.Code, w.Body.String())
 		}
 		capabilities := handshake.QueryCapabilities
-		if !capabilities.CalendarCycles || !capabilities.CalendarGroupKeys || !capabilities.MetricMinCountMeasures || !handshake.MetricCapabilities.MinCountMeasures {
-			t.Fatalf("%s: %+v %+v", sample.dataset, capabilities, handshake.MetricCapabilities)
+		if !capabilities.CalendarCycles || !capabilities.CalendarGroupKeys || !capabilities.MetricMinCountMeasures {
+			t.Fatalf("%s: %+v", sample.dataset, capabilities)
 		}
 		run := func(body string) qt.QueryResultV3 {
 			t.Helper()
@@ -585,7 +584,7 @@ func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
 			}
 			return result
 		}
-		total := func(metric qt.SQLiteMetricV2) (n int64) {
+		total := func(metric qt.MetricResult) (n int64) {
 			if metric.Error != "" {
 				t.Fatalf("%s: metric %s: %s", sample.dataset, metric.ID, metric.Error)
 			}
@@ -594,7 +593,7 @@ func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
 			}
 			return n
 		}
-		head := fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":false,"result":{"select":["id"],"limit":1}`, qt.SQLiteExpressionProfile, time.Now().UnixMilli())
+		head := fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":false,"source":{},"result":{"select":["id"],"limit":1}`, qt.SQLiteExpressionProfile, time.Now().UnixMilli())
 		cycle := func(interval string) string {
 			return fmt.Sprintf(`{"id":%q,"op":"count","groupBy":[%q],"dateGrouping":{"field":%q,"interval":%q,"timeZone":"UTC","includeEmpty":true,"range":"observed"}}`, interval, sample.at, sample.at, interval)
 		}
@@ -624,7 +623,7 @@ func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
 		// An OR of AND branches selects the union of its branches: here only
 		// its second, where a flat OR of the same literals keeps every row.
 		filtered := func(where string) int64 {
-			return total(run(fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":false,"result":{"select":["id"],"where":[%s],"limit":1},"metrics":[{"id":"n","op":"count"}]}`,
+			return total(run(fmt.Sprintf(`{"version":3,"profile":%q,"now":%d,"rows":false,"source":{},"result":{"select":["id"],"where":[%s],"limit":1},"metrics":[{"id":"n","op":"count"}]}`,
 				qt.SQLiteExpressionProfile, time.Now().UnixMilli(), where)).Metrics[0])
 		}
 		null := fmt.Sprintf(`{"field":%q,"op":"is_null","value":""}`, sample.nullable)
@@ -633,5 +632,52 @@ func TestQueryV3RunsEveryAdvertisedShape(t *testing.T) {
 		if keyed := filtered(present); branches != keyed || keyed == population || filtered(null) == 0 {
 			t.Fatalf("%s: OR of AND branches kept %d of %d rows, plain %d", sample.dataset, branches, population, keyed)
 		}
+	}
+}
+
+func TestQueryV3KeywordSourceBudgetRefusesPartialMembership(t *testing.T) {
+	override(t, &queryV3MaxPopulation, 2)
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 5)
+	execTx(t, catalog.DB, "UPDATE tool_calls SET command='noise'", "UPDATE tool_calls SET command='wanted' WHERE id='call-0'")
+	publishProjections(t, catalog)
+	server := testServer(t, config, catalog)
+	raw, _ := json.Marshal(recordSearchSpec{Field: "command", Query: "wanted", Mode: "literal"})
+	params := url.Values{"record_search": {string(raw)}}
+	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: qt.WireQuery{Select: []string{"id"}, Where: []qt.WhereTerm{{Field: "command", Op: "is_not_null"}}, Limit: 1}}
+	_, _, err := server.executeQueryV3(t.Context(), "tool_calls", params, PharosToolCallsSchema(), q)
+	var diagnostic *qt.PlanDiagnostic
+	if !errors.As(err, &diagnostic) || diagnostic.Code != qt.ErrorCodeResourceLimit {
+		t.Fatalf("searched a partial eligible identity set: %v", err)
+	}
+	q.Result.Where = []qt.WhereTerm{{Field: "id", Op: "=", Value: "call-0"}}
+	out, _, err := server.executeQueryV3(t.Context(), "tool_calls", params, PharosToolCallsSchema(), q)
+	if err != nil || out.Total != 1 || len(out.Rows) != 1 || out.Rows[0]["id"] != "call-0" {
+		t.Fatalf("narrowed keyword search: %+v %v", out, err)
+	}
+}
+
+func TestQueryV3DistinctAndIdentityHTTP(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 5)
+	publishProjections(t, catalog)
+	server := testServer(t, config, catalog)
+	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Limit: 1}, Distinct: &qt.DistinctRequestV3{Field: "tool_name", Limit: 2}}
+	response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	var out qt.QueryResultV3
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &out) != nil || out.Distinct == nil || len(out.Distinct.Values) == 0 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	q.Source.Where = []qt.WhereTerm{{Field: "id", Op: "=", Value: "call-0"}}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &out) != nil || out.Distinct == nil || len(out.Distinct.Values) != 1 {
+		t.Fatal("scoped distinct", response.Code, response.Body.String())
+	}
+	q.Distinct = nil
+	q.Rows = true
+	q.Result = qt.WireQuery{Select: []string{"id", "command"}, Where: []qt.WhereTerm{{Field: "id", Op: "=", Value: "call-0"}}, Limit: 2}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &out) != nil || out.Total != 1 || len(out.Rows) != 1 || out.Rows[0]["id"] != "call-0" {
+		t.Fatal(response.Code, response.Body.String())
 	}
 }

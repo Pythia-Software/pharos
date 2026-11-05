@@ -26,3 +26,29 @@ export function useRibbonInspector({interactive=false}:{interactive?:boolean}={}
  const portal=card?createPortal(<div id={id} role={card.pinned?'group':'tooltip'} onPointerDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()} aria-label={card.pinned?'Ribbon segment details':undefined} className={`lt-ribbon-inspector${interactive?' is-interactive':''}${card.pinned?' is-pinned':''}`} onPointerEnter={keep} onPointerLeave={leave} ref={node=>{popup.current=node;if(node){const height=node.getBoundingClientRect().height;node.style.top=`${Math.max(8,Math.min(card.y,window.innerHeight-height-8))}px`;if(card.focus&&!node.contains(document.activeElement))node.querySelector<HTMLElement>('a,button')?.focus({preventScroll:true});}}} style={{left:card.x,top:card.y}}>{card.content}</div>,document.body):null;
  return {id,show,pin,close,leave,portal};
 }
+
+/** What the pointer or keyboard cursor is on in a ribbon: a message span, tool
+ * dot or agent event. card renders its popover; pinned cards carry links. */
+export type RibbonHit={card:(pinned:boolean)=>React.ReactNode;hover?:()=>void};
+type Inspector=ReturnType<typeof useRibbonInspector>;
+/** The one hover, pin and keyboard model every ribbon mark uses (session
+ * timeline rows and the conversation fingerprint): hover shows the card under
+ * the pointer, a click pins it with its links, and on a focused ribbon the
+ * arrow keys browse candidates and Enter pins one with its link focused. */
+export function useRibbonPointer({inspector,hitAt,candidates=[],pinnable=true,disabled=false,suspended=false,unhover}:{inspector:Inspector;hitAt:(event:React.MouseEvent<Element>)=>RibbonHit|null;candidates?:RibbonHit[];pinnable?:boolean;disabled?:boolean;suspended?:boolean;unhover?:()=>void}){
+ const cursor=useRef(0);
+ const show=(target:Element,hit:RibbonHit,x?:number)=>{hit.hover?.();inspector.show(target,hit.card(false),x);};
+ const leave=()=>{unhover?.();inspector.leave();};
+ return {
+  onPointerMove:(event:React.PointerEvent<Element>)=>{if(disabled)return;if(suspended){inspector.close();return;}const hit=hitAt(event);if(hit)show(event.currentTarget,hit,event.clientX);else leave();},
+  onPointerLeave:leave,
+  onClick:(event:React.MouseEvent<Element>)=>{if(disabled||!pinnable)return;const hit=hitAt(event);if(!hit)return;event.preventDefault();event.stopPropagation();hit.hover?.();inspector.pin(event.currentTarget,hit.card(true),event.clientX);},
+  onFocus:(event:React.FocusEvent<Element>)=>{if(disabled)return;const hit=candidates[cursor.current]??candidates[0];if(hit)show(event.currentTarget,hit);},
+  onBlur:leave,
+  onKeyDown:(event:React.KeyboardEvent<Element>)=>{
+   if(disabled||!pinnable||!['ArrowLeft','ArrowRight','Enter',' '].includes(event.key)||!candidates.length)return;event.preventDefault();event.stopPropagation();
+   if(event.key==='ArrowLeft'||event.key==='ArrowRight'){cursor.current=(cursor.current+(event.key==='ArrowLeft'?-1:1)+candidates.length)%candidates.length;inspector.close();show(event.currentTarget,candidates[cursor.current]);}
+   else{const hit=candidates[cursor.current]??candidates[0];hit.hover?.();inspector.pin(event.currentTarget,hit.card(true),undefined,true);}
+  },
+ };
+}

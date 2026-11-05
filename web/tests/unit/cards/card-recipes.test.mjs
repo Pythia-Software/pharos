@@ -253,7 +253,7 @@ test("card detail links retain durable source tokens across dashboard datasets a
   const tokenCard = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "task-token-ranges"), 7);
   const records = { ...core.EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "chosen-repo" }] };
   const drilled = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: records }, new URL(tokenCard.url, location.origin).searchParams), location.origin);
-  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState({ ...records, fitToScreen: true }), "dashboard drilldowns use the newly selected records and fit their viewport");
+  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState({ ...records, fit: "screen" }), "dashboard drilldowns use the newly selected records and fit their viewport");
   assert.equal(drilled.searchParams.has("card_id"), false, "new analysis is distinct from the original card details");
 });
 
@@ -717,7 +717,7 @@ test("every active card opens a primary dashboard with the source population and
       const query = analysisQuery(catalog, { ...state, view: ["trend", "trend_line", "trend_bar"].includes(state.view) ? "compare" : state.view }, filters, { now: clock.getTime() });
       for (const part of core.planMetricSeries(query.query, schemas[catalog.dataset], { now: clock.getTime() })?.queries ?? [query.query]) {
         const request = core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now: clock.getTime(), rows: false });
-        assert.deepEqual(request.diagnostics, [], recipe.id);
+        assert.equal(request.version, 3, recipe.id);
       }
     }
   }

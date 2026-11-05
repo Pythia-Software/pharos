@@ -5,6 +5,7 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
@@ -42,10 +43,10 @@ export const viewFields: Record<string, ViewField> = {
   query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["1","7","30","90","180","365"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
-  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "json", "Query builder collapsed state by dataset ID."),
+  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table","settings/sync"], "json", "Query builder collapsed state by dataset or background table schema ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
   search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
-  chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
+  chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart identity (dashboard title or Habits section and automation identity). Hover is transient."),
   conveyor_paused: field("conveyor_paused", ["home"], "boolean", "Pause the Home suggestion carousel."),
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
@@ -68,6 +69,7 @@ export const viewFields: Record<string, ViewField> = {
   delegation_tint: field("delegation_tint", ["work"], "enum", "Tint session metric cells.", ["all", "sort", "off"]),
   delegation_expanded: field("delegation_expanded", ["work"], "strings", "Session IDs with detailed parallel lanes expanded."),
   delegation_event: field("delegation_event", ["work"], "text", "Selected parallel-lane event ID."),
+  timeline_idle: field("timeline_idle", ["work"], "boolean", "Skip idle gaps on the session timeline: stretches of 15 minutes or more with nothing running in any session (no message, model request or tool call in flight) that end with the caller speaking. Each skipped gap is a bar marked with the time the session resumed; the overview, zoom, axis and agent event arcs use the same compressed clock. Default on; a checkbox beside the timeline's zoom controls.", undefined, true),
   reader_filter_level: field("reader_filter_level", ["work"], "enum", "Transcript Show preset or custom category selection.", ["all", "all-minus-usage", "thought", "primary", "custom"]),
   reader_filter: field("reader_filter", ["work"], "strings", "Visible transcript category IDs (reader-model TRANSCRIPT_CATEGORIES)."),
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
@@ -75,6 +77,7 @@ export const viewFields: Record<string, ViewField> = {
   reader_writing: field("reader_writing", ["work","library"], "boolean", "Highlight human-written text (typed or dictated, not pasted, quoted or templated) in the conversation reader and a library card's Browse. Default on; one of the reader's Highlight checkboxes.", undefined, true),
   reader_events: field("reader_events", ["work","library"], "boolean", "Highlight agent events (Agent Experience, the sentence classifier) in the conversation reader and a library card's Browse: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events. Default off; one of the reader's Highlight checkboxes."),
   reader_labels: field("reader_labels", ["work","library"], "boolean", "Highlight message text by its local labels (Message labels, the message classifier) in the conversation reader and a library card's Browse; hovering highlighted text names the message's labels. Default off; one of the reader's Highlight checkboxes."),
+  reader_event_link: field("reader_event_link", ["work"], "text", "Selected two-sided agent event in the conversation reader, by event ID (e<number>): the observation and the earlier text it points back at are highlighted, joined in the gutter, and the observation is revealed. Set from the fingerprint, the session timeline or a click on either end; shown with the Agent events highlight."),
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),
@@ -93,6 +96,9 @@ export const viewFields: Record<string, ViewField> = {
 // These maps have viewer-dependent initial choices. Capture effective entries
 // so an empty map cannot fall back to another browser's saved preference.
 viewFields.query_layout.captureEntries=true;
+for (const schema of Object.values(syncSchemas)) {
+  viewFields[schema.name] = field(`q_${schema.name}`, ["settings/sync"], "text", `Native Query Table definition for ${schema.name}: filters, sorting, columns, grouping, metrics and pagination over the retained snapshot.`);
+}
 
 // Structured examples are exported with each field so an agent can construct
 // the same object the UI owns, without guessing names from prose descriptions.
@@ -101,7 +107,7 @@ const searchTemplate = emptyTextSearch();
 viewFields.disclosures.details={
   example:{quickStatsSettings:true},
   layout_sections:["menuBarPreferences","headerSettings","quickStatsSettings"],
-  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time"},
+  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
   families:{"background:<item ID>":"settings/sync", "sync:forecast:<run ID>":"settings/sync", "cloud:schedule:<destination ID>":"settings/backups", "carbon:row:<tier>:<category>":"analyze/carbon", "status:cadence:<cadence ID>":"overlay=drive", "status:support":"overlay=drive", "library:activity:<activity ID>:<started_at>:details":"overlay=drive", "work:<work ID>:files":"work", "feedback:logs:<submission ID>":"feedback inbox"},
   defaults:"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.",
   note:"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences.",
@@ -143,8 +149,8 @@ export const attentionTargets = [
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search; an alias for view.find. Opens page Find, highlights matches and reveals the first. Several text targets become one escaped OR regex. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
-  query_table_json_cells: {status:"blocked",version:"0.9.9",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
-  query_table_attention: {status:"partial",version:"0.9.9",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_json_cells: {status:"blocked",version:"1.0.0",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_attention: {status:"partial",version:"1.0.0",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
 };
 export const viewExclusions = {
   settings: "Settings values and their read-only diagnostics; section openness uses disclosures.",
@@ -206,6 +212,7 @@ export const delegatedViewFields: Record<string,{file:string; symbol:string}> = 
   history_search:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
   overlay:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
 };
+for (const schema of Object.values(syncSchemas)) delegatedViewFields[schema.name] = {file:"web/src/sync-tables.tsx",symbol:"useQueryTable"};
 
 for (const name of ["window_mode","window_days","window_field","window_until_field","window_dataset","window_timezone"]) delegatedViewFields[name]={file:"web/src/query-links.ts",symbol:"readRollingWindow"};
 for (const name of ["query_dashboard_chart","query_dashboard_filters","query_dashboard_window","query_opened","query_days","query_report","query_search"]) delegatedViewFields[name]={file:"web/src/usage-workspace-model.ts",symbol:"usageWorkspaceURL"};

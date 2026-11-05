@@ -286,6 +286,38 @@ func partsSignature(parts []sourcePart) string {
 	return hashBytes([]byte(strings.Join(values, "\n")))
 }
 
+// Verification can rediscover a newer input before the next indexing pass,
+// particularly when a queued large check runs independently of indexing.
+// Compare like revisions: a known unit with pending changes is not evidence
+// of corruption. Entirely untracked units still get checked for omissions,
+// and older captures can still verify the retained history they contributed.
+func (c *Catalog) auditIndexPending(ctx context.Context, unit syncUnit) (bool, error) {
+	known, changed := false, false
+	fromCapture := captureViewOf(unit.Reader) != nil
+	for _, part := range unit.Parts {
+		var indexed sourcePart
+		err := c.reader().QueryRowContext(ctx, `SELECT size,version,COALESCE(signal,'') FROM source_item_states
+			WHERE host_id=? AND source_name=? AND item=?`, unit.hostID(), unit.Source.Name, part.item).
+			Scan(&indexed.size, &indexed.version, &indexed.signal)
+		if errors.Is(err, sql.ErrNoRows) {
+			changed = true
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		known = true
+		if indexed.size == part.size && indexed.version == part.version && indexed.signal == part.signal {
+			continue
+		}
+		if fromCapture && indexed.version > part.version && indexed.size >= part.size {
+			continue
+		}
+		changed = true
+	}
+	return known && changed, nil
+}
+
 func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, budget int64) (result auditResult) {
 	started := time.Now()
 	result = auditResult{Outcome: "read_error", Source: unit.Source.Name, Unit: unit.ID}
@@ -315,6 +347,13 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 	}()
 	if budget > 0 && (unit.Bytes > budget || (budget == automaticAuditBytes && (len(unit.Parts) > 64 || (unit.Source.Kind == "conductor" && unit.Bytes > automaticAuditConductorMessages)))) {
 		result.Outcome, result.Detail = "deferred", "selected input exceeds quick verification budget"
+		return
+	}
+	if pending, err := c.auditIndexPending(ctx, unit); err != nil {
+		result.Detail = err.Error()
+		return
+	} else if pending {
+		result.Outcome, result.Reason, result.Detail = "deferred", "source_changed", "selected input has changes waiting to be indexed"
 		return
 	}
 	if !scopedCodexAudit(unit) && (unit.Reader == nil || captureViewOf(unit.Reader) == nil) && retainedAcquisitionEnabled(unit.Source) {

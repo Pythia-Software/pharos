@@ -72,15 +72,21 @@ With the Settings switch on (preference `pharos-agent-events-v1`, read as a feat
 `agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
 Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
-`agent_events_threads` (Settings → Agent events → Cores; unset, `labels_threads`), and the same power rules: each chain
+`agent_events_threads` (Settings → Agent events → CPU threads, shown for CPU execution; unset, `labels_threads`), and the same power rules: each chain
 pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
 `backlog` run when plugged in and stops if this Mac goes onto battery.
 
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
-status panel, cancels it (`Op.setStopper`), and it ends between chunks with what it scored stored. Its next run
-resumes from the conversations still unread; a chunk in flight, about 512 candidates, is scored again. Active runs
-check the Cores target every two minutes and replace their workers after the current scoring chunk finishes,
-keeping its results. Changing cores needs no stop or app relaunch; the shared budget and battery cap still apply.
+status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again
+on the next run. Agent events prepares upcoming conversations while the model scores the current window and a
+writer saves earlier results, one atomic transaction per conversation. A shared budget bounds queued candidates
+and message bookkeeping to three windows of about 512 rows, plus the conversation currently being built. A large
+conversation stays whole and occupies the budget until saved. Partial windows run as soon as preparation pauses,
+so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool. Active runs
+check the CPU thread target every two minutes and replace CPU workers after the current scoring chunk finishes,
+keeping its results. Changing threads needs no stop or app relaunch; the shared budget and battery cap still apply.
+GPU workers keep running when the saved CPU target changes. Settings shows the expected or confirmed device
+for each model, with automatic GPU capacity; see [device status](local-labeler.md#device-status-and-gpu-capacity).
 
 - **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
   (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into
@@ -118,10 +124,12 @@ keeping its results. Changing cores needs no stop or app relaunch; the shared bu
 changed, since what a fork inherited from its parent decides which replies are its own. A fork followed that way gets a
 dirty mark of its own, so a limited run that stops before it keeps it pending. Conversations that left the catalog lose
   their rows.
-- **How it stores.** Candidates are gathered across conversations (512 at a time), scored in batches packed by length,
-  and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored and
-  kills the verifier's workers, so batches queued at them do not run on; the next run resumes. A finished run leaves
-  them warm for `labels_idle_seconds`.
+- **How it stores.** Preparation, scoring windows and saving overlap (`agent_events_pipeline.go`). Candidates are
+  scored in batches packed by length, and each conversation's results, ledger row and original dirty token are
+  saved in one transaction. A stop keeps committed conversations and kills the verifier's workers, so batches queued
+  at them do not run on; the next run resumes. A finished run leaves them warm for `labels_idle_seconds`. Run stats
+  and the final progress line include preparation, inference and save time; these overlap rather than adding to
+  elapsed time.
 - **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
   (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
 

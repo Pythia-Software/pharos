@@ -90,8 +90,10 @@
 .bg-check input{margin-top:3px;accent-color:var(--accent)}
 .bg-card .optional-behavior{padding:14px 0 0;border-bottom:0}
 .bg-card .optional-behavior h4{margin:0;font-size:var(--fs-md)}
-.bg-card .optional-behavior p{margin:4px 0 0}
-.bg-threads{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--fs-sm);color:var(--muted)}
+.bg-card .optional-behavior p{margin:4px 0 0;overflow-wrap:anywhere}
+.bg-labeler-heading{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px}
+.bg-labeler-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;font-size:var(--fs-sm);color:var(--muted)}
+.bg-threads{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--muted)}
 .bg-threads select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
 @media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
 @container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
@@ -165,7 +167,7 @@
       dot: DOTS[row.state] ?? '', text: stateText(row, now), running: row.state === 'running', empty: !row.items?.length,
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
-    // Only when you ask: on no schedule, so in none of the columns.
+    // Only when you ask is the fourth column, on no automatic schedule.
     const unscheduled = (view.unscheduled || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now));
     // Only when you ask runs as the manual cadence: not while one of its
     // items runs, nor when none of them can.
@@ -218,8 +220,15 @@
   // schedule: that cadence for a week, "" to end the week when it is the
   // item's usual cadence, or null when it cannot move there.
   function dropCadence(item, cadence) {
-    if (!item?.adaptive || !CADENCE_ICONS[cadence] || cadence === item.column) return null;
+    if (!item?.id || !['frequent', 'hourly', 'daily', 'manual'].includes(cadence) || cadence === item.column) return null;
     return item.temporary && cadence === item.usual ? '' : cadence;
+  }
+
+  function labelingControls(settings) {
+    const execution = settings.execution || {device: 'unknown', status: 'Device not yet confirmed', detail: 'The device will be confirmed when labeling starts.'};
+    const notice = settings.notice || (settings.enabled && execution.device === 'unavailable' ? 'Processing is unavailable. Check the local model and runtime installation.' : '');
+    return {execution, notice, threadChoices: execution.device === 'cpu' ? settings.thread_choices || [] : [],
+      threadsCanChange: execution.device === 'cpu' && settings.threads_can_change === true};
   }
 
   // ---- rendering
@@ -297,7 +306,7 @@
   }
 
   // Dropping a dragged item on a column moves it there for a week, as its
-  // Promote and Demote buttons do.
+  // Move buttons do.
   function dropTarget(section, cadence) {
     const accepts = () => dropCadence(dragging, cadence) != null;
     section.ondragover = event => {
@@ -318,7 +327,7 @@
   }
 
   function renderColumns(model) {
-    const columns = node('div', 'bg-cols');
+    const columns = node('div', 'bg-cols bg-four');
     for (const column of model.columns) {
       const section = node('section', 'bg-col');
       section.setAttribute('aria-label', column.label);
@@ -370,16 +379,15 @@
     }
     // Only when you ask is one more column; four go two by two until
     // they fit on one line.
-    if (model.unscheduled?.length) {
-      columns.classList.add('bg-four');
-      columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable));
-    }
+    columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable));
     return columns;
   }
 
   function renderUnscheduled(items, runnable) {
     const section = node('section', 'bg-col bg-unscheduled');
     section.setAttribute('aria-label', 'Only when you ask');
+    section.dataset.cadence = 'manual';
+    dropTarget(section, 'manual');
     const head = node('div', 'bg-col-head'), title = node('h4', '', 'Only when you ask');
     title.append(runButton('Only when you ask', 'manual', !runnable));
     head.append(title);
@@ -391,7 +399,7 @@
   function renderItem(item) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
-    if (item.adaptive) {
+    if (item.id) {
       entry.draggable = true;
       entry.ondragstart = event => {
         dragging = item;
@@ -420,7 +428,7 @@
     headLine.append(head, runButton(item.label, {item: item.id}, item.state === 'running' || item.state === 'unavailable'));
     if (item.cost?.class) headLine.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
     entry.append(headLine, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
-    if (item.adaptive) {
+    if (item.id) {
       // A grip under the dot: this item drags to another schedule.
       const grip = node('span', 'bg-grip');
       grip.setAttribute('aria-hidden', 'true');
@@ -507,7 +515,7 @@
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
-    intro.append(node('h3', '', 'Keep my library current'),
+    intro.append(node('h3', '', 'Task Schedule'),
       node('p', 'muted', {on: 'Everything below runs automatically. Pharos measures every run and moves work between schedules as it gets faster or slower.',
         paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs until you choose Update everything now.'}[model.mode] || ''));
     const seg = node('div', 'bg-seg');
@@ -570,33 +578,35 @@
   function renderLabels(labels, events) {
     const card = node('section', 'bg-card');
     card.append(node('h3', '', 'Labeling on this Mac'),
-      node('p', 'muted', 'Small models label your library in the background and the reader highlights what they find. These settings follow the library. Turning one off keeps what it found; a run in progress finishes. Active runs check the cores target every two minutes and finish their current batches before adjusting; on battery each uses at most 2.'));
+      node('p', 'muted', 'Runs in the background. Turning a model off keeps its results.'));
     card.append(labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
-      'Label each message by what it does: requests, replies, feedback and more.', labels,
+      'Classify requests, replies, feedback and more.', labels,
       enabled => call('/api/labels/settings', {enabled}),
-      threads => call('/api/labels/settings', {threads}), labels.can_change));
+      threads => call('/api/labels/settings', {threads})));
     if (events) card.append(labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
-      'Find sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more, and list Analyze → Agent Experience. Reads the last 90 days after a one-time 140 MB download; a backlog catches up only while plugged in.', events,
+      'Find obstacles, discoveries and workarounds in agent replies from the last 90 days.', events,
       async enabled => {
         window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
         await window.pharosPrefs.flush?.();
         if (enabled) await call('/api/background/run', {item: 'agent_events'}).catch(() => {});
         return call('/api/background');
       },
-      threads => call('/api/labels/settings', {agent_events_threads: threads}), events.threads_can_change));
+      threads => call('/api/labels/settings', {agent_events_threads: threads})));
     return card;
   }
 
   // One switch of the labeling card, the App preferences toggle, with its
-  // model's cores: each save returns the next document.
-  function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads, threadsCanChange) {
+  // model's effective CPU control: each save returns the next document.
+  function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads) {
+    const controls = labelingControls(settings);
     const row = node('div', 'optional-behavior');
     const copy = node('div');
     const title = node('h4', '', text);
     title.id = `${prefix}Title`;
     const description = node('p', 'muted', about);
     description.id = `${prefix}Description`;
-    const status = node('p', 'muted', settings.status);
+    const status = node('p', 'muted', controls.notice);
+    status.hidden = !controls.notice;
     status.id = `${prefix}Status`;
     status.setAttribute('role', 'status');
     const toggle = node('button', 'toggle');
@@ -622,6 +632,7 @@
       } catch (error) {
         show(settings.enabled);
         status.textContent = error.message;
+        status.hidden = false;
         toast(error.message);
       } finally {
         labelsSaving = false;
@@ -630,16 +641,22 @@
       if (saved) render();
       if (focused && (document.activeElement === toggle || document.activeElement === document.body)) host()?.querySelector(`#${id}`)?.focus({preventScroll: true});
     };
-    copy.append(title, description, status);
-    if (settings.thread_choices?.length) {
-      const cores = node('label', 'bg-threads', 'Cores ');
-      const choice = select(settings.thread_choices.map(threads => [threads, String(threads)]), settings.threads, async value => {
+    const heading = node('div', 'bg-labeler-heading');
+    const meta = node('div', 'bg-labeler-meta');
+    meta.append(node('span', '', controls.execution.status));
+    heading.append(title, meta);
+    copy.append(heading, description, status);
+    if (controls.threadChoices.length) {
+      const cores = node('label', 'bg-threads', 'Threads ');
+      const choice = select(controls.threadChoices.map(threads => [threads, String(threads)]), settings.threads, async value => {
         document_ = await saveThreads(Number(value));
         render();
-      }, `${text} cores`);
-      choice.disabled = !threadsCanChange;
+      }, `${text} CPU threads`);
+      choice.dataset.focusKey = `${prefix}:threads`;
+      choice.title = 'Changes apply within two minutes after current batches finish. Battery policy may lower this target.';
+      choice.disabled = !controls.threadsCanChange;
       cores.append(choice);
-      copy.append(cores);
+      meta.append(cores);
     }
     row.append(copy, toggle);
     return row;
@@ -675,6 +692,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
+    scheduleModel, itemModel, batteryModel, labelingControls, stateText, dropCadence, pauseLength, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

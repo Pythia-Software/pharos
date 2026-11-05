@@ -11,7 +11,99 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
 )
+
+func TestLabelerDeviceSettings(t *testing.T) {
+	catalog, config := testCatalog(t)
+	workerDir := t.TempDir()
+	worker := filepath.Join(workerDir, "worker")
+	probeCount := filepath.Join(workerDir, "probes")
+	writeWorker := func(reply string) {
+		t.Helper()
+		// A capability probe must not load a model or start the framed worker.
+		script := "#!/bin/sh\ncase \" $* \" in *' --probe-mlx '*) ;; *) exit 1;; esac\necho probe >> '" + probeCount + "'\nprintf '%s\\n' '" + reply + "'\n"
+		if err := os.WriteFile(worker, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeWorker(`{"available":true}`)
+	model := func() string {
+		dir := t.TempDir()
+		for _, name := range []string{"model.fp32.onnx", "model.int8.onnx", "weights.safetensors"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("stand-in"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		man := labelrt.Manifest{Files: map[string]string{"onnx_fp32": "model.fp32.onnx", "onnx_int8": "model.int8.onnx"}, MLX: &labelrt.MLXArtifact{Weights: "weights.safetensors"}}
+		raw, _ := json.Marshal(man)
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	config.Labels = LabelerSettings{Worker: worker, Backend: "auto", ModelDir: model(), Variant: "fp32", Threads: 4}
+	config.AgentEvents = AgentEventSettings{ModelDir: model(), Variant: "int8", Threads: 2}
+	server := testServer(t, config, catalog)
+	check := func(document map[string]any, device string, confirmed, threads bool) {
+		t.Helper()
+		execution := document["execution"].(labelerDevice)
+		choices, _ := document["thread_choices"].([]int)
+		if execution.Device != device || execution.Confirmed != confirmed || document["threads_can_change"] != threads || (len(choices) > 0) != (device == "cpu") {
+			t.Fatalf("device=%s confirmed=%t threads=%t: %+v", device, confirmed, threads, document)
+		}
+		if execution.Status == "" || execution.Detail == "" {
+			t.Fatalf("unexplained device: %+v", execution)
+		}
+	}
+	check(server.labelsSettings(), "gpu", false, false)
+	if server.labelsSettings()["notice"] != "" {
+		t.Fatal("routine off status became a notice")
+	}
+	check(server.agentEventsSettings(t.Context()), "cpu", false, true)
+	check(server.labelsSettings(), "gpu", false, false)
+	probes, err := os.ReadFile(probeCount)
+	if err != nil || strings.Count(string(probes), "probe") != 1 {
+		t.Fatalf("uncached GPU probes: %s %v", probes, err)
+	}
+	settings := server.Config().Labels
+	path := filepath.Join(settings.ModelDir, "model.fp32.onnx")
+	storeDevice := func(device string) {
+		catalog.labelerWorkers.Store(path, labelerWorkerObservation{labelerDeviceKey(settings, path), func() labelrt.WorkerInfo { return labelrt.WorkerInfo{Device: device} }})
+	}
+	// Confirmed CPU fallback overrides a successful preflight GPU check.
+	storeDevice("cpu")
+	check(server.labelsSettings(), "cpu", true, true)
+	storeDevice("gpu")
+	check(server.labelsSettings(), "gpu", true, false)
+	// Replacing the worker invalidates observations and cached capability checks.
+	writeWorker(`{"available":false,"reason":"unsupported OS"}`)
+	check(server.labelsSettings(), "cpu", false, true)
+	setBackend := func(backend string) {
+		server.configMu.Lock()
+		server.config.Labels.Backend = backend
+		server.configMu.Unlock()
+	}
+	setBackend("mlx")
+	check(server.labelsSettings(), "unavailable", false, false)
+	setBackend("auto")
+	writeWorker(`{"available":null,"reason":"older engine"}`)
+	check(server.labelsSettings(), "unknown", false, false)
+	setBackend("cpu")
+	check(server.labelsSettings(), "cpu", false, true)
+	server.configMu.Lock()
+	server.config.Labels.ModelDir = ""
+	server.config.Labels.Enabled = true
+	server.configMu.Unlock()
+	check(server.labelsSettings(), "unknown", false, false)
+	if server.labelsSettings()["notice"] == "" {
+		t.Fatal("a pending download lost its notice")
+	}
+	if catalog.hasLabelsLedger() {
+		t.Fatal("reading device settings ran labeling")
+	}
+}
 
 // Background Processing (docs/background-work.md §11): where measured cost
 // places an item, when each cadence's work is due, the pass that runs it,
@@ -68,7 +160,7 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
 	ago := func(d time.Duration) string { return formatTime(at.Add(-d)) }
 	settings := func() backgroundSettings {
-		return backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{}}
+		return backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{"writing": cadenceHourly}, Placements: map[string]string{}}
 	}
 	// A stage with work written changed ago, last caught up completed ago.
 	pending := func(changed, completed time.Duration) deferredRow {
@@ -209,11 +301,215 @@ func TestBackgroundVerificationQueueRespectsCadence(t *testing.T) {
 	}
 }
 
+// Every declared item uses the chosen column, including work whose default
+// cadence used to be fixed or opt-in. Scheduling and Run now remain separate.
+func TestBackgroundPlanMovesEveryItem(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	ago := formatTime(at.Add(-48 * time.Hour))
+	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
+		upgradePending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
+		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
+	for _, item := range backgroundItems {
+		in.runs[item.ID] = backgroundRunRow{succeeded: ago}
+	}
+	for _, stage := range stageOrder {
+		in.deferred[stage] = deferredRow{generation: 2, completed: 1, changedAt: ago, completedAt: ago}
+	}
+	for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Temporary: map[string]temporaryCadence{}}
+		settings.sync = syncSettings{Interval: 300, NextAt: formatTime(at.Add(-48*time.Hour + 5*time.Minute))}
+		settings.lastConversationCheck = at.Add(-48 * time.Hour)
+		for _, item := range backgroundItems {
+			settings.Temporary[item.ID] = temporaryCadence{Cadence: cadence}
+		}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			wantDue := cadence != cadenceManual && plan.ID != "conversations" && !(plan.ID == "search" && cadence == cadenceFrequent)
+			if plan.Cadence != cadence || plan.Due != wantDue || (cadence == cadenceManual && !plan.Next.IsZero()) {
+				t.Errorf("%s on %s: %+v, want due=%v", plan.ID, cadence, plan, wantDue)
+			}
+		}
+		if got := automaticDue(settings, powerState{}, false, at); got != (cadence != cadenceManual) {
+			t.Errorf("scheduled conversations on %s: due=%v", cadence, got)
+		}
+		in.requested = map[string]bool{}
+		for _, item := range backgroundItems {
+			in.requested[item.ID] = true
+		}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if plan.ID != "conversations" && !plan.Due {
+				t.Errorf("Run now ignored %s on %s", plan.ID, cadence)
+			}
+		}
+		in.requested = nil
+	}
+}
+
+func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	for _, cadence := range cadences {
+		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Temporary: map[string]temporaryCadence{}}
+		in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", upgradePending: true,
+			verificationNext: at.Add(-time.Hour), runs: map[string]backgroundRunRow{}}
+		for _, id := range []string{"search", "preserve", "verification", "other-sources", "upgrade", "backup"} {
+			settings.Temporary[id] = temporaryCadence{Cadence: cadence}
+			in.runs[id] = backgroundRunRow{succeeded: formatTime(at.Add(-time.Minute))}
+		}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if _, tracked := in.runs[plan.ID]; tracked && plan.Due {
+				t.Errorf("%s on %s ran again too soon: %+v", plan.ID, cadence, plan)
+			}
+		}
+	}
+}
+
+func TestConversationsMovedScheduleWaitsForItsCadenceAndQuiet(t *testing.T) {
+	t.Run("settings saves preserve overdue checks", func(t *testing.T) {
+		catalog, config := testCatalog(t)
+		server := testServer(t, config, catalog)
+		ctx := context.Background()
+		at := time.Now()
+		last := at.Add(-48 * time.Hour)
+		execTx(t, catalog.DB,
+			"INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES("+sqlQuote(currentHost().ID)+",'last-check',"+sqlQuote(formatTime(last))+",'{}')",
+			"INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES('another-mac','other-check',"+sqlQuote(formatTime(at))+",'{}')")
+		post := func(body map[string]any) {
+			t.Helper()
+			response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings", body)
+			if response.Code != http.StatusOK {
+				t.Fatalf("settings save: %s", response.Body.String())
+			}
+		}
+		for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+			post(map[string]any{"mode": "pause", "daily_at": at.Add(-time.Hour).Format("15:04"),
+				"temporary_cadences": map[string]any{"conversations": cadence}})
+			for _, body := range []map[string]any{{"mode": "on"}, {"hold_when_busy": false}, {"interval_seconds": 600}} {
+				post(body)
+				settings, err := catalog.backgroundSettings(ctx, at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !automaticDue(settings, powerState{}, false, at) {
+					t.Errorf("%s overdue check was postponed by %v: %+v", cadence, body, settings.conversationsPlan(time.Time{}, at))
+				}
+			}
+		}
+		// A real completed check, unlike a settings save, advances the schedule.
+		execTx(t, catalog.DB, "INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES("+sqlQuote(currentHost().ID)+",'completed-check',"+sqlQuote(formatTime(at))+",'{}')")
+		settings, err := catalog.backgroundSettings(ctx, at)
+		if err != nil || automaticDue(settings, powerState{}, false, at) {
+			t.Fatalf("completed daily check did not advance the schedule: %+v (%v)", settings, err)
+		}
+	})
+	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
+	for _, cadence := range []string{cadenceHourly, cadenceDaily, cadenceManual} {
+		settings := backgroundSettings{Mode: "on", DailyAt: defaultDailyAt,
+			Temporary: map[string]temporaryCadence{"conversations": {Cadence: cadence}}}
+		settings.sync = syncSettings{Interval: 300, NextAt: formatTime(at.Add(4 * time.Minute))}
+		settings.lastConversationCheck = at.Add(-time.Minute)
+		if automaticDue(settings, powerState{}, false, at) {
+			t.Errorf("%s ran again before its next window", cadence)
+		}
+		if !automaticDue(settings, powerState{}, true, at) {
+			t.Errorf("Run now did not bypass %s", cadence)
+		}
+		settings.lastConversationCheck = at.Add(-2 * time.Hour)
+		if cadence == cadenceDaily {
+			settings.lastConversationCheck = at.Add(-24 * time.Hour)
+		}
+		quiet := at.Add(9 * time.Minute)
+		plan := settings.conversationsPlan(quiet, at)
+		if cadence != cadenceManual && !plan.Next.Equal(quiet) {
+			t.Errorf("%s did not wait for quiet: %+v", cadence, plan)
+		}
+	}
+}
+
+func TestBackgroundSearchFollowsScheduleAndRunNow(t *testing.T) {
+	catalog, config := libraryFixture(t)
+	server := testServer(t, config, catalog)
+	ctx := context.Background()
+	response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+		map[string]any{"temporary_cadences": map[string]any{"search": cadenceManual}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("moving Search: %s", response.Body.String())
+	}
+	gate := searchScheduleGate{}
+	waiting, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	pass := catalog.beginPass(ctx, "maintenance.search.text", triggerVersion)
+	pass.worked(1)
+	if err := gate.wait(waiting, catalog, &pass); err != context.DeadlineExceeded {
+		t.Fatalf("continuous Search did not wait on its manual schedule: %v", err)
+	}
+	if live, _ := runningItems(server.ops.views()); live["search"] {
+		t.Fatal("a held Search daemon left an operation running")
+	}
+	if dirtyCount(t, catalog) == 0 {
+		t.Fatal("fixture must have pending Search work")
+	}
+	// Scheduled Search must leave stopped projection work pending.
+	if !catalog.stopLibraryRefresh() {
+		t.Fatal("could not stop Search refresh")
+	}
+	pending := dirtyCount(t, catalog)
+	for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+		response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+			map[string]any{"hold_when_busy": false, "temporary_cadences": map[string]any{"search": cadence}})
+		if response.Code != http.StatusOK {
+			t.Fatalf("moving Search to %s: %s", cadence, response.Body.String())
+		}
+		settings, err := catalog.backgroundSettings(ctx, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, plan := range backgroundPlan(settings, backgroundInputs{}, time.Now()) {
+			if plan.ID == "search" {
+				server.runBackgroundPass(ctx, cadence, []string{"search"}, []itemPlan{plan})
+			}
+		}
+		if !catalog.libraryRefreshStopped() || dirtyCount(t, catalog) != pending {
+			t.Errorf("%s Search bypassed Stop: pending=%d, want %d", cadence, dirtyCount(t, catalog), pending)
+		}
+	}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+		map[string]any{"temporary_cadences": map[string]any{"search": cadenceManual}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("moving Search back to manual: %s", response.Body.String())
+	}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/run", map[string]any{"item": "search"})
+	if response.Code != http.StatusAccepted || !server.peekRequested()["search"] {
+		t.Fatalf("Search Run now was not queued: %s", response.Body.String())
+	}
+	if !server.backgroundPass(ctx, time.Now()) {
+		t.Fatal("Search Run now did not run")
+	}
+	if dirtyCount(t, catalog) != 0 {
+		t.Fatal("Search Run now left workspaces waiting")
+	}
+	settings, err := catalog.backgroundSettings(ctx, time.Now())
+	search, _ := backgroundItemByID("search")
+	if err != nil || settings.cadence(search) != cadenceManual {
+		t.Fatal("Run now changed the Search schedule")
+	}
+	if run := catalog.backgroundRuns(ctx)["search"]; run.succeeded == "" || run.err != "" {
+		t.Fatalf("Search catch-up failed: %+v", run)
+	}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+		map[string]any{"temporary_cadences": map[string]any{"search": ""}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("restoring Search: %s", response.Body.String())
+	}
+	gate = searchScheduleGate{}
+	if err := gate.wait(ctx, catalog); err != nil {
+		t.Fatalf("Search did not resume its continuous default: %v", err)
+	}
+}
+
 // An override can only slow an item down; a fixed item has none; an
 // opt-in item runs only when chosen.
 func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {
 	settings := backgroundSettings{Overrides: map[string]string{"writing": cadenceFrequent, "tools": cadenceDaily, "search": cadenceManual}, Placements: map[string]string{}}
-	for id, want := range map[string]string{"writing": cadenceHourly, "tools": cadenceDaily, "search": cadenceFrequent, "backup": cadenceManual} {
+	for id, want := range map[string]string{"writing": cadenceFrequent, "tools": cadenceDaily, "search": cadenceFrequent, "backup": cadenceManual} {
 		item, _ := backgroundItemByID(id)
 		if got := settings.cadence(item); got != want {
 			t.Errorf("%s runs %s, want %s", id, got, want)
@@ -296,6 +592,7 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	ctx := context.Background()
+	execSQL(t, catalog.DB, "INSERT INTO background_settings(host_id,overrides_json) VALUES("+sqlQuote(currentHost().ID)+",'{\"writing\":\"hourly\"}')")
 	stamp := func(d time.Duration) string { return sqlQuote(formatTime(time.Now().Add(-d))) }
 	execTx(t, catalog.DB, "DELETE FROM sync_deferred",
 		// Today's daily work is done.
@@ -316,6 +613,11 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	}
 	if completed("tools") != 2 || completed("authorship") != 1 {
 		t.Fatalf("the pass caught up tools only: tools %d, authorship %d", completed("tools"), completed("authorship"))
+	}
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool {
+		return view.Spec.Kind == "analysis.tools" && view.Step.Name != ""
+	}) {
+		t.Fatal("scheduled analysis lost its worker progress before reaching the operation registry")
 	}
 	runs := catalog.backgroundRuns(ctx)
 	if runs["tools"].succeeded == "" || runs["tools"].err != "" {
@@ -529,7 +831,7 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		t.Fatalf("the settings were not stored: %+v", settings)
 	}
 	post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
-	if settings, _ := catalog.backgroundSettings(ctx, time.Now()); settings.cadence(writing) != cadenceHourly {
+	if settings, _ := catalog.backgroundSettings(ctx, time.Now()); settings.cadence(writing) != cadenceFrequent {
 		t.Fatal("an empty override returns an item to automatic")
 	}
 	for _, body := range []map[string]any{
@@ -573,7 +875,7 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		items := get()["view"].(map[string]any)["items"].([]any)
 		for _, raw := range items {
 			item := raw.(map[string]any)
-			if item["id"] == "writing" && (item["column"] != cadenceHourly || item["temporary_cadence"] == nil || len(item["cadence_moves"].([]any)) != 2) {
+			if item["id"] == "writing" && (item["column"] != cadenceHourly || item["temporary_cadence"] == nil || len(item["cadence_moves"].([]any)) != 3) {
 				t.Fatalf("temporary schedule missing from view: %+v", item)
 			}
 		}
@@ -608,7 +910,7 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		}
 		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": cadenceManual}}, http.StatusOK)
 		settings, _ = catalog.backgroundSettings(ctx, time.Now())
-		if len(settings.Temporary) != 0 || settings.cadence(writing) != cadenceManual || len(itemCadenceMoves(writing, settings)) != 0 {
+		if len(settings.Temporary) != 0 || settings.cadence(writing) != cadenceManual || len(itemCadenceMoves(writing, settings)) != 3 {
 			t.Fatal("a permanent choice must end the temporary schedule")
 		}
 		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
@@ -616,18 +918,60 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"temporary_cadences": "hourly"},
 		{"temporary_cadences": map[string]any{"writing": nil}},
-		{"temporary_cadences": map[string]any{"writing": cadenceManual}},
 		{"temporary_cadences": map[string]any{"writing": "sometimes"}},
-		{"temporary_cadences": map[string]any{"search": cadenceDaily}},
-		{"temporary_cadences": map[string]any{"backup": cadenceDaily}},
 		{"temporary_cadences": map[string]any{"nothing": cadenceHourly}},
 	} {
 		post("/api/background/settings", body, http.StatusBadRequest)
 	}
+	t.Run("all items move between all four columns", func(t *testing.T) {
+		for _, item := range backgroundItems {
+			for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+				post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{item.ID: cadence}}, http.StatusOK)
+				settings, err := catalog.backgroundSettings(ctx, time.Now())
+				if err != nil || settings.cadence(item) != cadence || len(itemCadenceMoves(item, settings)) != 3 {
+					t.Fatalf("%s did not move to %s: %+v (%v)", item.ID, cadence, settings, err)
+				}
+				later, err := catalog.backgroundSettings(ctx, time.Now().Add(temporaryCadenceDuration+time.Minute))
+				if err != nil || later.cadence(item) != later.usual(item) {
+					t.Fatalf("%s did not return to its usual schedule: %+v (%v)", item.ID, later, err)
+				}
+			}
+			post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{item.ID: ""}}, http.StatusOK)
+		}
+	})
 	post("/api/background/run", map[string]any{"item": "writing"}, http.StatusAccepted)
 	if !server.peekRequested()["writing"] {
 		t.Fatal("Run now asks the next pass for the item")
 	}
+	t.Run("manual work stays queued after a pass accepts it", func(t *testing.T) {
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": cadenceManual}}, http.StatusOK)
+		state := func() string {
+			t.Helper()
+			_, views := server.operationsDocumentViews(ctx, false)
+			view := server.backgroundView(ctx, views, nil, time.Now())
+			for _, item := range view["items"].([]map[string]any) {
+				if item["id"] == "writing" {
+					return asString(item["state"])
+				}
+			}
+			return ""
+		}
+		if got := state(); got != "queued" {
+			t.Fatalf("requested manual item: %s", got)
+		}
+		server.takeRequested()
+		_, pass := server.begin(ctx, OperationSpec{Kind: "background.update", Variant: "requested", Trigger: triggerUser})
+		pass.Plan(backgroundSteps([]string{"upgrade", "writing"})...)
+		pass.Step("Library upgrade", "", -1)
+		if got := state(); got != "queued" {
+			t.Fatalf("accepted manual item behind upgrade: %s", got)
+		}
+		pass.Finish(nil)
+		if got := state(); got != "manual" {
+			t.Fatalf("after the pass, the saved manual cadence resumes: %s", got)
+		}
+		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
+	})
 	post("/api/background/run", map[string]any{"item": "conversations"}, http.StatusAccepted)
 	if !server.indexRequested() {
 		t.Fatal("Run now of new conversations asks for an index whatever the schedule")
@@ -700,7 +1044,7 @@ func TestBatteryPolicyByPowerSource(t *testing.T) {
 // scheduled index runs less often, and Run now still runs.
 func TestBackgroundPlanFollowsTheBatteryPolicy(t *testing.T) {
 	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
-	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{"writing": cadenceHourly}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
 	settings.sync.NextAt = formatTime(at.Add(time.Minute))
 	in := backgroundInputs{runs: map[string]backgroundRunRow{}, power: powerState{Battery: true, OnBattery: true, Percent: 80},
 		deferred: map[string]deferredRow{"authorship": {generation: 2, completed: 1, changedAt: formatTime(at.Add(-time.Hour)), completedAt: formatTime(at.Add(-2 * time.Hour))}}}
@@ -862,7 +1206,7 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 		// Your writing is hourly, and the library is not quiet.
 		pending("authorship", time.Minute), pending("findings", time.Minute),
 		"INSERT INTO background_runs(host_id,item,succeeded_at) VALUES("+host+",'preserve',"+stamp(0)+"),("+host+",'review',"+stamp(0)+")",
-		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\"}','{\"findings\":\"frequent\"}')",
+		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\",\"writing\":\"hourly\"}','{\"findings\":\"frequent\"}')",
 		setMetaSQL("findings_generation", findingsVersion+"/2026-10-26"))
 	completed := func(name string) int64 {
 		var generation int64
@@ -906,6 +1250,21 @@ func TestBackgroundReviewBringsAlongStagesPendingWhenTheChainStarts(t *testing.T
 	}
 	if !server.runBackgroundPass(ctx, cadenceDaily, []string{"review"}, plans) {
 		t.Fatal("the pass did not run")
+	}
+	for _, view := range server.ops.views() {
+		if view.Spec.Kind != "background.update" {
+			continue
+		}
+		for _, id := range []string{"repositories", "tools", "writing", "review"} {
+			item, _ := backgroundItemByID(id)
+			if !slices.ContainsFunc(view.Plan, func(step StepPlan) bool { return step.Name == item.Label }) {
+				t.Fatalf("discovered prerequisite %s missing from pass plan: %+v", id, view.Plan)
+			}
+		}
+		review, _ := backgroundItemByID("review")
+		if view.Step.Name != review.Label || view.Step.Index != len(view.Plan) {
+			t.Fatalf("pass still shows an earlier task after its chain: %+v", view.Step)
+		}
 	}
 	var waiting int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation").Scan(&waiting); err != nil || waiting != 0 {
@@ -953,5 +1312,29 @@ func TestBackgroundDayCostCountsFrequentPasses(t *testing.T) {
 	frequent := cost["cadences"].([]map[string]any)[0]
 	if seconds := frequent["seconds"].(float64); seconds < 59 || seconds > 61 {
 		t.Fatalf("the frequent pass is not counted: %v", frequent)
+	}
+}
+
+func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *testing.T) {
+	at := time.Date(2026, 11, 5, 4, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "03:00", Overrides: map[string]string{}, Placements: map[string]string{"writing": cadenceDaily}}
+	in := backgroundInputs{writingPending: true, writingRefinedAt: formatTime(at.Add(-24 * time.Hour)), runs: map[string]backgroundRunRow{"writing": {succeeded: formatTime(at.Add(-time.Minute))}}}
+	plans := func() map[string]itemPlan {
+		out := map[string]itemPlan{}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			out[plan.ID] = plan
+		}
+		return out
+	}
+	p := plans()
+	if quick := p["writing"]; quick.Cadence != cadenceFrequent || quick.Due || !quick.Next.Equal(at.Add(4*time.Minute)) {
+		t.Fatalf("quick estimates ignore obsolete adaptive placement and wait for their interval: %+v", quick)
+	}
+	if daily := p["writing-refine"]; daily.Cadence != cadenceDaily || !daily.Due {
+		t.Fatalf("recent estimates suppressed daily refinement: %+v", daily)
+	}
+	in.writingRefinedAt = formatTime(at.Add(-30 * time.Minute))
+	if daily := plans()["writing-refine"]; daily.Due || daily.Pending == false || !daily.Next.After(at) {
+		t.Fatalf("completed daily work ran again: %+v", daily)
 	}
 }

@@ -4,6 +4,7 @@ import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
 import { jsonInspectionTemplate } from "./query-inspection-contract";
 import { usageQuerySchema,usageActionQuery,fittedDefaultQuery } from "./usage-query-columns";
+import { withFingerprintColumn } from "./fingerprint-columns";
 import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
@@ -53,7 +54,7 @@ const fail = (message: string): never => { throw new Error(`site map: ${message}
 
 // ----- Datasets ----------------------------------------------------------------
 
-export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, loadSchema(document)])) as Record<QueryDataset, FieldSchema>;
+export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, withFingerprintColumn(loadSchema(document), name)])) as Record<QueryDataset, FieldSchema>;
 
 type FieldValue = { value: string; label?: string };
 type SiteField = { name: string; label: string; type: string; ops: string; values?: FieldValue[]; description?: string };
@@ -781,7 +782,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),
     query_state: {
       select:"Ordered columns: {field, width?, render?, display?}[]; [] uses dataset defaults.",
-      fitToScreen:"Boolean; false keeps explicit widths.",
+      fit:"Sizing: screen/content; omitted keeps widths.",
       where:"Native filter terms and AND/OR groups; timestamps can be relative (-7d, +0s).",
       orderBy:"Ordered {field, dir:asc|desc, nulls?:first|last, extract?}[]",
       limit:"Page size", offset:"Zero-based result offset",

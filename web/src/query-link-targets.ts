@@ -1,9 +1,10 @@
+import { fitQueryToScreen } from "./query-fit";
 import type { LinkTargets, QueryState } from "@pythia-software/query-table-core";
 import { queryDatasets, queryURL } from "./query-links";
 
 // Group link columns compose the query; Pharos decides where it opens. Every
 // dataset is a target, so a link can open matching records in any table.
-export const linkTargets: LinkTargets = Object.fromEntries(queryDatasets.map(dataset => [dataset, (query: QueryState) => queryURL(dataset, { ...query, fitToScreen: true })]));
+export const linkTargets: LinkTargets = Object.fromEntries(queryDatasets.map(dataset => [dataset, (query: QueryState) => queryURL(dataset, fitQueryToScreen(query))]));
 
 // Plain clicks stay in the app. Modified and middle clicks keep native link behavior.
 export function navigateLink(href: string): boolean {

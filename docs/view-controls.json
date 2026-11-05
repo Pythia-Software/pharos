@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -30,6 +30,10 @@
     {
       "file": "web/src/card-library.tsx",
       "field": "card_window"
+    },
+    {
+      "file": "web/src/habits-chart-inspection.tsx",
+      "field": "chart_pins"
     },
     {
       "file": "web/src/usage-chart.tsx",
@@ -272,8 +276,16 @@
       "field": "query_layout"
     },
     {
+      "file": "web/src/sync-tables.tsx",
+      "field": "query_layout"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "reader_content"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_event_link"
     },
     {
       "file": "internal/archive/assets/ui.py",
@@ -342,6 +354,10 @@
     {
       "file": "web/src/timeline-columns.tsx",
       "field": "timeline_columns"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_idle"
     }
   ],
   "controls": [
@@ -3024,6 +3040,15 @@
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
+      "key": "0f1d2d3f55722167:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "decorateEventLinks",
+      "tag": "button",
+      "control": "'button', `event-link-n ${side==='target'?'is-target':'is-observation'} ${eventGroupClass(link.group)}`, String(link.n)",
+      "contract": "reader",
+      "reason": "An agent event's inline number reveals the other end of its pair and selects it; the selection is the reader_event_link field (bindEventLinks writes and restores it through window.pharosView). Reveal scrolls and highlights without moving keyboard focus."
+    },
+    {
       "key": "02fdb8dab79aa534:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "disclosure",
@@ -4374,15 +4399,6 @@
       "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
-      "key": "19871f71c3d02175:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "CardGroupsField",
-      "control": "value={draft.groups} onChange={groups => update({ groups })}",
-      "contract": "editing",
-      "reason": "How many chart groups the new card shows. An unapplied authoring draft saved only with the card, never a dashboard view parameter; the dashboard keeps its own count."
-    },
-    {
       "key": "2da290a1c01e8a10:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
@@ -4417,6 +4433,15 @@
       "control": "onClick={() => dialog.current?.close()}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ff498fde464eaf4:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "CardGroupsField",
+      "control": "value={draft.groups} onChange={value => { const count = value.trim() ? Number(value) : undefined; update({ groups: value, description: draft.description === dashboardCardDescription(draft.url, draft.target, from.schema, groups) ? dashboardCardDescription(draft.url, draft.target, from.schema, validCardGroups(count) ? count : undefined) : draft.description }); }}",
+      "contract": "editing",
+      "reason": "New card group-count draft; also refreshes the unedited default description. Saved only with the card, while the dashboard retains its own group count."
     },
     {
       "key": "b4d31e6a92c6f43b:0",
@@ -5173,6 +5198,25 @@
       "reason": "Reset cancels any transient drag and restores the whole canonical timeline range through the existing parent change callback."
     },
     {
+      "key": "e55561cdcf8c53a5:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_idle\" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}",
+      "binding": "timeline_idle",
+      "contract": "view.timeline_idle",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "5be3bc0bf7116573:0",
+      "file": "web/src/event-link-overlay.tsx",
+      "owner": "EventLinkCard",
+      "tag": "PageLink",
+      "control": "onClick={event=>{event.stopPropagation();close?.();}}",
+      "contract": "navigation",
+      "reason": "PageLink opens the conversation reader at the event with reader_events and reader_event_link set, through the shared app router."
+    },
+    {
       "key": "244adf80af72c046:0",
       "file": "web/src/explore-search.tsx",
       "owner": "ExploreSearch",
@@ -5861,6 +5905,15 @@
       "reason": "Requests an explicit background refresh; does not change view state."
     },
     {
+      "key": "6ce0e6095fce172c:0",
+      "file": "web/src/habits-charts.tsx",
+      "owner": "CalendarChart",
+      "tag": "HabitsChartInspection",
+      "control": "onSelect={key => { const day = points.find(point => point.key === key)?.selection; if (day && \"day\" in day) onSelect?.(day.day === selected ? \"\" : day.day); }}",
+      "contract": "view.habits_day",
+      "reason": "Calendar inspection pins the mark through HabitsChartInspection (chart_pins) and selects the vacation-day controls through the habits_day binding."
+    },
+    {
       "key": "09297a595a9c5edc:0",
       "file": "web/src/habits.tsx",
       "owner": "DayDetail",
@@ -5880,67 +5933,67 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "782e951cbf10c182:0",
+      "key": "00c6447476393db3:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "HabitsSettingsPanel",
-      "control": "onChange={update}",
-      "contract": "settings",
-      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
-    },
-    {
-      "key": "807c26364addf6f8:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "CalendarChart",
       "control": "onSelect={setSelected}",
       "contract": "view.habits_day",
       "reason": "Selects or clears the calendar day through habits_day."
     },
     {
-      "key": "a2a903535d89bfce:0",
+      "key": "26e0848933ff750e:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={calendar} onChange={setCalendar}",
-      "contract": "view.habits_calendar",
-      "reason": "Writes habits_calendar through useViewState."
-    },
-    {
-      "key": "afce7374875b6312:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={mode} onChange={setMode}",
-      "contract": "view.habits_streak",
-      "reason": "Writes habits_streak through useViewState."
-    },
-    {
-      "key": "bb9fd842bddd5bee:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "DayDetail",
       "control": "onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))}",
       "contract": "view.habits_day",
       "reason": "Selects the calendar day through habits_day; its vacation switch saves to the habit settings (pharos-habits-v1), not the view."
     },
     {
-      "key": "d73e684db4c89234:0",
+      "key": "384e3fe78886bc91:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={weeks} onChange={setWeeks}",
-      "contract": "view.habits_weeks",
-      "reason": "Writes habits_weeks through useViewState."
+      "owner": "HabitsPanels",
+      "tag": "HabitsSettingsPanel",
+      "control": "onChange={update}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
     },
     {
-      "key": "dc058267a3b501a8:0",
+      "key": "399a2db4800b62d7:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={calendar} onChange={setCalendar}",
+      "contract": "view.habits_calendar",
+      "reason": "Writes habits_calendar through useViewState."
+    },
+    {
+      "key": "62c663a43b279ae5:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
       "tag": "ChartSelect",
       "control": "value={weekends} onChange={setWeekends}",
       "contract": "view.habits_weekends",
       "reason": "Writes habits_weekends through useViewState."
+    },
+    {
+      "key": "a998566b759387ca:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={mode} onChange={setMode}",
+      "contract": "view.habits_streak",
+      "reason": "Writes habits_streak through useViewState."
+    },
+    {
+      "key": "d58768ff4d085138:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={weeks} onChange={setWeeks}",
+      "contract": "view.habits_weeks",
+      "reason": "Writes habits_weeks through useViewState."
     },
     {
       "key": "7d1a49d4d82e3d7d:0",
@@ -6014,7 +6067,7 @@
       "tag": "ChartSelect",
       "control": "value={String(days)} onChange={onDays}",
       "contract": "view.habits_shape_days",
-      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanel's useViewState binding."
+      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanels' useViewState binding."
     },
     {
       "key": "0cc6b34321064cd2:0",
@@ -6349,13 +6402,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "4af7943147f725a8:0",
+      "key": "2ae56d618fbd40b1:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "button",
-      "control": "onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}",
+      "control": "onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}",
       "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
       "key": "4fe03021c57d9fcb:0",
@@ -6376,13 +6429,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "cc9d50ef6a6ff735:0",
+      "key": "9765fd6b72a02f3c:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "MetricsPanel",
-      "control": "onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}",
+      "control": "onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}",
       "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
       "key": "6d045847d0c95152:0",
@@ -6430,6 +6483,15 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "913a5acc7dd39995:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "CompactFingerprint",
+      "tag": "g",
+      "control": "aria-label={`${placed.length} agent events. Arrow keys browse events; Enter pins details.`} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown}",
+      "contract": "transient",
+      "reason": "One tab stop for the fingerprint's agent events, through the ribbons' shared useRibbonPointer: arrow keys browse events, Enter pins the card with its link focused. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
+    },
+    {
       "key": "3a87ee725d738e75:0",
       "file": "web/src/label-ribbon-inspector.tsx",
       "owner": "useRibbonInspector",
@@ -6459,23 +6521,14 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "8d7caea92cf9866c:0",
+      "key": "743453f66bfd77ad:0",
       "file": "web/src/label-session-ribbon.tsx",
       "owner": "RecursiveRibbonRow",
       "tag": "button",
-      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
+      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
       "binding": "delegation_event",
       "contract": "view.delegation_event",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "8a6e83114ee8f74f:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "SessionRibbon",
-      "tag": "svg",
-      "control": "aria-label={!disabled&&sourceHref&&node.children.length?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} onFocus={event=>{if(disabled)return;const item=candidates[cursor.current]??candidates[0];if(item)inspector.show(event.currentTarget,<ObservationCard items={[item]}/>);}} onBlur={inspector.leave} onKeyDown={event=>{if(disabled||!sourceHref||!['ArrowLeft','ArrowRight','Enter',' '].includes(event.key)||!candidates.length)return;event.preventDefault();event.stopPropagation();if(event.key==='ArrowLeft'||event.key==='ArrowRight'){cursor.current=(cursor.current+(event.key==='ArrowLeft'?-1:1)+candidates.length)%candidates.length;inspector.close();inspector.show(event.currentTarget,<ObservationCard items={[candidates[cursor.current]]}/>);}else pin(event.currentTarget,[candidates[cursor.current]??candidates[0]],undefined,true);}} onClick={event=>{if(disabled||!sourceHref)return;const hits=hitsAt(event);if(!hits.length)return;event.preventDefault();event.stopPropagation();pin(event.currentTarget,hits,event.clientX);}} onPointerMove={event=>{if(disabled)return;if(preview){inspector.close();return;}const hits=hitsAt(event);if(hits.length)inspector.show(event.currentTarget,<ObservationCard items={hits}/>,event.clientX);else inspector.leave();}}",
-      "contract": "transient",
-      "reason": "Pointer and keyboard segment inspection pins transient content in the full timeline; preview ribbons disable editing and inspection. Source links use the canonical message/call route."
     },
     {
       "key": "0af056f356d1207b:0",
@@ -6726,6 +6779,35 @@
       "control": "\"input\"",
       "contract": "view.find",
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
+      "key": "26f74b7cb0ed5e94:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"tokens.pricing-prompt\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "352f14ea9b260a3e:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "button",
+      "control": "onClick={() => void copyPrompt()}",
+      "contract": "action",
+      "reason": "Copies the generated pricing research prompt to the clipboard; does not change the content view or dismiss missing prices."
+    },
+    {
+      "key": "5613c684de087e62:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "textarea",
+      "control": "aria-label=\"Pricing refresh prompt\" value={pricing?.prompt ?? \"\"}",
+      "contract": "action",
+      "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
     },
     {
       "key": "502369976da84683:0",
@@ -7404,8 +7486,8 @@
       "owner": "SyncQueryTable",
       "tag": "MetricsPanel",
       "control": "onInspect={(bucket, clause) => { const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "74c21543f498bd83:0",
@@ -7413,17 +7495,17 @@
       "owner": "SyncQueryTable",
       "tag": "DataTable",
       "control": "onQueryChange={api.setQuery}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
-      "key": "cf14e4c3c5c1cee0:0",
+      "key": "98a927a3547e1c1f:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "SyncQueryTable",
       "tag": "QueryBuilder",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "control": "onCollapsedChange={setCollapsed}",
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "7c0248af1a26259f:0",

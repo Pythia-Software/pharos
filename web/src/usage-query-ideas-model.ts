@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
@@ -130,7 +131,7 @@ export function queryIdeaPatch(idea: QueryIdea) {
   const patch = usageTablePresetPatch(idea);
   return { ...patch, id: idea.id, owns: [...patch.owns, "metrics" as const], query: { ...patch.query, aggregations: idea.metrics ?? [] } };
 }
-export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return { ...applyPatch(query, queryIdeaPatch(idea)), fitToScreen: true }; }
+export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return fitQueryToScreen(applyPatch(query, queryIdeaPatch(idea))); }
 export function queryIdeaMatches(query: QueryState, idea: QueryIdea): boolean {
   return Boolean(query.grouping && matchPatch({ ...query, where: [] }, { ...queryIdeaPatch(idea), owns: ["grouping"] }).status === "active");
 }

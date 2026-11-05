@@ -60,13 +60,13 @@ func TestQueryPlansUseIndexes(t *testing.T) {
 	}
 	search := toolCallDataset
 	search.toolSearchIndexed = true
-	source, args := search.v2IndexedSource(schema, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "go test"}})
+	source, args := search.indexedQuerySource(schema, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "go test"}})
 	plans = append(plans,
 		plan{name: "command search", query: "SELECT count(*) FROM (" + source + ")", args: args, want: []string{"VIRTUAL TABLE INDEX"}},
 		// A projection joins only the tables its fields need.
-		plan{name: "tool calls without session fields", query: "SELECT count(*) FROM (" + toolCallDataset.project([]string{"id", "started_at", "provider"}).v2Source(schema) + ")",
+		plan{name: "tool calls without session fields", query: "SELECT count(*) FROM (" + toolCallDataset.project([]string{"id", "started_at", "provider"}).querySourceSQL(schema) + ")",
 			avoid: []string{"agent_sessions", "repositories"}},
-		plan{name: "tool calls with session fields", query: "SELECT count(*) FROM (" + toolCallDataset.project([]string{"repository_name", "session_kind"}).v2Source(schema) + ")",
+		plan{name: "tool calls with session fields", query: "SELECT count(*) FROM (" + toolCallDataset.project([]string{"repository_name", "session_kind"}).querySourceSQL(schema) + ")",
 			want: []string{"agent_sessions", "repositories"}},
 	)
 	for _, plan := range plans {

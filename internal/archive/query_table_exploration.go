@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -34,7 +35,7 @@ func (s *Server) querySnapshots(w http.ResponseWriter, r *http.Request) {
 }
 
 // Item identity is independent of the collection's filters, projection, and
-// search. V2 still validates the field allowlist and applies host enrichment.
+// search. V3 validates the field allowlist and applies host enrichment.
 func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset string) {
 	schema, err := sqliteQuerySchema(dataset)
 	if err != nil {
@@ -48,27 +49,27 @@ func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset st
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
 	defer cancel()
-	request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{
+	request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: qt.WireQuery{
 		Select: querySourceFields(schema), Where: []qt.WhereTerm{{Field: schema.IDField, Op: "=", Value: id}}, Limit: 1,
 	}}
-	result, err := s.executeQueryV2(ctx, dataset, url.Values{"carbon_settings": r.URL.Query()["carbon_settings"], "parallelism_settings": r.URL.Query()["parallelism_settings"]}, schema, &request, nil)
+	result, _, err := s.executeQueryV3(ctx, dataset, url.Values{"carbon_settings": r.URL.Query()["carbon_settings"], "parallelism_settings": r.URL.Query()["parallelism_settings"]}, schema, request)
 	if err != nil {
 		writeError(w, err, 400)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	if len(result.Rows.Rows) == 0 {
+	if len(result.Rows) == 0 {
 		writeJSON(w, map[string]any{"row": nil}, 200)
 		return
 	}
-	row := result.Rows.Rows[0]
+	row := result.Rows[0]
 	if dataset == "tool_calls" {
 		detail, detailErr := s.Catalog.toolCallDetail(ctx, id)
 		if detailErr != nil {
 			writeError(w, detailErr, 400)
 			return
 		}
-		// Preserve canonical V2 types and enrich only on explicit inspection.
+		// Preserve canonical wire types and enrich only on explicit inspection.
 		for _, name := range []string{"input_text", "input_text_bytes", "input_text_truncated", "result_text", "result_text_bytes", "result_text_truncated", "result_details", "commands", "urls", "request", "next_request"} {
 			row[name] = detail[name]
 		}

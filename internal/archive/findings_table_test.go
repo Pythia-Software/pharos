@@ -70,7 +70,7 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 	var rows struct {
 		Rows []map[string]any `json:"rows"`
 	}
-	call(http.MethodPost, "/api/query/findings/rows-v2", qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile,
+	call(http.MethodPost, "/api/query/findings/rows-v2", queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile,
 		WireQuery: qt.WireQuery{Select: fields, Where: []qt.WhereTerm{{Field: "state", Op: "=", Value: "open"}}, Limit: 100}}, &rows)
 	if len(rows.Rows) != len(overview.Findings) {
 		t.Fatalf("%d open rows, %d open cards", len(rows.Rows), len(overview.Findings))
@@ -111,7 +111,7 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 			} `json:"summary"`
 		}
 		call(http.MethodGet, "/api/findings?state=summary", nil, &summary)
-		var metrics qt.SQLiteMetricsV2Result
+		var metrics queryFixtureMetricsResult
 		call(http.MethodPost, "/api/query/findings/metrics", metricRequest(
 			qt.AggSpec{ID: "usd", Expression: "SUM([saved_usd])"}, qt.AggSpec{ID: "added", Expression: "SUM([saved_added_usd])"},
 			qt.AggSpec{ID: "net", Expression: "SUM([saved_net_usd])"}, qt.AggSpec{ID: "tokens", Expression: "SUM([saved_tokens])"},
@@ -144,7 +144,7 @@ func TestFindingsQueryTableEmpty(t *testing.T) {
 	spawned := false
 	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { spawned = true; return true }
 	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/findings/rows-v2",
-		qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state"}, Limit: 10}})
+		queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state"}, Limit: 10}})
 	var result struct {
 		Rows []map[string]any `json:"rows"`
 	}

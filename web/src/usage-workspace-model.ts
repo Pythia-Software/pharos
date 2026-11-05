@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { retainPageView } from "./view-contract";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
@@ -199,7 +200,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (mode !== "dashboards") {
     const query = change.query;
     if (query) {
-      params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
+      params.set(`q_${next.dataset}`, encodeQuery(fitQueryToScreen(query)));
       if (current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
     } else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
