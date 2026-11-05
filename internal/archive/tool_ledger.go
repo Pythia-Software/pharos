@@ -589,7 +589,8 @@ func toolResultText(content any) (string, int) {
 
 func toolFilePath(name string, input any) string {
 	if fields := mapValue(input); fields != nil {
-		if path := firstString(fields["file_path"], fields["notebook_path"], fields["path"], fields["filePath"], fields["AbsolutePath"], fields["TargetFile"]); path != "" {
+		if path := firstString(fields["file_path"], fields["notebook_path"], fields["path"], fields["filePath"], fields["AbsolutePath"], fields["TargetFile"],
+			fields["targetFile"], fields["relativeWorkspacePath"]); path != "" {
 			return clipText(path, 500)
 		}
 	}
