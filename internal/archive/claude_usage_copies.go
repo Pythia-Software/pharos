@@ -12,19 +12,24 @@ import (
 // Claude Code copies a reply into another session's transcript when a session
 // is resumed or forked: the copy keeps the reply's uuid, time, message ID and
 // request ID, and takes the new session's ID, so nothing in it says which is
-// the original. Library totals count the reply once. Every Claude
+// the original. Library totals count the reply once. Every Claude Code
 // conversation's replies are listed in claude_usage_copies by account,
-// message ID and request ID; of the conversations holding one, the one that
-// started first (then by native ID) counts it, and the others keep their
-// records as copies of it (wrapUsageCopy), which count nothing. The owner does
-// not depend on which conversation was indexed first, so a library rebuilt in
-// another order, or on another Mac, counts the same. A reply without a
-// request ID is not matched across sessions: a gateway can reuse one message
-// ID for every reply. Copies within one session are settled by its parse
+// message ID and request ID, with what its records of each say now (copy_of);
+// of the conversations holding one, the one that started first (then by
+// native ID) counts it, and the others keep their records as copies of it
+// (wrapUsageCopy), which count nothing. The owner does not depend on which
+// conversation was indexed first, so a library rebuilt in another order, or
+// on another Mac, counts the same. A reply without a request ID is not
+// matched across sessions: a gateway can reuse one message ID for every
+// reply. Copies within one session are settled by its parse
 // (dedupeClaudeGroupUsage).
+//
+// Only Claude Code's own records take part. Conductor and TL1 hold Claude
+// conversations that mirror a native one; Library counts one of a mirror
+// group (suppressMirrorRows), which must keep its replies.
 
 type claudeUsageHolder struct {
-	conversation, workspace, native, started string
+	conversation, workspace, native, started, copyOf string
 }
 
 func (h claudeUsageHolder) before(other claudeUsageHolder) bool {
@@ -32,6 +37,16 @@ func (h claudeUsageHolder) before(other claudeUsageHolder) bool {
 		return h.started < other.started
 	}
 	return h.native < other.native
+}
+
+func claudeUsageOwner(holders []claudeUsageHolder) claudeUsageHolder {
+	owner := holders[0]
+	for _, holder := range holders[1:] {
+		if holder.before(owner) {
+			owner = holder
+		}
+	}
+	return owner
 }
 
 // claudeCrossKey is the key of a usage record's reply across sessions, or ""
@@ -52,40 +67,47 @@ func claudeCrossKey(account string, m MessageRecord) string {
 	return account + "\x00" + id + "\x00" + request
 }
 
-// claudeGroupCopy says whether m is a copy its own record's parse made of
-// another of its conversations' records.
-func claudeGroupCopy(m MessageRecord, natives map[string]bool) bool {
+// usageCopyOf names the conversation a copy's record counts in, or "" when m
+// is not a copy.
+func usageCopyOf(m MessageRecord) string {
 	if _, copied := unwrapUsageCopy(m.RawText); !copied {
-		return false
+		return ""
 	}
 	value := map[string]any{}
 	json.Unmarshal([]byte(m.RawText), &value)
-	return natives[firstString(value["copy_of"])]
+	return firstString(value["copy_of"])
 }
 
-// claudeRecordKeys lists each Claude conversation's cross-session keys, by
-// index, leaving out the copies its parse made within the record.
-func claudeRecordKeys(record WorkspaceRecord) map[int][]string {
+// claudeConversationKeys lists a conversation's cross-session keys, with what
+// its records of each say (copy_of, or "" when they count), leaving out the
+// copies its session's parse made of another of natives.
+func claudeConversationKeys(conversation ConversationRecord, natives map[string]bool) map[string]string {
+	keys := map[string]string{}
+	if conversation.Provider != "claude" {
+		return keys
+	}
+	for _, message := range conversation.Messages {
+		key := claudeCrossKey(conversation.Account, message)
+		if key == "" {
+			continue
+		}
+		copyOf := usageCopyOf(message)
+		if natives[copyOf] {
+			continue
+		}
+		if _, seen := keys[key]; !seen {
+			keys[key] = copyOf
+		}
+	}
+	return keys
+}
+
+func recordNatives(record WorkspaceRecord) map[string]bool {
 	natives := map[string]bool{}
 	for _, conversation := range record.Conversations {
 		natives[conversation.NativeID] = true
 	}
-	keys := map[int][]string{}
-	for index, conversation := range record.Conversations {
-		if conversation.Provider != "claude" {
-			continue
-		}
-		seen := map[string]bool{}
-		for _, message := range conversation.Messages {
-			key := claudeCrossKey(conversation.Account, message)
-			if key == "" || seen[key] || claudeGroupCopy(message, natives) {
-				continue
-			}
-			seen[key] = true
-			keys[index] = append(keys[index], key)
-		}
-	}
-	return keys
+	return natives
 }
 
 // claudeUsageHolders lists the stored holders of keys, by key.
@@ -97,7 +119,7 @@ func claudeUsageHolders(tx *sql.Tx, keys []string) (map[string][]claudeUsageHold
 		for i, key := range chunk {
 			args[i] = key
 		}
-		rows, err := tx.Query(`SELECT k.usage_key,k.conversation_id,k.workspace_id,c.native_id,COALESCE(c.started_at,'') FROM claude_usage_copies k
+		rows, err := tx.Query(`SELECT k.usage_key,k.conversation_id,c.workspace_id,c.native_id,COALESCE(c.started_at,''),k.copy_of FROM claude_usage_copies k
 			JOIN conversations c ON c.id=k.conversation_id WHERE k.usage_key IN (`+placeholders(len(chunk))+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -105,7 +127,7 @@ func claudeUsageHolders(tx *sql.Tx, keys []string) (map[string][]claudeUsageHold
 		for rows.Next() {
 			var key string
 			var holder claudeUsageHolder
-			if err := rows.Scan(&key, &holder.conversation, &holder.workspace, &holder.native, &holder.started); err != nil {
+			if err := rows.Scan(&key, &holder.conversation, &holder.workspace, &holder.native, &holder.started, &holder.copyOf); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -120,148 +142,115 @@ func claudeUsageHolders(tx *sql.Tx, keys []string) (map[string][]claudeUsageHold
 	return holders, nil
 }
 
-// claimClaudeUsage makes the usage records of record's Claude conversations
-// copies where a conversation in another workspace owns their reply. It
-// returns the keys workspaceID held before, for settleClaudeUsage.
-func claimClaudeUsage(tx *sql.Tx, record *WorkspaceRecord, workspaceID string) ([]string, error) {
-	held, err := claudeHeldKeys(tx, workspaceID)
-	if err != nil {
-		return nil, err
+// claimClaudeUsage makes the usage records of a Claude Code record's
+// conversations copies where another conversation owns their reply, and its
+// own where none does, before they are written.
+func claimClaudeUsage(tx *sql.Tx, record *WorkspaceRecord) error {
+	if record.SourceKind != "claude" {
+		return nil
 	}
-	byIndex := claudeRecordKeys(*record)
-	if len(byIndex) == 0 {
-		return held, nil
-	}
-	natives := map[string]bool{}
-	all := []string{}
+	natives := recordNatives(*record)
+	byIndex := map[int]map[string]string{}
 	candidates := map[string][]claudeUsageHolder{}
-	for index, keys := range byIndex {
-		conversation := record.Conversations[index]
-		natives[conversation.NativeID] = true
-		for _, key := range keys {
+	all := []string{}
+	for index, conversation := range record.Conversations {
+		keys := claudeConversationKeys(conversation, natives)
+		if len(keys) == 0 {
+			continue
+		}
+		byIndex[index] = keys
+		for key := range keys {
 			if candidates[key] == nil {
 				all = append(all, key)
 			}
 			candidates[key] = append(candidates[key], claudeUsageHolder{native: conversation.NativeID, started: conversation.StartedAt})
 		}
 	}
+	if len(all) == 0 {
+		return nil
+	}
+	sort.Strings(all)
 	holders, err := claudeUsageHolders(tx, all)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	owners := map[string]claudeUsageHolder{}
+	owners := map[string]string{}
 	for key, list := range candidates {
 		for _, holder := range holders[key] {
-			// This record's own conversations are judged from what it says now,
-			// wherever they were stored.
-			if holder.workspace != workspaceID && !natives[holder.native] {
+			// This record's own conversations are judged from what it says now.
+			if !natives[holder.native] {
 				list = append(list, holder)
 			}
 		}
-		owners[key] = claudeUsageOwner(list)
+		owners[key] = claudeUsageOwner(list).native
 	}
-	for index := range byIndex {
+	for index, keys := range byIndex {
 		conversation := &record.Conversations[index]
 		for m := range conversation.Messages {
 			message := &conversation.Messages[m]
-			owner, ok := owners[claudeCrossKey(conversation.Account, *message)]
-			if !ok || claudeGroupCopy(*message, natives) {
+			key := claudeCrossKey(conversation.Account, *message)
+			// A copy the session's parse made stays one.
+			if _, ok := keys[key]; !ok || natives[usageCopyOf(*message)] {
 				continue
 			}
 			raw, _ := unwrapUsageCopy(message.RawText)
-			if owner.native == conversation.NativeID {
-				message.RawText = raw
-			} else {
-				message.RawText = wrapUsageCopy(raw, owner.native)
+			want := raw
+			if owner := owners[key]; owner != conversation.NativeID {
+				want = wrapUsageCopy(raw, owner)
 			}
+			message.RawText = want
 		}
 	}
-	return held, nil
+	return nil
 }
 
-func claudeUsageOwner(holders []claudeUsageHolder) claudeUsageHolder {
-	owner := holders[0]
-	for _, holder := range holders[1:] {
-		if holder.before(owner) {
-			owner = holder
-		}
-	}
-	return owner
-}
-
-func claudeHeldKeys(tx *sql.Tx, workspaceID string) ([]string, error) {
-	held := []string{}
-	if workspaceID == "" {
-		return held, nil
-	}
-	rows, err := tx.Query("SELECT DISTINCT usage_key FROM claude_usage_copies WHERE workspace_id=?", workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, err
-		}
-		held = append(held, key)
-	}
-	return held, rows.Err()
-}
-
-// settleClaudeUsage lists what record's Claude conversations hold now, then
-// has every holder of a key workspaceID holds or held agree with that key's
+// settleClaudeUsage lists what a Claude Code record's conversations hold now,
+// then has every holder of a key they hold or held agree with that key's
 // owner, rebuilding the usage of each workspace whose stored records changed.
-// claimClaudeUsage already made this record's agree, unless it was merged into
-// conversations it did not write.
-func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, workspaceID string, conversationIDs []string, held []string) error {
-	touched := map[string]bool{}
-	for _, key := range held {
-		touched[key] = true
+// A conversation the record merged into rather than wrote (fromStore) holds
+// what is stored, which can be more than the record has.
+func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, conversationIDs []string, fromStore []bool) (map[string]bool, error) {
+	if record.SourceKind != "claude" {
+		return nil, nil
 	}
-	// A conversation can have moved here from another workspace.
-	for _, id := range conversationIDs {
-		if id == "" {
+	natives := recordNatives(record)
+	touched := map[string]bool{}
+	for index, conversation := range record.Conversations {
+		if index >= len(conversationIDs) || conversationIDs[index] == "" || conversation.Provider != "claude" {
 			continue
 		}
-		rows, err := tx.Query("SELECT usage_key FROM claude_usage_copies WHERE conversation_id=? AND workspace_id<>?", id, workspaceID)
+		id := conversationIDs[index]
+		rows, err := tx.Query("SELECT usage_key FROM claude_usage_copies WHERE conversation_id=?", id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for rows.Next() {
 			var key string
 			if err := rows.Scan(&key); err != nil {
 				rows.Close()
-				return err
+				return nil, err
 			}
 			touched[key] = true
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := tx.Exec("DELETE FROM claude_usage_copies WHERE conversation_id=?", id); err != nil {
-			return err
+			return nil, err
 		}
-	}
-	if _, err := tx.Exec("DELETE FROM claude_usage_copies WHERE workspace_id=?", workspaceID); err != nil {
-		return err
-	}
-	for index, keys := range claudeRecordKeys(record) {
-		if index >= len(conversationIDs) || conversationIDs[index] == "" {
-			continue
+		if index < len(fromStore) && fromStore[index] {
+			if conversation.Messages, err = storedMessages(ctx, tx, id); err != nil {
+				return nil, err
+			}
 		}
-		for _, key := range keys {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO claude_usage_copies(usage_key,conversation_id,workspace_id)
-				SELECT ?,id,workspace_id FROM conversations WHERE id=?`, key, conversationIDs[index]); err != nil {
-				return err
+		for key, copyOf := range claudeConversationKeys(conversation, natives) {
+			if _, err := tx.Exec("INSERT INTO claude_usage_copies(usage_key,conversation_id,copy_of) VALUES(?,?,?)", key, id, copyOf); err != nil {
+				return nil, err
 			}
 			touched[key] = true
 		}
-	}
-	if len(touched) == 0 {
-		return nil
 	}
 	keys := make([]string, 0, len(touched))
 	for key := range touched {
@@ -270,25 +259,28 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 	sort.Strings(keys)
 	holders, err := claudeUsageHolders(tx, keys)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// Each holder's records are read once, for every key it shares.
+	// Only a holder whose records say otherwise than its key's owner is read.
 	decisions, workspaceOf := map[string]map[string]string{}, map[string]string{}
 	for _, key := range keys {
 		list := holders[key]
-		if len(list) == 0 || len(list) == 1 && list[0].workspace == workspaceID {
+		if len(list) == 0 {
 			continue
 		}
 		owner := claudeUsageOwner(list)
 		for _, holder := range list {
-			copyOf := ""
+			want := ""
 			if holder.conversation != owner.conversation {
-				copyOf = owner.native
+				want = owner.native
+			}
+			if want == holder.copyOf {
+				continue
 			}
 			if decisions[holder.conversation] == nil {
 				decisions[holder.conversation] = map[string]string{}
 			}
-			decisions[holder.conversation][key], workspaceOf[holder.conversation] = copyOf, holder.workspace
+			decisions[holder.conversation][key], workspaceOf[holder.conversation] = want, holder.workspace
 		}
 	}
 	conversations := make([]string, 0, len(decisions))
@@ -296,14 +288,22 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 		conversations = append(conversations, conversation)
 	}
 	sort.Strings(conversations)
-	changed := map[string]bool{}
+	changed := map[string]map[string]bool{}
 	for _, conversation := range conversations {
 		updated, err := settleStoredUsage(tx, conversation, decisions[conversation])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if updated {
-			changed[workspaceOf[conversation]] = true
+			if changed[workspaceOf[conversation]] == nil {
+				changed[workspaceOf[conversation]] = map[string]bool{}
+			}
+			changed[workspaceOf[conversation]][conversation] = true
+		}
+		for key, copyOf := range decisions[conversation] {
+			if _, err := tx.Exec("UPDATE claude_usage_copies SET copy_of=? WHERE usage_key=? AND conversation_id=?", copyOf, key, conversation); err != nil {
+				return nil, err
+			}
 		}
 	}
 	workspaces := make([]string, 0, len(changed))
@@ -311,12 +311,18 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 		workspaces = append(workspaces, workspace)
 	}
 	sort.Strings(workspaces)
+	rebuilt := map[string]bool{}
 	for _, workspace := range workspaces {
-		if err := rebuildWorkspaceUsage(ctx, tx, workspace); err != nil {
-			return err
+		conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspace)
+		if err != nil {
+			return nil, err
 		}
+		if err := rebuildWorkspaceUsage(tx, workspace, conversations, ids, changed[workspace]); err != nil {
+			return nil, err
+		}
+		rebuilt[workspace] = true
 	}
-	return nil
+	return rebuilt, nil
 }
 
 // settleStoredUsage makes a stored conversation's usage records of each key
@@ -361,74 +367,84 @@ func settleStoredUsage(tx *sql.Tx, conversationID string, copyOf map[string]stri
 	return len(updates) > 0, nil
 }
 
+// claudeRecordHasUsage says whether record's token metrics are derived from
+// Claude usage records, so that a record whose records are all copies counts
+// none.
+func claudeRecordHasUsage(record WorkspaceRecord) bool {
+	for _, conversation := range record.Conversations {
+		if conversation.Provider == "claude" && slices.ContainsFunc(conversation.Messages, claudeUsageRecord) {
+			return true
+		}
+	}
+	return false
+}
+
 // repairClaudeUsageCopies settles the copies of a workspace's stored Claude
-// conversations, as their parse would now: within each session, then across
-// sessions. Claude Code removes old transcripts, so a conversation's stored
-// messages may be all that is left of it.
-func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string) error {
-	conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
-	if err != nil {
-		return err
-	}
-	stored := map[string]string{}
-	for index, conversation := range conversations {
-		stored[conversation.NativeID] = ids[index]
-	}
-	for _, root := range conversations {
+// Code conversations, as their parse would now: within each session, then
+// across sessions. Claude Code removes old transcripts, so a conversation's
+// stored messages may be all that is left of it. It returns the
+// conversations whose records changed, or nil when it rebuilt the
+// workspace's usage itself.
+func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string) (map[string]bool, error) {
+	changed := map[string]bool{}
+	for rootIndex, root := range conversations {
 		if root.Provider != "claude" || root.AgentDepth != 0 {
 			continue
 		}
-		group := WorkspaceRecord{Conversations: append([]ConversationRecord{root}, claudeChildren(conversations, root)...)}
-		before := make([][]string, len(group.Conversations))
-		for c, conversation := range group.Conversations {
-			// The group's records share their messages with conversations.
-			group.Conversations[c].Messages = slices.Clone(conversation.Messages)
-			for _, message := range conversation.Messages {
-				before[c] = append(before[c], message.RawText)
+		// The session's root and its subagents, as claudeChildren finds them.
+		group := []int{rootIndex}
+		for index, conversation := range conversations {
+			if conversation.AgentDepth > 0 && (conversation.ParentNativeID == root.NativeID || strings.HasPrefix(conversation.NativeID, root.NativeID+":subagent:")) {
+				group = append(group, index)
 			}
 		}
-		dedupeClaudeGroupUsage(&group)
-		for c, conversation := range group.Conversations {
-			for m, message := range conversation.Messages {
-				if message.RawText != before[c][m] {
-					if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE conversation_id=? AND native_id=?", message.RawText, stored[conversation.NativeID], message.NativeID); err != nil {
-						return err
-					}
+		record := WorkspaceRecord{}
+		for _, index := range group {
+			conversation := conversations[index]
+			conversation.Messages = slices.Clone(conversation.Messages)
+			record.Conversations = append(record.Conversations, conversation)
+		}
+		dedupeClaudeGroupUsage(&record)
+		for g, index := range group {
+			for m, message := range record.Conversations[g].Messages {
+				if message.RawText == conversations[index].Messages[m].RawText {
+					continue
 				}
+				if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE conversation_id=? AND native_id=?", message.RawText, ids[index], message.NativeID); err != nil {
+					return nil, err
+				}
+				changed[ids[index]] = true
 			}
+			conversations[index].Messages = record.Conversations[g].Messages
 		}
 	}
-	held, err := claudeHeldKeys(tx, workspaceID)
-	if err != nil {
-		return err
+	rebuilt, err := settleClaudeUsage(ctx, tx, WorkspaceRecord{SourceKind: "claude", Conversations: conversations}, ids, nil)
+	if err != nil || rebuilt[workspaceID] {
+		return nil, err
 	}
-	conversations, ids, err = storedWorkspaceConversations(ctx, tx, workspaceID)
-	if err != nil {
-		return err
-	}
-	return settleClaudeUsage(ctx, tx, WorkspaceRecord{Conversations: conversations}, workspaceID, ids, held)
+	return changed, nil
 }
 
-// rebuildWorkspaceUsage derives a workspace's sessions, hourly usage, model
-// requests and token metrics again from its stored messages, whatever they
-// held before: a reply it counted may now be another's.
-func rebuildWorkspaceUsage(ctx context.Context, tx *sql.Tx, workspaceID string) error {
-	conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
-	if err != nil {
-		return err
-	}
+// rebuildWorkspaceUsage derives a workspace's sessions, hourly usage and token
+// metrics again from its stored conversations, whatever they held before: a
+// reply it counted may now be another's. The model requests of the
+// conversations in ledger are derived again too.
+func rebuildWorkspaceUsage(tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string, ledger map[string]bool) error {
 	for j, conversation := range conversations {
 		if err := replaceAgentSessions(tx, workspaceID, ids[j], conversation); err != nil {
 			return err
 		}
-		if err := replaceToolLedger(tx, workspaceID, ids[j], conversation); err != nil {
-			return err
+		if ledger[ids[j]] {
+			if err := replaceToolLedger(tx, workspaceID, ids[j], conversation); err != nil {
+				return err
+			}
 		}
 	}
 	if err := applyClaudeGroupUsage(tx, workspaceID, conversations, ids, nil); err != nil {
 		return err
 	}
-	if metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: conversations}); len(metrics) > 0 {
+	record := WorkspaceRecord{Conversations: conversations}
+	if metrics := reconciledTokenMetrics(record); len(metrics) > 0 || claudeRecordHasUsage(record) {
 		if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
 			return err
 		}

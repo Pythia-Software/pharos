@@ -879,8 +879,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			}
 		}
 	}
-	heldUsage, err := claimClaudeUsage(tx, &record, workspaceID)
-	if err != nil {
+	if err := claimClaudeUsage(tx, &record); err != nil {
 		return 0, 0, err
 	}
 	messageCount, conversationCount := 0, 0
@@ -1061,7 +1060,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 		metrics := record.Metrics
-		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 {
+		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 || claudeRecordHasUsage(record) {
 			if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
 				return 0, 0, err
 			}
@@ -1113,7 +1112,11 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	if err := recordCopyVersions(tx, host, workspaceID, conversationIDs, record, !authority.older); err != nil {
 		return 0, 0, err
 	}
-	if err := settleClaudeUsage(ctx, tx, record, workspaceID, conversationIDs, heldUsage); err != nil {
+	merges := make([]bool, len(record.Conversations))
+	for index := range merges {
+		merges[index] = !authority.conversations[index].writer
+	}
+	if _, err := settleClaudeUsage(ctx, tx, record, conversationIDs, merges); err != nil {
 		return 0, 0, err
 	}
 	if err := refreshWorkspaceNames(tx, []string{workspaceID}); err != nil {

@@ -218,6 +218,11 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 		claudeReply("s2", "a2", "p2", "msg_2", "req_2", text("Fixed"), usage(200, 20)),
 	}
 	resumed[0] = strings.Replace(resumed[0], "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1)
+	// A session resumed and left at once holds nothing but copies.
+	copyOnly := []string{
+		strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s3"`), "2026-09-24T17:00:00Z", "2026-09-24T19:00:00Z", 1),
+		strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s3"`),
+	}
 	// A gateway that names every reply alike, without a request ID, is not
 	// matched across sessions.
 	gateway := func(session string) []string {
@@ -227,11 +232,11 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 		}
 	}
 	want := int64(110 + 44 + 220 + 2000)
-	for _, order := range [][]string{{"s1", "s2"}, {"s2", "s1"}} {
+	for _, order := range [][]string{{"s1", "s2", "s3"}, {"s3", "s2", "s1"}} {
 		t.Run(strings.Join(order, "-then-"), func(t *testing.T) {
 			useHost(t, "host-a")
 			catalog, _ := testCatalog(t)
-			files := map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed}
+			files := map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed, "s3.jsonl": copyOnly}
 			all := map[string][]string{"g1.jsonl": gateway("g1"), "g2.jsonl": gateway("g2")}
 			for _, session := range order {
 				all[session+".jsonl"] = files[session+".jsonl"]
@@ -255,10 +260,95 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 			if _, err := catalog.DB.Exec("DELETE FROM usage_attribution_state"); err != nil {
 				t.Fatal(err)
 			}
-			if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 4 {
+			if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 5 {
 				t.Fatalf("repair = %d, %v", repaired, err)
 			}
 			wantLibraryTokens(t, catalog, want)
 		})
+	}
+}
+
+func TestClaudeGatewayReplySharingAnIDStaysOnItsBranch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// A gateway names every reply alike and records no request ID.
+	messages := parseJSONL(t, "claude", path,
+		claudeTurn("s", "p1", "", "user", "Hi", nil),
+		claudeReply("s", "g1", "p1", "reply", "", text("Hello"), usage(1, 1)),
+		claudeTurn("s", "u2", "g1", "user", "Tell me a joke", nil),
+		claudeReply("s", "g2", "u2", "reply", "", text("A joke"), usage(1, 1)),
+		claudeTurn("s", "u3", "g1", "user", "Tell me a fact", nil),
+		claudeReply("s", "g3", "u3", "reply", "", text("A fact"), usage(1, 1)))
+	selected := entrySelected(t, messages)
+	if !selected["g1"] || !selected["g3"] || selected["u2"] || selected["g2"] {
+		t.Fatalf("selected = %v, want p1, g1, u3 and g3 alone", selected)
+	}
+}
+
+func claudeUsageMessage(uuid, id, request string, input, output int) MessageRecord {
+	counts := usage(input, output)
+	event := map[string]any{"type": "assistant", "uuid": uuid, "requestId": request, "message": map[string]any{"id": id, "model": "claude-test", "usage": counts}}
+	return MessageRecord{NativeID: uuid + ":usage", Role: "system", Kind: "metadata", Model: "claude-test", Selected: true, RawText: jsonText(event),
+		Text: jsonText(map[string]any{"type": "token_usage", "usage": counts, "usage_message_id": id})}
+}
+
+func claudeSessionRecord(kind, native, started, origin string, messages ...MessageRecord) WorkspaceRecord {
+	return WorkspaceRecord{SourceID: native, SourceKind: kind, Account: "local", Conversations: []ConversationRecord{{
+		NativeID: native, Provider: "claude", Model: "claude-test", Account: "local", Origin: origin, StartedAt: started, Messages: messages}}}
+}
+
+func TestClaudeCopyFromAnotherMacKeepsWhatIsStored(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	r1, r2 := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10), claudeUsageMessage("a2", "msg_2", "req_2", 200, 20)
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1, r2)))
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, claudeSessionRecord("claude", "s2", "2026-09-20T11:00:00Z", "/a/s2.jsonl",
+		r1, r2, claudeUsageMessage("b1", "msg_3", "req_3", 400, 40))))
+	wantLibraryTokens(t, catalog, 110+220+440)
+	// Another Mac's older copy of s1 lacks a reply s1 still holds.
+	if result := ingestAs(t, catalog, "host-b", newCopyFixture(t, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/b/s1.jsonl", r1))); result.Workspaces != 1 {
+		t.Fatalf("the copy was not processed: %+v", result)
+	}
+	wantLibraryTokens(t, catalog, 110+220+440)
+}
+
+func TestClaudeMirrorsKeepTheirReplies(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	r1 := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10)
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1)))
+	// TL1 holds the session too; Library counts one of the two.
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, claudeSessionRecord("tl1", "tl1-run", "2026-09-20T11:00:00Z", "/a/run.jsonl", r1)))
+	copies, err := queryMaps(catalog.DB, `SELECT native_id FROM messages WHERE raw_text LIKE '{"copied":%'`)
+	if err != nil || len(copies) != 0 {
+		t.Fatalf("copies = %v, %v; a mirror's replies are its own", copies, err)
+	}
+}
+
+func TestClaudeClaimLeavesCopiedRepliesUncounted(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	reply := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10)
+	copied := reply
+	copied.RawText = wrapUsageCopy(reply.RawText, "s1")
+	// The process's claim can count what its subagent was given as well as
+	// what it sent.
+	claim := MessageRecord{NativeID: "claim", Kind: "metadata", Text: `{"type":"cost-state","modelUsage":{"claude-test":{"input_tokens":400,"output_tokens":40}}}`}
+	record := claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", reply, claim)
+	record.Conversations = append(record.Conversations, ConversationRecord{NativeID: "s1:subagent:agent-f", ParentNativeID: "s1", Provider: "claude", Model: "claude-test",
+		Account: "local", AgentDepth: 1, StartedAt: "2026-09-20T10:01:00Z", Messages: []MessageRecord{copied, claudeUsageMessage("f1", "msg_2", "req_2", 200, 20)}})
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var sessions int64
+	if err := catalog.DB.QueryRow("SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions").Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 110+220 {
+		t.Fatalf("sessions = %d, want %d", sessions, 110+220)
 	}
 }

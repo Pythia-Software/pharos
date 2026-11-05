@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +16,8 @@ import (
 // compaction joined to what it summarized (logicalParentUuid).
 //
 // Claude Code also writes one reply over several lines (one per content
-// block, a parallel tool call on its own line) and each tool result under the
+// block, a parallel tool call on its own line, all under its message and
+// request ID) and each tool result under the
 // line of its call, so a reply's other lines and its calls' results branch
 // off that path without leaving the conversation. They are on it with the
 // entry they belong to, as are the attachments and notes under an entry on
@@ -39,7 +41,13 @@ func claudeActiveBranch(events []map[string]any) map[string]bool {
 		message := mapValue(event["message"])
 		e := entry{uuid: id, parent: firstString(event["parentUuid"], event["logicalParentUuid"]), kind: firstString(event["type"])}
 		if e.kind == "assistant" {
-			e.reply = firstString(message["id"])
+			// A gateway can give every reply one message ID; a reply's lines
+			// share their request ID too.
+			if id := firstString(message["id"]); event["requestId"] != nil {
+				e.reply = id + "\x00" + firstString(event["requestId"])
+			} else if strings.HasPrefix(id, "msg_") {
+				e.reply = id
+			}
 		}
 		if blocks, ok := firstNonNil(message["content"], event["content"]).([]any); ok {
 			for _, raw := range blocks {
@@ -178,6 +186,23 @@ func wrapUsageCopy(raw, owner string) string {
 		original = raw
 	}
 	return jsonText(map[string]any{"type": claudeUsageCopyType, "copy_of": owner, "copied": original})
+}
+
+// withUsageCopies is messages with each copy's record in its place.
+func withUsageCopies(messages []MessageRecord) []MessageRecord {
+	var result []MessageRecord
+	for index, message := range messages {
+		if raw, copied := unwrapUsageCopy(message.RawText); copied {
+			if result == nil {
+				result = slices.Clone(messages)
+			}
+			result[index].RawText = raw
+		}
+	}
+	if result == nil {
+		return messages
+	}
+	return result
 }
 
 // unwrapUsageCopy returns the record a copy keeps, and whether raw was one.

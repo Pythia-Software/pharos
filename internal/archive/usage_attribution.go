@@ -57,7 +57,9 @@ func claudeGroupRemainder(conversations []ConversationRecord, root ConversationR
 	requests := map[string]tokenCounts{}
 	hasRequests := false
 	for _, conversation := range append([]ConversationRecord{root}, claudeChildren(conversations, root)...) {
-		modelRequests, _ := buildToolLedger(conversation.Messages, conversation.Model)
+		// A claim counts whatever the process sent, so a reply counted in
+		// another conversation is not left over beyond it.
+		modelRequests, _ := buildToolLedger(withUsageCopies(conversation.Messages), conversation.Model)
 		for _, request := range modelRequests {
 			if request.Counts["total_tokens"] <= 0 {
 				continue
@@ -145,7 +147,7 @@ func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int,
 }
 
 func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int, int), walLimit int64) (int, error) {
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id FROM workspaces w WHERE EXISTS
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.source_kind FROM workspaces w WHERE EXISTS
 		(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id AND c.provider='claude')
 		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=w.id AND s.version=?)`, usageAttributionVersion)
 	if err != nil {
@@ -156,12 +158,22 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			return index, err
 		}
 		workspaceID := firstString(row["id"])
-		err := c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
-			if err := repairClaudeUsageCopies(ctx, tx, workspaceID); err != nil {
-				return err
+		conversations, ids, err := storedWorkspaceConversations(ctx, c.DB, workspaceID)
+		if err != nil {
+			return index, err
+		}
+		err = c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
+			ledger := map[string]bool{}
+			if firstString(row["source_kind"]) == "claude" {
+				var err error
+				if ledger, err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
+					return err
+				}
 			}
-			if err := rebuildWorkspaceUsage(ctx, tx, workspaceID); err != nil {
-				return err
+			if ledger != nil {
+				if err := rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, ledger); err != nil {
+					return err
+				}
 			}
 			_, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
 				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion)
