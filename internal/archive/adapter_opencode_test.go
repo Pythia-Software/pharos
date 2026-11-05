@@ -60,6 +60,9 @@ INSERT INTO session_message VALUES('q1','ses_parts','user',1,1793721000000,17937
 INSERT INTO session_message VALUES('q2','ses_parts','assistant',2,1793721000500,1793721001000,'{"time":{"created":1793721000500},"model":{"id":"big-pickle","providerID":"opencode"},"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
 INSERT INTO session_part VALUES('q2','ses_parts',1,'text',NULL,1793721001000,1793721001000,'{"type":"text","text":"world"}');
 INSERT INTO session_part VALUES('q2','ses_parts',0,'text',NULL,1793721000900,1793721000900,'{"type":"text","text":"Hello,"}');
+-- An image a part names as media:<hash>.
+INSERT INTO blob VALUES('h1','image/png',4,1,1,x'89504e47',1793721000000);
+INSERT INTO blob_ref VALUES('ses_parts','q1','h1',0);
 INSERT INTO credential VALUES('opencode','` + opencodeSecret + `');
 INSERT INTO kv VALUES('auth','{"key":"` + opencodeSecret + `"}');
 `
@@ -82,6 +85,8 @@ CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, workspac
   tokens_cache_write integer DEFAULT 0 NOT NULL, agent text, model text, time_created integer NOT NULL, time_updated integer NOT NULL);
 CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);
 CREATE TABLE session_part (message_id text NOT NULL, session_id text NOT NULL, ordinal integer NOT NULL, type text NOT NULL, call_id text, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL, PRIMARY KEY(message_id, ordinal));
+CREATE TABLE blob (hash text PRIMARY KEY, mime text NOT NULL, bytes integer NOT NULL, width integer, height integer, data blob NOT NULL, time_created integer NOT NULL);
+CREATE TABLE blob_ref (session_id text NOT NULL, message_id text NOT NULL, hash text NOT NULL, seq integer NOT NULL, PRIMARY KEY(message_id, hash, seq));
 CREATE TABLE credential (id text PRIMARY KEY, secret text NOT NULL);
 CREATE TABLE kv (key text PRIMARY KEY, value text NOT NULL);
 CREATE VIEW secrets AS SELECT secret FROM credential;
@@ -152,6 +157,78 @@ func TestOpenCodeSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 	parts := records["ses_parts"].Conversations[0].Messages
 	if got := kinds(parts); got != "user:message assistant:message assistant:message system:metadata" || parts[1].Text != "Hello," || parts[2].Text != "world" {
 		t.Fatalf("content in session_part: %s %+v", got, parts)
+	}
+}
+
+// opencodeMoreRows add a session with each other kind of message, and a fork
+// of ses_parts that starts with copies of its messages.
+const opencodeMoreRows = `
+INSERT INTO session_v2 VALUES('ses_more','p1',NULL,NULL,NULL,'more','/work/app','More','2.2.5',0.0,'{}',
+  200,20,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793722000000,1793722010000);
+INSERT INTO session_message VALUES('r1','ses_more','user',1,1793722000000,1793722000000,'{"text":"Tidy up"}');
+INSERT INTO session_message VALUES('r2','ses_more','synthetic',2,1793722000100,1793722000100,'{"text":"The user switched to plan mode."}');
+INSERT INTO session_message VALUES('r3','ses_more','system',3,1793722000200,1793722000200,'{"text":"Stay in /work/app."}');
+INSERT INTO session_message VALUES('r4','ses_more','skill',4,1793722000300,1793722000300,'{"skill":"tidy","text":"Run gofmt first."}');
+INSERT INTO session_message VALUES('r5','ses_more','shell',5,1793722000400,1793722000400,'{"command":"git status","status":"completed","exit":1,"output":"not a repo"}');
+-- Its content list is empty; its parts are in session_part.
+INSERT INTO session_message VALUES('r6','ses_more','assistant',6,1793722000500,1793722001000,'{"model":{"id":"big-pickle"},"content":[],"tokens":{"input":200,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_part VALUES('r6','ses_more',0,'text',NULL,1793722000900,1793722000900,'{"type":"text","text":"Done."}');
+INSERT INTO session_message VALUES('r7','ses_more','compaction',7,1793722002000,1793722002000,'{"summary":"Tidied the repo."}');
+-- The fork's totals count only its own request.
+INSERT INTO session_v2 VALUES('ses_fork','p1',NULL,NULL,'ses_parts','fork','/work/app','Parts fork','2.2.5',0.0,'{}',
+  50,5,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793723000000,1793723001000);
+INSERT INTO session_message VALUES('evt_ab_1','ses_fork','user',1,1793721000000,1793721000000,'{"text":"Say hello"}');
+INSERT INTO session_message VALUES('evt_ab_2','ses_fork','assistant',2,1793721000500,1793721001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Hello, world"}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('msg_f3','ses_fork','user',3,1793723000000,1793723000000,'{"text":"Now in French"}');
+INSERT INTO session_message VALUES('msg_f4','ses_fork','assistant',4,1793723000500,1793723001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Bonjour"}],"tokens":{"input":50,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}');
+`
+
+// What OpenCode adds to a prompt is context, a command the person ran is a
+// call, a compaction is a boundary, parts replace an empty content list, and
+// a fork keeps the messages it copied without counting their requests again.
+func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
+	root := t.TempDir()
+	opencodeDatabase(t, filepath.Join(root, "opencode.db"), opencodeRows+opencodeMoreRows)
+	records := discoverOpenCode(t, root)
+	kinds := func(messages []MessageRecord) string {
+		out := []string{}
+		for _, message := range messages {
+			out = append(out, message.Role+":"+message.Kind)
+		}
+		return strings.Join(out, " ")
+	}
+	more := records["ses_more"].Conversations[0].Messages
+	if got, want := kinds(more), "user:message system:context system:context system:context user:tool_call tool:tool_result assistant:message system:metadata system:metadata"; got != want {
+		t.Fatalf("messages\n got %s\nwant %s", got, want)
+	}
+	if !strings.Contains(more[1].Text, `"source":"opencode_synthetic"`) || !strings.Contains(more[3].Text, `"source":"opencode_skill:tidy"`) || !strings.Contains(more[3].Text, "Run gofmt first.") {
+		t.Fatalf("context = %+v", more[1:4])
+	}
+	if call, result := more[4], more[5]; call.CallID == "" || result.CallID != call.CallID || !strings.Contains(call.Text, "git status") ||
+		result.Text != `{"content":"not a repo","details":{"exit_code":1},"is_error":true,"tool":"shell"}` {
+		t.Fatalf("shell call %+v result %+v", call, result)
+	}
+	if more[6].Text != "Done." || !isCompactionMarker(more[8]) {
+		t.Fatalf("parts %+v compaction %+v", more[6], more[8])
+	}
+	fork := records["ses_fork"]
+	if got := kinds(fork.Conversations[0].Messages); got != "user:message assistant:message user:message assistant:message system:metadata" || fork.Metadata["forked_from"] != "ses_parts" {
+		t.Fatalf("fork %s %+v", got, fork.Metadata)
+	}
+
+	c, _ := testCatalog(t)
+	ingestSource(t, c, SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true})
+	usage := func(id string) int {
+		return countRows(t, c, `SELECT COALESCE(SUM(u.total_tokens),0) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN conversations v ON v.id=a.conversation_id WHERE v.native_id=?`, id)
+	}
+	if got := usage("ses_fork"); got != 55 {
+		t.Fatalf("fork usage %d, want its own request's 55", got)
+	}
+	if got := usage("ses_parts"); got != 110 {
+		t.Fatalf("source usage %d", got)
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM tool_calls WHERE provider='opencode' AND call_id='r5:shell'`); n != 1 {
+		t.Fatalf("%d calls for the command the person ran", n)
 	}
 }
 
@@ -228,7 +305,7 @@ func TestOpenCodeCaptureHoldsOnlyTheSessions(t *testing.T) {
 			err = errors.Join(err, fmt.Errorf("captured %s", table))
 		}
 	}
-	if err != nil || !tables["session_v2"] || !tables["session_message"] {
+	if err != nil || !tables["session_v2"] || !tables["session_message"] || !tables["blob"] || !tables["blob_ref"] {
 		t.Fatalf("captured tables %v %v", tables, err)
 	}
 	if strings.Contains(capturedText(t, config.CaptureRoot), opencodeSecret) {
@@ -442,12 +519,13 @@ func TestOpenCodeSessionIsVerifiedLive(t *testing.T) {
 }
 
 // OpenCode is found and counted by the probe, offered to a Mac set up before
-// Pharos read it, and chosen in guided setup.
+// Pharos read it, and chosen in guided setup; XDG_DATA_HOME moves it.
 func TestOpenCodeIsFoundAndSetUp(t *testing.T) {
 	home := probeHome(t)
 	useHost(t, "host-a")
 	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
-	opencodeDatabase(t, filepath.Join(home, ".local", "share", "opencode", "opencode.db"), opencodeRows)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	opencodeDatabase(t, filepath.Join(home, "data", "opencode", "opencode.db"), opencodeRows)
 	candidate := candidateNamed(t, probeSources(home, Config{}, nil), "opencode")
 	if candidate.Kind != "opencode" || candidate.Status != "found" || candidate.Count != 3 || candidate.Unit != "session" || !candidate.Recommended {
 		t.Fatalf("candidate = %+v", candidate)
