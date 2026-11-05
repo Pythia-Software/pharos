@@ -31,7 +31,7 @@ import (
 type vscodeCopilotAdapter struct{ baseAdapter }
 
 // vscodeCopilotExtractor versions the parser; bump it when parsing changes.
-const vscodeCopilotExtractor = "vscode-copilot-v1"
+const vscodeCopilotExtractor = "vscode-copilot-v2-capture-client"
 
 func (a *vscodeCopilotAdapter) partExtractor() string { return vscodeCopilotExtractor }
 
@@ -744,10 +744,12 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 // variant names the VS Code build whose user folder this is (Code, Code -
 // Insiders, VSCodium, Positron).
 func (a *vscodeCopilotAdapter) variant() string {
-	if filepath.Base(a.config.Path) != "User" {
+	// The source's folder names it, not a capture's copy of the folder.
+	path := a.original(a.config.Path)
+	if filepath.Base(path) != "User" {
 		return ""
 	}
-	return filepath.Base(filepath.Dir(a.config.Path))
+	return filepath.Base(filepath.Dir(path))
 }
 
 // vscodeSubagent is a subagent's conversation: the prompt it was given, its

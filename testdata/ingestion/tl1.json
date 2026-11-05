@@ -1,0 +1,584 @@
+{
+  "index_version": "tl1-analysis-v4-origins",
+  "records": [
+    {
+      "SourceID": "install-1:task-claude",
+      "SourceKind": "tl1",
+      "Title": "Count the words",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "ready",
+      "ActivityAt": "2026-09-20T10:40:00.000Z",
+      "Location": "$ROOT/002/repo",
+      "Repository": {
+        "display_name": "fixture",
+        "local_locations": [
+          "$ROOT/002/repo"
+        ]
+      },
+      "Metadata": {
+        "base_ref": "base",
+        "branch": "candidate/1",
+        "custody_version": null,
+        "flavor": "implement",
+        "head_ref": "head",
+        "lifecycle": "terminal",
+        "status": "done",
+        "terminal": true,
+        "version": "v2"
+      },
+      "Conversations": [
+        {
+          "NativeContext": {
+            "entrypoint": "cli"
+          },
+          "NativeID": "install-1:att-claude:1-claude.jsonl",
+          "Provider": "claude",
+          "Model": "claude-opus-4-5",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/transcripts/task-claude/1-claude.jsonl",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-01T10:00:00.000Z",
+          "EndedAt": "2026-09-01T10:00:22.000Z",
+          "Harness": "claude-code/cli",
+          "HarnessVersionFirst": "2.1.3",
+          "HarnessVersionLast": "2.1.3",
+          "Aliases": [
+            "claude-session"
+          ],
+          "Messages": [
+            {
+              "NativeID": "u1",
+              "Role": "user",
+              "Kind": "message",
+              "Text": "Count the words in README.md",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:1",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "a1:block:0",
+              "Role": "assistant",
+              "Kind": "reasoning",
+              "Text": "Read the file first.",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:05.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u1",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:2:block:0",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true,
+              "ReasoningFormat": "text"
+            },
+            {
+              "NativeID": "a1:block:1",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"command\":\"wc -w README.md\"},\"tool\":\"Bash\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:05.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u1",
+              "CallID": "toolu_1",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:2:block:1",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "a1:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_1\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:05.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u1",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:2",
+              "RawText": "{\"_line\":2,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Read the file first.\",\"type\":\"thinking\"},{\"id\":\"toolu_1\",\"input\":{\"command\":\"wc -w README.md\"},\"name\":\"Bash\",\"type\":\"tool_use\"}],\"id\":\"msg_1\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"u1\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:05.000Z\",\"type\":\"assistant\",\"uuid\":\"a1\",\"version\":\"2.1.3\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "u2:block:0",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"74 README.md\",\"is_error\":null,\"tool\":\"Bash\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:06.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "a1",
+              "CallID": "toolu_1",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:3:block:0",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "a2:block:0",
+              "Role": "assistant",
+              "Kind": "delegation",
+              "Text": "{\"input\":{\"description\":\"Check the count\",\"prompt\":\"Count the words again\",\"subagent_type\":\"general-purpose\"},\"tool\":\"Task\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:08.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u2",
+              "CallID": "toolu_2",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:4:block:0",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "a2:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_2\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:08.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u2",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:4",
+              "RawText": "{\"_line\":4,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"id\":\"toolu_2\",\"input\":{\"description\":\"Check the count\",\"prompt\":\"Count the words again\",\"subagent_type\":\"general-purpose\"},\"name\":\"Task\",\"type\":\"tool_use\"}],\"id\":\"msg_2\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"u2\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:08.000Z\",\"type\":\"assistant\",\"uuid\":\"a2\",\"version\":\"2.1.3\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "u3:block:0",
+              "Role": "tool",
+              "Kind": "delegation_result",
+              "Text": "{\"content\":[{\"text\":\"74 words.\",\"type\":\"text\"}],\"is_error\":null,\"tool\":\"Task\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:20.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "a2",
+              "CallID": "toolu_2",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:5:block:0",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "a3",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "README.md has 74 words.",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:22.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u3",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:6",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "a3:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_3\"}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:22.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "u3",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-claude.jsonl:6",
+              "RawText": "{\"_line\":6,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"text\":\"README.md has 74 words.\",\"type\":\"text\"}],\"id\":\"msg_3\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"u3\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:22.000Z\",\"type\":\"assistant\",\"uuid\":\"a3\",\"version\":\"2.1.3\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        },
+        {
+          "NativeContext": {
+            "cli_version": "0.50.0",
+            "originator": "codex_cli_rs",
+            "source": {
+              "subagent": {
+                "thread_spawn": {
+                  "depth": 1,
+                  "parent_thread_id": "0199a000-0000-7000-8000-000000000001"
+                }
+              }
+            }
+          },
+          "NativeID": "install-1:att-claude:1-codex.jsonl",
+          "Provider": "codex",
+          "Model": "gpt-5-codex",
+          "Effort": "low",
+          "Account": "local",
+          "ParentNativeID": "0199a000-0000-7000-8000-000000000001",
+          "Origin": "$ROOT/002/transcripts/task-claude/1-codex.jsonl",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-01T10:00:08.000Z",
+          "EndedAt": "2026-09-01T10:00:10.000Z",
+          "AgentDepth": 1,
+          "Harness": "codex/codex_cli_rs",
+          "HarnessVersionFirst": "0.50.0",
+          "HarnessVersionLast": "0.50.0",
+          "Aliases": [
+            "0199a000-0000-7000-8000-000000000002"
+          ],
+          "Messages": [
+            {
+              "NativeID": "line-3",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "74 words.",
+              "Model": "gpt-5-codex",
+              "Effort": "low",
+              "CreatedAt": "2026-09-01T10:00:10.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-codex.jsonl:3",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        }
+      ],
+      "WorkItems": [
+        {
+          "explicit": true,
+          "source_id": "task-claude",
+          "status": "done",
+          "title": "Count the words"
+        }
+      ],
+      "Attempts": [
+        {
+          "attempt_no": 1,
+          "configuration": {
+            "agent_configuration": "claude-opus",
+            "effort": "high",
+            "executor": "claude",
+            "harness_id": "claude",
+            "model": "claude-opus-4-5"
+          },
+          "ended_at": "2026-09-20T10:40:00.000Z",
+          "failure": null,
+          "instructions": "",
+          "result": null,
+          "source_id": "att-claude",
+          "source_ref": "wt-1",
+          "started_at": "2026-09-20T10:30:05.000Z",
+          "validation": "succeeded"
+        }
+      ],
+      "Handoffs": [],
+      "Metrics": [
+        {
+          "coverage": 1,
+          "extractor_version": "tl1-registry-v1",
+          "name": "reported_cost",
+          "status": "reported-incremental",
+          "unit": "USD",
+          "value": 0.12
+        }
+      ],
+      "Changes": null,
+      "PRs": []
+    },
+    {
+      "SourceID": "install-1:task-human",
+      "SourceKind": "tl1",
+      "Title": "Recover review",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "",
+      "ActivityAt": "2026-09-20T10:22:00.000Z",
+      "Location": "$ROOT/002/repo",
+      "Repository": {
+        "display_name": "fixture",
+        "local_locations": [
+          "$ROOT/002/repo"
+        ]
+      },
+      "Metadata": {
+        "base_ref": "base",
+        "branch": "candidate/1",
+        "custody_version": null,
+        "flavor": "human-escalation",
+        "head_ref": "head",
+        "lifecycle": "active",
+        "status": "pending",
+        "terminal": false,
+        "version": "v1"
+      },
+      "Conversations": [],
+      "WorkItems": [
+        {
+          "explicit": true,
+          "source_id": "task-human",
+          "status": "pending",
+          "title": "Recover review"
+        }
+      ],
+      "Attempts": [],
+      "Handoffs": [],
+      "Metrics": [],
+      "Changes": null,
+      "PRs": []
+    },
+    {
+      "SourceID": "install-1:task-impl",
+      "SourceKind": "tl1",
+      "Title": "Implement parser fix",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "ready",
+      "ActivityAt": "2026-09-20T10:20:00.000Z",
+      "Location": "$ROOT/002/repo",
+      "Repository": {
+        "display_name": "fixture",
+        "local_locations": [
+          "$ROOT/002/repo"
+        ]
+      },
+      "Metadata": {
+        "base_ref": "base",
+        "branch": "candidate/1",
+        "custody_version": null,
+        "flavor": "implement",
+        "head_ref": "head",
+        "lifecycle": "terminal",
+        "status": "done",
+        "terminal": true,
+        "version": "v2"
+      },
+      "Conversations": [
+        {
+          "NativeID": "install-1:att-impl:1-codex.jsonl",
+          "Provider": "codex",
+          "Model": "gpt-5.6-terra",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/transcripts/task-impl/1-codex.jsonl",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-20T10:00:05.000Z",
+          "EndedAt": "2026-09-20T10:20:00.000Z",
+          "Harness": "tl1",
+          "Aliases": [
+            "thread-1"
+          ],
+          "Messages": [
+            {
+              "NativeID": "item_0",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "Implementing the fix.",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-impl/1-codex.jsonl:3",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_1:call",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"command\":\"go test ./...\"},\"tool\":\"shell\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_1",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-impl/1-codex.jsonl:4",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_1:result",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"FAIL\",\"exit_code\":1,\"is_error\":true,\"tool\":\"shell\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_1",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-impl/1-codex.jsonl:4",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_2:call",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"changes\":[{\"kind\":\"update\",\"path\":\"a.go\"}]},\"tool\":\"apply_patch\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_2",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-impl/1-codex.jsonl:5",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_2:result",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"completed\",\"is_error\":false,\"tool\":\"apply_patch\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_2",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-impl/1-codex.jsonl:5",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "turn-1:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cached_input_tokens\":900000,\"input_tokens\":1000000,\"output_tokens\":20000,\"reasoning_output_tokens\":5000}}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-impl/1-codex.jsonl:6",
+              "RawText": "{\"type\":\"turn.completed\",\"usage\":{\"cached_input_tokens\":900000,\"input_tokens\":1000000,\"output_tokens\":20000,\"reasoning_output_tokens\":5000}}",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        }
+      ],
+      "WorkItems": [
+        {
+          "explicit": true,
+          "source_id": "task-impl",
+          "status": "done",
+          "title": "Implement parser fix"
+        }
+      ],
+      "Attempts": [
+        {
+          "attempt_no": 1,
+          "configuration": {
+            "agent_configuration": "codex-terra-high",
+            "effort": "high",
+            "executor": "codex",
+            "harness_id": "codex",
+            "model": "gpt-5.6-terra"
+          },
+          "ended_at": "2026-09-20T10:20:00.000Z",
+          "failure": null,
+          "instructions": "",
+          "result": null,
+          "source_id": "att-impl",
+          "source_ref": "wt-1",
+          "started_at": "2026-09-20T10:00:05.000Z",
+          "validation": "succeeded"
+        }
+      ],
+      "Handoffs": [],
+      "Metrics": [],
+      "Changes": null,
+      "PRs": []
+    },
+    {
+      "SourceID": "install-1:task-review",
+      "SourceKind": "tl1",
+      "Title": "Review parser fix",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "runtime_error",
+      "ActivityAt": "2026-09-20T10:21:04.000Z",
+      "Location": "$ROOT/002/repo",
+      "Repository": {
+        "display_name": "fixture",
+        "local_locations": [
+          "$ROOT/002/repo"
+        ]
+      },
+      "Metadata": {
+        "base_ref": "base",
+        "branch": "candidate/1",
+        "custody_version": null,
+        "flavor": "review",
+        "head_ref": "head",
+        "lifecycle": "terminal",
+        "status": "done",
+        "terminal": true,
+        "version": "v1"
+      },
+      "Conversations": [],
+      "WorkItems": [
+        {
+          "explicit": true,
+          "source_id": "task-review",
+          "status": "done",
+          "title": "Review parser fix"
+        }
+      ],
+      "Attempts": [
+        {
+          "attempt_no": 1,
+          "configuration": {
+            "agent_configuration": "codex-terra-high",
+            "effort": "high",
+            "executor": "codex",
+            "harness_id": "codex",
+            "model": "gpt-5.6-terra"
+          },
+          "ended_at": "2026-09-20T10:21:04.000Z",
+          "failure": "codex exited with code 1: Reading additional input from stdin...\nNot inside a trusted directory and --skip-git-repo-check was not specified.",
+          "instructions": "",
+          "result": null,
+          "source_id": "att-review",
+          "source_ref": "wt-1",
+          "started_at": "2026-09-20T10:21:02.000Z",
+          "validation": "succeeded"
+        }
+      ],
+      "Handoffs": [],
+      "Metrics": [],
+      "Changes": null,
+      "PRs": []
+    }
+  ]
+}

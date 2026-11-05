@@ -1355,9 +1355,11 @@ func TestAppCSPAllowsOnlyLocalBlobFormulaWorkers(t *testing.T) {
 	}
 }
 
-func TestConductorSemanticEventsRepositoryAndPR(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	root := t.TempDir()
+// conductorSemanticFixture writes a Conductor database below root: an archived
+// workspace on a branch of a repository, whose Claude session delegated to a
+// subagent, edited a file, opened a PR and reported its usage.
+func conductorSemanticFixture(t *testing.T, root string) {
+	t.Helper()
 	repository := filepath.Join(root, "repo")
 	worktree := filepath.Join(repository, ".conductor", "kiev")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
@@ -1391,6 +1393,12 @@ CREATE TABLE session_messages (id TEXT PRIMARY KEY,session_id TEXT,role TEXT,con
 		}
 	}
 	db.Close()
+}
+
+func TestConductorSemanticEventsRepositoryAndPR(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	conductorSemanticFixture(t, root)
 	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: root, Account: "local", Enabled: true}
 	adapter, err := MakeAdapter(source)
 	if err != nil {
