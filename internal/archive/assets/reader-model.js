@@ -603,7 +603,7 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
     if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
       const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
       options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:`${count} event${count===1?'':'s'} in ${views.length} of ${summary.messages_read??0} agent messages read`,
-        legend:EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)}))});continue}
+        legend:[...EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)})),...(views.flat().some(event=>event.target)?[{name:'Earlier text an event points back at (numbered pairs)',className:'event-target-legend'}]:[])]});continue}
     const summary=conversation?.labels;if(!summary)continue;
     const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
     options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',

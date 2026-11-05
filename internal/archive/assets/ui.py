@@ -239,6 +239,7 @@ APP_HTML = r'''<!doctype html>
     .show-events mark.event-target{text-decoration:underline 2px dashed var(--event-link);text-underline-offset:3px;background:color-mix(in srgb,var(--event-link) 7%,transparent);border-radius:2px;cursor:pointer;-webkit-box-decoration-break:clone;box-decoration-break:clone}
     .show-events [data-agent-events] .agent-event.is-linked{cursor:pointer;text-decoration:underline 1.5px solid color-mix(in srgb,var(--event-hue) 70%,transparent);text-underline-offset:3px}
     .event-link-n,.event-link-notes,.event-link-gutter{display:none}
+    .event-legend-item.event-target-legend i{background:color-mix(in srgb,var(--event-link) 7%,transparent);border:0;border-bottom:2px dashed var(--event-link);border-radius:0}
     .show-events .event-link-n{display:inline-block;min-width:15px;height:15px;padding:0 3px;margin:0 1px;border-radius:8px;font:700 9px/15px var(--sans);text-align:center;vertical-align:super;cursor:pointer;background:var(--event-hue);color:var(--event-halo);font-style:normal}
     .show-events .event-link-n.is-target{background:var(--panel);color:var(--event-link);box-shadow:inset 0 0 0 1.5px var(--event-link)}
     .show-events .event-link-notes{display:flex;flex-wrap:wrap;gap:4px 6px;margin:6px 0 2px}
