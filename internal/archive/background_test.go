@@ -11,7 +11,99 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
 )
+
+func TestLabelerDeviceSettings(t *testing.T) {
+	catalog, config := testCatalog(t)
+	workerDir := t.TempDir()
+	worker := filepath.Join(workerDir, "worker")
+	probeCount := filepath.Join(workerDir, "probes")
+	writeWorker := func(reply string) {
+		t.Helper()
+		// A capability probe must not load a model or start the framed worker.
+		script := "#!/bin/sh\ncase \" $* \" in *' --probe-mlx '*) ;; *) exit 1;; esac\necho probe >> '" + probeCount + "'\nprintf '%s\\n' '" + reply + "'\n"
+		if err := os.WriteFile(worker, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeWorker(`{"available":true}`)
+	model := func() string {
+		dir := t.TempDir()
+		for _, name := range []string{"model.fp32.onnx", "model.int8.onnx", "weights.safetensors"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("stand-in"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		man := labelrt.Manifest{Files: map[string]string{"onnx_fp32": "model.fp32.onnx", "onnx_int8": "model.int8.onnx"}, MLX: &labelrt.MLXArtifact{Weights: "weights.safetensors"}}
+		raw, _ := json.Marshal(man)
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	config.Labels = LabelerSettings{Worker: worker, Backend: "auto", ModelDir: model(), Variant: "fp32", Threads: 4}
+	config.AgentEvents = AgentEventSettings{ModelDir: model(), Variant: "int8", Threads: 2}
+	server := testServer(t, config, catalog)
+	check := func(document map[string]any, device string, confirmed, threads bool) {
+		t.Helper()
+		execution := document["execution"].(labelerDevice)
+		choices, _ := document["thread_choices"].([]int)
+		if execution.Device != device || execution.Confirmed != confirmed || document["threads_can_change"] != threads || (len(choices) > 0) != (device == "cpu") {
+			t.Fatalf("device=%s confirmed=%t threads=%t: %+v", device, confirmed, threads, document)
+		}
+		if execution.Status == "" || execution.Detail == "" {
+			t.Fatalf("unexplained device: %+v", execution)
+		}
+	}
+	check(server.labelsSettings(), "gpu", false, false)
+	if server.labelsSettings()["notice"] != "" {
+		t.Fatal("routine off status became a notice")
+	}
+	check(server.agentEventsSettings(t.Context()), "cpu", false, true)
+	check(server.labelsSettings(), "gpu", false, false)
+	probes, err := os.ReadFile(probeCount)
+	if err != nil || strings.Count(string(probes), "probe") != 1 {
+		t.Fatalf("uncached GPU probes: %s %v", probes, err)
+	}
+	settings := server.Config().Labels
+	path := filepath.Join(settings.ModelDir, "model.fp32.onnx")
+	storeDevice := func(device string) {
+		catalog.labelerWorkers.Store(path, labelerWorkerObservation{labelerDeviceKey(settings, path), func() labelrt.WorkerInfo { return labelrt.WorkerInfo{Device: device} }})
+	}
+	// Confirmed CPU fallback overrides a successful preflight GPU check.
+	storeDevice("cpu")
+	check(server.labelsSettings(), "cpu", true, true)
+	storeDevice("gpu")
+	check(server.labelsSettings(), "gpu", true, false)
+	// Replacing the worker invalidates observations and cached capability checks.
+	writeWorker(`{"available":false,"reason":"unsupported OS"}`)
+	check(server.labelsSettings(), "cpu", false, true)
+	setBackend := func(backend string) {
+		server.configMu.Lock()
+		server.config.Labels.Backend = backend
+		server.configMu.Unlock()
+	}
+	setBackend("mlx")
+	check(server.labelsSettings(), "unavailable", false, false)
+	setBackend("auto")
+	writeWorker(`{"available":null,"reason":"older engine"}`)
+	check(server.labelsSettings(), "unknown", false, false)
+	setBackend("cpu")
+	check(server.labelsSettings(), "cpu", false, true)
+	server.configMu.Lock()
+	server.config.Labels.ModelDir = ""
+	server.config.Labels.Enabled = true
+	server.configMu.Unlock()
+	check(server.labelsSettings(), "unknown", false, false)
+	if server.labelsSettings()["notice"] == "" {
+		t.Fatal("a pending download lost its notice")
+	}
+	if catalog.hasLabelsLedger() {
+		t.Fatal("reading device settings ran labeling")
+	}
+}
 
 // Background Processing (docs/background-work.md §11): where measured cost
 // places an item, when each cadence's work is due, the pass that runs it,

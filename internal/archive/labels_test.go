@@ -117,41 +117,50 @@ func labelerHelloThreads(t *testing.T, path string) []int {
 }
 
 func TestLabelsLiveThreadTarget(t *testing.T) {
-	catalog := labeledCatalog(t)
-	settings := labelsTestSettings(t, "ok")
-	settings.MaxBatch = 1 // Enough batches to change targets during one run.
-	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
-	t.Setenv(labelertest.FakeHelloEnv, hellos)
-	override(t, &labelerThreadCheck, time.Duration(0))
-	var observed []int
-	stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{ThreadTarget: func() LabelerSettings {
-		if catalog.labelers != nil {
-			threads, _, _ := catalog.labelers.Usage()
-			if len(observed) == 0 || observed[len(observed)-1] != threads {
-				observed = append(observed, threads)
+	for _, device := range []string{"", "cpu", "gpu"} {
+		t.Run("device="+device, func(t *testing.T) {
+			t.Setenv(labelertest.FakeDeviceEnv, device)
+			catalog := labeledCatalog(t)
+			settings := labelsTestSettings(t, "ok")
+			settings.MaxBatch = 1 // Enough batches to change targets during one run.
+			hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+			t.Setenv(labelertest.FakeHelloEnv, hellos)
+			override(t, &labelerThreadCheck, time.Duration(0))
+			var observed []int
+			stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{ThreadTarget: func() LabelerSettings {
+				if catalog.labelers != nil {
+					threads, _, _ := catalog.labelers.Usage()
+					if len(observed) == 0 || observed[len(observed)-1] != threads {
+						observed = append(observed, threads)
+					}
+				}
+				target := settings
+				target.Threads = 1
+				if slices.Contains(observed, 1) {
+					target.Threads = 4
+				}
+				if slices.Contains(observed, 4) {
+					target.Threads = 2
+				}
+				return target
+			}})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		target := settings
-		target.Threads = 1
-		if slices.Contains(observed, 1) {
-			target.Threads = 4
-		}
-		if slices.Contains(observed, 4) {
-			target.Threads = 2
-		}
-		return target
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !stats.Complete || stats.MessagesFailed != 0 || stats.ItemsLabeled != len(liveItems(t, catalog)) || labelCount(t, catalog, "") != stats.MessagesLabeled {
-		t.Fatalf("changing cores lost work: %+v", stats)
-	}
-	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{1, 4, 2}) {
-		t.Fatalf("worker thread targets: %v", threads)
-	}
-	if stats.Restarts != 0 {
-		t.Fatalf("deliberate core changes counted as crashes: %+v", stats)
+			if !stats.Complete || stats.MessagesFailed != 0 || stats.ItemsLabeled != len(liveItems(t, catalog)) || labelCount(t, catalog, "") != stats.MessagesLabeled {
+				t.Fatalf("changing cores lost work: %+v", stats)
+			}
+			want := []int{1, 4, 2}
+			if device == "gpu" {
+				want = []int{1}
+			}
+			if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, want) {
+				t.Fatalf("worker thread targets: %v", threads)
+			}
+			if stats.Restarts != 0 {
+				t.Fatalf("deliberate core changes counted as crashes: %+v", stats)
+			}
+		})
 	}
 }
 

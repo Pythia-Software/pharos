@@ -43,7 +43,7 @@ runtime instead, and comes first:
 | `labels_backend` | — | `auto` (default), `cpu`, or `mlx`; shared by message labels and agent events. MLX needs a verified FP32 companion ([Apple silicon GPU](#apple-silicon-gpu)) |
 | `labels_mlx_runtime` | `PHAROS_MLX_LIBRARY` | native MLX engine override; default `mlx/libpharos_mlx.dylib` beside the worker |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → Cores |
+| `labels_threads` | — | CPU intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → CPU threads; ignored by MLX GPU inference |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
 | `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
@@ -168,6 +168,43 @@ Admission conservatively reserves this capacity for eligible `auto` sessions
 even when startup subsequently falls back to CPU. Power, cancellation, restart
 and idle-expiry policies still apply. Batches respect the worker's 256-row and 16,384
 padded-token limits; Kestrel accepts 512 tokens and Jayhawk 768 per row.
+
+### Device status and GPU capacity
+
+Settings reports the execution device separately for Message labels and Agent
+events. Before a run, it combines the selected model variant with the worker's
+`--probe-mlx` capability check (OS, worker build, native engine and Metal device).
+The probe loads no model and runs no inference; results are cached for a minute
+and invalidated when the worker or engine changes. The label is **expected** until
+the worker's Ready handshake confirms its device. An automatic CPU fallback is
+shown explicitly, including after an idle worker exits. Replacing the model,
+worker or runtime invalidates that observation. Missing models and older/custom
+workers that cannot report capabilities show an unconfirmed device instead of
+guessing. A forced `mlx` configuration that cannot use GPU shows unavailable.
+
+**CPU threads** appears only for expected or confirmed CPU execution. The saved
+CPU target is retained for fallback. Changing it does not restart an active GPU
+worker; CPU fallback workers still retune. Threads remain a limit on ONNX
+intra-op parallelism, not an assignment of physical CPU cores or a cap on the
+whole process's CPU usage.
+
+There is no GPU core-count or utilization-percentage control. This engine submits
+compiled operations to the default Metal stream; MLX's
+[streams](https://ml-explore.github.io/mlx/build/html/usage/using_streams.html)
+choose execution queues, while its
+[memory limit](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
+is an allocation guideline. Neither assigns a share of GPU cores. Increasing
+that memory limit would not by itself request more compute.
+
+Higher throughput can be investigated through batching and the CPU preparation
+pipeline. The current defaults allow 64 rows and 16,384 padded tokens per batch,
+two outstanding batches, and one GPU worker shared across models. The engine
+accepts up to 256 rows, but the token ceiling still applies. Increasing rows can
+help short inputs; longer inputs already fill the token budget. Extra workers or
+streams compete for the same device and memory and need measurement before
+changing admission policy. Keep the existing limits and automatic scheduling
+until representative end-to-end measurements show better throughput without
+unacceptable memory use or responsiveness. No GPU intensity slider is exposed.
 
 The optional Go integration test can recheck both native classifiers against
 ONNX Runtime with short and maximum-length mixed batches, output selection,
@@ -490,13 +527,14 @@ schedule rather than one of their own:
   `labels_memory_budget_mb` applies to both. The runtime's budget is set
   before workers start (`Manager.SetBudget`): a smaller one stops idle workers
   over it at once.
-- **Cores is a live target.** Message labels and agent events read their
+- **CPU threads is a live target.** Message labels and agent events read their
   Settings targets when workers start and every two minutes during an active
   run. When the target changes, message labels finish their in-flight batches
   and agent events finish their current scoring chunk, then replace the
   workers with the new thread count. Queued work and finished results are
   kept, and no app relaunch is needed. The shared budget and battery cap
-  still apply. Command-line runs keep the thread count they started with.
+  still apply. GPU workers ignore thread changes; the CPU target remains saved
+  for fallback. Command-line runs keep the thread count they started with.
 - Low battery (under 20%) or Low Power Mode makes the item wait, as it does
   all background work, unless you Run now.
 

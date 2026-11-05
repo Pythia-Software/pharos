@@ -22,6 +22,16 @@ test('Settings switches keep keyboard focus and their saved state across Setting
     }, enabled);
     if (enabled) await shot('enabled');
   }
+  const threads = page.getByRole('combobox', {name:'Agent events (preview) CPU threads', exact:true});
+  await threads.focus();
+  const savedThreads = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
+  await threads.selectOption('2');
+  await savedThreads;
+  await page.waitForFunction(() => {
+    const select = document.querySelector('[data-focus-key="agentEvents:threads"]');
+    return select?.value === '2' && document.activeElement === select;
+  });
+  await shot('labeling');
   await page.evaluate(() => window.pharosNavigate('/settings/mcp'));
   await page.locator('#mcpSettingsPage .mcp-setup-grid').waitFor();
   const mcp = page.getByRole('switch', { name: 'Enable MCP', exact: true });

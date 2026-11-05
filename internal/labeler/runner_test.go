@@ -144,6 +144,8 @@ func TestManagerSetBudget(t *testing.T) {
 }
 
 func TestManagerGPUAdmission(t *testing.T) {
+	// Auto can reserve the GPU before startup and still select CPU fallback.
+	t.Setenv("PHAROS_LABELER_FAKE_DEVICE", "cpu")
 	first, err := LoadModel(writeModelDir(t, nil), "int8")
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +165,9 @@ func TestManagerGPUAdmission(t *testing.T) {
 	}
 	if threads, memory, runners := manager.Usage(); threads != 1 || memory != 3072 || runners != 1 {
 		t.Fatalf("GPU reservation: %d threads %d MB %d runners", threads, memory, runners)
+	}
+	if !a.UsesCPUThreads() {
+		t.Fatal("GPU reservation hid the actual CPU fallback thread control")
 	}
 	if _, _, err := manager.Runner(t.Context(), second, cfg); !errors.Is(err, ErrBudget) {
 		t.Fatalf("competing GPU worker admitted: %v", err)
