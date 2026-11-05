@@ -879,6 +879,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			}
 		}
 	}
+	unclaimed := record.Conversations
 	if err := claimClaudeUsage(tx, &record); err != nil {
 		return 0, 0, err
 	}
@@ -925,8 +926,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := recordOriginObservation(tx, conversationID, host, record.SourceKind, conversation); err != nil {
 			return 0, 0, err
 		}
-		// What the source gave is what a delivery checkpoint matches.
-		delivered := conversation
+		// What the source gave is what a delivery checkpoint matches, before
+		// another conversation's claim on its replies.
+		delivered := unclaimed[index]
 		if conversation.Coverage == "partial" {
 			if conversation.Messages, err = keepStoredMessages(ctx, tx, conversationID, conversation); err != nil {
 				return 0, 0, err

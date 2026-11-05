@@ -178,7 +178,6 @@ func wantLibraryTokens(t *testing.T, catalog *Catalog, want int64) {
 
 func TestClaudeForkedSubagentCountsItsParentsRepliesOnce(t *testing.T) {
 	useHost(t, "host-a")
-	catalog, _ := testCatalog(t)
 	original := []string{
 		claudeTurn("s0", "p1", "", "user", "Investigate", nil),
 		claudeReply("s0", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
@@ -189,19 +188,24 @@ func TestClaudeForkedSubagentCountsItsParentsRepliesOnce(t *testing.T) {
 		strings.ReplaceAll(original[1], `"sessionId":"s0"`, `"sessionId":"s1"`),
 	}
 	// A forked subagent starts with a copy of its parent's conversation; a
-	// sidechain replays it under new request IDs.
-	fork := []string{
-		claudeReply("s1", "a1", "p1", "msg_1", "req_1b", text("Looking"), usage(100, 10)),
-		claudeReply("s1", "f1", "a1", "msg_2", "req_2", text("Found it"), usage(200, 20)),
+	// sidechain replays it under new request IDs, and its copy can be the
+	// fuller record of the reply, which then counts in neither s0 nor s1.
+	for _, output := range []int{10, 20} {
+		catalog, _ := testCatalog(t)
+		fork := []string{
+			claudeReply("s1", "a1", "p1", "msg_1", "req_1b", text("Looking"), usage(100, output)),
+			claudeReply("s1", "f1", "a1", "msg_2", "req_2", text("Found it"), usage(200, 20)),
+		}
+		source := claudeSessionFiles(t, map[string][]string{"s0.jsonl": original, "s1.jsonl": parent, "s1/subagents/agent-f.jsonl": withSidechain(fork)})
+		ingestSource(t, catalog, source)
+		want := int64(100 + output + 220)
+		wantLibraryTokens(t, catalog, want)
+		unsettle(t, catalog)
+		if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 2 {
+			t.Fatalf("repair = %d, %v", repaired, err)
+		}
+		wantLibraryTokens(t, catalog, want)
 	}
-	source := claudeSessionFiles(t, map[string][]string{"s0.jsonl": original, "s1.jsonl": parent, "s1/subagents/agent-f.jsonl": withSidechain(fork)})
-	ingestSource(t, catalog, source)
-	wantLibraryTokens(t, catalog, 110+220)
-	unsettle(t, catalog)
-	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 2 {
-		t.Fatalf("repair = %d, %v", repaired, err)
-	}
-	wantLibraryTokens(t, catalog, 110+220)
 }
 
 // unsettle makes catalog a library indexed before copies were settled, whose
@@ -316,6 +320,29 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 			wantLibraryTokens(t, catalog, want)
 		})
 	}
+	// s2, saved from a catalog that never held s1, counted s1's reply there;
+	// recovered beside s1, it no longer does.
+	t.Run("recovered", func(t *testing.T) {
+		useHost(t, "host-a")
+		earlier, _ := testCatalog(t)
+		ingestSource(t, earlier, claudeSessionFiles(t, map[string][]string{"s2.jsonl": resumed}))
+		tx := seedTx(t, earlier.DB)
+		var workspaceID string
+		if err := tx.QueryRow("SELECT id FROM workspaces").Scan(&workspaceID); err != nil {
+			t.Fatal(err)
+		}
+		envelope, err := exportHistoryRecovery(t.Context(), tx, historyUnit{Kind: "catalog-workspace", Original: workspaceID}, "")
+		tx.Rollback()
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, _ := testCatalog(t)
+		ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": original}))
+		if outcome, err := catalog.applyHistoryRecovery(t.Context(), envelope); err != nil || outcome != "catalog-derived" {
+			t.Fatal(outcome, err)
+		}
+		wantLibraryTokens(t, catalog, 110+44+220)
+	})
 }
 
 func TestClaudeGatewayReplySharingAnIDStaysOnItsBranch(t *testing.T) {

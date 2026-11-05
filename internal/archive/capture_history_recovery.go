@@ -496,6 +496,12 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 				return err
 			}
 		}
+		// The usage restored above is what the workspace's replies counted in
+		// the catalog it was saved from, where another conversation here may
+		// count one of them, or none does.
+		if err = rederiveRecoveredClaudeUsage(ctx, tx, e.Record, id); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, "UPDATE workspaces SET preservation_completeness='catalog-derived' WHERE id=?", id); err != nil {
 			return err
 		}

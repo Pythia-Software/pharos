@@ -14,16 +14,16 @@ import (
 // is resumed or forked: the copy keeps the reply's uuid, time, message ID and
 // request ID, and takes the new session's ID, so nothing in it says which is
 // the original. Library totals count the reply once. Every Claude Code
-// conversation's replies are listed in claude_usage_copies by account,
-// message ID and request ID, with what its records of each say now (copy_of);
+// conversation's replies are listed in claude_usage_copies by account and
+// message ID (claudeCrossKey), with what its records of each say now (copy_of);
 // of the conversations holding one, the one that started first (then by
 // native ID) counts it, unless another holds a fuller record of it, and the
 // others keep their records as copies of it
 // (wrapUsageCopy), which count nothing. The owner does not depend on which
 // conversation was indexed first, so a library rebuilt in another order, or
-// on another Mac, counts the same. A reply without a request ID is not
-// matched across sessions: a gateway can reuse one message ID for every
-// reply. Copies within one session are settled by its parse
+// on another Mac, counts the same. A gateway can reuse one message ID for
+// every reply, so its replies are matched by request ID too, and not at all
+// without one. Copies within one session are settled by its parse
 // (dedupeClaudeGroupUsage).
 //
 // Only Claude Code's own records take part. Conductor and TL1 hold Claude
@@ -59,23 +59,16 @@ func claudeUsageOwner(holders []claudeUsageHolder) claudeUsageHolder {
 }
 
 // claudeCrossKey is the key of a usage record's reply across sessions, or ""
-// for a record that is not a reply's usage or has no request ID, with the
-// tokens the record reports.
+// for a record that is not a reply's usage, with the tokens the record
+// reports. An Anthropic message ID names one reply in every session, whatever
+// request ID a sidechain gave its copy; another message ID needs its request
+// ID, and is not matched without one.
 func claudeCrossKey(account string, m MessageRecord) (string, int64) {
-	if !claudeUsageRecord(m) {
+	keys, tokens := claudeUsageKeys(m)
+	if len(keys) == 0 {
 		return "", 0
 	}
-	raw, _ := unwrapUsageCopy(m.RawText)
-	event := map[string]any{}
-	if json.Unmarshal([]byte(raw), &event) != nil {
-		return "", 0
-	}
-	message := mapValue(event["message"])
-	id, request := firstString(message["id"]), firstString(event["requestId"])
-	if id == "" || request == "" {
-		return "", 0
-	}
-	return account + "\x00" + id + "\x00" + request, integer(normalizeTokenCounts(mapValue(message["usage"]))["total_tokens"])
+	return account + "\x00" + keys[len(keys)-1], tokens
 }
 
 // usageCopyOf names the conversation a copy's record counts in, or "" when m
@@ -173,7 +166,8 @@ func claudeUsageHolders(tx *sql.Tx, keys []string) (map[string][]claudeUsageHold
 
 // claimClaudeUsage makes the usage records of a Claude Code record's
 // conversations copies where another conversation owns their reply, and its
-// own where none does, before they are written.
+// own where none does, before they are written. It leaves the conversations
+// and messages record had as they were: they are what the source gave.
 func claimClaudeUsage(tx *sql.Tx, record *WorkspaceRecord) error {
 	if record.SourceKind != "claude" {
 		return nil
@@ -213,8 +207,10 @@ func claimClaudeUsage(tx *sql.Tx, record *WorkspaceRecord) error {
 		}
 		owners[key] = claudeUsageOwner(list).native
 	}
+	record.Conversations = slices.Clone(record.Conversations)
 	for index, keys := range byIndex {
 		conversation := &record.Conversations[index]
+		conversation.Messages = slices.Clone(conversation.Messages)
 		for m := range conversation.Messages {
 			message := &conversation.Messages[m]
 			key, _ := claudeCrossKey(conversation.Account, *message)
@@ -539,6 +535,42 @@ func repairClaudeAdvisorUsage(tx *sql.Tx, conversationID string, conversation *C
 	}
 	conversation.Messages = messages
 	return writer != nil, nil
+}
+
+// rederiveRecoveredClaudeUsage derives a recovered Claude Code workspace's
+// usage again where its stored usage records differ from those it was saved
+// with (saved): writing them settled their replies' copies against the
+// conversations this catalog holds. Otherwise the usage it was saved with
+// stands.
+func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved WorkspaceRecord, workspaceID string) error {
+	if saved.SourceKind != "claude" {
+		return nil
+	}
+	records := map[string]string{}
+	for _, conversation := range saved.Conversations {
+		for _, message := range conversation.Messages {
+			if claudeUsageRecord(message) {
+				records[conversation.NativeID+"\x00"+message.NativeID] = message.RawText
+			}
+		}
+	}
+	conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	changed := map[string]bool{}
+	for index, conversation := range conversations {
+		for _, message := range conversation.Messages {
+			if claudeUsageRecord(message) && message.RawText != records[conversation.NativeID+"\x00"+message.NativeID] {
+				changed[ids[index]] = true
+				break
+			}
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	return rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed)
 }
 
 // rebuildWorkspaceUsage derives a workspace's sessions, hourly usage and token

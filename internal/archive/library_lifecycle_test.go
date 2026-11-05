@@ -1726,6 +1726,35 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 			t.Fatal("delivered rewrite returned to pending")
 		}
 	})
+	t.Run("Claude replies another session claimed", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		useHost(t, currentHost().ID)
+		original := []string{
+			claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+			claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
+		}
+		resumed := []string{
+			strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s2"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+			strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
+		}
+		source := claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed})
+		a.Sources = []SourceConfig{source}
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		// s2's copy of s1's reply counted nothing in the library it reached.
+		writeSourceFile(t, filepath.Join(source.Path, "-p", "s2", "subagents", "agent-x.jsonl"),
+			strings.Join(withSidechain([]string{claudeReply("s2", "x1", "", "msg_9", "req_9", text("Checked"), usage(50, 5))}), "\n")+"\n")
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if n := catalogCount(t, a, "conversations"); n != 1 {
+			t.Fatalf("%d conversations pending, want the new subagent alone", n)
+		}
+	})
 	a, b := lifecycleLibraries(t)
 	path := filepath.Join(t.TempDir(), "history.json")
 	writeSourceFile(t, path, `{"workspaces":[{"id":"pending-session","title":"Pending","conversations":[{"id":"pending-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"pending text"}]},{"id":"unchanged-chat","provider":"codex","messages":[{"id":"q2","role":"user","text":"already delivered sibling"}]}]}]}`)
