@@ -13,6 +13,17 @@ import (
 	"time"
 )
 
+func TestTL1DollarDisplay(t *testing.T) {
+	for value, want := range map[float64]string{
+		0: "$0.00", 0.0001: "$0.00", 12.3456: "$12.35", 99.99: "$99.99",
+		99.995: "$100", 100: "$100", 1234.56: "$1235", -1234.56: "$-1235", -0.0001: "$0.00",
+	} {
+		if got := tl1Dollars(value); got != want {
+			t.Errorf("tl1Dollars(%v) = %q, want %q", value, got, want)
+		}
+	}
+}
+
 func TestClassifyTL1Error(t *testing.T) {
 	for _, test := range []struct{ text, class, signature, attribution string }{
 		{"worker wren died", "worker_died", "worker died", tl1AttributionInfrastructure},

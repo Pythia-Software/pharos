@@ -637,7 +637,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         metric("words", "Words typed", (usage?["human_words"] as? NSNumber).map { NumberFormatter.localizedString(from: $0, number: .decimal) })
         metric("tokens", "Tokens used", (usage?["tokens"] as? NSNumber).map { Self.compact($0.doubleValue) })
         metric("carbon", "Estimated CO₂e", (usage?["co2e_g"] as? NSNumber).map { Self.mass($0.doubleValue) })
-        metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { String(format: "$%.2f", $0.doubleValue) })
+        metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { Self.dollars($0.doubleValue) })
         let streaks = usage?["streaks"] as? [String: String]
         metric("streak", "Your streak", streaks?["you"])
         metric("agent_streak", "Agent streak", streaks?["agents"])
@@ -818,6 +818,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     static func ago(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+    static func dollars(_ value: Double, locale: Locale = .current) -> String {
+        guard value.isFinite else { return "" }
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.minimumFractionDigits = abs(value) >= 99.995 ? 0 : 2
+        formatter.maximumFractionDigits = formatter.minimumFractionDigits
+        formatter.roundingMode = .halfUp
+        return formatter.string(from: NSNumber(value: abs(value) < 0.005 ? 0 : value)) ?? ""
     }
     static func compact(_ value: Double) -> String {
         scaled(value, units: ["", "k", "M", "B", "T"], separator: "")

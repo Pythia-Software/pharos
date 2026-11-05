@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { CursorPagination } from "./cursor-pagination";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
@@ -165,13 +166,7 @@ export function formatted(value: number | null | undefined, unit = "count") {
   if (unit === "date")
     return localMetricDateTime.format(new Date(value));
   if (unit === "usd")
-    return value.toLocaleString(undefined, {
-      style: "currency",
-      currency: "USD",
-      ...(Math.abs(value) >= 1000
-        ? { notation: "compact", maximumSignificantDigits: 3 }
-        : { maximumFractionDigits: 2 }),
-    });
+    return formatUSD(value);
   if (Math.abs(value) >= 1000)
     return value.toLocaleString("en-US", {
       notation: "compact",
@@ -257,7 +252,9 @@ export function cellTitle(metric: Metric, spec: Spec) {
       ? ""
       : spec.unit === "date"
         ? `${localTime(metric.value)}\n`
-        : `${metric.value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${spec.unit}\n`;
+        : spec.unit === "usd"
+          ? `${formatUSD(metric.value)}\n`
+          : `${metric.value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${spec.unit}\n`;
   return `${exact}${spec.definition}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
 }
 
