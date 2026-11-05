@@ -7,6 +7,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { initiatorLabels } from "./habits-analysis-catalog";
 import { CreateDashboardCard } from "./create-dashboard-card";
 import { CalendarChart, DaysChart, PunchcardChart } from "./habits-charts";
+import { HabitsChartInspection, type HabitChartPoint } from "./habits-chart-inspection";
 import { habitsCardTitle, readHabitsCardView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
 import {
   defaultHabitsSettings, engagedGaps, formatClock, formatDay, formatGap, formatHours, habitsSettingsKey, healthStats,
@@ -184,11 +185,19 @@ function Automations({ data }: { data: HabitsSummary }) {
       <thead><tr><th scope="col">Started by</th><th scope="col">Kind</th><th scope="col">Runs</th><th scope="col">Days</th><th scope="col">Agent time</th><th scope="col">Cadence</th><th scope="col">Missed</th><th scope="col">Last run</th><th scope="col">Daily runs</th></tr></thead>
       <tbody>{data.automations.map(item => {
         const largest = Math.max(1, ...Object.values(item.daily));
+        const points: HabitChartPoint[] = days.filter(day => item.daily[day]).map(day => ({
+          key: day, heading: formatDay(day), selection: { day, automation: { initiator: item.initiator, label: item.label } },
+          rows: [{ label: "Runs started", value: item.daily[day].toLocaleString(), color: "var(--gold)", actors: ["automated"] }], detail: item.label,
+        }));
+        const byDay = new Map(points.map(point => [point.key, point]));
         return <tr key={`${item.initiator}:${item.label}`}>
           <th scope="row">{item.label}</th><td>{initiatorLabels[item.initiator] ?? item.initiator}</td><td>{item.runs.toLocaleString()}</td><td>{item.active_days}</td>
           <td>{item.agent_hours.toFixed(1)} h</td><td>{formatGap(item.median_gap_ms)}</td><td>{item.initiator === "scheduled" ? item.missed : "—"}</td>
           <td>{item.last_run ? new Date(item.last_run).toLocaleDateString() : "—"}</td>
-          <td><svg width={days.length * 2} height={14} aria-hidden="true">{days.map((day, index) => item.daily[day] ? <rect key={day} x={index * 2} y={14 - Math.max(2, 14 * item.daily[day] / largest)} width={2} height={Math.max(2, 14 * item.daily[day] / largest)} className="habits-strip" /> : null)}</svg></td>
+          <td><HabitsChartInspection chart={`habits-automation:${JSON.stringify([item.initiator, item.label])}`} data={data} points={points}>{mark =>
+            <svg width={days.length * 2} height={14} role="group" aria-label={`Daily runs for ${item.label}`}>{days.map((day, index) => item.daily[day] ? <rect key={day}
+              {...mark(byDay.get(day)!)} x={index * 2} y={14 - Math.max(2, 14 * item.daily[day] / largest)} width={2} height={Math.max(2, 14 * item.daily[day] / largest)} className="habits-strip" /> : null)}</svg>
+          }</HabitsChartInspection></td>
         </tr>;
       })}</tbody>
     </table></div>

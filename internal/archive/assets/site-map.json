@@ -38,7 +38,7 @@
    "query_layout": {"param":"query_layout","pages":["library","analyze/query/*","findings/table","findings/safety/table","settings/sync"],"kind":"json","description":"Query builder collapsed state by dataset or background table schema ID.","captureEntries":true},
    "reader_content": {"param":"reader_content","pages":["work","library"],"kind":"json","description":"Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."},
    "search_cards": {"param":"search_cards","pages":["library"],"kind":"json","description":"Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."},
-   "chart_pins": {"param":"chart_pins","pages":["analyze/*"],"kind":"json","description":"Pinned chart bucket keys by chart title. Hover is transient."},
+   "chart_pins": {"param":"chart_pins","pages":["analyze/*"],"kind":"json","description":"Pinned chart bucket keys by chart identity (dashboard title or Habits section and automation identity). Hover is transient."},
    "conveyor_paused": {"param":"conveyor_paused","pages":["home"],"kind":"boolean","description":"Pause the Home suggestion carousel."},
    "delegation_page": {"param":"delegation_page","pages":["work"],"kind":"text","description":"Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."},
    "card_window": {"param":"card_window","pages":["cards"],"kind":"enum","description":"Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.","values":["default","today","1","7","30","90"],"default":"default"},
@@ -121,7 +121,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 869
+   "controls": 870
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],

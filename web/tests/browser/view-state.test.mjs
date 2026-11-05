@@ -1016,6 +1016,51 @@ test('Habits panels and the standard dashboard restore their independent control
  await fresh.shot('habits-restored');
 });
 
+test('Habits standalone charts preview, pin, restore and open their records',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.habits-days-chart [role="button"]'}),{page}=app;
+ const tip=page.locator('.habits-chart-popover');
+ const focus=()=>page.evaluate(()=>document.activeElement?.getAttribute('aria-label')??document.activeElement?.tagName);
+ const charts=[
+  '.habits-days-chart',
+  '.habits-calendar',
+  '[data-pharos-target="section:habits-punchcard"] .habits-chart-inspection',
+  '.habits-automations',
+ ];
+ for(const selector of charts){
+  const mark=page.locator(selector).getByRole('button').first();
+  await mark.scrollIntoViewIfNeeded();
+  const before=path(page),focused=await focus();
+  await mark.hover();await tip.waitFor();
+  assert.equal(path(page),before,'hover leaves the URL alone');
+  assert.equal(await focus(),focused,'hover leaves focus alone');
+  assert.equal(await tip.getByRole('link').count(),0);
+  await mark.click();await tip.getByRole('link').first().waitFor();await app.settled();
+  const url=path(page),name=await mark.getAttribute('aria-label');
+  const fresh=await open(t,{url,ready:'.habits-chart-popover.pinned a'});
+  const restoredMark=fresh.page.locator(selector).getByRole('button',{name,exact:true});
+  assert.equal(await restoredMark.getAttribute('aria-pressed'),'true');
+  for(const key of ['Enter','Space']){
+   await restoredMark.focus();await restoredMark.press(key);await fresh.settled();
+   assert.equal(await fresh.page.locator('.habits-chart-popover.pinned').getByRole('link').first().evaluate(node=>node===document.activeElement),true,`${selector}: ${key} reaches the detail link of a restored pin`);
+  }
+  await page.mouse.move(1,1);assert.ok(await tip.isVisible(),'a pin survives leaving the mark');
+  await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
+ }
+ await page.setViewportSize({width:320,height:800});
+ const mark=page.locator('.habits-days-chart').getByRole('button').first();
+ await mark.scrollIntoViewIfNeeded();await mark.focus();await mark.press('Enter');
+ await tip.getByRole('link').first().waitFor();
+ assert.equal(await tip.getByRole('link').first().evaluate(node=>node===document.activeElement),true,'keyboard inspection reaches the detail link');
+ const box=await tip.boundingBox();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=320&&box.y+box.height<=800);
+ await app.shot('daily-schedule-details');
+ await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
+ assert.equal(await mark.evaluate(node=>node===document.activeElement),true,'Escape returns focus to the inspected mark');
+ await mark.press('Space');await tip.getByRole('link').first().waitFor();
+ await tip.getByRole('link').first().click();await page.locator('.usage-workspace-table').waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_data'),'rhythm');
+ assert.equal(new URL(page.url()).searchParams.get('analyze_mode'),'query');
+});
+
 test('native Message Labels dashboards and conversation cards share standard navigation and saved query presentation',{skip},async t=>{
  const definitions=new Map(),api={'PUT /api/query-snapshots':({body})=>{definitions.set(body.code,body);return body},'GET /api/query-snapshots':({query})=>definitions.get(query.get('code'))};
  const read=page=>{const token=new URL(page.url()).searchParams.get('q_message_labels');return decodeQueryStrict(token?.startsWith('@')?definitions.get(token.slice(1)).token:token)};
