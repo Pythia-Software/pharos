@@ -4957,15 +4957,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "c26a1ddf974ec6cc:1",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "cbf5b8d632cafc7c:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5003,42 +4994,6 @@
       "owner": "InboxSessions",
       "tag": "div",
       "control": "onClick={event => { if (!(event.target as HTMLElement).closest(\"button\")) openNode(n); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "8de83645e3ca7611:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "select",
-      "control": "aria-label=\"Session comparison metric\" value={`${family}:${spec.id}`} onChange={event => { const [scope, id] = event.target.value.split(\":\"); choose(id, scope); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "8f5f28f1365fa426:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={() => sortColumn(spec.id, family)} aria-label={`Sort ${spec.label}${ranked ? `, currently ${direction === \"desc\" ? \"descending\" : \"ascending\"}` : \"\"}`}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "e068e146ae91f3e0:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "e107c41cc7c05263:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={hierarchy}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
@@ -6260,15 +6215,6 @@
       "reason": "The inspection popup owns only hover, focus and click-pinning. Its event boundary prevents source links from starting a brush or activating the containing row."
     },
     {
-      "key": "0a29a56c9ed06f02:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "RecursiveRibbonRow",
-      "tag": "button",
-      "control": "aria-label={`Open session ${fullName}`} onClick={event=>{event.preventDefault();event.stopPropagation();props.openSession?.();}}",
-      "contract": "delegation",
-      "reason": "Session identity opens or switches the canonical conversation and delegation_session via openNode, independently of the ViewDisclosure event tree. The outline is displayed on its metadata line; the accessible name retains the complete identity. Remains available in sidebar preview."
-    },
-    {
       "key": "487e42bdd4ef7739:0",
       "file": "web/src/label-session-ribbon.tsx",
       "owner": "RecursiveRibbonRow",
@@ -7207,6 +7153,15 @@
       "control": "",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "99295ff8758bf7a1:0",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionIdentity",
+      "tag": "button",
+      "control": "aria-label={`Open session ${[outline, name].filter(Boolean).join(\" · \")}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "contract": "delegation",
+      "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
     },
     {
       "key": "85efc2b35d82ffac:0",

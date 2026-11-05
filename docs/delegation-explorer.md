@@ -5,18 +5,20 @@ transcript. Selecting a session opens `/work/{workspace}/conversation/{conversat
 and animates the overview into an inbox sidebar alongside the existing reader.
 The panes scroll independently. Their divider supports dragging, keyboard
 resizing, and double-click reset; its width is remembered. Below 720 pixels of
-sidebar width, the usage table becomes a compact hierarchy with one comparison
-metric selectable from every Self and Self + children column. Hierarchy boxes,
-selection highlighting, sorting, branch collapse, and pagination remain available.
-Widening the sidebar restores the full table. Timeline replaces Parallel activity
+sidebar width, the usage table becomes a compact hierarchy with fixed Self API
+cost and Time to run columns. Time to run is the session's earliest-to-latest
+evidence span; its tooltip explains the evidence limits. Branch collapse and
+pagination remain available. Comparison controls and metric definitions are
+omitted. Widening the sidebar restores the full table and its saved ranking. Timeline replaces Parallel activity
 throughout the workspace explorer. Beside a reader it shows a collapsed, static
-overview; session names switch the reader, while interacting with Events or the
-clock returns to the editable full-width view. Saved `explorer=parallel` links
+overview with Session and clock columns; session names switch the reader, while
+interacting with the clock returns to the editable full-width view. Events stay
+available in the full-width view. Saved `explorer=parallel` links
 open Timeline and retain their time range, session and hierarchy state.
 
-Session rows show the age of their first retained evidence on the same line as
-provider, model, and effort; the compact hierarchy places it beneath the
-comparison metric. Turn headers show the age of the user message (or first event
+Full-width usage rows show the age of their first retained evidence on the same
+line as provider, model, and effort. Compact rows keep the session's outline
+number, provider and model beneath its title. Turn headers show the age of the user message (or first event
 for session setup). Ages refresh each minute and expose
 the exact local timestamp on hover. Missing timestamps omit the age.
 
@@ -53,7 +55,9 @@ conversation dropdown. A single button beside the sliding
 Hierarchy & usage / Timeline switch shows or hides the session content.
 The toolbar remains visible while collapsed, and choosing a view opens it.
 The views sit directly on the workspace without an enclosing disclosure panel. The selected row and conversation header
-share a background highlight, session outline number, and assignment label.
+share a session outline number and assignment label. Both session views outline
+the current row. Titles of other sessions use link styling and underline on hover;
+the current session's title has no navigation action.
 Workspace totals sit alongside the workspace title and remain visible when the
 explorer is collapsed. The native workspace header omits its old Usage disclosure.
 The conversation header shows self usage and a child-session picker. Parent
@@ -62,10 +66,8 @@ Cross-workspace parent references retain their direct navigation link. Delegatio
 links to child transcripts when their turns are materialized. Child transcripts
 open in the existing reader, with its search, context rail, and lazy tool output.
 
-The explorer has a hierarchy/usage table and a shared-axis activity view. Nested
-boxes and level badges frame each visible subtree. Parallel heavy borders retain
-every enclosing level on both sides, including during horizontal scrolling.
-A lighter divider beneath each parent separates it from its children. The table
+The explorer has a hierarchy/usage table and a shared-axis activity view. Both
+use the same session identities, ownership tree branches and outline numbering. The table
 uses the full overview width and grows with its rows, scrolling naturally with the overview. The inbox sidebar width is adjusted with
 its divider.
 The two orders are hierarchy and metric ranking. Clicking a metric header cycles
