@@ -874,6 +874,22 @@ function markdownTree(text,depth=0,mask=''){
   }return root;
 }
 
+// File chips' history links (conversationFileLinks, work_files.go): each
+// call's files by the message that made the call and the path it named,
+// matched exactly, else by the file's path in its project. A file the
+// service did not link (a read outside a repository, a session not yet
+// derived) opens the Files page by its path, which finds it if it can.
+function fileLinkIndex(links){
+  const byMessage=new Map();
+  for(const link of Array.isArray(links)?links:[]){if(!link?.message_id||!link.url)continue;const list=byMessage.get(link.message_id)||[];list.push(link);byMessage.set(link.message_id,list)}
+  return(messageId,path,callId='')=>{
+    if(!path)return'';
+    const list=(byMessage.get(messageId)||[]).filter(link=>!callId||!link.call_id||link.call_id===callId),clean=String(path).replace(/^\.\//,'');
+    const found=list.find(link=>link.path===path)||list.find(link=>link.file&&(link.file===clean||clean.endsWith('/'+link.file)||String(link.path||'').endsWith('/'+clean)));
+    return found?found.url:'/files?'+new URLSearchParams({file:path});
+  };
+}
+
 // Exact source identities take precedence. Aggregated time rows resolve to the
 // nearest retained event; equal distances prefer the earlier recorded event.
 function transcriptAnchor(messages,{message='',at='',call=''}={}){

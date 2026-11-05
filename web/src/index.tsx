@@ -35,6 +35,7 @@ import { DataTaxonomyModal, openDataTaxonomy, SourceQueryBuilder } from "./data-
 import { installDelegationExplorer } from "./delegation";
 import { installReaderNavigator } from "./reader-navigator";
 import { installWorkspaceInbox } from "./workspace-inbox";
+import { installWorkFiles } from "./work-files";
 import { ConversationCard, ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
@@ -1802,7 +1803,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(<PageErrorBoundary><LazyPage host={element}>{component}</LazyPage></PageErrorBoundary>);
 }
-startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer(); installReaderNavigator();
+startFindingsChrome(); installWorkspaceInbox(); installWorkFiles(); installDelegationExplorer(); installReaderNavigator();
 if (concurrencyPrototypeEnabled) {
   const modalHost = document.createElement("div");
   modalHost.id = "parallelismModal";document.body.append(modalHost);

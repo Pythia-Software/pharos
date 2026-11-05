@@ -107,8 +107,10 @@ export const viewFields: Record<string, ViewField> = {
   habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits", "analyze/query/rhythm"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
   habits_shape_days: field("habits_shape_days", ["analyze/habits", "analyze/query/rhythm"], "enum", "Number of recent days shown in the Habits Your days chart.", ["7", "14", "28", "56", "90"], "28"),
   habits_day: field("habits_day", ["analyze/habits", "analyze/query/rhythm"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
-  file_history_path: field("file", ["files"], "text", "File History: the file whose workspaces and commits to show. A repository-relative path (src/main.go), a folder path (~/notes/plan.md) or an absolute path; when no path matches exactly, a path ending matches in every project."),
-  file_history_project: field("file_project", ["files"], "text", "File History: only the file in this project (a list_projects name), when several projects hold the path."),
+  file_history_path: field("file", ["files"], "text", "Files: the file whose workspaces and commits to show. A repository-relative path (src/main.go), a folder path (~/notes/plan.md) or an absolute path; when no path matches exactly, a path ending matches (without file_project, in every project)."),
+  file_history_project: field("file_project", ["files"], "text", "Files: the project whose tree to show, and whose file file names: a list_projects name, or repository:<id> when two repositories share a name (get_file_history's files[].project_ref)."),
+  file_tree_dir: field("file_dir", ["files"], "text", "Files: a directory of file_project (relative, no trailing slash) to show with its latest sessions and commits, when no file is set."),
+  file_commit: field("file_commit", ["files"], "text", "Files: a commit of file_project's repository (a hash or its first 7+ characters) to show with its files and linked sessions; it shows instead of file or file_dir."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };
 // These maps have viewer-dependent initial choices. Capture effective entries

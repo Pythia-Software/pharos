@@ -325,6 +325,8 @@ func (c *Catalog) Initialize() error {
 		{"conversation_derivation_inputs", "child_usage", "ALTER TABLE conversation_derivation_inputs ADD COLUMN child_usage TEXT NOT NULL DEFAULT ''"},
 		{"tool_query_facts", "day", "ALTER TABLE tool_query_facts ADD COLUMN day TEXT"},
 		{"git_repository_scans", "history_since", "ALTER TABLE git_repository_scans ADD COLUMN history_since TEXT"},
+		{"git_repository_scans", "tree_ref", "ALTER TABLE git_repository_scans ADD COLUMN tree_ref TEXT"},
+		{"git_repository_scans", "tree_commit", "ALTER TABLE git_repository_scans ADD COLUMN tree_commit TEXT"},
 		{"sync_deferred", "pending_since", "ALTER TABLE sync_deferred ADD COLUMN pending_since TEXT"},
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},

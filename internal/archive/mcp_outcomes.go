@@ -26,10 +26,10 @@ var outcomeMCPTools = []map[string]any{
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 			"offset":            map[string]any{"type": "integer", "minimum": 0},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "get_file_history", "description": "Why is this file like this? Every session that edited a file, newest first: its edits, lines added and removed, outcome label with its evidence, and a reader link at its first edit of the file. In a repository local Git checked, also the commits that changed the file, each with the sessions linked to it. Works for files in plain folders from transcripts alone. path is repository-relative (src/main.go), a folder path (~/notes/plan.md) or an absolute path; a path that matches exactly wins, and only otherwise does a path ending match. files_truncated means more files matched than were returned: give a longer path or a project.",
+	{"name": "get_file_history", "description": "Why is this file like this? Every session that edited a file, newest first: its edits, each a reader link to the call that made it (places), lines added and removed, outcome label with its evidence, and the sessions whose lines it removed (reworked) or that removed its lines (reworked_by). In a repository local Git checked, also the commits that changed the file, each with the sessions linked to it and a reader link to where each printed or made it. Works for files in plain folders from transcripts alone. path is repository-relative (src/main.go), a folder path (~/notes/plan.md) or an absolute path; a path that matches exactly wins, and only otherwise does a path ending match. files_truncated means more files matched than were returned: give a longer path or a project. With project, a repository-relative path is that repository's file even when no session touched it. Each file has url, its page on the Files page with its project's tree.",
 		"inputSchema": map[string]any{"type": "object", "required": []string{"path"}, "properties": map[string]any{
 			"path":              map[string]any{"type": "string"},
-			"project":           map[string]any{"type": "string", "description": "Only the file in this project, when several projects hold the path."},
+			"project":           map[string]any{"type": "string", "description": "Only the file in this project, when several projects hold the path: a name or folder as list_projects gives it, or repository:<id>."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Sessions and commits per file; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "get_branch_spend", "description": "What agents spent on each branch of your repositories: cost (API-price equivalent, as the Library prices it), tokens and sessions per branch, most spent first, and the coverage split (on a branch per turn or per session, unknown branch, no branch data) that adds up to the repository sessions' whole spend. A session that switched branches is split turn by turn. Sessions in folders have no branches and are not counted; for them use query_statistics. Same numbers as Analyze → Spend by Branch.",
@@ -270,7 +270,8 @@ func (c *Catalog) listOutcomes(ctx context.Context, args map[string]any) (map[st
 // getFileHistory is the get_file_history tool.
 func (c *Catalog) getFileHistory(ctx context.Context, args map[string]any) (map[string]any, error) {
 	limit := clamp(int(integer(valueOr(args["limit"], 20))), 1, 100)
-	result, err := c.FileHistory(ctx, FileHistoryOptions{Path: firstString(args["path"]), Project: firstString(args["project"]), Limit: limit})
+	// Three edits per session lead to the rest, which the file's page lists.
+	result, err := c.FileHistory(ctx, FileHistoryOptions{Path: firstString(args["path"]), Project: firstString(args["project"]), Limit: limit, Places: 3})
 	if err != nil {
 		return nil, err
 	}
