@@ -775,15 +775,33 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		if err = tx.QueryRowContext(ctx, "SELECT source_kind FROM workspaces WHERE id=?", workspaceID).Scan(&kind); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if kind != "claude" {
+		var claude bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace_id=? AND provider='claude')", workspaceID).Scan(&claude); err != nil {
+			return err
+		}
+		if !claude {
 			continue
 		}
 		conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
 		if err != nil {
 			return err
 		}
-		if err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
-			return fmt.Errorf("settle imported Claude usage: %w", err)
+		if kind == "claude" {
+			if err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
+				return fmt.Errorf("settle imported Claude usage: %w", err)
+			}
+			continue
+		}
+		// Another library's TL1 runs may be stored without the advisor
+		// records their replies hold.
+		changed, err := backfillClaudeAdvisorUsage(tx, conversations, ids)
+		if err != nil {
+			return err
+		}
+		if len(changed) > 0 {
+			if err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed); err != nil {
+				return err
+			}
 		}
 	}
 	messages, err := queryMaps(tx, "SELECT id FROM incoming_messages")

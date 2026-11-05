@@ -165,6 +165,16 @@ func TestClaudeCountsAdvisorIterationsUnderTheirModel(t *testing.T) {
 	if total := conversationTokenCounts(messages)["total_tokens"]; total != 330+185 {
 		t.Fatalf("total tokens = %v, want %d", total, 330+185)
 	}
+	// A subagent's advisor is counted in its stream, which its task's
+	// cumulative usage covers.
+	task := parseJSONL(t, "claude", filepath.Join(t.TempDir(), "task.jsonl"),
+		claudeTurn("s", "p1", "", "user", "Plan it", nil),
+		strings.Replace(claudeReply("s", "a1", "p1", "msg_1", "req_1", text("Planned"), anonymous), "{", `{"parent_tool_use_id":"toolu_1",`, 1),
+		jsonText(claudeEntry{"type": "system", "subtype": "task_progress", "uuid": "k1", "parentUuid": "a1", "sessionId": "s", "timestamp": "2026-09-24T17:00:05Z",
+			"tool_use_id": "toolu_1", "usage": map[string]any{"input_tokens": 160, "output_tokens": 15}}))
+	if total := conversationTokenCounts(task)["total_tokens"]; total != 175 {
+		t.Fatalf("total tokens with a task's usage = %v, want 175", total)
+	}
 	// The reader counts a usage message ID once.
 	advisors := map[string]bool{}
 	for _, message := range messages {
@@ -412,6 +422,28 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClaudeCopiedToolCallBelongsToNoLaterRequest(t *testing.T) {
+	// A resumed session's copy of a reply that called a tool, then its own
+	// reply.
+	messages := parseJSONL(t, "claude", filepath.Join(t.TempDir(), "s2.jsonl"),
+		claudeTurn("s2", "p1", "", "user", "List the files", nil),
+		claudeReply("s2", "a1", "p1", "msg_1", "req_1", toolUse("t1"), usage(100, 10)),
+		claudeTurn("s2", "r1", "a1", "user", toolResult("t1"), nil),
+		claudeReply("s2", "a2", "r1", "msg_2", "req_2", text("Two files"), usage(200, 20)))
+	for index, message := range messages {
+		if message.NativeID == "a1:usage" {
+			messages[index].RawText = wrapUsageCopy(message.RawText, "s1")
+		}
+	}
+	requests, calls := buildToolLedger(messages, "claude-test")
+	if len(requests) != 1 || len(calls) != 1 {
+		t.Fatalf("%d requests and %d calls, want s2's own request and the copied call", len(requests), len(calls))
+	}
+	if calls[0].RequestKey != "" {
+		t.Fatalf("the copied call is given %s's request", calls[0].RequestKey)
 	}
 }
 

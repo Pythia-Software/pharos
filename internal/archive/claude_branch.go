@@ -171,6 +171,12 @@ func claudeAdvisorUsage(base MessageRecord, event map[string]any, usage map[stri
 		id := reply + ":advisor:" + strconv.Itoa(index)
 		envelope := map[string]any{"type": "assistant", "advisor_of": reply, "requestId": event["requestId"],
 			"message": map[string]any{"id": id, "model": model, "usage": counts}}
+		// A subagent's advisor is in its stream.
+		for _, field := range []string{"parent_tool_use_id", "agent_id"} {
+			if value, ok := event[field]; ok {
+				envelope[field] = value
+			}
+		}
 		record := base
 		record.NativeID = base.NativeID + ":advisor:" + strconv.Itoa(index)
 		record.Model = model

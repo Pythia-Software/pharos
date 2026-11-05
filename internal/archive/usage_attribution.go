@@ -170,15 +170,10 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			} else {
 				// TL1 runs Claude Code too; its stored replies get their
 				// advisor records, but its copies are not settled.
-				changed := map[string]bool{}
-				for index := range conversations {
-					added, err := repairClaudeAdvisorUsage(tx, ids[index], &conversations[index])
-					if err != nil {
-						return err
-					}
-					changed[ids[index]] = added
+				var changed map[string]bool
+				if changed, err = backfillClaudeAdvisorUsage(tx, conversations, ids); err == nil {
+					err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed)
 				}
-				err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed)
 			}
 			if err != nil {
 				return err

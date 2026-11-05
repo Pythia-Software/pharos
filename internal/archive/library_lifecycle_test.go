@@ -1367,20 +1367,24 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 		// that resumed it, which counts the copied reply there.
 		resumed := claudeSessionRecord("claude", "s2", "2026-09-20T11:00:00Z", "/a/s2.jsonl", r1, r2)
 		ingest(b, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1), resumed)
-		ingest(a, resumed)
+		// It also holds a TL1 run stored before advisor records were.
+		run := claudeUsageMessage("t1", "msg_7", "req_7", 100, 10)
+		run.RawText = jsonText(map[string]any{"type": "assistant", "uuid": "t1", "requestId": "req_7", "message": map[string]any{"id": "msg_7", "model": "claude-test",
+			"usage": map[string]any{"input_tokens": 100, "output_tokens": 10, "iterations": []any{map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 50, "output_tokens": 5}}}}})
+		ingest(a, resumed, claudeSessionRecord("tl1", "tl1-run", "2026-09-20T12:00:00Z", "/a/run.jsonl", run))
 		if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
 			t.Fatal(err)
 		}
 		c := reopenCatalog(t, b.CatalogPath)
 		defer c.Close()
 		var tokens int64
-		if err := c.DB.QueryRow(`SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions WHERE provider='claude'`).Scan(&tokens); err != nil || tokens != 330 {
-			t.Fatalf("Claude tokens = %d, %v; want 330", tokens, err)
+		if err := c.DB.QueryRow(`SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions WHERE provider='claude'`).Scan(&tokens); err != nil || tokens != 330+165 {
+			t.Fatalf("Claude tokens = %d, %v; want %d", tokens, err, 330+165)
 		}
 		// Its requests are those of a library that indexed both sessions.
 		requests := func(c *Catalog) string {
 			rows, err := queryMaps(c.DB, `SELECT c.native_id conversation,r.native_id,r.sequence,r.total_tokens,r.context_growth_tokens
-				FROM model_requests r JOIN conversations c ON c.id=r.conversation_id ORDER BY 1,2`)
+				FROM model_requests r JOIN conversations c ON c.id=r.conversation_id WHERE c.native_id IN ('s1','s2') ORDER BY 1,2`)
 			if err != nil {
 				t.Fatal(err)
 			}

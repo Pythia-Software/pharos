@@ -444,15 +444,9 @@ func claudeRecordHasUsage(record WorkspaceRecord) bool {
 // stored messages may be all that is left of it. It rebuilds the
 // workspace's usage, and that of any other whose records changed.
 func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string) error {
-	changed := map[string]bool{}
-	for index := range conversations {
-		added, err := repairClaudeAdvisorUsage(tx, ids[index], &conversations[index])
-		if err != nil {
-			return err
-		}
-		if added {
-			changed[ids[index]] = true
-		}
+	changed, err := backfillClaudeAdvisorUsage(tx, conversations, ids)
+	if err != nil {
+		return err
 	}
 	for rootIndex, root := range conversations {
 		if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -486,6 +480,23 @@ func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string
 		}
 	}
 	return settleClaudeUsage(ctx, tx, WorkspaceRecord{SourceKind: "claude", Conversations: conversations}, ids, nil, workspaceID, changed)
+}
+
+// backfillClaudeAdvisorUsage adds the advisor records a workspace's stored
+// Claude replies hold (repairClaudeAdvisorUsage), and says which
+// conversations it added them to.
+func backfillClaudeAdvisorUsage(tx *sql.Tx, conversations []ConversationRecord, ids []string) (map[string]bool, error) {
+	changed := map[string]bool{}
+	for index := range conversations {
+		added, err := repairClaudeAdvisorUsage(tx, ids[index], &conversations[index])
+		if err != nil {
+			return nil, err
+		}
+		if added {
+			changed[ids[index]] = true
+		}
+	}
+	return changed, nil
 }
 
 // repairClaudeAdvisorUsage adds the advisor usage records (claudeAdvisorUsage)
