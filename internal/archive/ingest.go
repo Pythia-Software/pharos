@@ -949,12 +949,16 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 		retained := map[string]bool{}
+		usageChanged := false
 		for sourceOrder, message := range conversation.Messages {
 			if err := ctx.Err(); err != nil {
 				messageWriter.statement.Close()
 				return 0, 0, err
 			}
 			message.SourceOrder = sourceOrder
+			if prior, stored := messageWriter.states[message.NativeID]; stored && claudeUsageRecord(message) && prior.message.RawText != message.RawText {
+				usageChanged = true
+			}
 			id, changed, err := messageWriter.write(message)
 			if err != nil {
 				messageWriter.statement.Close()
@@ -1004,7 +1008,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if inputErr != nil && inputErr != sql.ErrNoRows {
 			return 0, 0, inputErr
 		}
-		if !force && input == priorInput {
+		// A claim can change what an unchanged conversation's replies count:
+		// another conversation's start moved, or it came or went.
+		if !force && input == priorInput && !usageChanged {
 			continue
 		}
 		if force {

@@ -540,8 +540,9 @@ func repairClaudeAdvisorUsage(tx *sql.Tx, conversationID string, conversation *C
 // rederiveRecoveredClaudeUsage derives a recovered Claude Code workspace's
 // usage again where its stored usage records differ from those it was saved
 // with (saved): writing them settled their replies' copies against the
-// conversations this catalog holds. Otherwise the usage it was saved with
-// stands.
+// conversations this catalog holds, or it was saved without the advisor
+// records its replies hold (claudeAdvisorUsage). Otherwise the usage it was
+// saved with stands.
 func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved WorkspaceRecord, workspaceID string) error {
 	if saved.SourceKind != "claude" {
 		return nil
@@ -559,18 +560,31 @@ func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved Workspa
 		return err
 	}
 	changed := map[string]bool{}
-	for index, conversation := range conversations {
+	for index := range conversations {
+		conversation := &conversations[index]
 		for _, message := range conversation.Messages {
 			if claudeUsageRecord(message) && message.RawText != records[conversation.NativeID+"\x00"+message.NativeID] {
 				changed[ids[index]] = true
 				break
 			}
 		}
+		if added, err := repairClaudeAdvisorUsage(tx, ids[index], conversation); err != nil {
+			return err
+		} else if added {
+			changed[ids[index]] = true
+		}
 	}
 	if len(changed) == 0 {
 		return nil
 	}
-	return rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed)
+	// The restored model requests and tool calls carry the fingerprints of
+	// those the writer derived before they were restored over.
+	for id := range changed {
+		if _, err := tx.Exec("DELETE FROM tool_ledger_inputs WHERE conversation_id=?", id); err != nil {
+			return err
+		}
+	}
+	return settleClaudeUsage(ctx, tx, WorkspaceRecord{SourceKind: "claude", Conversations: conversations}, ids, nil, workspaceID, changed)
 }
 
 // rebuildWorkspaceUsage derives a workspace's sessions, hourly usage and token

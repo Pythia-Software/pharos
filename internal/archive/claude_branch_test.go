@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,29 +321,62 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 			wantLibraryTokens(t, catalog, want)
 		})
 	}
-	// s2, saved from a catalog that never held s1, counted s1's reply there;
-	// recovered beside s1, it no longer does.
-	t.Run("recovered", func(t *testing.T) {
-		useHost(t, "host-a")
-		earlier, _ := testCatalog(t)
-		ingestSource(t, earlier, claudeSessionFiles(t, map[string][]string{"s2.jsonl": resumed}))
-		tx := seedTx(t, earlier.DB)
-		var workspaceID string
-		if err := tx.QueryRow("SELECT id FROM workspaces").Scan(&workspaceID); err != nil {
-			t.Fatal(err)
-		}
-		envelope, err := exportHistoryRecovery(t.Context(), tx, historyUnit{Kind: "catalog-workspace", Original: workspaceID}, "")
-		tx.Rollback()
-		if err != nil {
-			t.Fatal(err)
-		}
-		catalog, _ := testCatalog(t)
-		ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": original}))
-		if outcome, err := catalog.applyHistoryRecovery(t.Context(), envelope); err != nil || outcome != "catalog-derived" {
-			t.Fatal(outcome, err)
-		}
-		wantLibraryTokens(t, catalog, 110+44+220)
-	})
+	// s2, saved from a catalog that never held s1, counted s1's reply there,
+	// and a catalog indexed before advisor records left out its advisor's
+	// tokens. Recovered, it counts as if indexed here.
+	for _, advisors := range []bool{true, false} {
+		t.Run(fmt.Sprintf("recovered with advisor records %v", advisors), func(t *testing.T) {
+			useHost(t, "host-a")
+			earlier, _ := testCatalog(t)
+			ingestSource(t, earlier, claudeSessionFiles(t, map[string][]string{"s2.jsonl": resumed}))
+			tx := seedTx(t, earlier.DB)
+			var workspaceID string
+			if err := tx.QueryRow("SELECT id FROM workspaces").Scan(&workspaceID); err != nil {
+				t.Fatal(err)
+			}
+			if !advisors {
+				if _, err := tx.Exec("DELETE FROM messages WHERE native_id LIKE '%:usage:advisor:%'"); err != nil {
+					t.Fatal(err)
+				}
+				conversations, ids, err := storedWorkspaceConversations(t.Context(), tx, workspaceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, map[string]bool{ids[0]: true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			envelope, err := exportHistoryRecovery(t.Context(), tx, historyUnit{Kind: "catalog-workspace", Original: workspaceID}, "")
+			tx.Rollback()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := func(catalog *Catalog) string {
+				rows, err := queryMaps(catalog.DB, `SELECT c.native_id conversation,r.native_id,r.sequence,r.total_tokens,r.context_growth_tokens
+					FROM model_requests r JOIN conversations c ON c.id=r.conversation_id ORDER BY 1,2`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return jsonText(rows)
+			}
+			for _, beside := range []map[string][]string{{}, {"s1.jsonl": original}} {
+				catalog, _ := testCatalog(t)
+				if len(beside) > 0 {
+					ingestSource(t, catalog, claudeSessionFiles(t, beside))
+				}
+				if outcome, err := catalog.applyHistoryRecovery(t.Context(), envelope); err != nil || outcome != "catalog-derived" {
+					t.Fatal(outcome, err)
+				}
+				wantLibraryTokens(t, catalog, 110+44+220)
+				indexed, _ := testCatalog(t)
+				beside["s2.jsonl"] = resumed
+				ingestSource(t, indexed, claudeSessionFiles(t, beside))
+				if got, want := requests(catalog), requests(indexed); got != want {
+					t.Fatalf("recovered requests %s, want %s", got, want)
+				}
+			}
+		})
+	}
 }
 
 func TestClaudeGatewayReplySharingAnIDStaysOnItsBranch(t *testing.T) {
@@ -388,6 +422,24 @@ func TestClaudeCopyFromAnotherMacKeepsWhatIsStored(t *testing.T) {
 		t.Fatalf("the copy was not processed: %+v", result)
 	}
 	wantLibraryTokens(t, catalog, 110+220+440)
+}
+
+func TestClaudeUnchangedSessionWhoseReplyMovedIsCountedAgain(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	r1 := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10)
+	s1 := claudeSessionRecord("claude", "s1", "2026-09-20T12:00:00Z", "/a/s1.jsonl", r1, claudeUsageMessage("a2", "msg_2", "req_2", 200, 20))
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, s1))
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, claudeSessionRecord("claude", "s2", "2026-09-20T11:00:00Z", "/a/s2.jsonl", r1)))
+	wantLibraryTokens(t, catalog, 110+220)
+	// Another Mac's older copy of s1 starts earlier, so s1 counts the reply;
+	// then s1 gains a subagent, and its own unchanged transcript starts later
+	// again.
+	ingestAs(t, catalog, "host-b", newCopyFixture(t, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/b/s1.jsonl", r1)))
+	wantLibraryTokens(t, catalog, 110+220)
+	s1.Conversations = append(s1.Conversations, ConversationRecord{NativeID: "s1:subagent:x", ParentNativeID: "s1", AgentDepth: 1, Provider: "claude", Model: "claude-test",
+		Account: "local", Origin: "/a/s1/subagents/agent-x.jsonl", StartedAt: "2026-09-20T12:01:00Z", Messages: []MessageRecord{claudeUsageMessage("x1", "msg_9", "req_9", 50, 5)}})
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, s1))
+	wantLibraryTokens(t, catalog, 110+220+55)
 }
 
 func TestClaudeMirrorsKeepTheirReplies(t *testing.T) {
@@ -466,16 +518,21 @@ func TestClaudeRepairAddsAdvisorUsageFromStoredReplies(t *testing.T) {
 		strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
 	}
 	ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed}))
-	wantLibraryTokens(t, catalog, 165)
+	// TL1 runs Claude Code too, and its stored replies are all that is left
+	// of them.
+	run := claudeUsageMessage("t1", "msg_7", "req_7", 100, 10)
+	run.RawText = jsonText(map[string]any{"type": "assistant", "uuid": "t1", "requestId": "req_7", "message": map[string]any{"id": "msg_7", "model": "claude-test", "usage": advised}})
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, claudeSessionRecord("tl1", "tl1-run", "2026-09-24T19:00:00Z", "/a/run.jsonl", run)))
+	wantLibraryTokens(t, catalog, 165+110)
 	// A library indexed before advisor iterations were counted.
 	unsettle(t, catalog)
 	if _, err := catalog.DB.Exec("DELETE FROM messages WHERE native_id LIKE '%:advisor:%'"); err != nil {
 		t.Fatal(err)
 	}
-	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 2 {
+	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 3 {
 		t.Fatalf("repair = %d, %v", repaired, err)
 	}
-	wantLibraryTokens(t, catalog, 165)
+	wantLibraryTokens(t, catalog, 165+165)
 }
 
 func TestClaudeSessionCountsAReplyOnceWhateverItsDepths(t *testing.T) {
