@@ -25,46 +25,7 @@ const authorshipQuickDDL = `
 CREATE TABLE IF NOT EXISTS authorship_pending(message_id TEXT PRIMARY KEY, revision TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS authorship_message_state(message_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL, version TEXT NOT NULL, provisional INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS authorship_provisional ON authorship_message_state(message_id) WHERE provisional=1;
-CREATE TRIGGER IF NOT EXISTS authorship_quick_insert AFTER INSERT ON messages
- WHEN NEW.role='user' AND NEW.kind='message'
- BEGIN INSERT INTO authorship_pending VALUES(NEW.id,hex(randomblob(16))) ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision; END;
-CREATE TRIGGER IF NOT EXISTS authorship_quick_update AFTER UPDATE ON messages
- WHEN ((OLD.role='user' AND OLD.kind='message') OR (NEW.role='user' AND NEW.kind='message'))
- AND (OLD.id IS NOT NEW.id OR OLD.conversation_id IS NOT NEW.conversation_id OR OLD.role IS NOT NEW.role OR OLD.kind IS NOT NEW.kind OR OLD.text IS NOT NEW.text OR OLD.created_at IS NOT NEW.created_at OR OLD.sender IS NOT NEW.sender)
- BEGIN
- INSERT INTO authorship_pending VALUES(OLD.id,hex(randomblob(16))) ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision;
- INSERT INTO authorship_pending VALUES(NEW.id,hex(randomblob(16))) ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision;
- END;
-CREATE TRIGGER IF NOT EXISTS authorship_quick_delete AFTER DELETE ON messages
- WHEN OLD.role='user' AND OLD.kind='message'
- BEGIN INSERT INTO authorship_pending VALUES(OLD.id,hex(randomblob(16))) ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision; END;
 `
-
-func (c *Catalog) ensureQuickAuthorshipState() error {
-	if _, err := c.DB.Exec(authorshipQuickDDL); err != nil {
-		return err
-	}
-	// Existing complete classifications stay intact on upgrade. Queue only
-	// uncovered messages once; new edits and deletions are captured by triggers.
-	return c.writeTransaction(context.Background(), "initialize writing estimates", func(tx *sql.Tx) error {
-		var ready bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM meta WHERE key='authorship_quick_initialized')`).Scan(&ready); err != nil {
-			return err
-		}
-		if ready {
-			return nil
-		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO authorship_pending SELECT m.id,hex(randomblob(16)) FROM messages m
-   WHERE m.kind='message' AND m.role='user' AND NOT EXISTS(SELECT 1 FROM message_authorship a WHERE a.message_id=m.id)`); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT 'authorship_refined_at',value FROM meta WHERE key='authorship_built_at'`); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('authorship_quick_initialized','1')`)
-		return err
-	})
-}
 
 // Source identity deliberately excludes derived relationships: those can be
 // reconsidered overnight without downgrading unchanged refined messages.
@@ -103,6 +64,13 @@ func (c *Catalog) UpdateAuthorship(parent context.Context, generation string) (f
 	ctx, cancel := context.WithTimeout(parent, authorshipQuickBudget)
 	defer cancel()
 	err := c.withAuthorshipLease(func() error {
+		representative, err := c.authorshipRepresentatives(ctx)
+		if err != nil {
+			return err
+		}
+		if err := c.refreshAuthorshipMirrors(ctx, representative); err != nil {
+			return err
+		}
 		pending, err := c.authorshipPending(ctx)
 		if err != nil {
 			return err
@@ -125,26 +93,8 @@ func (c *Catalog) UpdateAuthorship(parent context.Context, generation string) (f
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// These are small metadata rows, not transcript text. Mirror suppression
-		// uses the same deterministic representative as daily refinement.
-		workspaces, err := queryMapsContext(ctx, c.reader(), `SELECT id,source_kind,activity_at FROM workspaces`)
-		if err != nil {
+		if err := c.runAuthorshipLanes(ctx, representative); err != nil {
 			return err
-		}
-		links, err := queryMapsContext(ctx, c.reader(), identityLinkWorkspacesSQL)
-		if err != nil {
-			return err
-		}
-		representative := mirrorRepresentatives(workspaces, links)
-		for done := 0; done < max(1, authorshipQuickLimit); {
-			n, err := c.quickAuthorshipBatch(ctx, representative, min(25, max(1, authorshipQuickLimit)-done))
-			if err != nil {
-				return err
-			}
-			done += n
-			if n == 0 {
-				break
-			}
 		}
 		return c.publishAuthorshipEstimates(ctx, generation)
 	})
@@ -199,21 +149,25 @@ func (c *Catalog) tryExactAuthorship(ctx context.Context, generation string) (bo
 	return true, nil
 }
 
-func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[string]string, limit int) (int, error) {
+func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[string]string, limit int, cutoff string, recent bool) (int, error) {
+	predicate, order := "(sent_at<? OR sent_at IS NULL)", "queued_at,rowid"
+	if recent {
+		predicate, order = "sent_at>=?", "sent_at DESC,message_id"
+	}
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT p.message_id,p.revision,m.conversation_id,c.workspace_id,m.text,m.created_at,m.sender,m.role,m.kind,
-  w.source_kind,c.harness,c.parent_id,s.source_hash,s.version,
+  w.source_kind,c.harness,c.parent_id,s.source_hash,s.version,s.disposition,
   (SELECT l.parent_id FROM conversation_launches l WHERE l.child_id=c.id) launch_parent,
   (SELECT l.program FROM conversation_launches l WHERE l.child_id=c.id) launch_program
-  FROM (SELECT message_id,revision FROM authorship_pending ORDER BY rowid LIMIT ?) p
+  FROM (SELECT message_id,revision FROM authorship_pending WHERE `+predicate+` ORDER BY `+order+` LIMIT ?) p
   LEFT JOIN messages m ON m.id=p.message_id LEFT JOIN conversations c ON c.id=m.conversation_id
-  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN authorship_message_state s ON s.message_id=p.message_id`, limit)
+  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN authorship_message_state s ON s.message_id=p.message_id`, cutoff, limit)
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
 	inputs := []authorInput{}
 	ids := []string{}
 	revisions := map[string]string{}
-	deferred := map[string]string{}
+	outcomes := map[string][]any{}
 	for _, row := range rows {
 		id := asString(row["message_id"])
 		revisions[id] = asString(row["revision"])
@@ -222,14 +176,21 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 		input.SentAt = at
 		if asString(row["role"]) != "user" || asString(row["kind"]) != "message" || !valid || strings.TrimSpace(input.Text) == "" || representative[input.WorkspaceID] != "" {
 			ids = append(ids, id) // Delete stale classifications of removed/ineligible rows.
+			if asString(row["conversation_id"]) != "" {
+				disposition := authorshipIneligible
+				if representative[input.WorkspaceID] != "" {
+					disposition = authorshipSuppressed
+				}
+				outcomes[id] = []any{id, authorshipSourceHash(input), authorshipVersion, 0, disposition, representative[input.WorkspaceID]}
+			}
 			continue
 		}
 		hash := authorshipSourceHash(input)
-		if asString(row["source_hash"]) == hash && (asString(row["version"]) == authorshipVersion || asString(row["version"]) == authorshipQuickVersion) {
+		if asString(row["disposition"]) == authorshipCounted && asString(row["source_hash"]) == hash && (asString(row["version"]) == authorshipVersion || asString(row["version"]) == authorshipQuickVersion) {
 			continue
 		}
 		if len(input.Text) > authorshipQuickMaxBytes {
-			deferred[id] = hash
+			outcomes[id] = []any{id, hash, authorshipQuickVersion, 1, authorshipDeferred, ""}
 			ids = append(ids, id)
 			continue
 		}
@@ -315,8 +276,8 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 		if err := executeAuthorshipMutations(ctx, tx, plan, nil); err != nil {
 			return err
 		}
-		for id, hash := range deferred {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO authorship_message_state VALUES(?,?,?,1) ON CONFLICT(message_id) DO UPDATE SET source_hash=excluded.source_hash,version=excluded.version,provisional=1`, id, hash, authorshipVersion+"/deferred"); err != nil {
+		for _, values := range outcomes {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO authorship_message_state(message_id,source_hash,version,provisional,disposition,representative_id) VALUES(?,?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET source_hash=excluded.source_hash,version=excluded.version,provisional=excluded.provisional,disposition=excluded.disposition,representative_id=excluded.representative_id`, values...); err != nil {
 				return err
 			}
 		}
@@ -327,7 +288,7 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 		}
 		// Any provisional output means the persisted full-classifier checkpoint
 		// cannot claim these output rows are still fully analyzed.
-		if len(plan) > 0 || len(deferred) > 0 {
+		if len(plan) > 0 || len(outcomes) > 0 {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE key='authorship_state_version'`); err != nil {
 				return err
 			}
@@ -385,9 +346,16 @@ func (c *Catalog) publishAuthorshipEstimates(ctx context.Context, generation str
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_pending)`).Scan(&pending); err != nil {
 			return err
 		}
-		metadata := map[string]string{"authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
+		metadata := map[string]string{"authorship_quick_version": authorshipQuickVersion}
 		if !pending {
 			metadata["authorship_quick_generation"] = generation
+			var deferred bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_message_state WHERE disposition='deferred')`).Scan(&deferred); err != nil {
+				return err
+			}
+			if !deferred {
+				metadata["authorship_complete_at"] = now()
+			}
 		}
 		for key, value := range metadata {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {

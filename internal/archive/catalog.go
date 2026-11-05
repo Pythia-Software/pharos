@@ -210,7 +210,9 @@ func (c *Catalog) Close() error {
 // and can recreate history explicitly moved out of a source library.
 // 22: provisional authorship and the durable estimates queue. Older full
 // writers do not maintain per-message completion state.
-const catalogSchemaVersion = 22
+// 23: explicit writing outcomes and timestamped live/history queue lanes.
+// Older writers cannot preserve these dispositions or the queue timestamps.
+const catalogSchemaVersion = 23
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

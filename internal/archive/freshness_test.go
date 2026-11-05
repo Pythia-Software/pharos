@@ -55,7 +55,7 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("tool_ledger_generation", "7"), setMetaSQL("tool_rollup_generation", "7/"+toolRollupVersion),
 		setMetaSQL("tool_rollup_day", c.clock().Format("2006-01-02")), setMetaSQL("tool_rollup_timezone", toolRollupTimezone()),
 		setMetaSQL("tool_rollup_full_revision", "r1"), setMetaSQL("tool_rollup_built_full_revision", "r1"),
-		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"),
+		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"), setMetaSQL("authorship_complete_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
 		// Each completion was for the library's inputs as they are (7:3).
 		setMetaSQL("findings_inputs_generation", "7:3"), setMetaSQL("analysis_inputs:identities", "records:3"), setMetaSQL("analysis_inputs:git", "records:3"),
@@ -310,6 +310,10 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "tools rollup of an older layout", domain: "an.tools", seed: []string{setMetaSQL("tool_rollup_generation", "7/old")}, state: freshBehind, reason: "version"},
 		{name: "tools rollup never built", domain: "an.tools", seed: []string{"DELETE FROM meta WHERE key='tool_rollup_generation'"}, state: freshBehind, reason: "never-built"},
 		{name: "writing classification behind", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed", asOf: "2026-10-27T08:00:00Z"},
+		{name: "writing progress is not coverage", domain: "an.authorship", seed: []string{
+			setMetaSQL("authorship_quick_at", "2026-10-27T12:00:00Z"),
+			`INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at) VALUES('a','r','2026-10-27T11:00:00Z','2026-10-27T11:01:00Z'),('b','r','2026-07-01T11:00:00Z','2026-10-27T10:01:00Z')`,
+		}, state: freshBehind, reason: "changed", count: 2, countKnown: true, unit: "message", asOf: "2026-10-27T08:00:00Z"},
 		{name: "writing classification caught up", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-author", "analysis.authorship", "")}}, state: freshBehind, reason: "running", catching: "op-author"},
 		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
