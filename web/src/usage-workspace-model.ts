@@ -7,6 +7,7 @@ import { analysisVersion } from "./dashboard-analysis-model";
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
   message_labels:{label:"Message labels",description:"Stored message functions, coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
+  compactions: { label: "Compactions", description: "Recorded context compaction boundaries and trigger evidence.", field: "model", searchLabel: "Compaction Model Names" },
   model_requests: { label: "Model requests", description: "Retained request usage and post-tool timing evidence.", field: "model", searchLabel: "Model request names" },
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
   conversation_activity: { label: "Conversation activity", description: "Human messages and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
@@ -25,6 +26,7 @@ export const usageDatasets = {
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
+  compaction: { label: "Compaction", description: "Count context compactions and compare human and machine triggers across services, models and repositories." },
   labels:{label:"Message Labels",description:"Explore conversation functions over time, compare labels and follow their matching conversations."},
   activity: { label: "Conversations", description: "How many conversations are you having, and how much do they produce? Explore conversations, your messages and model output across models and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
@@ -40,17 +42,17 @@ export const engineUsageTopics = {
   agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
 } as const;
 export const usageTopics = { ...engineUsageTopics,
-  "thinking-overview": {label:"Waiting and Compaction",description:"Understand observed model waits, context associations, compaction and timing evidence."},
+  "thinking-overview": {label:"Waiting",description:"Understand observed model waits, context associations and timing evidence."},
   "thinking-detail": {label:"Thinking",description:"Compare complete request distributions across models, effort, workloads and dates."},
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   message_labels:"labels",
-  model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
+  compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
   tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
-  labels:"message_labels",
+  compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
   calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events",
 };
@@ -59,7 +61,7 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
   message_labels:["occurred_at"],
-  model_requests: ["requested_at"],
+  compactions: ["occurred_at"], model_requests: ["requested_at"],
   tl1_attempts: ["started_at"],
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],

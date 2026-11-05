@@ -21,7 +21,7 @@ export const viewFields: Record<string, ViewField> = {
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["compactions","model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
