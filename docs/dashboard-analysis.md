@@ -722,7 +722,7 @@ around it. Its default view is the one it always opened on.
 | Carbon | `usage`, estimated under the user's assumptions | conversation, agent session, delegated run | `co2`, `energy`, `tokens` | usage `hour`, `day` | Over time |
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
 | Outcomes | `outcomes`: one session, at its start | none | `cost`, `tokens`, `files_changed`, lines | `started_at` (timestamp) | Over time |
-| Spend by Branch | `branch_usage`: one session's usage on one branch, with one model, on one local day | none | `cost`, `tokens` | `usage_at` (timestamp) | Compare |
+| Spend by Branch | `branch_usage`: one session's usage on one branch, with one model, in one hour | none | `cost`, `tokens` | `usage_at` (timestamp) | Compare |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
