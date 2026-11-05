@@ -108,13 +108,26 @@ func TestAProviderNeedsOnlyItsSpec(t *testing.T) {
 		New:  func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
 		Plan: (*capturePlan).canonical, Preservation: retainedInputs,
 		Probe: &providerProbe{
-			Folders: []string{".test-provider"}, Env: []probeEnv{{Name: "TEST_PROVIDER_HOME", Sub: "data"}},
+			Folders: []string{".test-provider"}, Env: []probeEnv{{Name: "TEST_PROVIDER_HOME", Sub: "data"}, {Name: "XDG_DATA_HOME", Sub: "test-provider"}},
 			Defaults: func(r *probeRun, home string) { look(r, filepath.Join(home, ".test-provider"), "default location") },
 			Folder:   look,
 		},
 	}))
 	home := probeHome(t)
 	useHost(t, "host-a")
+	named := filepath.Join(home, "named")
+	chosen := filepath.Join(home, "chosen")
+	for _, dir := range []string{filepath.Join(named, "data"), filepath.Join(named, "test-provider"), filepath.Join(named, "opencode"), chosen} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A variable is expanded before the provider's folder below it is added.
+	t.Setenv("TEST_PROVIDER_HOME", "~/../"+filepath.Base(home)+"/named")
+	if tools := probeTools(home, Config{}); !slices.Contains(tools, ProbeTool{"test-provider", "~/named/data", "TEST_PROVIDER_HOME"}) {
+		t.Fatalf("tools = %+v", tools)
+	}
+	t.Setenv("TEST_PROVIDER_HOME", "")
 	export := filepath.Join(home, ".test-provider")
 	writeSourceFile(t, filepath.Join(export, "one.json"), `{"workspaces":[{"id":"work","title":"Synthetic","conversations":[{"id":"thread","provider":"codex","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`)
 	source := SourceConfig{Name: "test", Kind: "Test-Alias", Path: export, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
@@ -148,24 +161,26 @@ func TestAProviderNeedsOnlyItsSpec(t *testing.T) {
 	if tools := probeTools(home, Config{}); !slices.ContainsFunc(tools, func(tool ProbeTool) bool { return tool.Kind == "test-provider" && tool.FoundBy == "data folder" }) {
 		t.Fatalf("tools = %+v", tools)
 	}
-	named := filepath.Join(home, "named")
-	chosen := filepath.Join(home, "chosen")
-	for _, dir := range []string{filepath.Join(named, "data"), chosen} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stubShellEnv(t, map[string]string{"TEST_PROVIDER_HOME": named})
-	report, err := selectedProbe(Config{}, nil, ProbeSelection{Kinds: &[]string{"test-provider"}, Locations: []ProbeLocation{{Kind: "test-provider", Path: chosen}}})
+	stubShellEnv(t, map[string]string{"TEST_PROVIDER_HOME": named, "XDG_DATA_HOME": named})
+	report, err := selectedProbe(Config{}, nil, ProbeSelection{Kinds: &[]string{"test-provider", "opencode"}, Locations: []ProbeLocation{{Kind: "test-provider", Path: chosen}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := map[string]string{}
 	for _, candidate := range report.Candidates {
-		found[candidate.Path] = candidate.FoundBy
+		if candidate.Kind == "test-provider" {
+			found[candidate.Path] = candidate.FoundBy
+		}
 	}
-	if len(found) != 3 || found[export] != "default location" || !strings.Contains(found[filepath.Join(named, "data")], "TEST_PROVIDER_HOME") || found[chosen] == "" {
+	if len(found) != 4 || found[export] != "default location" || !strings.Contains(found[filepath.Join(named, "data")], "TEST_PROVIDER_HOME") ||
+		!strings.Contains(found[filepath.Join(named, "test-provider")], "XDG_DATA_HOME") || found[chosen] == "" {
 		t.Fatalf("candidates = %v", found)
+	}
+	// OpenCode still looks below the variable it shares.
+	if !slices.ContainsFunc(report.Checked, func(location ProbeLocation) bool {
+		return location.Kind == "opencode" && location.Path == "~/named/opencode" && strings.Contains(location.FoundBy, "XDG_DATA_HOME")
+	}) {
+		t.Fatalf("checked = %+v", report.Checked)
 	}
 	if _, err := selectedProbe(Config{}, nil, ProbeSelection{Kinds: &[]string{"canonical"}}); err == nil {
 		t.Fatal("setup offered a provider it does not list")

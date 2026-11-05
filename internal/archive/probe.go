@@ -231,7 +231,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		}
 		for _, env := range spec.Probe.Env {
 			if path := os.Getenv(env.Name); path != "" {
-				check(spec.Kind, resolvePath(home, filepath.Join(path, env.Sub)), env.Name)
+				check(spec.Kind, filepath.Join(resolvePath(home, path), env.Sub), env.Name)
 			}
 		}
 	}
@@ -317,14 +317,19 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 		spec *providerSpec
 		probeEnv
 	}
-	envNames, variables := []string{}, map[string]variable{}
+	// Providers may share a variable (XDG_DATA_HOME); each reads its own
+	// folder below it.
+	envNames, variables := []string{}, map[string][]variable{}
 	for index := range providerRegistry {
 		spec := &providerRegistry[index]
 		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] {
 			continue
 		}
 		for _, env := range spec.Probe.Env {
-			envNames, variables[env.Name] = append(envNames, env.Name), variable{spec, env}
+			if variables[env.Name] == nil {
+				envNames = append(envNames, env.Name)
+			}
+			variables[env.Name] = append(variables[env.Name], variable{spec, env})
 		}
 	}
 	go func() {
@@ -356,8 +361,10 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			}
 			report.Environment = append(report.Environment, ProbeVariable{Name: name, Value: value, From: from})
 			foundBy := name + " (" + from + ")"
-			path := filepath.Join(resolvePath(home, value), variables[name].Sub)
-			timed(variables[name].spec.Kind, func() { variables[name].spec.Probe.Folder(run, path, foundBy) })
+			for _, variable := range variables[name] {
+				path := filepath.Join(resolvePath(home, value), variable.Sub)
+				timed(variable.spec.Kind, func() { variable.spec.Probe.Folder(run, path, foundBy) })
+			}
 		}
 	}
 	process := map[string]string{}
