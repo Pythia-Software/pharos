@@ -71,7 +71,7 @@ import {timelineModeGroups,timelineLegendWindow} from '../../../src/timeline-leg
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
-import {conversationRibbon} from '../../../src/conversation-fingerprint-model.ts';
+import {conversationRibbon,fingerprintMessageAt} from '../../../src/conversation-fingerprint-model.ts';
 
 import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
 import {overlapping} from '../../../src/ribbon-marks';
@@ -83,6 +83,8 @@ import {stateColor} from '../../../src/conversation-labels.ts';
 import {ribbonSegment} from '../../../src/conversation-fingerprint-model.ts';
 
 import {ribbonMessageTitle,parallelEnvelopes,messageAllocation} from '../../../src/conversation-fingerprint-model.ts';
+import {eventLinkURL} from '../../../src/event-link-url';
+import {ribbonInspectorPlacement} from '../../../src/label-ribbon-inspector';
 
 import {splitTimelineCallers,authorshipMix,authorshipSegments,authorshipExcerpt} from '../../../src/timeline-caller-model.ts';
 
@@ -108,6 +110,19 @@ test('native timeline lanes preserve session ownership, empty classifications an
 const message=(id,family,extra={})=>({id,role:'assistant',kind:'message',segment:'AR',labels:family?[[family,.9]]:[],chunks:family?1:0,text:'Test fixture',text_source:'Retained message excerpt',truncated:false,at:null,...extra});
 
 const conversation=(id,messages)=>({id,work_id:'workspace-test',title:'Test fixture',repository:'fixture',provider:'codex',started_at:null,messages});
+
+test('workspace fingerprint event links open the source conversation and preserve the event selection',()=>{
+ const event={id:'e7',message_id:'reply'},workspace=conversation('workspace-test',[message('reply','C.report',{conversation_id:'source-conversation'})]);
+ const url=new URL(eventLinkURL(workspace,event),'http://pharos.invalid');
+ assert.equal(url.pathname,'/work/workspace-test');
+ assert.equal(url.searchParams.get('conversation'),'source-conversation');
+ assert.equal(url.searchParams.get('message'),'reply');
+ assert.equal(url.searchParams.get('reader_events'),'1');
+ assert.equal(url.searchParams.get('reader_event_link'),'e7');
+ const direct=new URL(eventLinkURL({id:'direct-conversation',work_id:'workspace-test'},event),'http://pharos.invalid');
+ assert.equal(direct.pathname,'/work/workspace-test');
+ assert.equal(direct.searchParams.get('conversation'),'direct-conversation');
+});
 
 test('timeline legend keeps specific labels with their parent modes without duplicating ancestors',()=>{
  const messages=[message('a','C.report.finding',{labels:[['C',1],['C.report',.95],['C.report.finding',.9]]}),message('b','C.report.progress'),message('duplicate','C.report.finding'),message('request','P.request.work.implement'),message('parent','P.request'),message('generic','C'),message('future','P.custom.detail')];
@@ -184,6 +199,31 @@ test('compressed fingerprint segments preserve every original message for inform
  const tokens=conversationRibbon(c,4);
  assert.deepEqual(tokens.flatMap(t=>t.messages),events);assert.ok(tokens.every(t=>t.count===t.messages.length));
  assert.equal(tokens.flatMap(t=>t.messages).filter(m=>m.kind==='reasoning').length,10);
+});
+
+test('fingerprint source selection follows the clicked message within a compressed column',()=>{
+ const messages=[message('first','P.request',{conversation_id:'earlier-conversation'}),message('second','C.report',{conversation_id:'source /conversation',session_id:'source /session'}),message('third','P.request')];
+ const [token]=conversationRibbon(conversation('workspace-ribbon',messages),1);
+ assert.equal(fingerprintMessageAt(token,.05),messages[0]);
+ assert.equal(fingerprintMessageAt(token,.5),messages[1]);
+ assert.equal(fingerprintMessageAt(token,.95),messages[2]);
+ assert.equal(fingerprintMessageAt(token,0),messages[0]);assert.equal(fingerprintMessageAt(token,1),messages[2]);
+ assert.equal(fingerprintMessageAt({messages:[]},.5),undefined);
+ const selected=fingerprintMessageAt(token,.5),url=new URL(ribbonSourceURL({message:selected,start:0},{workspace:'work /space',conversation:'workspace-ribbon',session:'main'},'/analyze?analyze_data=message_labels'),'http://pharos.invalid');
+ assert.equal(url.pathname,'/work/work%20%2Fspace');
+ assert.equal(url.searchParams.get('conversation'),'source /conversation');
+ assert.equal(url.searchParams.get('delegation_session'),'source /session');
+ assert.equal(url.searchParams.get('message'),'second');assert.equal(url.searchParams.get('reveal'),'message:second');
+ assert.equal(url.searchParams.get('reader_view'),'conversation');assert.equal(url.searchParams.has('analyze_data'),false);
+});
+
+test('ribbon keys fit on screen without covering their inspected bar',()=>{
+ for(const [anchor,height,viewport] of [[{top:400,bottom:440},320,480],[{top:10,bottom:54},200,480],[{top:210,bottom:254},600,480],[{top:100,bottom:144},300,900]]){
+  const position=ribbonInspectorPlacement(anchor,height,viewport),bottom=position.top+Math.min(height,position.maxHeight);
+  assert.ok(position.top>=0&&bottom<=viewport);
+  assert.ok(bottom<=anchor.top||position.top>=anchor.bottom,'a tall key must leave the ribbon clickable');
+  assert.ok(position.maxHeight>0);
+ }
 });
 
 test('label intervals reach between observations, clip at tool boundaries and leave idle gaps blank',()=>{
@@ -354,8 +394,25 @@ test('fingerprint allocations conserve message weight across roots, leaves, pare
  const segment=ribbonSegment([mixed,message('parent','C.report'),message('unlabeled',null),message('no-match',null,{chunks:1})],taxonomy),rows=new Map(segment.rows.map(row=>[row.id,row]));
  assert.equal(rows.get('all').share,1);assert.equal(rows.get('P').share,.125);assert.equal(rows.get('C').share,.375);assert.equal(rows.get('uncategorized').share,.5);assert.equal(rows.get('C.report~other').share,.25);assert.equal(rows.get('C.report~other').colorID,'C.report');
  assert.equal(rows.get('C.report.finding').parent,'C.report');assert.equal(rows.get('P.request.work.review').parent,'P.request.work');
+ assert.equal(stateColor(rows.get('no-match').colorID),'transparent');
+ assert.equal(stateColor(rows.get('unlabeled').colorID),stateColor('?'));
+ assert.notEqual(stateColor(rows.get('unlabeled').colorID),'transparent');
  for(const row of segment.rows){const children=segment.rows.filter(child=>child.parent===row.id);if(children.length)assert.ok(Math.abs(children.reduce((sum,child)=>sum+child.weight,0)-row.weight)<1e-12);}
  assert.deepEqual(ribbonSegment([],taxonomy),{rows:[],slices:[]});
+});
+
+test('fingerprints keep no-match runs separate from unprocessed messages, including after compression',()=>{
+ const messages=[message('pending',null),message('no-match-a',null,{chunks:1}),message('no-match-b',null,{chunks:2}),message('missing',null,{chunks:null}),message('matched','C.report')];
+ const tokens=conversationRibbon(conversation('coverage',messages));
+ assert.deepEqual(tokens.map(token=>token.messages.map(m=>m.id)),[['pending'],['no-match-a','no-match-b'],['missing'],['matched']]);
+ assert.deepEqual(tokens.map(token=>ribbonSegment(token.messages).slices.map(slice=>[slice.id,slice.share])),[[['unlabeled',1]],[['no-match',1]],[['unlabeled',1]],[['C.report',1]]]);
+ const compressed=conversationRibbon(conversation('coverage',messages),1);
+ assert.deepEqual(compressed.flatMap(token=>token.messages),messages);
+ const slices=new Map(ribbonSegment(compressed[0].messages).slices.map(slice=>[slice.id,slice]));
+ assert.equal(slices.get('no-match').share,2/5);
+ assert.equal(slices.get('unlabeled').share,2/5);
+ assert.equal(stateColor(slices.get('no-match').colorID),'transparent');
+ assert.notEqual(stateColor(slices.get('unlabeled').colorID),'transparent');
 });
 
 test('compact fingerprints bound their size while preserving message volume and recorded nesting',()=>{

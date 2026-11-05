@@ -24,7 +24,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || !strings.HasPrefix(response.Body.String(), "window.pharosPreferenceValues={};window.pharosPreviewScope=\"") {
 		t.Fatalf("empty library: %d %q", response.Code, response.Body.String())
 	}
-	body := `{"set":{"pharos-theme":"light","pharos-show-nav-button":true,"pharos-bookmarks-v1":[{"id":"a","url":"/x</script>","title":"T"}]}}`
+	body := `{"set":{"pharos-theme":"light","pharos-show-nav-button":true,"pharos-fingerprint-events":false,"pharos-bookmarks-v1":[{"id":"a","url":"/x</script>","title":"T"}]}}`
 	if response := preferencesCall(t, server, http.MethodPost, "/api/preferences", body); response.Code != http.StatusOK {
 		t.Fatalf("set: %d %s", response.Code, response.Body.String())
 	}
@@ -37,7 +37,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	if response.Header().Get("Content-Type") != "text/javascript; charset=utf-8" ||
 		!strings.HasPrefix(script, "window.pharosPreferenceValues={") ||
 		!strings.Contains(script, `"pharos-theme":"dark"`) || strings.Contains(script, "pharos-show-nav-button") ||
-		!strings.Contains(script, `"pharos-bookmarks-v1":[{`) {
+		!strings.Contains(script, `"pharos-bookmarks-v1":[{`) || !strings.Contains(script, `"pharos-fingerprint-events":false`) {
 		t.Fatalf("script: %q", script)
 	}
 	// The preview cache scope survives requests/restarts and separates catalogs
@@ -74,7 +74,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 		t.Fatal("different libraries share preview snapshots")
 	}
 	values := libraryStatusCall(t, server, "/api/preferences")["values"].(map[string]any)
-	if values["pharos-theme"] != "dark" || len(values) != 2 {
+	if values["pharos-theme"] != "dark" || values["pharos-fingerprint-events"] != false || len(values) != 3 {
 		t.Fatalf("values: %#v", values)
 	}
 }

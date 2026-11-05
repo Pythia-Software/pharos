@@ -51,7 +51,7 @@ export const askAreas: AskArea[] = [
 export const askExcludedPages: Record<string, string> = {
   "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
   "settings/layout": "Header and navigation layout preferences.",
-  "settings/preferences": "Display preferences.",
+  "settings/preferences": "Display preferences, including agent event markers and arcs in fingerprints.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted.",
 };
 
