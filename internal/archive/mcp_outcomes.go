@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The outcome and file-history MCP tools (docs/projects-and-outcomes.md).
@@ -35,8 +36,8 @@ var outcomeMCPTools = []map[string]any{
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"project":           map[string]any{"type": "string", "description": "A repository from list_projects."},
 			"branch":            map[string]any{"type": "string", "description": "Only branches whose name contains this text."},
-			"from":              map[string]any{"type": "string", "description": "Usage at or after this time (RFC 3339 or date)."},
-			"to":                map[string]any{"type": "string", "description": "Usage before this time."},
+			"from":              map[string]any{"type": "string", "description": "Usage in UTC hours starting at or after this time: an RFC 3339 timestamp or a UTC date. Spend is placed in the hour it was used."},
+			"to":                map[string]any{"type": "string", "description": "Usage in UTC hours starting before this time; a date includes its whole day."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Branches listed; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 }
@@ -49,7 +50,21 @@ func (c *Catalog) getBranchSpend(ctx context.Context, args map[string]any) (map[
 	limit := clamp(int(integer(valueOr(args["limit"], 20))), 1, 100)
 	budget := mcpBudget(args, 1500)
 	project, branchText := firstString(args["project"]), strings.ToLower(firstString(args["branch"]))
-	from, to := firstString(args["from"]), firstString(args["to"])
+	// Rows are hourly: the bounds select the hours starting in [from, to),
+	// compared as instants, so a bound's offset counts.
+	var from, to time.Time
+	for key, bound := range map[string]*time.Time{"from": &from, "to": &to} {
+		if value := strings.TrimSpace(firstString(args[key])); value != "" {
+			parsed, ok := parseTime(value)
+			if !ok {
+				return nil, fmt.Errorf("%s must be a valid timestamp or date", key)
+			}
+			if key == "to" && len(value) == len("2006-01-02") {
+				parsed = parsed.Add(24 * time.Hour)
+			}
+			*bound = parsed
+		}
+	}
 	var inProject map[string]bool
 	if project != "" {
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id FROM workspaces w`+projectJoin("w")+` WHERE `+projectPredicate("w"), projectArgs(project)...)
@@ -92,8 +107,8 @@ func (c *Catalog) getBranchSpend(ctx context.Context, args map[string]any) (map[
 	}
 	branches, coverage := map[string]*total{}, map[string]*total{}
 	for _, row := range rows {
-		at := firstString(row["usage_at"])
-		if inProject != nil && !inProject[firstString(row["workspace_id"])] || from != "" && at < from || to != "" && at >= to {
+		at, _ := parseTime(firstString(row["usage_at"]))
+		if inProject != nil && !inProject[firstString(row["workspace_id"])] || !from.IsZero() && at.Before(from) || !to.IsZero() && !at.Before(to) {
 			continue
 		}
 		branch := firstString(row["branch"])

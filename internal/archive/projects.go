@@ -338,7 +338,9 @@ func (c *Catalog) listProjects(args map[string]any) (map[string]any, error) {
 		if repository := folderRepository(key, roots); repository != "" {
 			where, values = " AND pj.id=?", []any{repository}
 		} else {
-			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{key, key}, true
+			// A folder is its project folder, so temporary folders are /tmp.
+			folder := projectFolder(path)
+			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{folder, folder}, true
 		}
 	}
 	rows, err := queryMaps(c.DB, `SELECT `+projectNameSQL("w")+` project,`+projectKindSQL("w")+` kind,MAX(pj.canonical_remote) remote,

@@ -774,12 +774,16 @@ commit, is an error naming `max_output_tokens`, never an empty page whose
   coverage split (on a branch per turn or per session, unknown, no branch
   data), from the same rows as Analyze → Spend by Branch. Where no repository
   session has spend, it says so and points to `query_statistics` per project.
+  Spend is placed in the UTC hour it was used: `from` and `to` select the
+  hours starting in [`from`, `to`), compared as instants, and a date `to`
+  includes its day.
 
 Every other tool takes the new facts too:
 
 - `list_projects` takes `path`, an agent's working directory, and returns the
   project it is in: the nearest repository checked out at or above it, else
-  the nearest folder project, even below where any session ran.
+  the nearest folder project, even below where any session ran. A temporary
+  directory is in `/tmp`, as the project rule places its sessions.
 - A `file` filter (`search_conversations`, `search_work`, `trace`,
   `query_statistics`) matches files sessions edited through their tool
   calls (`session_files`), not only change sets, so it finds Claude Code,
