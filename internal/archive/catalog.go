@@ -306,6 +306,7 @@ func (c *Catalog) Initialize() error {
 		{"conversations", "harness_version_first", "ALTER TABLE conversations ADD COLUMN harness_version_first TEXT"},
 		{"conversations", "harness_version_last", "ALTER TABLE conversations ADD COLUMN harness_version_last TEXT"},
 		{"conversations", "harness_version_source", "ALTER TABLE conversations ADD COLUMN harness_version_source TEXT"},
+		{"conversations", "extractor", "ALTER TABLE conversations ADD COLUMN extractor TEXT"},
 		{"workspaces", "reclamation_authority", "ALTER TABLE workspaces ADD COLUMN reclamation_authority INTEGER NOT NULL DEFAULT 0"},
 		{"workspaces", "main_merge_commit", "ALTER TABLE workspaces ADD COLUMN main_merge_commit TEXT"},
 		{"workspaces", "main_merge_title", "ALTER TABLE workspaces ADD COLUMN main_merge_title TEXT"},
@@ -341,6 +342,13 @@ func (c *Catalog) Initialize() error {
 				return err
 			}
 		}
+	}
+	// Conductor stored its extractor as its conversations' coverage before
+	// they had an extractor of their own.
+	if _, err := c.DB.Exec(`UPDATE conversations SET extractor=coverage,coverage='complete'
+		WHERE coverage LIKE ? AND NOT EXISTS(SELECT 1 FROM meta WHERE key='conversation_extractor_version');
+		INSERT OR IGNORE INTO meta(key,value) VALUES('conversation_extractor_version','1')`, legacyCoveragePrefix+"%"); err != nil {
+		return err
 	}
 	if err := c.ensureQueryFactTriggers(); err != nil {
 		return err

@@ -81,7 +81,7 @@ Past Work also shows when an archived commit appears on the local `origin/main` 
 - **Tools** analyzes tool use from retained transcripts. A daily summary table groups calls by tool, shell program and subcommand (`git status`, `go test`, `sed`), model, repository, and agent kind, with error counts by kind, durations, the tokens each result added to the context, the tokens re-read by later requests until compaction, and their API-equivalent cost. A per-call table filters and sorts every call; a summary row drills into its calls, and each call opens with its parsed commands, input, and result. Each call also records the sites it reached: URLs from web fetches, browser navigation, Codex web searches, and network commands such as `curl`, plus any web search query and the links it returned. Presets cover error rates, failure kinds, top commands, shell calls a dedicated tool could make, slow tools, test and build time, context cost, sites reached, and web searches. Definitions are in [`docs/tool-analytics.md`](tool-analytics.md).
 - **Findings** turns recurring, fixable patterns (failures, instruction drift between harnesses, CLI friction, context-heavy commands, orientation and exploration cost, cost outliers, and TL1 flavor problems) into plain-language cards with a proposed change. Findings go into per-target prompts ("carts") saved in the library; copying one is the intervention that starts a before-and-after measurement with a fixed analysis plan, guard metrics, and weekly net savings. Manual Index changes runs a full findings pass; scheduled indexing defers findings. Capture & index and separate index actions retain daily full discovery and watched-finding measurements between daily passes. See [`docs/findings.md`](findings.md).
 - **MCP** controls local agent access, provides a copyable stdio connection definition and setup prompt, and offers a query-table of recent tool calls with filters, saved views, metrics, response-size estimates, duration, result counts, truncation, and errors.
-- **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, and errors. Each card has an enable switch in its header. It offers **Find sources on this Mac** and links to Settings → Background Processing, which shows what runs Frequently, Hourly and Daily and has **Capture & index** (capture this Mac, index captures from every Mac, then any pending library upgrade) and, separately, **Capture this Mac** and **Index captured files**. The header's **Index changes** button incrementally indexes this Mac's sources, then refreshes GitHub, identities, Git integration, Tools, Human Words, and findings using live inputs by default and retained inputs only when explicitly enabled. Acquisition rollout is staged; see the [source acquisition matrix](incremental-sync.md#source-acquisition-rollout).
+- **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, errors, and what its kind of source never records or records only sometimes (see [content capabilities](#content-capabilities)). Each card has an enable switch in its header. It offers **Find sources on this Mac** and links to Settings → Background Processing, which shows what runs Frequently, Hourly and Daily and has **Capture & index** (capture this Mac, index captures from every Mac, then any pending library upgrade) and, separately, **Capture this Mac** and **Index captured files**. The header's **Index changes** button incrementally indexes this Mac's sources, then refreshes GitHub, identities, Git integration, Tools, Human Words, and findings using live inputs by default and retained inputs only when explicitly enabled. Acquisition rollout is staged; see the [source acquisition matrix](incremental-sync.md#source-acquisition-rollout).
 - **Library drive** (in the header) names the drive holding the library and what is holding or writing the library (capture, index, backup, Git lookups, Library view indexing), with progress and estimated completion times based on recent successful runs. In the app, **Eject** at the right of the panel's title releases the library, stops agents' Pharos MCP servers running from the drive, quits, and ejects it. See [Library status and Eject](configuration.md#library-status-and-eject).
 - **Macs and captures** (in Settings → Sources) lists this Mac and every Mac whose captures are in the library, with when each source was captured and indexed and which need indexing. **Open Capture & index** links to the capture and index controls and their progress. A newly added Mac is captured right after onboarding, then offered **Index now**.
 - **Library drive** checks and **Backups** (in Settings → Health) show the drive's encryption, Spotlight, file system, free space, volume pin and backup age, each with what to do and a copyable command, and back the library up to a folder on another drive.
@@ -106,6 +106,24 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 ## Sources and identity
 
 Each kind of source is one entry in `providerRegistry` (`provider_registry.go`). Its `providerSpec` declares the adapter, what capture copies and which of a database's tables it keeps, how retained inputs are acquired and named, where probe looks for it, whether setup offers it and in what order, whether background updates read it, and its rank among mirrors. Code that depends on a source's kind reads the spec rather than switching on the kind, so adding a provider is one entry plus its adapter (`TestAProviderNeedsOnlyItsSpec`). Parsers still name their own harnesses and channels.
+
+### Content capabilities
+
+Each spec also declares what its records hold (`Content`, `provider_capabilities.go`), for each of:
+- the folder and Git branch;
+- the model and effort;
+- per-request token usage;
+- tool calls and results;
+- thinking;
+- message times;
+- subagents;
+- a title the tool gave;
+- the tool's version;
+- a cost the tool reports.
+
+Each is supported, varies (with a note saying how), unsupported, or not applicable (a folder for a web chat). `GET /api/providers` serves the declarations, and `testdata/providers.json` keeps a copy for the JavaScript tests. The setup wizard takes its tools and their names from the endpoint, and shows a table of what the chosen tools record before any is added. Each Settings source card lists what its kind never records and what it records only sometimes.
+
+A conversation's `coverage` is a completeness word (`complete`, or `partial` when content it lists could not be read). Conductor once stored its extractor version there. That now has its own column, `conversations.extractor`, and the catalog upgrade moved existing values.
 
 | Kind | Acquisition | Mutation capability |
 | --- | --- | --- |
@@ -218,6 +236,7 @@ GET  /api/receipt/{receipt_or_operation_id}
 GET  /api/health
 GET  /api/health/carbon
 GET  /api/sources
+GET  /api/providers
 GET  /api/activity
 GET  /api/library/status
 GET  /api/health/drive

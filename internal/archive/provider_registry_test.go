@@ -1,9 +1,10 @@
 package archive
 
 import (
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -56,38 +57,69 @@ func TestProviderRegistryIsConsistent(t *testing.T) {
 	}
 }
 
-// The setup wizard offers the tools setupProviders lists, in its order, under
-// their display names.
-func TestSetupWizardListsTheRegistrysTools(t *testing.T) {
-	script, err := os.ReadFile(filepath.Join("assets", "onboarding.js"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	match := regexp.MustCompile(`const supported=\[([^\]]*)\]`).FindSubmatch(script)
-	if match == nil {
-		t.Fatal("onboarding.js lists no supported tools")
-	}
-	want := []string{}
-	for _, spec := range setupProviders() {
-		want = append(want, "'"+spec.Kind+"'")
-	}
-	if got := string(match[1]); got != strings.Join(want, ",") {
-		t.Fatalf("onboarding.js offers %s, the registry %s", got, strings.Join(want, ","))
-	}
-	kinds := regexp.MustCompile(`const KINDS = \{([^}]*)\}`).FindSubmatch(script)
-	if kinds == nil {
-		t.Fatal("onboarding.js names no tools")
+// Each provider declares every capability at most once, with a note for
+// people wherever its support varies.
+func TestProvidersDeclareTheirContent(t *testing.T) {
+	keys := map[string]bool{}
+	for _, capability := range contentCapabilityList {
+		keys[capability.Key] = true
 	}
 	for _, spec := range providerRegistry {
-		if spec.Setup == 0 && spec.Kind != "chatgpt" && spec.Kind != "claude-ai" {
-			continue
+		named := map[string]bool{}
+		for _, list := range []string{spec.Content.Supported, spec.Content.Varies, spec.Content.NotApplicable} {
+			for _, key := range strings.Fields(list) {
+				if !keys[key] || named[key] {
+					t.Fatalf("%s declares %q twice or unknown", spec.Kind, key)
+				}
+				named[key] = true
+			}
 		}
-		key := spec.Kind
-		if strings.Contains(key, "-") {
-			key = "'" + key + "'"
+		for key := range spec.Content.Notes {
+			if !keys[key] {
+				t.Fatalf("%s notes unknown %q", spec.Kind, key)
+			}
 		}
-		if !strings.Contains(string(kinds[1]), key+": '"+spec.DisplayName+"'") {
-			t.Fatalf("onboarding.js does not name %s %q", spec.Kind, spec.DisplayName)
+		for _, capability := range spec.info().Capabilities {
+			if capability.Support == varies && capability.Note == "" {
+				t.Fatalf("%s varies in %s without saying how", spec.Kind, capability.Key)
+			}
+		}
+	}
+	cursor, _ := providerFor("cursor-cli")
+	if missing, partial := cursor.contentLimits(); !slices.Contains(missing, "Token usage") || !slices.Contains(partial, "Thinking") || slices.Contains(missing, "Tool calls") {
+		t.Fatal(missing, partial)
+	}
+}
+
+// The setup wizard and its tests read the providers as GET /api/providers
+// gives them, from testdata/providers.json.
+func TestProvidersFixtureMatchesTheRegistry(t *testing.T) {
+	catalog, config := testCatalog(t)
+	config.Sources = []SourceConfig{{Name: "chats", Kind: "cursor-cli", Path: t.TempDir(), Enabled: true}}
+	server := testServer(t, config, catalog)
+	// A source's Settings card says what its kind never records.
+	if code, sources := probeCall(t, server, http.MethodGet, "/api/sources", ""); code != http.StatusOK ||
+		!strings.Contains(jsonText(sources["items"]), `"not_recorded":["Git branch","Effort","Token usage"`) {
+		t.Fatal(code, sources)
+	}
+	code, served := probeCall(t, server, http.MethodGet, "/api/providers", "")
+	if code != http.StatusOK {
+		t.Fatal(code, served)
+	}
+	data, _ := json.MarshalIndent(served, "", "  ")
+	data = append(data, '\n')
+	path := filepath.Join("..", "..", "testdata", "providers.json")
+	if os.Getenv("PHAROS_UPDATE_PROVIDERS") == "1" {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(data) {
+		t.Fatalf("%s is not the registry; run with PHAROS_UPDATE_PROVIDERS=1 (%v)", path, err)
+	}
+	for index, spec := range setupProviders() {
+		if info := providerInfos()[index]; info.Kind != spec.Kind || !info.Setup {
+			t.Fatalf("setup's tools come first, in its order: %+v", info)
 		}
 	}
 }

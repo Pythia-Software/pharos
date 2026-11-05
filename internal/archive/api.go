@@ -364,6 +364,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeEmbeddedAsset(w, asset.name, asset.contentType)
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
+	case path == "/api/providers":
+		writeJSON(w, map[string]any{"providers": providerInfos(), "capabilities": contentCapabilityList}, http.StatusOK)
 	case path == "/api/probe/tools":
 		home, _ := os.UserHomeDir()
 		writeJSON(w, map[string]any{"tools": probeTools(home, s.Config())}, http.StatusOK)
@@ -997,6 +999,9 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		}
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
 		item["preservation_mode"] = preservationMode(source)
+		if spec, ok := providerFor(source.Kind); ok {
+			item["not_recorded"], item["sometimes_recorded"] = spec.contentLimits()
+		}
 		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)
 		if reads := sqliteFallbackReads(source.Path); len(reads) > 0 {
 			item["sqlite_reads"] = reads

@@ -175,6 +175,33 @@ func TestIngestSkipsUnchangedRecordsWhenSourceFingerprintChanges(t *testing.T) {
 	}
 }
 
+// Conductor once stored its extractor as its conversations' coverage. The
+// upgrade moves it, and a saved catalog recovered later is read alike.
+func TestConductorExtractorLeavesCoverage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','conductor','local','s','Session','2026-09-23T00:00:00Z');
+		INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage) VALUES('old','w','codex','local','old','conductor-v12'),('partial','w','codex','local','partial','partial');
+		DELETE FROM meta WHERE key='conversation_extractor_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(catalog.DB, "SELECT id,coverage,COALESCE(extractor,'') extractor FROM conversations ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonText(rows); got != `[{"coverage":"complete","extractor":"conductor-v12","id":"old"},{"coverage":"partial","extractor":"","id":"partial"}]` {
+		t.Fatal(got)
+	}
+	for _, saved := range [][2]string{{"conductor-v12", ""}, {"complete", "conductor-v13"}, {"partial", ""}} {
+		coverage, extractor := legacyCoverage(saved[0], saved[1])
+		if coverage == "conductor-v12" || saved[0] == "conductor-v12" && extractor != "conductor-v12" || saved[1] != "" && extractor != saved[1] {
+			t.Fatal(saved, coverage, extractor)
+		}
+	}
+}
+
 func TestLegacyConductorResumeChecksActivityTime(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	adapter, err := MakeAdapter(SourceConfig{Name: "conductor", Kind: "conductor", Path: t.TempDir(), Account: "local"})
@@ -183,7 +210,7 @@ func TestLegacyConductorResumeChecksActivityTime(t *testing.T) {
 	}
 	record := WorkspaceRecord{SourceID: "session", SourceKind: "conductor", Account: "local", Title: "Session",
 		ActivityAt: "2026-09-20T00:00:00Z", Conversations: []ConversationRecord{{
-			NativeID: "thread", Provider: "codex", Account: "local", Coverage: conductorExtractor,
+			NativeID: "thread", Provider: "codex", Account: "local", Extractor: conductorExtractor,
 			Messages: []MessageRecord{{NativeID: "one", Role: "user", Kind: "message", Text: "hello", Selected: true}},
 		}},
 	}

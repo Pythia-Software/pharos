@@ -42,6 +42,10 @@ type ConversationRecord struct {
 	HarnessVersionFirst                                                                              string `json:"HarnessVersionFirst,omitempty"`
 	HarnessVersionLast                                                                               string `json:"HarnessVersionLast,omitempty"`
 	HarnessVersionSource                                                                             string `json:"HarnessVersionSource,omitempty"`
+	// Extractor, when set, versions the parser that read the conversation,
+	// so an unchanged record its current parser read need not be read
+	// again (recordUsesCurrentExtractor). Coverage stays a completeness word.
+	Extractor string `json:"Extractor,omitempty"`
 	Aliases                                                                                          []string
 	Messages                                                                                         []MessageRecord
 	// Instructions are the instruction files and skills the transcript

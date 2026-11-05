@@ -1,9 +1,12 @@
 // Source choice and consent stay separate from discovery and DOM rendering.
-function createPharosSourceWizard() {
-  const supported=['claude','codex','conductor','tl1','antigravity','copilot','opencode','cline','vscode-copilot','cursor','cursor-cli','zed'];
+// providers are GET /api/providers' list; setup offers those marked setup,
+// in their order.
+function createPharosSourceWizard(providers=[]) {
+  const supported=providers.filter(provider=>provider.setup).map(provider=>provider.kind);
   const key=c=>c.kind+'\0'+c.path;
   return {
     tools:[], detected:[], detectionReady:false, locations:[], report:null, decisions:new Map(), names:{},
+    capabilities() {return pharosCapabilityRows(providers,this.tools)},
     detect(tools) {
       this.detected=supported.filter(kind=>tools.some(tool=>tool.kind===kind));
       if(!this.detectionReady)this.tools=[...this.detected];
@@ -32,6 +35,17 @@ function createPharosSourceWizard() {
   };
 }
 
+// What the chosen tools' histories hold: a row for each capability, with a
+// cell for each tool (support and note), in the providers' order.
+function pharosCapabilityRows(providers,kinds) {
+  const chosen=kinds.map(kind=>providers.find(provider=>provider.kind===kind)).filter(Boolean);
+  if(!chosen.length)return[];
+  return chosen[0].capabilities.map(({key,label})=>({key,label,cells:chosen.map(provider=>{
+    const capability=provider.capabilities.find(item=>item.key===key)||{support:'unsupported'};
+    return {kind:provider.kind,name:provider.display_name,support:capability.support,note:capability.note||''};
+  })}));
+}
+
 // Source setup UI.
 // Detect installed tools and familiar data folders before offering choices. The same
 // guide runs inside application setup and from Settings → Sources. Approval
@@ -40,7 +54,9 @@ function createPharosSourceWizard() {
 (() => {
   'use strict';
   const DISMISSED = 'pharos-onboarding-dismissed:';
-  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', 'claude-ai': 'Claude.ai', copilot: 'Copilot CLI', opencode: 'OpenCode', cline: 'Cline', 'vscode-copilot': 'VS Code Copilot', cursor: 'Cursor', 'cursor-cli': 'Cursor CLI', zed: 'Zed', antigravity: 'Antigravity'};
+  // Display names by kind, from GET /api/providers once setup has loaded it.
+  let NAMES = {};
+  const toolName = kind => NAMES[kind] || kind;
   const CSS = `
 .source-setup-open .application-body{overflow:hidden}
 .source-setup-open .application-body>:not(#pharosOnboarding){display:none!important}
@@ -76,6 +92,15 @@ function createPharosSourceWizard() {
 .pharos-onboard .pharos-other-sources{padding:0;border:0;margin:14px 0;background:transparent;font-size:12px;color:var(--muted)}
 .pharos-onboard .pharos-other-tools{padding:16px 0 0;border:0;border-top:1px solid var(--line);margin:18px 0 0;background:transparent}
 .pharos-other-tools>summary{cursor:pointer;font-weight:600}
+.pharos-tool-contents{margin:22px 0 0;padding:16px 0 0;border-top:1px solid var(--line)}
+.pharos-tool-contents>p{margin:6px 0 12px}
+.pharos-table-scroll{overflow-x:auto;max-width:100%}
+.pharos-capabilities{border-collapse:collapse;font-size:14px}
+.pharos-capabilities th,.pharos-capabilities td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.pharos-capabilities thead th{font-weight:600;white-space:nowrap}
+.pharos-capabilities tbody th{font-weight:400;white-space:nowrap}
+.pharos-capabilities td small{display:block;max-width:24ch;margin-top:2px;font-size:12px}
+.pharos-capabilities .pharos-support-unsupported>span,.pharos-capabilities .pharos-support-not-applicable>span{color:var(--muted,#666)}
 .pharos-other-tools>.pharos-tool-options{margin-top:16px}
 .pharos-other-sources summary,.pharos-custom-source summary{cursor:pointer;font-weight:600}
 .pharos-onboard-body>p{margin:18px 0}
@@ -156,7 +181,7 @@ function createPharosSourceWizard() {
   function candidateRow(candidate, index, choices) {
     const row = node('div', 'pharos-candidate'), head = node('div', 'pharos-candidate-head');
     const id = `pharosCandidate${index}`, configured = candidate.configured;
-    const title = node('label', '', KINDS[candidate.kind] || candidate.kind);
+    const title = node('label', '', toolName(candidate.kind));
     title.htmlFor = id;
     head.append(title);
     if (candidate.display_path) head.append(node('code', '', candidate.display_path));
@@ -166,7 +191,7 @@ function createPharosSourceWizard() {
       const box = node('input');
       box.type = 'checkbox';
       box.id = id;
-      box.setAttribute('aria-label', `${KINDS[candidate.kind] || candidate.kind}: ${candidate.display_path || candidate.path}`);
+      box.setAttribute('aria-label', `${toolName(candidate.kind)}: ${candidate.display_path || candidate.path}`);
       box.checked = configured ? configured.enabled : candidate.recommended;
       // A paused source in this Mac's file can be switched on from here.
       box.disabled = Boolean(configured) && (configured.enabled || configured.scope !== 'host');
@@ -216,7 +241,7 @@ function createPharosSourceWizard() {
     const title=node('h2');title.id='pharosOnboardTitle';title.tabIndex=-1;
     const intro=node('p','pharos-onboard-intro');
     const body=node('div','pharos-onboard-body'),actions=node('div','pharos-onboard-actions');
-    const wizard=createPharosSourceWizard();
+    let wizard=createPharosSourceWizard();
     active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderTools()};
     dialog.append(title,intro,body,actions);
     if(embedded){embedded.classList.add('source-setup-open');embedded.setAttribute('aria-labelledby',title.id);embedded.querySelector('.application-body').append(dialog)}
@@ -239,14 +264,15 @@ function createPharosSourceWizard() {
       body.replaceChildren();error.textContent='';
       const descriptions={claude:'Conversations from the Claude Code app and CLI.',codex:'Conversations from the Codex app and CLI.',conductor:'Agent conversations and workspace context.',tl1:'Agent runs, tasks and project context.',antigravity:'Conversations from Antigravity / AGY.'};
       const note=node('p','pharos-muted');
-      const update=()=>{next.disabled=!wizard.tools.length;note.textContent='Reviewing locations comes next. Nothing is captured until you approve the sources.'};
+      const contents=node('section','pharos-tool-contents');contents.setAttribute('aria-label','What these tools record');
+      const update=()=>{next.disabled=!wizard.tools.length;note.textContent='Reviewing locations comes next. Nothing is captured until you approve the sources.';renderContents(contents,wizard.capabilities())};
       function options(kinds,labelText,detected){
         const fieldset=node('fieldset','pharos-tool-options');fieldset.setAttribute('aria-label',labelText);
         for(const kind of kinds){
           const label=node('label','pharos-tool'),box=node('input');box.type='checkbox';box.value=kind;box.checked=wizard.tools.includes(kind);
           const art=document.createElementNS('http://www.w3.org/2000/svg','svg');art.setAttribute('viewBox','0 0 80 54');art.setAttribute('aria-hidden','true');
           art.innerHTML=kind==='conductor'||kind==='tl1'?'<rect x="5" y="6" width="48" height="32" rx="3"/><rect x="26" y="19" width="48" height="30" rx="3"/><path d="m34 29 6 5-6 5m14 0h13"/>':'<rect x="7" y="5" width="66" height="44" rx="4"/><path d="M7 16h66m-54 9 8 6-8 6m19 0h17"/>';
-          const copy=node('span'),name=node('strong','',KINDS[kind]);copy.append(name,node('span','pharos-muted',descriptions[kind]));
+          const copy=node('span'),name=node('strong','',toolName(kind));copy.append(name,node('span','pharos-muted',descriptions[kind]));
           if(detected)copy.append(node('span','pharos-tool-detected','Detected on this Mac'));
           label.append(box,art,copy);fieldset.append(label);
           box.onchange=()=>{wizard.choose(kind,box.checked);update()};
@@ -261,7 +287,7 @@ function createPharosSourceWizard() {
       if(groups.other.length)other.append(options(groups.other,'Other tools',false));
       other.append(node('p','pharos-muted','Tools in a custom location may not be detected. Select one here to find or choose its conversation folder.'));
       const exports=node('details','pharos-other-sources');exports.append(node('summary','','ChatGPT exports and other formats'),node('p','pharos-muted','ChatGPT history comes from a downloaded export, rather than a local agent folder. You can configure exports and other supported source formats later in Settings → Sources.'));
-      other.append(exports);body.append(other);
+      other.append(exports);body.append(other,contents);
       actions.replaceChildren(step(1),button('Set up later',false,skip),next);update();
     }
     async function discover(){
@@ -278,7 +304,7 @@ function createPharosSourceWizard() {
       for(const checked of wizard.report.checked||[])if(checked.found_by==='chosen folder'&&checked.status==='missing')body.append(node('p','pharos-error',`No history found at ${checked.path}. Check the folder or choose another location.`));
       for(const kind of wizard.tools){
         const candidates=wizard.report.candidates.filter(candidate=>candidate.kind===kind);
-        const group=node('section','pharos-source-group');group.append(node('h3','',KINDS[kind]));
+        const group=node('section','pharos-source-group');group.append(node('h3','',toolName(kind)));
         if(!candidates.length)group.append(node('p','pharos-muted','No saved history found in the usual locations. Choose a different folder below, or go Back to change tools.'));
         for(const candidate of candidates){
           const row=candidateRow(candidate,choices.length,choices),choice=choices.find(c=>c.candidate===candidate);
@@ -291,7 +317,7 @@ function createPharosSourceWizard() {
       }
       const custom=node('details','pharos-custom-source');custom.append(node('summary','','Use a different folder'));
       const kind=node('select');kind.setAttribute('aria-label','Tool for this folder');
-      wizard.tools.forEach(tool=>{const option=node('option','',KINDS[tool]);option.value=tool;kind.append(option)});
+      wizard.tools.forEach(tool=>{const option=node('option','',toolName(tool));option.value=tool;kind.append(option)});
       const path=node('input');path.setAttribute('aria-label','Source folder');path.placeholder='/path/to/source';path.spellcheck=false;
       const hint=node('p','pharos-muted'),hints={claude:'Choose the Claude configuration folder containing projects, or the projects folder itself.',codex:'Choose the Codex home folder containing sessions.',conductor:'Choose the Conductor app data folder containing its databases.',tl1:'Choose the TL1 folder containing registry.json or workspaces.json.',antigravity:'Choose the Antigravity profile folder.'};
       kind.onchange=()=>hint.textContent=hints[kind.value];kind.onchange();
@@ -307,7 +333,7 @@ function createPharosSourceWizard() {
       const selected=wizard.selected();
       heading('Review source access.',selected.length?'Pharos will add these sources for this Mac and preserve their conversation files and database history in your library. Indexing comes next.':'No new sources are selected. You can finish setup now and add sources later.');
       body.replaceChildren();error.textContent='';
-      selected.forEach(candidate=>{const row=node('div','pharos-source-review');row.append(node('strong','',KINDS[candidate.kind]),node('code','',candidate.display_path||candidate.path),node('span','pharos-muted',facts(candidate)||'Size unavailable'));body.append(row)});
+      selected.forEach(candidate=>{const row=node('div','pharos-source-review');row.append(node('strong','',toolName(candidate.kind)),node('code','',candidate.display_path||candidate.path),node('span','pharos-muted',facts(candidate)||'Size unavailable'));body.append(row)});
       if(selected.length){const bytes=selected.reduce((total,c)=>total+(c.bytes||0),0);body.append(node('p','pharos-muted',`${plural(selected.length,'source')} selected${bytes?' · '+size(bytes)+' of source files':''}. Counts and sizes are estimates; database snapshots and search indexes need additional room.`))}
       body.append(node('p','pharos-muted','These choices apply only on this Mac. Opening the library on another Mac will ask you to configure its own sources.'));
       const add=button(selected.length?'Add and capture':'Finish setup',true,async()=>{
@@ -320,13 +346,37 @@ function createPharosSourceWizard() {
     heading('Finding your tools…','Checking common application and data-folder locations on this Mac.');
     body.replaceChildren(working('Looking for installed tools…'));
     actions.replaceChildren(step(1),button('Set up later',false,skip));active.back=skip;
-    call('/api/probe/tools').then(result=>{
+    // The tools setup offers, and what each records, come from the registry;
+    // detection only says which are on this Mac.
+    Promise.all([call('/api/providers'),call('/api/probe/tools').catch(()=>null)]).then(([catalog,result])=>{
       if(!dialog.isConnected||active?.stage!==0)return;
-      wizard.detect(result.tools||[]);renderTools();
+      NAMES=Object.fromEntries(catalog.providers.map(provider=>[provider.kind,provider.display_name]));
+      wizard=createPharosSourceWizard(catalog.providers);
+      wizard.detect(result?.tools||[]);renderTools();
+      if(!result)fail(Error('Tool detection was unavailable. You can still select tools under Other tools.'));
     }).catch(failure=>{
       if(!dialog.isConnected||active?.stage!==0)return;
-      wizard.detect([]);renderTools();fail(Error('Tool detection was unavailable. You can still select tools under Other tools.'));
+      body.replaceChildren();fail(failure);
     });
+  }
+
+  const SUPPORT={supported:'Yes',varies:'Sometimes',unsupported:'No','not-applicable':'Not applicable'};
+  // A table of what the chosen tools record (pharosCapabilityRows), one
+  // column a tool, so their limits are known before any is added.
+  function renderContents(section,rows) {
+    section.replaceChildren();section.hidden=!rows.length;
+    if(!rows.length)return;
+    section.append(node('h3','','What Pharos can read from these tools'),node('p','pharos-muted','Each tool keeps a different record of its conversations, and Pharos can only show what it keeps. When a tool reports no cost, Pharos prices its tokens.'));
+    const scroll=node('div','pharos-table-scroll'),table=node('table','pharos-capabilities'),head=node('tr'),tbody=node('tbody'),thead=node('thead');
+    scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.setAttribute('aria-label','What each chosen tool records');
+    const corner=node('th','','Records');corner.scope='col';head.append(corner);
+    for(const cell of rows[0].cells){const th=node('th','',cell.name);th.scope='col';head.append(th)}
+    for(const row of rows){
+      const tr=node('tr'),label=node('th','',row.label);label.scope='row';tr.append(label);
+      for(const cell of row.cells){const td=node('td','pharos-support-'+cell.support);td.append(node('span','',SUPPORT[cell.support]||cell.support));if(cell.note)td.append(node('small','pharos-muted',cell.note));tr.append(td)}
+      tbody.append(tr);
+    }
+    thead.append(head);table.append(thead,tbody);scroll.append(table);section.append(scroll);
   }
 
   function renderResult(result, body, actions, status) {
