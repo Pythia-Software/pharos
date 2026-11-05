@@ -101,7 +101,7 @@ func TestSnapshotSQLiteStepsThroughOneReadTransaction(t *testing.T) {
 	// Cancelled a few pages into a copy of thousands, it stops.
 	cancelled := &cancelAfter{Context: context.Background()}
 	cancelled.left.Store(5)
-	if err := backupSQLite(cancelled, file, filepath.Join(dir, "cancelled.db")); !errors.Is(err, context.Canceled) {
+	if err := backupSQLite(cancelled, openSourceSQLite, file, filepath.Join(dir, "cancelled.db")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled snapshot: %v", err)
 	}
 }

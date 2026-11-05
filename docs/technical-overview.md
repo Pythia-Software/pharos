@@ -133,10 +133,14 @@ Each Claude Code and Codex conversation also records the instruction files and s
 A harness's SQLite database is opened read-only (`openSourceSQLite`). When the harness keeps it from being read in place, the read steps down a ladder:
 
 1. **In place:** `mode=ro` and `query_only`, waiting up to five seconds for a lock.
-2. **Without locks** (`immutable=1`): when SQLite cannot create the shared-memory file it needs to read a WAL database, as in a read-only folder, and nothing is waiting beside the database to be written into it (no WAL frames, no hot journal).
-3. **From a copy:** otherwise the database and its WAL are copied to a private folder (`0700`, in the Mac's temporary folder, never in a capture or the library), the original is checked to be unchanged across the copy, and the copy is read with its WAL folded in. A copy is removed when its database closes, and one a crash left is removed a day later. A held lock always comes here, not to step 2, since whatever holds the lock can write at any moment and only a copy is checked.
+2. **Without locks** (`immutable=1`): only on a volume mounted read-only, which nothing can write, when SQLite cannot create the shared-memory file it needs to read a WAL database and nothing is waiting beside the database to be written into it (no WAL frames, no hot journal).
+3. **From a copy:** otherwise the database and its WAL are copied to a private folder (`0700`, in the Mac's temporary folder) and the copy is read with its WAL folded in. The original must be unchanged across the copy: its identity, size and time, its header's change counter, and its WAL's size, time and salts. The copy folder must be on the same disk as the original, so a copy, which holds everything the harness keeps (credentials included), never lands on a library drive. A copy is removed when its database closes; one a crash left is removed by the next process that opens a harness's database.
 
-A hot rollback journal (one SQLite has not zeroed) means a write is half done in the main file, so neither step 2 nor 3 is consistent. The read fails as busy and is tried again on the next update. A source whose last read was not in place says so on its Settings card (`sqlite_reads` in `GET /api/sources`) until it is read in place again. Pharos's own catalog and captures are opened with `openReadOnlySQLite`, never copied.
+The read waits instead, failing as busy so it is tried again on the next update, when no copy would be consistent:
+- **A hot rollback journal** (one SQLite has not zeroed) means a write is half done in the main file.
+- **A rollback-journal database held locked with no journal on disk** may be written without one (`journal_mode` `MEMORY` or `OFF`), with nothing to tell a whole copy from a half-written one.
+
+A source whose last read was not in place says so on its Settings card (`sqlite_reads` in `GET /api/sources`) until it is read in place again. Pharos's own catalog, its backups and its captures are opened with `openReadOnlySQLite`, never copied.
 
 Deduplication uses account-scoped native IDs. Conductor aliases are retained as evidence-backed identity links after all adapters run; repeated identical prompts are never merged by content hash. The Conductor extractor inspects each row and selects the materially populated `content`, `full_message`, or `text` field, recording that decision in its evidence locator.
 

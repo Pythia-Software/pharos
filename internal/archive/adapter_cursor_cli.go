@@ -160,7 +160,7 @@ func (a *cursorCLIAdapter) open(store string) (*sql.DB, *sql.Tx, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := openSourceSQLite(readable)
+	db, err := openSourceSQLite(a.context(), readable)
 	if err != nil {
 		return nil, nil, err
 	}

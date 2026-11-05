@@ -69,7 +69,7 @@ func (a *antigravityAdapter) requests(id string) (map[int64]antigravityRequest, 
 	if err != nil {
 		return nil, err
 	}
-	db, err := openSourceSQLite(readable)
+	db, err := openSourceSQLite(a.context(), readable)
 	if err != nil {
 		return nil, err
 	}

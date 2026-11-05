@@ -1527,7 +1527,7 @@ if(!conversations.length&&w.summary){const summary=node('section','panel');summa
 function formatBytes(value){if(value==null||!Number.isFinite(Number(value)))return'Unavailable';const amount=Math.max(0,Number(value)),units=['B','KB','MB','GB','TB','PB'];if(amount===0)return'0 B';const power=Math.min(Math.floor(Math.log(amount)/Math.log(1000)),units.length-1),scaled=amount/(1000**power),digits=scaled<10&&power>0?1:0;return`${scaled.toFixed(digits)} ${units[power]}`}
 function sourceTime(value){if(!value)return'Never';const date=new Date(value),seconds=Math.max(0,Math.round((Date.now()-date.getTime())/1000));let relative=seconds<60?'just now':seconds<3600?`${Math.floor(seconds/60)}m ago`:seconds<86400?`${Math.floor(seconds/3600)}h ago`:`${Math.floor(seconds/86400)}d ago`;return`${relative} · ${date.toLocaleString()}`}
 // A harness database Pharos could not read in place (openSourceSQLite).
-function sqliteReadNote(read){const file=read.path.split('/').pop();return{copy:`Read from a copy of ${file}: another app held it locked.`,immutable:`Read ${file} without locking it: its folder is read-only.`,waiting:`Waiting for another app to finish writing ${file}.`}[read.via]||`Read ${file} another way.`}
+function sqliteReadNote(read){const file=read.path.split('/').pop(),why=read.cause==='locked'?'another app held it locked':'it could not be read in place';return{copy:`Read from a copy of ${file}: ${why}.`,immutable:`Read ${file} without locking it: its volume is read-only.`,waiting:`Waiting for another app to finish writing ${file}.`,failed:`Could not read ${file}: ${read.reason}`}[read.via]||`Read ${file} another way.`}
 function sourceSeverity(source){if(source.error||source.path_status!=='available')return'bad';if(source.pending_count||!source.last_success_at||source.stale)return'warn';return''}
 function sourceFact(list,label,value){list.append(node('dt','',label),node('dd','',value))}
 async function loadSources(){
@@ -1556,7 +1556,7 @@ async function loadSources(){
     if(source.error)card.append(node('div','sync-note badtext',source.error));
     else if(source.path_status==='missing')card.append(node('div','sync-note badtext','The configured path is unavailable.'));
     const read=source.sqlite_reads?.[0];
-    if(read)card.append(node('div','sync-note',sqliteReadNote(read)));
+    if(read)card.append(node('div',read.via==='failed'?'sync-note badtext':'sync-note',sqliteReadNote(read)));
     localCards.push(card);
   });
   root.prepend(...localCards);

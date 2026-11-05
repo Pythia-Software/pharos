@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,7 +60,7 @@ func codexNamingDatabases(root string) ([]string, error) {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		db, err := openSourceSQLite(path)
+		db, err := openSourceSQLite(context.Background(), path)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +116,7 @@ func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 	}
 	seen := map[string]bool{}
 	for _, path := range databases {
-		db, err := openSourceSQLite(path)
+		db, err := openSourceSQLite(a.context(), path)
 		if err != nil {
 			return nil, err
 		}

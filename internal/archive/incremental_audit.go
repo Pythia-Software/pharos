@@ -788,7 +788,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 			return nil, nil, err
 		}
-		if err := snapshotSQLite(ctx, path, destination); err != nil {
+		if err := snapshotSourceSQLite(ctx, path, destination); err != nil {
 			return nil, nil, err
 		}
 		after, err := sqliteDependencyState(path)

@@ -529,7 +529,7 @@ func (a *antigravityAdapter) summaries(ids map[string]string) (map[string]antigr
 		if err != nil {
 			return nil, err
 		}
-		if db, err := openSourceSQLite(readable); err == nil {
+		if db, err := openSourceSQLite(a.context(), readable); err == nil {
 			rows, err := queryMapsContext(a.context(), db, "SELECT * FROM conversation_summaries")
 			db.Close()
 			if err != nil {

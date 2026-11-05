@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -294,7 +295,7 @@ func (p *capturePlan) walk(root string, info fs.FileInfo, prefix string, include
 }
 
 func conductorConversationDatabase(file string) (bool, error) {
-	db, err := openSourceSQLite(file)
+	db, err := openSourceSQLite(context.Background(), file)
 	if err != nil {
 		return false, err
 	}
