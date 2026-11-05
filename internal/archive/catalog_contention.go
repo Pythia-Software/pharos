@@ -48,12 +48,15 @@ func (c *Catalog) retryCatalogWrite(ctx context.Context, operation string, waiti
 			waiting()
 		}
 		timer := time.NewTimer(delay)
+		resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			resume()
 			return ctx.Err()
 		case <-timer.C:
 		}
+		resume()
 	}
 }
 
@@ -95,6 +98,8 @@ func (c *Catalog) acquireWriteGate(ctx context.Context) (func(), error) {
 	}
 	tracker.waiting.Add(1)
 	defer tracker.waiting.Add(-1)
+	resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
+	defer resume()
 	select {
 	case gate <- struct{}{}:
 		return func() { <-gate }, nil
@@ -169,7 +174,9 @@ func (c *Catalog) beginTrackedWrite(ctx context.Context, label string) (*sql.Tx,
 	if err != nil {
 		return nil, nil, err
 	}
+	resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
 	tx, err := c.beginWrite(ctx)
+	resume()
 	waited := time.Since(started)
 	if waited >= time.Second || err != nil {
 		fmt.Fprintf(os.Stderr, "Catalog writer acquisition: operation=%s pid=%d waited=%s %s error=%v\n", label, os.Getpid(), waited.Round(time.Millisecond), c.writerSummary(), err)

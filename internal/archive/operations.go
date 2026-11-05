@@ -648,7 +648,17 @@ func (op *Op) Plan(steps ...StepPlan) {
 	if !op.lock() {
 		return
 	}
+	// Worker phases replace step.Name, but the declared task remains active.
+	// Preserve that task's identity when discovery revises the remaining plan;
+	// unplanned discovery phases do not become positions in a new plan.
+	active := op.step.Name
+	if op.step.Index > 0 && op.step.Index <= len(op.plan) {
+		active = op.plan[op.step.Index-1].Name
+	}
 	op.plan = slices.Clone(steps)
+	if len(op.plan) > 0 {
+		op.step.Index = slices.IndexFunc(op.plan, func(step StepPlan) bool { return step.Name == active }) + 1
+	}
 	op.unlock(false)
 }
 
@@ -666,6 +676,11 @@ func (op *Op) stepLocked(name, source, unit string, total float64) {
 		op.transitionLocked(opRunning)
 	}
 	index := op.step.Index + 1
+	if len(op.plan) > 0 {
+		// A named task selects its planned position below. Other phase/source
+		// changes describe work inside that task and must not advance N of M.
+		index = op.step.Index
+	}
 	if planned := slices.IndexFunc(op.plan, func(step StepPlan) bool { return step.Name == name }); planned >= 0 {
 		index = planned + 1
 	}
@@ -697,6 +712,10 @@ func (op *Op) SetDone(n int64) {
 // the same one updates its counts. It allocates nothing when nothing changed.
 func (op *Op) progress(phase, source, unit string, done, total float64, known bool) {
 	if !op.lock() {
+		return
+	}
+	if opTerminal(op.state) {
+		op.reg.mu.Unlock()
 		return
 	}
 	if !known && total <= 0 {
@@ -752,6 +771,35 @@ func (op *Op) Unblock() {
 		op.reason, op.detail = "", ""
 	}
 	op.unlock(false)
+}
+
+// waitFor marks a real wait without replacing another owner's blocked/stopping
+// state. Tentative daemon probes stay invisible until they have found work.
+// The returned function restores only the wait this call actually installed.
+func (op *Op) waitFor(reason, detail string) func() {
+	if op == nil {
+		return func() {}
+	}
+	op.reg.mu.Lock()
+	if op.tentative || op.state != opRunning {
+		op.reg.mu.Unlock()
+		return func() {}
+	}
+	op.transitionLocked(opBlocked)
+	op.reason, op.detail = reason, detail
+	op.unlock(false)
+	return func() {
+		if !op.lock() {
+			return
+		}
+		if op.state == opBlocked && op.reason == reason && op.detail == detail {
+			op.transitionLocked(opRunning)
+			op.reason, op.detail = "", ""
+			op.unlock(false)
+			return
+		}
+		op.reg.mu.Unlock()
+	}
 }
 
 // SafePoint says how soon a stop would land; 0 means at one now.

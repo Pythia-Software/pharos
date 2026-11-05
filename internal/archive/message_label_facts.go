@@ -281,6 +281,8 @@ func (c *Catalog) refreshMessageLabelFacts(ctx context.Context) (int, error) {
 		}
 		return 0, tx.Commit()
 	}
+	completed := maintenanceBatch(ctx, tx, "Indexing message labels", "conversation", pending,
+		"SELECT count(*) FROM message_label_facts_dirty")
 	live := messageLabelLiveDataset(selector)
 	var ledger int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='message_labels'").Scan(&ledger); err != nil {
@@ -310,7 +312,9 @@ func (c *Catalog) refreshMessageLabelFacts(ctx context.Context) (int, error) {
 			return 0, err
 		}
 	}
-	return pending, tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return pending, err
 }
 
 func (c *Catalog) maintainMessageLabelFacts(ctx context.Context) {
@@ -321,7 +325,7 @@ func (c *Catalog) maintainMessageLabelFacts(ctx context.Context) {
 		}
 	}()
 	for {
-		if c.queries.wait(ctx) != nil {
+		if c.queries.wait(pass.context(ctx)) != nil {
 			return
 		}
 		if pass == nil {
@@ -329,8 +333,10 @@ func (c *Catalog) maintainMessageLabelFacts(ctx context.Context) {
 		}
 		var count int
 		var err error
-		pass.runIO(func() { count, err = c.refreshMessageLabelFacts(ctx) })
-		pass.worked(count)
+		pass.runIO(ctx, func(ctx context.Context) { count, err = c.refreshMessageLabelFacts(ctx) })
+		if err == nil {
+			pass.worked(count, "conversation")
+		}
 		delay := 20 * time.Millisecond
 		if count == 0 || err != nil {
 			pass.end(err)

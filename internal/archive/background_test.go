@@ -522,6 +522,11 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	if completed("tools") != 2 || completed("authorship") != 1 {
 		t.Fatalf("the pass caught up tools only: tools %d, authorship %d", completed("tools"), completed("authorship"))
 	}
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool {
+		return view.Spec.Kind == "analysis.tools" && view.Step.Name != ""
+	}) {
+		t.Fatal("scheduled analysis lost its worker progress before reaching the operation registry")
+	}
 	runs := catalog.backgroundRuns(ctx)
 	if runs["tools"].succeeded == "" || runs["tools"].err != "" {
 		t.Fatalf("the pass records each item it ran: %+v", runs["tools"])

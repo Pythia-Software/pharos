@@ -295,12 +295,21 @@ func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) 
 		if err != nil {
 			return done, err
 		}
+		var pending int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM (SELECT 1 FROM parallelism_dirty LIMIT ?)", min(limit-done, parallelismBatch)).Scan(&pending); err != nil {
+			_ = tx.Rollback()
+			return done, err
+		}
+		completed := maintenanceBatch(ctx, tx, "Measuring parallel work", "conversation", pending,
+			"SELECT count(*) FROM parallelism_dirty")
 		batch, err := deriveParallelismBatch(ctx, tx, cutoff, min(limit-done, parallelismBatch))
 		_ = tx.Rollback()
 		if err != nil || len(batch) == 0 {
 			return done, err
 		}
-		if err := c.publishParallelism(ctx, batch); err != nil {
+		err = c.publishParallelism(ctx, batch)
+		completed(err)
+		if err != nil {
 			return done, err
 		}
 		done += len(batch)

@@ -39,17 +39,71 @@ test("each top-level operation is one line: label, step N of M, its measured amo
   // A unit count, and a state that is not running says its word.
   const waiting = plain(panel.operationLine(operation("c", { state: "blocked", state_label: "Waiting", step: { index: 2, count: 4, name: "Indexing", unit: "conversation", done: 1, total: 1 } })));
   assert.deepEqual(waiting.primary, ["Waiting", "step 2 of 4", "1 of 1 conversation"]);
-  assert.deepEqual(waiting.secondary, ["Indexing"]);
+  assert.deepEqual(waiting.secondary, ["Indexing", "Detail c"]);
   // A state word that only repeats the label is left out.
   assert.deepEqual(plain(panel.operationLine(operation("d", { state: "blocked", state_label: "Label d" }))).primary, []);
 });
 
-test("Now shows foreground work, else the first background work", () => {
-  const busy = model(view({ operations: [operation("a"), operation("b", { priority: "background" }), operation("old", { state: "succeeded" })] }));
-  assert.deepEqual(busy.lines.map(line => line.id), ["a"]);
+test("Now shows concurrent background work alongside foreground work, foreground first", () => {
+  const busy = model(view({ operations: [operation("b", { priority: "background" }), operation("a"), operation("old", { state: "succeeded" })] }));
+  assert.deepEqual(busy.lines.map(line => line.id), ["a", "b"]);
   const background = model(view({ operations: [operation("b", { priority: "background" }), operation("c", { priority: "background" })] }));
-  assert.deepEqual(background.lines.map(line => line.id), ["b"]);
+  assert.deepEqual(background.lines.map(line => line.id), ["b", "c"]);
   assert.equal(model(view()).lines.length, 0);
+});
+
+test("unknown totals retain completed counts, a current phase, and elapsed time", () => {
+  const started = '2026-11-05T12:00:00Z';
+  const now = Date.parse(started) + 120000;
+  const pending = plain(panel.operationLine(operation('labels', {started_at: started,
+    step: {name: 'Indexing message labels', unit: 'conversation', done: 1200, total: null},
+  }), now));
+  assert.deepEqual(pending.primary, ['1,200 conversations processed']);
+  assert.ok(pending.secondary.includes('Indexing message labels'));
+  assert.ok(pending.secondary.includes('2 min elapsed'));
+  assert.equal(pending.fraction, null);
+  assert.equal(panel.stepAmount({unit: 'byte', done: 4200, total: null}), '4.2 KB processed');
+  assert.equal(panel.stepAmount({unit: 'conversation', done: 0, total: 0}), '0 of 0 conversations');
+  const starting = plain(panel.operationLine(operation('new', {verb: 'Finding work'})));
+  assert.equal(starting.progressLabel, 'Finding work');
+  assert.ok(starting.secondary.includes('Finding work'));
+});
+
+test("all operation kinds show their active child's progress and actual wait state", () => {
+  const child = operation('child', {kind: 'analysis.git', label: 'Check repositories', state: 'blocked',
+    state_label: 'Waiting', detail: 'Waiting for the catalog writer',
+    step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}});
+  const parent = operation('parent', {step: {index: 2, count: 4, name: 'Analysis'}, children: [child]});
+  const shown = plain(panel.operationLine(parent));
+  assert.equal(shown.label, parent.label);
+  assert.equal(shown.currentLabel, child.label);
+  assert.deepEqual(shown.primary, ['Waiting', 'step 2 of 4', '2 of 5 repositories']);
+  assert.ok(shown.secondary.includes('Waiting for the catalog writer'));
+  assert.equal(shown.fraction, .4);
+  assert.equal(shown.waiting, true);
+  assert.equal(plain(panel.operationLine({...parent, state: 'stopping', state_label: 'Stopping…'})).state, 'stopping');
+  child.step = null;
+  assert.equal(plain(panel.operationLine(parent)).fraction, null, 'an unmeasured child never inherits an old parent percentage');
+
+  // An ancestor can wait on its own write while its child remains live.
+  // Keep the child's measurements and the actual blocking ancestor's state.
+  child.step = {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4};
+  child.state = 'running';
+  child.state_label = 'Checking repositories';
+  child.detail = null;
+  const blocked = {...parent, state: 'blocked', state_label: 'Waiting', detail: 'Waiting for the catalog writer',
+    time: {label: 'about 3 min'}};
+  for (const ancestor of [blocked, {...parent, children: [{...blocked, id: 'chain', children: [child]}]}]) {
+    const line = plain(panel.operationLine(ancestor));
+    assert.equal(line.state, 'blocked');
+    assert.equal(line.waiting, true);
+    assert.ok(line.primary.includes('Waiting'));
+    assert.ok(line.secondary.includes('Waiting for the catalog writer'));
+    assert.equal(line.currentLabel, child.label);
+    assert.equal(line.fraction, .4);
+    assert.equal(line.time, '', 'a blocked ancestor must not keep showing a running countdown');
+  }
+  assert.equal(plain(panel.operationLine({...blocked, children: [{...child, state: 'stopping', state_label: 'Stopping…'}]})).state, 'stopping');
 });
 
 test("the app's operations that touch the selected library are on the Now row and make the chip busy, even with the library's service stopped", () => {

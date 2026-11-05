@@ -160,6 +160,10 @@ func (op *Op) Finish(err error)                // terminal state from err and th
   only where it is today, and the snapshot labels it as such.
 - `Plan` may be revised once discovery knows more (sources, needed steps);
   revisions only add or drop steps not yet started.
+- A declared plan owns the task position. Worker phase/source changes update
+  the active task's measurements without advancing its index. Replanning
+  preserves that task's identity; discovery before the plan starts has no
+  planned position.
 - `SafePoint` defaults from the kind's latency class (§3.1); work that knows
   better (an index inside a huge workspace) reports a measured estimate.
 - Handle methods never touch SQLite or take a catalog lock: progress hooks
@@ -173,6 +177,10 @@ func (op *Op) Finish(err error)                // terminal state from err and th
   refresh mirror their progress callbacks. Nothing in the registry writes
   to a run, so `libraryActivities` and the old drive panel are unchanged.
   (This replaces phase 0's plan of the handle updating `SyncRun.Work`.)
+- `reportWork` mirrors a worker's phase and measured counts to the operation
+  in its context, as well as its optional history/forecast callback. Chain
+  stages pass their own operation context into work; a history meter must not
+  be required for scheduled work to report progress.
 - Work that returns `nil` once a release cancelled its context did not
   finish: a top-level operation without a recorded outcome then ends
   `interrupted`.
@@ -376,11 +384,23 @@ operation.
 
 **Daemon passes.** A pass's operation is registered before the pass runs,
 tentatively: it counts for the verdict but tells no subscriber, and a pass
-that did nothing is forgotten without a trace. The first unit of work
-publishes it. A stretch of passes that keep finding work (the Search view
+that did nothing is forgotten without a trace. A positive work inventory
+publishes it before the first expensive batch; otherwise the first completed
+unit publishes it. Zero-work probes stay tentative. A stretch of passes that keep finding work (the Search view
 catching up, previews, parallelism, an index build) is one operation, from
 the first pass that works to the first that finds nothing. These kinds do
 not call `Wrote()`, so they are journaled only past their threshold.
+
+Maintenance batches report named phases and actual units: conversations for
+message-label query facts and parallelism, workspaces for Search projections,
+metrics and previews, messages/tool calls for search backfills, and files for
+capture compression. Counts advance after successful commits. Inventories are
+collected by the worker, never by a status request, and refreshed at most once
+per second or when the next batch would exhaust the previous inventory. New
+arrivals can increase a queue's total; the fraction is completed work in this
+pass, not elapsed time. Word-index removal retains its approximate row-cursor
+fraction, while its final merge reports completed batches with an unknown
+total. Any remaining unmeasured daemon work still reports named batch counts.
 
 **Very frequent tiny work.** WAL bounding checks every 10 s; almost every
 check does nothing. The check is the daemon. Only a check that runs a
@@ -1409,7 +1429,8 @@ Scheduled (muted: "updates tomorrow"; never "stale"), `behind` Behind,
 ### 8.3 Reason codes
 
 Blocked: `capture-running`, `ingest-busy` (another run holds the
-coordinator), `catalog-busy` (the writer, with retries), `destination-busy`,
+coordinator), `catalog-busy` (the writer, with retries), `interactive-query`
+(yielding to interactive reads when enabled), `destination-busy`,
 `waiting-for-drive`, `waiting-for-network`. Skipped: `already-running`,
 `nothing-to-do`, `disabled`, `capture-busy`, `deferred-to-<kind>`,
 `stopping`. Interrupted: `owner-exited` (its process died), `released`
@@ -1805,8 +1826,15 @@ the same schedule from one declaration (`backgroundItems`):
   Schedule head their sections. A background pass leads with its current
   task, shows its cadence beside it, and marks its place among the planned
   tasks. The marker is a task position, not an elapsed-time percentage; a
-  measured step has a separate progress bar. Other running lines say who
-  started them (`trigger`). An alert's title and action share a line, its detail
+  measured step has a separate accessible progress bar. All active operations
+  are shown, foreground first, including concurrent maintenance. Each line
+  uses its active child's current phase and counts, without inheriting a
+  previous stage's percentage. A wait or stop on any ancestor remains visible
+  alongside those child counts; stopping takes precedence over waiting, and
+  waiting suppresses the running countdown. Unknown totals keep completed counts and use
+  an indeterminate bar; elapsed time and actual query/writer wait reasons
+  remain visible. Other running lines say who
+  started them (`trigger`); this describes provenance, not a wait. An alert's title and action share a line, its detail
   below.
 
 ## Known hazards this contract must not hide
