@@ -275,7 +275,8 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		call.RequestKey = byBase[base]
 		if call.RequestKey == "" {
 			for _, request := range perStream[call.Stream] {
-				if request.FirstIndex >= index {
+				// An advisor makes no calls, wherever its record is stored.
+				if request.FirstIndex >= index && !claudeAdvisorRequest(messages[request.FirstIndex]) {
 					if !compactedBetween(copies[call.Stream], index-1, request.FirstIndex) {
 						call.RequestKey = request.Key
 					}

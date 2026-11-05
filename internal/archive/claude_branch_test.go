@@ -365,6 +365,16 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 				t.Fatalf("repair = %d, %v", repaired, err)
 			}
 			wantLibraryTokens(t, catalog, want)
+			// So is one indexed before raw text was kept, whose usage records
+			// are their text alone.
+			unsettle(t, catalog)
+			if _, err := catalog.DB.Exec("UPDATE messages SET raw_text=NULL WHERE kind='metadata' AND native_id LIKE '%:usage%'"); err != nil {
+				t.Fatal(err)
+			}
+			if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 5 {
+				t.Fatalf("repair = %d, %v", repaired, err)
+			}
+			wantLibraryTokens(t, catalog, want)
 		})
 	}
 	// s2, saved from a catalog that never held s1, counted s1's reply there,
@@ -725,6 +735,26 @@ func TestClaudeAdvisorRequestLeavesTheContextAlone(t *testing.T) {
 	if !found {
 		t.Fatalf("no request for msg_2 in %+v", requests)
 	}
+	// A reply's call on a line before its usage is the reply's, even where
+	// its advisor's record is stored before its own.
+	messages = parseJSONL(t, "claude", filepath.Join(t.TempDir(), "stored.jsonl"),
+		claudeTurn("s", "p1", "", "user", "Plan it", nil),
+		claudeReply("s", "a1", "p1", "msg_1", "req_1", toolUse("t1"), nil),
+		claudeReply("s", "a1b", "a1", "msg_1", "req_1", text("Planned"), advised))
+	last := len(messages) - 1
+	if !claudeAdvisorRequest(messages[last]) {
+		t.Fatalf("the advisor's record is not last: %+v", messages[last])
+	}
+	messages[last-1], messages[last] = messages[last], messages[last-1]
+	requests, calls := buildToolLedger(messages, "claude-test")
+	for _, request := range requests {
+		if len(calls) != 1 || request.Key == calls[0].RequestKey && request.Model != "claude-test" {
+			t.Fatalf("the call is given the %s request, of %d calls", request.Model, len(calls))
+		}
+	}
+	if calls[0].RequestKey == "" {
+		t.Fatal("the call is given no request")
+	}
 }
 
 func TestClaudeShallowerSubagentCountsAReplyItsChildCopied(t *testing.T) {
@@ -753,5 +783,20 @@ func TestClaudeShallowerSubagentCountsAReplyItsChildCopied(t *testing.T) {
 		WHERE m.native_id LIKE '%:usage' AND m.raw_text NOT LIKE '{"copied":%'`)
 	if err != nil || len(counted) != 1 || counted[0]["native_id"] != "s1:subagent:agent-z" || integer(counted[0]["agent_depth"]) != 1 {
 		t.Fatalf("counted in %v, %v; want agent-z at depth 1", counted, err)
+	}
+	// A library indexed before lineage depths, which stored every subagent
+	// at depth 1, is repaired to the same decision.
+	unsettle(t, catalog)
+	if _, err := catalog.DB.Exec("UPDATE conversations SET agent_depth=1 WHERE agent_depth>1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	wantLibraryTokens(t, catalog, 330)
+	counted, err = queryMaps(catalog.DB, `SELECT c.native_id FROM messages m JOIN conversations c ON c.id=m.conversation_id
+		WHERE m.native_id LIKE '%:usage' AND m.raw_text NOT LIKE '{"copied":%'`)
+	if err != nil || len(counted) != 1 || counted[0]["native_id"] != "s1:subagent:agent-z" {
+		t.Fatalf("repair counted in %v, %v; want agent-z", counted, err)
 	}
 }

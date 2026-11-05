@@ -217,6 +217,17 @@ func withUsageCopies(messages []MessageRecord) []MessageRecord {
 	return result
 }
 
+// usageRecordAs is the raw text of m, a usage record, as a copy of owner's
+// record, or as its own where owner is "". A record a library indexed before
+// raw text was kept has none, and keeps its usage in its text.
+func usageRecordAs(m MessageRecord, owner string) string {
+	raw, _ := unwrapUsageCopy(m.RawText)
+	if owner != "" {
+		return wrapUsageCopy(raw, owner)
+	}
+	return raw
+}
+
 // unwrapUsageCopy returns the record a copy keeps, and whether raw was one.
 func unwrapUsageCopy(raw string) (string, bool) {
 	if !strings.Contains(raw, `"`+claudeUsageCopyType+`"`) {
@@ -249,11 +260,12 @@ func claudeUsageKeys(m MessageRecord) ([]string, int64) {
 	}
 	raw, _ := unwrapUsageCopy(m.RawText)
 	event := map[string]any{}
-	if json.Unmarshal([]byte(raw), &event) != nil {
+	// A record stored without its event names its reply in its text.
+	if json.Unmarshal([]byte(defaultString(raw, m.Text)), &event) != nil {
 		return nil, 0
 	}
 	message := mapValue(event["message"])
-	id := firstString(message["id"])
+	id := firstString(message["id"], event["usage_message_id"])
 	if id == "" {
 		return nil, 0
 	}
@@ -264,7 +276,7 @@ func claudeUsageKeys(m MessageRecord) ([]string, int64) {
 	if strings.HasPrefix(id, "msg_") {
 		keys = append(keys, id)
 	}
-	return keys, integer(normalizeTokenCounts(mapValue(message["usage"]))["total_tokens"])
+	return keys, integer(normalizeTokenCounts(mapValue(firstNonNil(message["usage"], event["usage"])))["total_tokens"])
 }
 
 // dedupeClaudeGroupUsage counts once a reply that several of a session's
@@ -298,7 +310,7 @@ func dedupeClaudeGroupUsage(record *WorkspaceRecord) {
 		for m := range record.Conversations[c].Messages {
 			message := &record.Conversations[c].Messages[m]
 			if natives[usageCopyOf(*message)] {
-				message.RawText, _ = unwrapUsageCopy(message.RawText)
+				message.RawText = usageRecordAs(*message, "")
 			}
 			keys, tokens := claudeUsageKeys(*message)
 			if len(keys) == 0 {
@@ -350,7 +362,7 @@ func dedupeClaudeGroupUsage(record *WorkspaceRecord) {
 		if owner == r.conversation || usageCopyOf(*message) != "" {
 			continue
 		}
-		message.RawText = wrapUsageCopy(message.RawText, record.Conversations[owner].NativeID)
+		message.RawText = usageRecordAs(*message, record.Conversations[owner].NativeID)
 	}
 }
 

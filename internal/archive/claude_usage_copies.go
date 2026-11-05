@@ -218,12 +218,11 @@ func claimClaudeUsage(tx *sql.Tx, record *WorkspaceRecord) error {
 			if _, ok := keys[key]; !ok || natives[usageCopyOf(*message)] {
 				continue
 			}
-			raw, _ := unwrapUsageCopy(message.RawText)
-			want := raw
-			if owner := owners[key]; owner != conversation.NativeID {
-				want = wrapUsageCopy(raw, owner)
+			owner := owners[key]
+			if owner == conversation.NativeID {
+				owner = ""
 			}
-			message.RawText = want
+			message.RawText = usageRecordAs(*message, owner)
 		}
 	}
 	return nil
@@ -358,7 +357,7 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 // in copyOf a copy of the conversation it names there, or, where that is "",
 // its own. It reports whether any changed.
 func settleStoredUsage(tx *sql.Tx, conversationID string, copyOf map[string]string) (bool, error) {
-	rows, err := tx.Query(`SELECT m.id,m.native_id,COALESCE(m.raw_text,''),c.account FROM messages m JOIN conversations c ON c.id=m.conversation_id
+	rows, err := tx.Query(`SELECT m.id,m.native_id,COALESCE(m.raw_text,''),COALESCE(m.text,''),c.account FROM messages m JOIN conversations c ON c.id=m.conversation_id
 		WHERE m.conversation_id=? AND m.kind='metadata' AND (m.native_id LIKE '%:usage' OR m.native_id LIKE '%:usage:advisor:%')`, conversationID)
 	if err != nil {
 		return false, err
@@ -366,21 +365,18 @@ func settleStoredUsage(tx *sql.Tx, conversationID string, copyOf map[string]stri
 	type update struct{ id, raw string }
 	updates := []update{}
 	for rows.Next() {
-		var id, native, raw, account string
-		if err := rows.Scan(&id, &native, &raw, &account); err != nil {
+		var id, native, raw, text, account string
+		if err := rows.Scan(&id, &native, &raw, &text, &account); err != nil {
 			rows.Close()
 			return false, err
 		}
-		key, _ := claudeCrossKey(account, MessageRecord{NativeID: native, Kind: "metadata", RawText: raw})
+		record := MessageRecord{NativeID: native, Kind: "metadata", RawText: raw, Text: text}
+		key, _ := claudeCrossKey(account, record)
 		owner, ok := copyOf[key]
 		if !ok {
 			continue
 		}
-		want, _ := unwrapUsageCopy(raw)
-		if owner != "" {
-			want = wrapUsageCopy(want, owner)
-		}
-		if want != raw {
+		if want := usageRecordAs(record, owner); want != raw {
 			updates = append(updates, update{id, want})
 		}
 	}
@@ -390,7 +386,7 @@ func settleStoredUsage(tx *sql.Tx, conversationID string, copyOf map[string]stri
 		return false, err
 	}
 	for _, u := range updates {
-		if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE id=?", u.raw, u.id); err != nil {
+		if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE id=?", nilIfEmpty(u.raw), u.id); err != nil {
 			return false, err
 		}
 	}
@@ -469,13 +465,24 @@ func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string
 			conversation.Messages = slices.Clone(conversation.Messages)
 			record.Conversations = append(record.Conversations, conversation)
 		}
+		// Copies are decided by depth as a parse finds it from the session's
+		// launches, which a library indexed earlier may not have stored.
+		lineage := WorkspaceRecord{Conversations: slices.Clone(record.Conversations)}
+		reconcileClaudeLineage(&lineage)
+		depths := map[string]int{}
+		for _, conversation := range lineage.Conversations {
+			depths[conversation.NativeID] = conversation.AgentDepth
+		}
+		for g := range record.Conversations {
+			record.Conversations[g].AgentDepth = depths[record.Conversations[g].NativeID]
+		}
 		dedupeClaudeGroupUsage(&record)
 		for g, index := range group {
 			for m, message := range record.Conversations[g].Messages {
 				if message.RawText == conversations[index].Messages[m].RawText {
 					continue
 				}
-				if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE conversation_id=? AND native_id=?", message.RawText, ids[index], message.NativeID); err != nil {
+				if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE conversation_id=? AND native_id=?", nilIfEmpty(message.RawText), ids[index], message.NativeID); err != nil {
 					return err
 				}
 				changed[ids[index]] = true
