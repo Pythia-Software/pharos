@@ -601,7 +601,7 @@ func queryRowActionFields(dataset string, selected []string) []string {
 	var required []string
 	switch dataset {
 	case "tools":
-		required = []string{"day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "provider", "model", "effort", "repository_name", "session_kind", "source_kind"}
+		required = []string{"day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "provider", "model", "effort", "repository_name", "project_name", "session_kind", "source_kind"}
 	case "usage":
 		required = []string{"workspace_id", "conversation_id", "first_usage_at"}
 	case "conversation_activity":

@@ -1,0 +1,320 @@
+package archive
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// A project is what every workspace is grouped by: its repository, else the
+// repository whose checkout holds its folder, else its working folder, else
+// none (a chat export). See docs/projects-and-outcomes.md.
+
+// folderKey is a working directory as a folder project names it: cleaned, with
+// a home directory (this Mac's, or any /Users/<name> or /home/<name>) as ~.
+func folderKey(location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return ""
+	}
+	if location == "~" || strings.HasPrefix(location, "~/") {
+		return filepath.Clean(location)
+	}
+	if !filepath.IsAbs(location) {
+		return ""
+	}
+	location = filepath.Clean(location)
+	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+		if location == home {
+			return "~"
+		}
+		if rest, ok := strings.CutPrefix(location, home+"/"); ok {
+			return "~/" + rest
+		}
+	}
+	parts := strings.SplitN(strings.TrimPrefix(location, "/"), "/", 3)
+	if len(parts) >= 2 && (parts[0] == "Users" || parts[0] == "home") && parts[1] != "" && parts[1] != "Shared" {
+		if len(parts) == 2 {
+			return "~"
+		}
+		return "~/" + parts[2]
+	}
+	return location
+}
+
+// projectFolder is the folder project of a working directory. Temporary
+// directories (temporaryFolders) are one project, so each scratch directory
+// is not one. Tests, whose own directories are temporary, clear the list.
+func projectFolder(location string) string {
+	key := folderKey(location)
+	for _, temp := range temporaryFolders {
+		if key == temp || strings.HasPrefix(key, temp+"/") {
+			return "/tmp"
+		}
+	}
+	return key
+}
+
+// projectRoot is a checkout location of a repository, as a folder key.
+type projectRoot struct{ folder, repository string }
+
+func projectRoots(ctx context.Context, q queryer) ([]projectRoot, error) {
+	rows, err := queryMapsContext(ctx, q, `SELECT id,local_locations_json FROM repositories`)
+	if err != nil {
+		return nil, err
+	}
+	roots := []projectRoot{}
+	for _, row := range rows {
+		var locations []string
+		_ = json.Unmarshal([]byte(firstString(row["local_locations_json"])), &locations)
+		for _, location := range locations {
+			if key := folderKey(location); key != "" {
+				roots = append(roots, projectRoot{key, firstString(row["id"])})
+			}
+		}
+	}
+	return roots, nil
+}
+
+// folderRepository is the one repository with a checkout at the folder or
+// above it, the nearest one winning. A checkout at the home directory or at /
+// claims only itself, or a home directory under Git would swallow every
+// folder. Two repositories at the nearest checkout leave the folder alone.
+func folderRepository(folder string, roots []projectRoot) string {
+	best, found := "", ""
+	for _, root := range roots {
+		inside := folder == root.folder || root.folder != "~" && root.folder != "/" && strings.HasPrefix(folder, strings.TrimSuffix(root.folder, "/")+"/")
+		if !inside || len(root.folder) < len(best) {
+			continue
+		}
+		if len(root.folder) > len(best) {
+			best, found = root.folder, root.repository
+		} else if found != root.repository {
+			found = ""
+		}
+	}
+	return found
+}
+
+// projectChange is a workspace whose project columns differ from what its
+// location and repositories derive.
+type projectChange struct{ id, folder, repository string }
+
+// projectChanges derives the project columns of the workspaces predicate (over
+// w) selects, and returns those that differ from the stored ones. It only reads.
+func projectChanges(ctx context.Context, q queryer, predicate string, args ...any) ([]projectChange, error) {
+	rows, err := queryMapsContext(ctx, q, `SELECT w.id,w.repository_id,w.location,w.project_folder,w.folder_repository_id FROM workspaces w WHERE `+predicate, args...)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	var roots []projectRoot
+	changes := []projectChange{}
+	for _, row := range rows {
+		location := firstString(row["location"])
+		folder, repository := projectFolder(location), ""
+		if firstString(row["repository_id"]) == "" && folder != "" {
+			if roots == nil {
+				if roots, err = projectRoots(ctx, q); err != nil {
+					return nil, err
+				}
+			}
+			repository = folderRepository(folderKey(location), roots)
+		}
+		if folder != firstString(row["project_folder"]) || repository != firstString(row["folder_repository_id"]) {
+			changes = append(changes, projectChange{firstString(row["id"]), folder, repository})
+		}
+	}
+	return changes, nil
+}
+
+func applyProjectChanges(ctx context.Context, tx *sql.Tx, changes []projectChange) error {
+	for _, change := range changes {
+		if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET project_folder=?,folder_repository_id=? WHERE id=?`, nilIfEmpty(change.folder), nilIfEmpty(change.repository), change.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveProjects sets the project columns of the workspaces predicate (over
+// w) selects. Only ingest and maintenance call it: requests never write.
+func resolveProjects(ctx context.Context, tx *sql.Tx, predicate string, args ...any) error {
+	changes, err := projectChanges(ctx, tx, predicate, args...)
+	if err != nil {
+		return err
+	}
+	return applyProjectChanges(ctx, tx, changes)
+}
+
+// resolveFolderProjects resolves again the workspaces without a repository
+// once repositories gained checkouts, since a folder may now be one of them.
+func resolveFolderProjects(ctx context.Context, tx *sql.Tx, added []string) error {
+	if len(added) == 0 {
+		return nil
+	}
+	return resolveProjects(ctx, tx, `w.repository_id IS NULL AND w.location IS NOT NULL`)
+}
+
+// repositoryCheckouts is every repository's checkouts, to tell whether a
+// write that bypasses upsertRepositoryChanges added any.
+func repositoryCheckouts(ctx context.Context, q queryer) (string, error) {
+	rows, err := queryMapsContext(ctx, q, `SELECT COALESCE(group_concat(id||'='||COALESCE(local_locations_json,''),char(10)),'') checkouts FROM (SELECT id,local_locations_json FROM repositories ORDER BY id)`)
+	if err != nil || len(rows) == 0 {
+		return "", err
+	}
+	return firstString(rows[0]["checkouts"]), nil
+}
+
+// migrateProjects adds the project columns and derives them for every
+// workspace. It runs whenever a build first opens the catalog, so it also
+// repairs what an older build wrote without them (repairProjects does so
+// while this build stays open); it writes only the rows that differ.
+func (c *Catalog) migrateProjects() error {
+	for _, column := range []string{"project_folder", "folder_repository_id"} {
+		has, err := c.hasColumn("workspaces", column)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := c.DB.Exec("ALTER TABLE workspaces ADD COLUMN " + column + " TEXT"); err != nil {
+				return err
+			}
+		}
+	}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := resolveProjects(context.Background(), tx, "1"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// repairProjects derives every workspace's project columns and writes those
+// that differ: a build from before projects inserts workspaces without them
+// and moves locations without updating them, on this Mac or another sharing
+// the library. The derivation only reads, so a library with nothing to repair
+// takes no write lock.
+func (c *Catalog) repairProjects(ctx context.Context) error {
+	changes, err := projectChanges(ctx, c.DB, "1")
+	if err != nil || len(changes) == 0 {
+		return err
+	}
+	return c.writeTransaction(ctx, "repair projects", func(tx *sql.Tx) error {
+		// Derive again under the write lock, in case a writer changed them.
+		return resolveProjects(ctx, tx, "w.id IN (SELECT value FROM json_each(?))", jsonText(projectChangeIDs(changes)))
+	})
+}
+
+func projectChangeIDs(changes []projectChange) []string {
+	ids := make([]string, len(changes))
+	for index, change := range changes {
+		ids[index] = change.id
+	}
+	return ids
+}
+
+// projectJoin joins the repository of the project of workspace alias w as pj.
+func projectJoin(w string) string {
+	return " LEFT JOIN repositories pj ON pj.id=COALESCE(" + w + ".repository_id," + w + ".folder_repository_id)"
+}
+
+// projectNameSQL is the project's name: its repository's, else its folder.
+// It is NULL only for a workspace with no project.
+func projectNameSQL(w string) string {
+	return "COALESCE(pj.display_name," + w + ".project_folder)"
+}
+
+// projectKindSQL is repository, folder, or none: three states, never NULL.
+func projectKindSQL(w string) string {
+	return "CASE WHEN pj.id IS NOT NULL THEN 'repository' WHEN " + w + ".project_folder IS NOT NULL THEN 'folder' ELSE 'none' END"
+}
+
+// projectIDSQL is a stable project key, NULL for no project.
+func projectIDSQL(w string) string {
+	return "CASE WHEN pj.id IS NOT NULL THEN 'repository:'||pj.id WHEN " + w + ".project_folder IS NOT NULL THEN 'folder:'||" + w + ".project_folder END"
+}
+
+// projectPredicate selects the workspaces (alias w) of the projects a project
+// filter names: a repository by name or remote, as the repository filter
+// matches, including the folders checked out inside it; or a folder project
+// by its key (~/notes), any part of it, or its absolute path. A workspace in
+// a repository is that repository's project, even inside a folder project's
+// directory, so a folder name matches only workspaces outside any repository,
+// as projectKindSQL tells them. Its arguments are projectArgs.
+func projectPredicate(w string) string {
+	repository := "COALESCE(" + w + ".repository_id," + w + ".folder_repository_id)"
+	return "(" + repository + " IN (SELECT pr.id FROM repositories pr WHERE " + repositoryNamePredicate("pr") + ")" +
+		" OR instr(lower(" + w + ".project_folder),lower(?))>0 AND NOT EXISTS(SELECT 1 FROM repositories pf WHERE pf.id=" + repository + "))"
+}
+
+func projectArgs(value string) []any {
+	folder := value
+	if key := projectFolder(value); key != "" {
+		folder = key
+	}
+	return []any{value, value, folder}
+}
+
+// checkProjectFilter reports an error when a project filter matches no
+// project, which would otherwise filter everything out silently.
+func (c *Catalog) checkProjectFilter(value string) error {
+	matches, err := queryMaps(c.DB, `SELECT 1 FROM workspaces w WHERE `+projectPredicate("w")+` LIMIT 1`, projectArgs(value)...)
+	if err != nil || len(matches) > 0 {
+		return err
+	}
+	return fmt.Errorf("no project named %q. list_projects lists the projects Pharos knows: repositories by name, and folders as ~/path", value)
+}
+
+// listProjects is the list_projects tool: every project an agent can pass as
+// the project filter, repositories and folders alike, most recently active
+// first. A library without Git lists its folders here as completely as one
+// with Git lists its repositories.
+func (c *Catalog) listProjects(args map[string]any) (map[string]any, error) {
+	query := strings.ToLower(strings.TrimSpace(firstString(args["query"])))
+	kind := firstString(args["kind"])
+	limit := clamp(int(integer(valueOr(args["limit"], 20))), 1, 100)
+	budget := mcpBudget(args, 1500)
+	rows, err := queryMaps(c.DB, `SELECT `+projectNameSQL("w")+` project,`+projectKindSQL("w")+` kind,MAX(pj.canonical_remote) remote,
+		COUNT(c.id) conversations,MAX(COALESCE(c.ended_at,c.started_at,w.activity_at)) last_message_at,MAX(w.indexed_at) last_indexed_at
+		FROM workspaces w`+projectJoin("w")+` JOIN conversations c ON c.workspace_id=w.id
+		WHERE `+projectNameSQL("w")+` IS NOT NULL
+		GROUP BY `+projectIDSQL("w")+` ORDER BY last_message_at DESC,project`)
+	if err != nil {
+		return nil, err
+	}
+	items := []map[string]any{}
+	for _, row := range rows {
+		if kind != "" && row["kind"] != kind {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(firstString(row["project"])+"\n"+firstString(row["remote"])), query) {
+			continue
+		}
+		if row["remote"] == nil {
+			delete(row, "remote")
+		}
+		items = append(items, row)
+	}
+	result := map[string]any{"total": len(items)}
+	if len(items) > limit {
+		items = items[:limit]
+		result["truncated"] = true
+	}
+	result["items"] = items
+	// Chat exports without a folder belong to no project and match no filter.
+	none, err := queryMaps(c.DB, `SELECT COUNT(*) n FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+		WHERE w.repository_id IS NULL AND w.folder_repository_id IS NULL AND w.project_folder IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	result["conversations_without_project"] = none[0]["n"]
+	fitConversationItems(result, budget)
+	return result, nil
+}

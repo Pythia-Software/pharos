@@ -830,8 +830,15 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 	}
-	// Tool calls already stored may name a checkout this record made known.
+	// Tool calls already stored may name a checkout this record made known,
+	// and so may the folders of workspaces without a repository.
 	if err := reresolveToolPaths(tx, stalePaths); err != nil {
+		return 0, 0, err
+	}
+	if err := resolveProjects(context.Background(), tx, "w.id=?", workspaceID); err != nil {
+		return 0, 0, err
+	}
+	if err := resolveFolderProjects(context.Background(), tx, stalePaths); err != nil {
 		return 0, 0, err
 	}
 	workItemID := ""
@@ -2162,6 +2169,9 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if err := c.inheritHarnessAliasesContext(ctx); err != nil {
+		return 0, err
+	}
+	if err := c.repairProjects(ctx); err != nil {
 		return 0, err
 	}
 	links, err := queryMapsContext(ctx, c.DB, `SELECT wa.id left_id,wa.source_kind left_kind,wa.activity_at left_activity,

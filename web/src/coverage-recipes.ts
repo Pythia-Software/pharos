@@ -71,9 +71,9 @@ const parallelRecipes: QueryRecipe[] = [
     measures: [{ id: "pl_hours", op: "sum", field: "unit_hours", groupBy: ["hour_of_day"], groupLimit: 24, sort: [{ key: "group0", dir: "asc" }], label: "Agent hours by local hour",
       display: { kind: "bar-vertical", xLabel: "Local hour", yLabel: "Agent hours", format: { kind: "number", decimals: 1 } } }],
     cover: { mode: "source", metricId: "pl_hours", kind: "bar-vertical", maxGroups: 24, height: 170 } }),
-  parallel({ id: "parallel-repositories", title: "Agent hours by repository", description: "Active agent hours per repository over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Compare repositories", measures: [],
-    exploration: compare(["repository_name"], [sum("pl_agent_hours", "unit_hours", "Agent hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Agents" }],
-      "hours", "repositories", "Compare repositories", { context: [{ field: "pl_elapsed", label: "h with any active" }, { field: "pl_units", label: "agents" }] }),
+  parallel({ id: "parallel-repositories", title: "Agent hours by project", description: "Active agent hours per project over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Compare projects", measures: [],
+    exploration: compare(["project_name"], [sum("pl_agent_hours", "unit_hours", "Agent hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Agents" }],
+      "hours", "projects", "Compare projects", { context: [{ field: "pl_elapsed", label: "h with any active" }, { field: "pl_units", label: "agents" }] }),
     cover: { mode: "result", metricId: "pl_agent_hours", kind: "bar-horizontal", maxGroups: 6, showOther: true } }),
 ];
 
@@ -96,7 +96,7 @@ const carbonRecipes: QueryRecipe[] = [
     trend: { value: { op: "sum", field: "co2e_kg" }, valueLabel: "kg CO₂e · past {days} days", pointValueLabel: "kg CO₂e", sample: "usage records",
       detail: "Each point: estimated CO₂e over its trailing {days} local days, including today so far. The norm is the mean of the prior 30 endpoints." } },
   carbon("carbon-tiers", "CO₂e by model size", "Share of estimated emissions from small, mid-size and large models over the last {days} days.", ["carbon_tier"], "Compare model tiers", true, { cover: { mode: "result", metricId: co2.id, kind: "pie", maxGroups: 3, showOther: false, showLegend: true, legendColumns: 2, height: 230 } }),
-  carbon("carbon-repositories", "CO₂e by repository", "Repositories with the largest estimated emissions from recorded tokens over the last {days} days.", ["repository_name"], "Compare repositories", false),
+  carbon("carbon-repositories", "CO₂e by project", "Projects with the largest estimated emissions from recorded tokens over the last {days} days.", ["project_name"], "Compare projects", false),
   carbon("carbon-models", "CO₂e by model", "Models with the largest estimated emissions from recorded tokens over the last {days} days.", ["model_family"], "Compare models", false),
   carbon("carbon-providers", "CO₂e by provider", "Share of estimated emissions by agent provider over the last {days} days.", ["provider"], "Compare providers", true),
   carbon("carbon-effort", "CO₂e by effort", "Share of estimated emissions by recorded reasoning effort over the last {days} days.", ["effort"], "Compare effort levels", true,

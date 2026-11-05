@@ -97,7 +97,7 @@ func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledg
 		if row == nil {
 			row = map[string]any{
 				"id": key, "agent_session_id": entry["agent_session_id"], "conversation_id": entry["conversation_id"],
-				"workspace_id": entry["workspace_id"], "title": entry["title"], "repository_name": entry["repository_name"],
+				"workspace_id": entry["workspace_id"], "title": entry["title"], "repository_name": entry["repository_name"], "project_name": entry["project_name"],
 				"source_kind": entry["source_kind"], "provider": entry["provider"], "model": model, "effort": nilIfEmpty(firstString(entry["effort"])),
 				"model_effort": modelEffort(model, firstString(entry["effort"])),
 				"harness":      entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
@@ -164,7 +164,7 @@ func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribu
 		row["session_role"] = nilIfEmpty(lineage.sessionRoles[session])
 		if root := lineage.roots[firstString(row["conversation_id"])]; root != nil {
 			row["root_conversation_id"], row["root_provider"] = root["id"], root["provider"]
-			row["root_title"], row["root_repository_name"] = root["root_title"], root["root_repository_name"]
+			row["root_title"], row["root_repository_name"], row["root_project_name"] = root["root_title"], root["root_repository_name"], root["root_project_name"]
 			row["root_model_family"] = modelFamily(firstString(root["model"]))
 			row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
 			row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[session])
@@ -439,12 +439,12 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
             CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
-			w.id workspace_id,w.title,w.source_kind,r.display_name repository_name
+			w.id workspace_id,w.title,w.source_kind,r.display_name repository_name,`+projectNameSQL("w")+` project_name
 		FROM agent_session_usage u
 		JOIN agent_sessions a INDEXED BY agent_sessions_usage_idx ON a.id=u.agent_session_id
         LEFT JOIN conversations c INDEXED BY conversations_usage_idx ON c.id=a.conversation_id
 		JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
-		LEFT JOIN repositories r ON r.id=w.repository_id
+		LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w")+`
 		WHERE u.total_tokens>0`+filter, args...)
 }
 

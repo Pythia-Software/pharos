@@ -90,7 +90,7 @@ func TestBrowseSiteReachesEveryServedPageWithinItsBudget(t *testing.T) {
 		columns := map[string]bool{}
 		for {
 			value, text := browseText(t, catalog, map[string]any{"path": path, "offset": offset})
-			if len(text) > 3000*3 {
+			if len(text) > 3500*3 {
 				t.Errorf("%s: %d bytes over the default budget", path, len(text))
 			}
 			items, _ := value["items"].([]any)

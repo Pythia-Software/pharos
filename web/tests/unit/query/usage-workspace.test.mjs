@@ -141,7 +141,7 @@ test("dashboard filter descriptions preserve alternatives, negations, empties an
   const schema = loadSchema(usage);
   const query = { ...EMPTY_QUERY, where: [
     { any: [{ field: "provider", op: "=", value: "codex" }, { field: "provider", op: "=", value: "claude" }] },
-    { any: [{ field: "repository_name", op: "contains", value: "pharos", negated: true }, { field: "provider", op: "is_null", value: "" }] },
+    { any: [{ field: "project_name", op: "contains", value: "pharos", negated: true }, { field: "provider", op: "is_null", value: "" }] },
     { any: ["2026-10-02", "2026-10-01", "2026-10-03"].map(value => ({ field: "day", op: "=", value })) },
     { any: ["2026-10-01", "2026-10-03"].map(value => ({ field: "day", op: "=", value })) },
     { field: "provider", op: "!=", value: "claude" },
@@ -151,7 +151,7 @@ test("dashboard filter descriptions preserve alternatives, negations, empties an
     { any: [{ all: [{ field: "provider", op: "=", value: "claude" }, { field: "model", op: "=", value: "opus" }] }, { field: "provider", op: "=", value: "codex" }] },
   ] };
   assert.deepEqual(dashboardQueryDetails(schema, query)[0].values, [
-    "(Provider is Codex or Claude)", "(not (Repository contains pharos) or Provider is empty)",
+    "(Provider is Codex or Claude)", "(not (Project contains pharos) or Provider is empty)",
     "Day from 2026-10-01 to 2026-10-03", "(Day is 2026-10-01 or 2026-10-03)", "Provider is not Claude",
     "First usage is before 2026-10-21 12:00 UTC", "Last usage is after 2026-10-21 12:34:56.123 -06:00", "No matching records",
     "((Provider is Claude and Reported model is opus) or Provider is Codex)",
@@ -159,17 +159,17 @@ test("dashboard filter descriptions preserve alternatives, negations, empties an
 });
 
 test("dashboard previews distinguish source and group filters and retain custom sorts", () => {
-  const schema = loadSchema(usage), source = { ...EMPTY_QUERY, orderBy: [{ field: "total_tokens", dir: "asc" }], where: [{ field: "repository_name", op: "=", value: "pharos" }] };
+  const schema = loadSchema(usage), source = { ...EMPTY_QUERY, orderBy: [{ field: "total_tokens", dir: "asc" }], where: [{ field: "project_name", op: "=", value: "pharos" }] };
   const query = { ...EMPTY_QUERY, grouping: { source, keys: [], summaries: [{ id: "total", label: "Total tokens", op: "sum", field: "total_tokens" }], representative: null }, where: [{ field: "total", op: ">", value: "1000" }], orderBy: [{ field: "total", dir: "desc" }] };
   const links = dashboardQueryLinks("usage", query, schema, new URLSearchParams());
   const details = Object.fromEntries(links[0].details.map(detail => [detail.label, detail.values]));
-  assert.deepEqual(details.Filters, ["Repository is pharos"]);
+  assert.deepEqual(details.Filters, ["Project is pharos"]);
   assert.deepEqual(details["Group filters"], ["Total tokens is greater than 1000"]);
   assert.equal(details["Group by"], undefined);
   assert.deepEqual(details.Sort, ["Total tokens descending"]);
   const sentence = dashboardQuerySentence(links[0].details);
   assert.deepEqual(sentence.map(part => part.keyword), ["Show", "where", "keeping groups where", "sorted by"]);
-  assert.equal(sentence.map(part => `${part.prefix}${part.keyword}${part.text ? ` ${part.text}` : ""}`).join(""), "Show Total tokens where Repository is pharos, keeping groups where Total tokens is greater than 1000, sorted by Total tokens descending");
+  assert.equal(sentence.map(part => `${part.prefix}${part.keyword}${part.text ? ` ${part.text}` : ""}`).join(""), "Show Total tokens where Project is pharos, keeping groups where Total tokens is greater than 1000, sorted by Total tokens descending");
   assert.deepEqual(links[1].details.find(detail => detail.label === "Sort").values, ["Cost (API $) descending"]);
   assert.deepEqual(links[1].query.where, source.where);
   const ungrouped = dashboardQueryLinks("usage", EMPTY_QUERY, schema, new URLSearchParams());
@@ -190,16 +190,16 @@ test("all eight dashboards offer four distinct native queries that retain source
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
-    ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
+    ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["project_name"], label: "Typed words" }],
     ["skills", "skill_usages", trendClause(skillsAnalysisCatalog, { metric: "records", split: "skill_name" })],
     ["time", "tool_calls", trendClause(toolTimeAnalysisCatalog, { metric: "time", split: "activity" })],
-    ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" }],
+    ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["project_name"], label: "Active unit hours" }],
     ["tools", "tools", analysisQuery(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_category" }, []).clause],
     ["mcp", "mcp_calls", analysisQuery(mcpAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }, []).clause],
   ];
   for (const [topic, dataset, metric] of configs) {
     const schema = loadSchema(documents[dataset]);
-    const where = [{ field: dataset === "mcp_calls" ? "query_source" : "repository_name", op: "=", value: "pharos" }];
+    const where = [{ field: dataset === "mcp_calls" ? "query_source" : "project_name", op: "=", value: "pharos" }];
     const query = { ...EMPTY_QUERY, fitToScreen: false, where, aggregations: [{ ...metric, id: "chart" }] }, original = structuredClone(query);
     const links = dashboardQueryLinks(dataset, query, schema, new URLSearchParams({ analyze_topic: topic, analyze_carbon: '{"scenario":"high"}' }));
     assert.equal(links.length, 4, topic);
@@ -314,7 +314,7 @@ test("Analyze defaults to its sidebar layout and older analyses open what replac
   const carbon = canonical("/analyze", 'analyze_view=carbon&analyze_chart={"metric":"energy"}');
   assert.deepEqual([carbon.get("analyze_mode"), carbon.get("analyze_topic"), carbon.get("analyze_chart"), carbon.has("analyze_view")], ["dashboards", "carbon", '{"metric":"energy"}', false]);
   // Carbon's population and Today window move to the dashboard's parameters.
-  const carbonWhere = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "provider", op: "=", value: "codex" }];
+  const carbonWhere = [{ field: "project_name", op: "=", value: "pharos" }, { field: "provider", op: "=", value: "codex" }];
   const filtered = canonical("/analyze", new URLSearchParams({ analyze_view: "carbon", q_carbon: encodeQuery({ ...EMPTY_QUERY, where: carbonWhere }), carbon_window: "today" }).toString());
   assert.deepEqual(decodeQueryStrict(filtered.get("analyze_filters")).where, carbonWhere);
   assert.deepEqual([filtered.get("analyze_window"), filtered.has("q_carbon"), filtered.has("carbon_window")], ["today", false, false]);
@@ -393,7 +393,7 @@ test("invalid page selections fall back to visible, usable defaults", () => {
 
 
 test("dashboard filter links round trip and malformed filters produce a visible error", () => {
-  const query = { ...EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "pharos" }] };
+  const query = { ...EMPTY_QUERY, where: [{ field: "project_name", op: "=", value: "pharos" }] };
   assert.deepEqual(readDashboardQuery(new URLSearchParams({ analyze_filters: encodeQuery(query) }), EMPTY_QUERY), { query, error: "" });
   assert.ok(readDashboardQuery(new URLSearchParams({ analyze_filters: "broken" }), EMPTY_QUERY).error);
 });
@@ -435,12 +435,12 @@ test("parallelism links preserve the selected unit, repository and hours overlap
   const settings = { counting: "agent", gap: 15, repository: "pharos", mode: "model" };
   const query = parallelismSelectionQuery({ settings, bounds, selected });
   const schema = loadSchema(parallelism);
-  const common = { counting: "agent", gap_minutes: 15, repository_name: "pharos", unit_id: "root", unit_hours: 1 };
+  const common = { counting: "agent", gap_minutes: 15, project_name: "pharos", unit_id: "root", unit_hours: 1 };
   const rows = ["09:00", "10:00", "11:00", "12:00"].map((hour, id) => ({ ...common, id, started_at: `2026-10-20T${hour}:00Z` }));
   rows.push({ ...rows[1], id: 9, unit_id: "another" });
   assert.deepEqual(applyQuery(rows, query, schema).rows.map(row => row.id).sort(), [1, 2]);
   assert.ok(parallelismSelectionQuery({ settings: { ...settings, counting: "workspace" }, bounds, selected }).where.some(term => term.field === "unit_id" && term.value === "workspace"));
-  assert.deepEqual(groupedDashboardQuery(query).grouping.keys, ["repository_name"]);
+  assert.deepEqual(groupedDashboardQuery(query).grouping.keys, ["project_name"]);
 });
 
 
@@ -510,8 +510,9 @@ test("Tools comparisons weight failure rates and mean durations by their actual 
 
 
 test("Tool summary call links keep every dimension of the selected row", () => {
-  const base = { day: "2026-10-01", tool_name: "read_mcp_resource", tool_category: "mcp", provider: "codex", model: "gpt", effort: "high", repository_name: "test", session_kind: "root", source_kind: "codex", program: null, subcommand: null, command_category: null, mcp_server: "alpha" };
-  const rows = [{ ...base, id: "exact" }, { ...base, id: "server", mcp_server: "beta" }, { ...base, id: "category", command_category: "read" }, { ...base, id: "tool-category", tool_category: "read" }];
+  const base = { day: "2026-10-01", tool_name: "read_mcp_resource", tool_category: "mcp", provider: "codex", model: "gpt", effort: "high", repository_name: "test", project_name: "test", session_kind: "root", source_kind: "codex", program: null, subcommand: null, command_category: null, mcp_server: "alpha" };
+  // The same project, from a folder before it became the repository's checkout.
+  const rows = [{ ...base, id: "exact" }, { ...base, id: "server", mcp_server: "beta" }, { ...base, id: "category", command_category: "read" }, { ...base, id: "tool-category", tool_category: "read" }, { ...base, id: "folder", repository_name: null }];
   const query = { ...EMPTY_QUERY, where: toolSummaryCallFilters(base) };
   assert.deepEqual(applyQuery(rows, query, loadSchema(toolCalls)).rows.map(row => row.id), ["exact"]);
 });

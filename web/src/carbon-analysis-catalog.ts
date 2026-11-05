@@ -1,5 +1,6 @@
 import {  type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type DerivedTotals } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
+import { projectLegacy } from "./project-analysis";
 
 // Carbon over the usage ledger: one record is one agent session's usage of
 // one model and effort on one recorded day, as in Tokens and Cost. Its
@@ -51,7 +52,7 @@ const measures: Record<string, AnalysisMeasure> = {
 };
 
 // The old chart's model tier split.
-const legacy = (state: AnalysisState): AnalysisState => state.split === "tier" ? { ...state, split: "carbon_tier" } : state;
+const legacy = projectLegacy((state: AnalysisState): AnalysisState => state.split === "tier" ? { ...state, split: "carbon_tier" } : state);
 
 // The catalog under the user's current assumptions. Without them (link
 // validation, chart comparison) it has the same measures and breakdowns and
@@ -60,7 +61,7 @@ export function carbonAnalysisCatalog(assumptions?: CarbonAssumptions): Analysis
   const { breakdowns } = tokenAnalysisCatalog;
   const availableBreakdowns = {
     carbon_tier: { label: "Model tier", fields: ["carbon_tier"], order: assumptions?.factors.tiers.map(tier => tier.key) },
-    provider: breakdowns.provider, repository_name: breakdowns.repository_name, model_family: breakdowns.model_family, provider_model: breakdowns.provider_model, effort: breakdowns.effort, model_effort: breakdowns.model_effort,
+    provider: breakdowns.provider, project_name: breakdowns.project_name, model_family: breakdowns.model_family, provider_model: breakdowns.provider_model, effort: breakdowns.effort, model_effort: breakdowns.model_effort,
     channel: breakdowns.channel, machine_id: breakdowns.machine_id, execution_machine_id: breakdowns.execution_machine_id, session_kind: breakdowns.session_kind,
   };
 

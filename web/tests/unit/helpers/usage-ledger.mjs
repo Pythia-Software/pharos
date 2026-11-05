@@ -25,8 +25,8 @@ export function usageLedger() {
       const row = {
         id: `${session.id}|${date}|${sessionFamily}|${effort}`, day: date,
         first_usage_at: at.toISOString(), last_usage_at: new Date(at.getTime() + 2 * 3600000 - 1).toISOString(),
-        provider: sessionProvider, model_family: sessionFamily, model: sessionFamily, effort, repository_name: `repo-${conversation % 3}`,
-        root_provider: provider, root_model_family: family, root_effort: effort, root_repository_name: `repo-${conversation % 3}`,
+        provider: sessionProvider, model_family: sessionFamily, model: sessionFamily, effort, repository_name: `repo-${conversation % 3}`, project_name: `repo-${conversation % 3}`,
+        root_provider: provider, root_model_family: family, root_effort: effort, root_repository_name: `repo-${conversation % 3}`, root_project_name: `repo-${conversation % 3}`,
         root_conversation_id: rootID, conversation_id: session.kind === "root" ? rootID : session.id, agent_session_id: session.id, session_kind: session.kind,
         delegated_session_id: session.kind === "root" ? null : session.id, delegated_run_depth: session.depth,
         total_tokens: input + output, input_tokens: input, cache_read_input_tokens: reads, cache_creation_input_tokens: writes, uncached_input_tokens: uncached, output_tokens: output,

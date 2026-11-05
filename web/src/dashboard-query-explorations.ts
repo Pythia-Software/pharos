@@ -26,16 +26,16 @@ export function dashboardExplorations(dataset: UsageDataset, source: QueryState,
     case "usage": return carbon ? [
       records("Usage records with highest emissions", ["day", "title", "model_family", "energy_wh", "co2e_g", "total_tokens"], "co2e_g"),
       grouped("Model size vs energy & emissions", ["model_family", "carbon_tier"], [sum("energy_wh", "Estimated Wh"), sum("co2e_g", "Estimated CO₂e (g)")]),
-      grouped("Repository emissions per million tokens", ["repository_name"], [formula("explore_intensity", "SUM([co2e_g])*1000000/NULLIF(SUM([total_tokens]),0)", "g CO₂e / 1M tokens"), sum("total_tokens", "Tokens")]),
+      grouped("Project emissions per million tokens", ["project_name"], [formula("explore_intensity", "SUM([co2e_g])*1000000/NULLIF(SUM([total_tokens]),0)", "g CO₂e / 1M tokens"), sum("total_tokens", "Tokens")]),
     ] : [
-      records("Highest-cost token records", ["day", "title", "repository_name", "model_family", "cost_usd", "total_tokens", "cache_read_share"], "cost_usd"),
-      grouped("API cost by repository & model", ["repository_name", "model_family"], [sum("cost_usd", "API cost (USD)"), sum("total_tokens", "Tokens")]),
+      records("Highest-cost token records", ["day", "title", "project_name", "model_family", "cost_usd", "total_tokens", "cache_read_share"], "cost_usd"),
+      grouped("API cost by project & model", ["project_name", "model_family"], [sum("cost_usd", "API cost (USD)"), sum("total_tokens", "Tokens")]),
       grouped("Conversation cost & cache use", ["root_conversation_id"], [sum("cost_usd", "API cost (USD)"), formula("explore_cache_share", "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)", "Cache-read share", true)], { name: "root_title", time: "last_usage_at" }),
     ];
     case "writing": return [
-      records("Conversations with most typed words", ["title", "repository_name", "providers", "typed_words", "user_words", "pasted_words", "cost_usd"], "typed_words"),
-      grouped("Writing mix by repository & provider", ["repository_name", "providers"], [sum("typed_words", "Typed words"), sum("pasted_words", "Likely pasted words"), sum("machine_words", "Harness & automation words")]),
-      grouped("Repository input vs token use", ["repository_name"], [formula("explore_words_per_mtok", "SUM([typed_words])*1000000/NULLIF(SUM([total_tokens]),0)", "Typed words / 1M tokens"), sum("typed_words", "Typed words"), sum("total_tokens", "Tokens")]),
+      records("Conversations with most typed words", ["title", "project_name", "providers", "typed_words", "user_words", "pasted_words", "cost_usd"], "typed_words"),
+      grouped("Writing mix by project & provider", ["project_name", "providers"], [sum("typed_words", "Typed words"), sum("pasted_words", "Likely pasted words"), sum("machine_words", "Harness & automation words")]),
+      grouped("Project input vs token use", ["project_name"], [formula("explore_words_per_mtok", "SUM([typed_words])*1000000/NULLIF(SUM([total_tokens]),0)", "Typed words / 1M tokens"), sum("typed_words", "Typed words"), sum("total_tokens", "Tokens")]),
     ];
     case "skill_usages": return [
       records("Latest skill evidence", ["created_at", "skill_name", "evidence_type", "status", "content_bytes", "title"], "created_at"),
@@ -53,7 +53,7 @@ export function dashboardExplorations(dataset: UsageDataset, source: QueryState,
       grouped("Context added vs carried by tool & program", ["tool_name", "program"], [sum("result_tokens", "Context added (tokens)"), sum("carried_tokens", "Context carried (tokens)")]),
     ];
     case "parallelism": return [
-      records("Busiest hourly occupancy records", ["started_at", "unit_label", "repository_name", "level", "unit_hours"], "level"),
+      records("Busiest hourly occupancy records", ["started_at", "unit_label", "project_name", "level", "unit_hours"], "level"),
       grouped("Concurrency by hour of day", ["hour_of_day", "level_band"], [sum("elapsed_hours", "Elapsed hours"), sum("parallel_elapsed_hours", "Parallel elapsed hours")]),
       grouped("Most active units in the selected range", ["unit_id", "unit_label"], [sum("unit_hours", "Active unit hours"), sum("parallel_elapsed_hours", "Parallel elapsed hours")]),
     ];

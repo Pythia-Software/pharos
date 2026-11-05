@@ -5,7 +5,7 @@ import { queryCapabilities, serverQuery as sharedServerQuery } from "../../suppo
 import { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
 import { compactTimelineBuckets } from "../../../src/column-marks";
 
-const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
+const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", project_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
 function job(id, aggregations, options = {}, extra = {}) { return { id, dataset: "tool_calls", schema: schemas.tool_calls, query: query(aggregations, extra), options }; }
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -181,7 +181,7 @@ test("weekday previews render daily distributions and keep all-time and edited c
     }
   }
   const date = { field: "sent_at", op: ">=", value: "2026-10-12T12:00:00Z" };
-  for (const predicate of [{ any: [date, { field: "repository_name", op: "=", value: "other" }] }, { ...date, negated: true }]) {
+  for (const predicate of [{ any: [date, { field: "project_name", op: "=", value: "other" }] }, { ...date, negated: true }]) {
     for (const changed of [
       { ...item.query, where: [...item.query.where, predicate] },
       { ...item.query, aggregations: item.query.aggregations.map(metric => ({ ...metric, where: [predicate] })) },
@@ -430,8 +430,8 @@ test("cancellation prevents publication and leaves no aborted result in the cach
 test("grouped saved views preview the full source before HAVING and result paging", async t => {
  const requests=fixture(t);
  const grouped=core.normalizeQueryState({
-  grouping:{source:query([],{where:[{field:'duration_ms',op:'>',value:'200'}],limit:1,offset:99}),keys:['repository_name'],summaries:[{id:'group_rows',op:'count'}]},
-  select:[{field:'repository_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'4'}],orderBy:[{field:'repository_name',dir:'asc'}],limit:1,offset:1,
+  grouping:{source:query([],{where:[{field:'duration_ms',op:'>',value:'200'}],limit:1,offset:99}),keys:['project_name'],summaries:[{id:'group_rows',op:'count'}]},
+  select:[{field:'project_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'4'}],orderBy:[{field:'project_name',dir:'asc'}],limit:1,offset:1,
   aggregations:[{id:'groups',op:'count',expression:'COUNT()',groupBy:[]}],
  });
  const preview=await loadQueryPreview('tool_calls',grouped,schemas.tool_calls);
@@ -486,7 +486,7 @@ test("daily repository words average seven calendar days with history before the
   t.mock.timers.enable({ apis: ["Date"], now });
   const recipe = queryRecipes.find(recipe => recipe.id === "human-repository-words-trend"), item = instantiateRecipe(recipe, recipe.days[0]);
   const schema = schemas.writing_messages;
-  const dated = (id, date, typed_words, repository_name) => ({ id, sent_at: new Date(date).toISOString(), day: new Date(date).toLocaleDateString("en-CA"), typed_words, repository_name });
+  const dated = (id, date, typed_words, project_name) => ({ id, sent_at: new Date(date).toISOString(), day: new Date(date).toLocaleDateString("en-CA"), typed_words, project_name });
   const first = new Date(now); first.setDate(first.getDate() - 30);
   const history = new Date(first); history.setDate(history.getDate() - 1);
   const population = [dated("history", history, 70, "one"), dated("first", first, 140, "one"), dated("other-repo", first, 35, "two"), dated("automated", first, 0, "one")];
@@ -502,7 +502,7 @@ test("daily repository words average seven calendar days with history before the
   assert.equal(buckets[7].values["s:one"] ?? 0, 0, "old writing rolls out of the trailing window");
   const url = new URL(item.url, "http://preview.test"), chart = JSON.parse(url.searchParams.get("analyze_chart"));
   assert.equal(url.searchParams.get("analyze_days"), "30");
-  assert.equal(chart.split, "repository_name");
+  assert.equal(chart.split, "project_name");
   assert.equal(chart.rollingPeriods, 7);
 });
 
@@ -543,7 +543,7 @@ test("truncated and errored measures never produce a headline total", async t =>
 
 
 test("labelled covers fetch friendly titles beyond twelve visible groups", async t => {
- const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,root_conversation_id:`root-${i}`,root_repository_name:'repo',root_title:`Friendly work ${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
+ const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,root_conversation_id:`root-${i}`,root_project_name:'repo',root_title:`Friendly work ${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
  const requests=fixture(t,(path,request)=>{
   if(!path.includes("/usage/query-v3"))return;
   const state={...core.EMPTY_QUERY,...request.result,select:request.result.select.map(field=>({field})),aggregations:request.metrics,grouping:{...request.grouping,source:{...core.EMPTY_QUERY,...request.source,select:request.source.select.map(field=>({field}))}}};
@@ -597,7 +597,7 @@ test("model tail previews apply task-count support before the visible point budg
 
 test("metric filters and minimum group sizes run only where advertised and disclose hidden groups", async t => {
   const errors = [{ field: "error_count", op: ">", value: "0" }];
-  const measures = [{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount: 4, where: [{ field: "duration_ms", op: ">=", value: "400" }] }];
+  const measures = [{ id: "calls", op: "sum", field: "call_count", groupBy: ["project_name"], minCount: 4, where: [{ field: "duration_ms", op: ">=", value: "400" }] }];
   // Without the handshake flags the card fails on its own instead of dropping the controls.
   fixture(t,path => path.endsWith("capabilities") ? response({queryCapabilities:{...queryCapabilities,metricFilters:false,metricMinCount:false,metricMinCountMeasures:false},computedExecution:execution}) : undefined);
   await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /filter|minimum|minCount/i);
@@ -622,7 +622,7 @@ test("metric filters and minimum group sizes run only where advertised and discl
     [{ min: 4, distinct: "conversation_id" }, "1 group hidden (fewer than 4 distinct Conversation ID values)"],
     [{ min: 200, sum: "result_tokens" }, "1 group hidden (fewer than 200 total Context added (tokens))"],
   ]) {
-    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount, where: slow }]), schemas.tool_calls);
+    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["project_name"], minCount, where: slow }]), schemas.tool_calls);
     assert.equal(measured.metrics[0].result.hiddenGroups, 1);
     assert.ok(measured.note.includes(note), measured.note);
   }
@@ -643,9 +643,9 @@ test("grouped previews run distinct minimums only where query-v3 advertises them
 test("grouped cards with link columns execute without sending the links", async t => {
   const requests = fixture(t);
   const source = { ...core.EMPTY_QUERY };
-  const grouped = { ...core.withGroupingKeys(source, ["repository_name"]), select: [{ field: "open" }, { field: "calls" }] };
+  const grouped = { ...core.withGroupingKeys(source, ["project_name"]), select: [{ field: "open" }, { field: "calls" }] };
   grouped.grouping = { ...grouped.grouping, summaries: [{ id: "calls", op: "sum", field: "call_count" },
-    { id: "open", op: "link", label: "Repository", link: { label: { column: "repository_name" }, to: { kind: "query", target: "tool_calls" } } }] };
+    { id: "open", op: "link", label: "Repository", link: { label: { column: "project_name" }, to: { kind: "query", target: "tool_calls" } } }] };
   const preview = await loadQueryPreview("tool_calls", grouped, schemas.tool_calls);
   assert.equal(preview.state, "ready");
   const request = requests.find(item => item.path.includes("query-v3")).request;
@@ -714,7 +714,7 @@ test("card preview identity separates query, cover, template, schema and search 
   assert.equal(key, await cardPreviewKey({ ...item, id: "two" }));
   assert.equal(key, await cardPreviewKey(Object.fromEntries(Object.entries(item).reverse())), "property order does not change a cover");
   for (const changed of [
-    { ...item, query: { ...item.query, where: [{ field: "repository_name", op: "=", value: "one" }] } },
+    { ...item, query: { ...item.query, where: [{ field: "project_name", op: "=", value: "one" }] } },
     { ...item, options: { coverMetricId: "other" } },
     { ...item, options: { url: "/library?search=cache" } },
     { ...item, schema: { ...item.schema, fields: item.schema.fields.slice(1) } },
@@ -756,7 +756,7 @@ test("grouped card requests do not wait for every sibling in their metrics batch
     await waiting.at(-1);
   });
   const items = Array.from({ length: 3 }, (_, i) => job(String(i), [{ id: "metric", op: "sum", field: "total", groupBy: [] }], {}, {
-    grouping: { source: core.EMPTY_QUERY, keys: ["repository_name"], summaries: [{ id: "total", op: "sum", field: "duration_ms" }], representative: null },
+    grouping: { source: core.EMPTY_QUERY, keys: ["project_name"], summaries: [{ id: "total", op: "sum", field: "duration_ms" }], representative: null },
   }));
   const work = loadQueryPreviews(items, (id, preview, error) => { assert.ifError(error); completed.set(id, preview); });
   await twoStarted;

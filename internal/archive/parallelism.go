@@ -417,6 +417,7 @@ type concurrencyThread struct {
 	WorkspaceID        string           `json:"workspace_id"`
 	WorkspaceName      string           `json:"workspace_name"`
 	Repository         string           `json:"repository"`
+	Project            string           `json:"project"`
 	Title              string           `json:"title"`
 	Channel            string           `json:"channel"`
 	MachineID          string           `json:"machine_id"`
@@ -484,8 +485,8 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		return nil, err
 	}
 	workspaces := map[string]map[string]any{}
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.location,w.source_kind,w.activity_at,r.display_name repository_name
- FROM workspaces w INDEXED BY workspaces_library_idx LEFT JOIN repositories r ON r.id=w.repository_id`)
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.location,w.source_kind,w.activity_at,r.display_name repository_name,`+projectNameSQL("w")+` project_name
+ FROM workspaces w INDEXED BY workspaces_library_idx LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w"))
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +552,7 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 				thread.location = firstString(workspaces[mirror]["location"])
 			}
 		}
-		thread.Repository = firstString(workspace["repository_name"])
+		thread.Repository, thread.Project = firstString(workspace["repository_name"]), firstString(workspace["project_name"])
 		// Adapters can record the same checkout under several workspace IDs;
 		// its location is the user's workspace.
 		thread.WorkspaceID, thread.WorkspaceName = rootWorkspace, thread.Title
@@ -627,7 +628,7 @@ func (c *Catalog) parallelismSettings(ctx context.Context) parallelismSettings {
 type parallelismUnit struct {
 	channel, machineID, executionMachineID string
 	id, label, workspace, location         string
-	repository, conversation               any
+	repository, project, conversation      any
 	provider, model                        any
 	spans                                  parallelismSpans
 }
@@ -648,7 +649,7 @@ func parallelismUnits(threads []concurrencyThread, settings parallelismSettings)
 		}
 		at, ok := index[id]
 		if !ok {
-			unit := parallelismUnit{channel: thread.Channel, machineID: thread.MachineID, executionMachineID: thread.ExecutionMachineID, id: id, label: thread.WorkspaceName, workspace: thread.WorkspaceName, location: thread.location, repository: nilIfEmpty(thread.Repository)}
+			unit := parallelismUnit{channel: thread.Channel, machineID: thread.MachineID, executionMachineID: thread.ExecutionMachineID, id: id, label: thread.WorkspaceName, workspace: thread.WorkspaceName, location: thread.location, repository: nilIfEmpty(thread.Repository), project: nilIfEmpty(thread.Project)}
 			if settings.counting == "agent" {
 				unit.label, unit.conversation, unit.provider, unit.model = thread.Title, id, thread.rootProvider, thread.rootModel
 			}
@@ -693,7 +694,7 @@ type parallelismMeasure struct {
 // parallelismCells sweeps the units' spans. Between consecutive changes in
 // who is active, split at local hours, each active unit gets the piece's
 // duration, and its share of the piece's wall time: 1/level machine-wide and
-// 1/repo_level within its repository. Summed over any rows, the shares are
+// 1/repo_level within its project (repo_level predates projects). Summed over any rows, the shares are
 // the wall time with any of those units active.
 func parallelismCells(units []parallelismUnit) map[parallelismCell]*parallelismMeasure {
 	type edge struct {
@@ -704,7 +705,7 @@ func parallelismCells(units []parallelismUnit) map[parallelismCell]*parallelismM
 	edges := []edge{}
 	repositories := make([]string, len(units))
 	for i, unit := range units {
-		repositories[i] = firstString(unit.repository)
+		repositories[i] = firstString(unit.project)
 		for _, span := range unit.spans {
 			edges = append(edges, edge{span[0], i, true}, edge{span[1], i, false})
 		}
@@ -810,7 +811,7 @@ func (table *parallelismTable) maps(fields libraryFields, from, to int64) []map[
 		}
 		values := map[string]any{"started_at": at.started, "day": at.day, "hour_of_day": at.hour, "week": at.week, "month": at.month,
 			"counting": table.settings.counting, "gap_minutes": table.settings.gap,
-			"unit_id": unit.id, "unit_label": unit.label, "repository_name": unit.repository, "workspace_name": nilIfEmpty(unit.workspace),
+			"unit_id": unit.id, "unit_label": unit.label, "repository_name": unit.repository, "project_name": unit.project, "workspace_name": nilIfEmpty(unit.workspace),
 			"channel": nilIfEmpty(unit.channel), "machine_id": nilIfEmpty(unit.machineID), "execution_machine_id": nilIfEmpty(unit.executionMachineID),
 			"location": nilIfEmpty(unit.location), "conversation_id": unit.conversation, "provider": unit.provider, "model": unit.model,
 			"level": int64(cell.level), "level_band": band, "repo_level": int64(cell.repoLevel),

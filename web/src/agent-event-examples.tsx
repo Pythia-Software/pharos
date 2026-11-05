@@ -24,7 +24,7 @@ type EventRow = {
   source: string; occurred_at: string; title?: string; repository_name?: string; provider?: string; probability: number;
   conversation_id: string; workspace_id?: string; message_id: string;
 };
-const fields = ["id", "family", "sentence", "subject", "response", "has_subject", "source", "occurred_at", "title", "repository_name", "provider", "probability", "conversation_id", "workspace_id", "message_id"];
+const fields = ["id", "family", "sentence", "subject", "response", "has_subject", "source", "occurred_at", "title", "project_name", "provider", "probability", "conversation_id", "workspace_id", "message_id"];
 
 function useEventRows(where: WhereTerm[], limit: number) {
   const key = JSON.stringify(where);

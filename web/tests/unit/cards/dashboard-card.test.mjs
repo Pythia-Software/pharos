@@ -36,7 +36,7 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.equal(dashboardCardCollected(url),false);
   const card = collectDashboardCard(url,' My tokens ',' My description ');
   assert.equal(dashboardCardCollected(url),true,'Ask offers each chart address once');
-  const second = collectDashboardCard(makeURL({...state,split:'repository_name'}),'Repositories','');
+  const second = collectDashboardCard(makeURL({...state,split:'project_name'}),'Repositories','');
   assert.equal(readBookmarks().length,2);
   assert.equal(card.title,'My tokens');
   const edited = updateBookmark(card.id,'Renamed','Edited description');
@@ -295,7 +295,7 @@ test('a dashboard card can show its own count of the chart groups while the dash
   fixture(t);
   const local = usageLedger();
   const url = view => makeURL({metric:'tokens',minSamples:0,split:'repository_name',...view},[]);
-  assert.deepEqual(dashboardCardGroups(url({view:'compare'})),{noun:'repositories',max:100,fallback:12});
+  assert.deepEqual(dashboardCardGroups(url({view:'compare'})),{noun:'projects',max:100,fallback:12});
   assert.equal(dashboardCardGroups(url({view:'compare',compareAs:'share'})).fallback,8);
   assert.equal(dashboardCardGroups(url({view:'trend'})).fallback,15);
   for (const view of [{view:'compare',split:'none'},{view:'scatter',metricY:'cost',unit:'conversation'},{view:'cycle',cycle:'hour',split:'none'}]) assert.equal(dashboardCardGroups(url(view)),undefined,JSON.stringify(view));
@@ -418,7 +418,7 @@ test('a Parallelism URL offers its ribbon and its chart as cards, each collected
   assert.equal(dashboardCardWindow(url,'ribbon'),'Saved range');
   assert.equal(dashboardCardPresentation(url,'ribbon').category,'machines');
   // Two workspaces in two repositories; one busy for two hours, one for half an hour.
-  const thread = (id,repository,turns) => ({id,conversation_id:id,work_id:id,workspace_id:id,workspace_name:id,repository,title:id,provider:'claude',model:'m',agent_depth:0,turns,model_spans:[]});
+  const thread = (id,project,turns) => ({id,conversation_id:id,work_id:id,workspace_id:id,workspace_name:id,repository:project,project,title:id,provider:'claude',model:'m',agent_depth:0,turns,model_spans:[]});
   const timing = {generated_at:'',timezone:'UTC',period_start:'2026-10-01',period_end:'2026-10-01',days:['2026-10-01'],coverage:{},
     threads:[thread('a','alpha',[[start,start+2*hour]]),thread('b','beta',[[start+hour,start+1.5*hour]])]};
   const preview = await loadDashboardCardPreview(url,schemas.parallelism,undefined,undefined,start,'ribbon',timing);
@@ -557,9 +557,10 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
   assert.deepEqual(dashboardCardTargets(harness).map(target => [target.id, target.title]), [['thinking-distributions', 'Wait by agent / harness · harness is codex']]);
   assert.equal(dashboardCardWindow(harness, 'thinking-distributions'), 'All time');
   assert.deepEqual((await loadDashboardCardPreview(harness, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['harness']);
+  // A link from before projects grouped by repository; it reads as the project breakdown.
   const reasoning = detail({ view: 'reasoning', groupBy: 'repository' });
-  assert.equal(dashboardCardTargets(reasoning)[0].title, 'Reported reasoning by repository · harness is codex');
-  assert.deepEqual((await loadDashboardCardPreview(reasoning, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['repository_name']);
+  assert.equal(dashboardCardTargets(reasoning)[0].title, 'Reported reasoning by project · harness is codex');
+  assert.deepEqual((await loadDashboardCardPreview(reasoning, schemas.model_requests, undefined, undefined, now, 'thinking-distributions', undefined, undefined, response)).metrics[0].clause.groupBy, ['project_name']);
   assert.equal(dashboardCardTargets(detail({ view: 'histogram', groupBy: 'none' }))[0].title, 'Model wait distribution · harness is codex');
   // A whole library's exact quantiles exceed the service's budget; without a breakdown the card draws a box per model.
   assert.deepEqual((await loadDashboardCardPreview(detail({ view: 'histogram', groupBy: 'none' }), schemas.model_requests, undefined, undefined, now, 'thinking-distributions')).metrics[0].clause.groupBy, ['model']);

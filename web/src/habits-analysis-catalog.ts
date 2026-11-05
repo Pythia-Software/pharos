@@ -1,4 +1,5 @@
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
+import { projectBreakdown, projectLegacy } from "./project-analysis";
 
 // Habits over the rhythm dataset: one record is one local hour of one actor in
 // one top-level conversation. You are your engaged time, estimated from the
@@ -36,17 +37,17 @@ export const habitsAnalysisCatalog: AnalysisCatalog = {
     actor: { label: "Actor", fields: ["actor"], order: ["you", "with_you", "unattended", "automated"], values: actorLabels },
     initiator: { label: "Started by", fields: ["initiator"], order: ["human", "scheduled", "scripted", "orchestrated", "agent", "delegated", "unknown"], values: initiatorLabels },
     automation: { label: "Automation", fields: ["automation"], empty: "Not automated" },
-    repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
+    project_name: projectBreakdown(),
     ...single([["provider", "Provider"], ["model", "Model"], ["workspace_name", "Workspace"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
   },
   records: { label: "Actor hour", plural: "Actor hours", note: "A record is one local hour of one actor (you, or agents with you, unattended or automated) in one top-level conversation." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "unit_id", where: [{ field: "unit_id", op: "is_not_null", value: "" }],
-      breakdowns: { repository_name: ["repository_name"], provider: ["provider"], model: ["model"], workspace_name: ["workspace_name"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
-      note: "A conversation is one top-level conversation, with its continuations and delegated runs; its repository, provider and origin are constant." },
+      breakdowns: { project_name: ["project_name"], provider: ["provider"], model: ["model"], workspace_name: ["workspace_name"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
+      note: "A conversation is one top-level conversation, with its continuations and delegated runs; its project, provider and origin are constant." },
   },
   cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
-  trend: { metric: "wall_hours", split: "actor" },
+  trend: { metric: "wall_hours", split: "actor" }, legacy: projectLegacy(),
   scatter: ["wall_hours", "turns"],
 };

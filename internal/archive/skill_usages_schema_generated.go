@@ -39,6 +39,7 @@ func PharosSkillUsagesSchema() querytable.Schema {
 			"model_effort":             {Name: "model_effort", Kind: querytable.FieldText, Expr: "r.\"model_effort\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"model_effort\""},
 			"effort":                   {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
 			"repository_name":          {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":             {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"title":                    {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"session_kind":             {Name: "session_kind", Kind: querytable.FieldText, Expr: "r.\"session_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"session_kind\""},
 			"tool_name":                {Name: "tool_name", Kind: querytable.FieldText, Expr: "r.\"tool_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"tool_name\""},

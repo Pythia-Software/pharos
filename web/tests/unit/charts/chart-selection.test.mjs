@@ -94,7 +94,7 @@ test('category state distinguishes neutral, full, mixed and hidden in either sel
 });
 
 test('selection writes preserve date, repository, and unrelated model predicates', () => {
-  const preserved = [{ field: 'last_usage_at', op: '>=', value: '2026-09-01' }, { field: 'repository_name', op: '=', value: 'pharos' }, { field, op: 'contains', value: '5' }];
+  const preserved = [{ field: 'last_usage_at', op: '>=', value: '2026-09-01' }, { field: 'project_name', op: '=', value: 'pharos' }, { field, op: 'contains', value: '5' }];
   const original = [...preserved, { field, op: '=', value: 'opus-5-5' }];
   const changed = withSlice(original, field, { values: ['gpt-6-sol'], excluded: true });
   assert.deepEqual(changed.slice(0, 3), preserved);
@@ -136,13 +136,13 @@ test('inclusions with an unknown value remain a single OR selection', () => {
 });
 
 test('plain not-equal filters preserve missing repositories through legend actions', () => {
-  const repositoryField = 'repository_name';
+  const repositoryField = 'project_name';
   const time = { field: 'last_usage_at', op: '>=', value: '2026-09-01' };
   const where = [time, { field: repositoryField, op: '!=', value: 'foo' }];
   const selection = readSlice(where, repositoryField);
   assert.deepEqual(selection, { values: ['foo'], excluded: true });
   assert.equal(selection.values.includes(null), false);
-  const rows = ['foo', 'bar', 'baz', null, ''].map(repository_name => ({ repository_name, last_usage_at: '2026-10-01' }));
+  const rows = ['foo', 'bar', 'baz', null, ''].map(project_name => ({ project_name, last_usage_at: '2026-10-01' }));
   rows.push({ last_usage_at: '2026-10-01' });
   for (const [next, expected] of [[selection, rows.slice(1)], [updateSlice(selection, 'bar', 'toggle'), rows.slice(2)]]) {
     const rewritten = withSlice(where, repositoryField, next);

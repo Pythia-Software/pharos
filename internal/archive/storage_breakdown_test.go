@@ -91,13 +91,13 @@ func TestStorageBreakdownDividesOriginalsAndCatalog(t *testing.T) {
 		},
 	}
 	shares := storageShares{
-		// host-a saw 3 messages of pharos and 1 of no repository in Claude;
+		// host-a saw 3 messages of pharos and 1 of no project in Claude;
 		// host-b's Conductor capture has no conversations to divide by.
-		Originals: []storageShare{{"host-a", "claude", "repo-pharos", 3}, {"host-a", "claude", "", 1}},
-		Catalog:   []storageShare{{"host-a", "claude", "repo-pharos", 2}, {"host-b", "conductor", "repo-site", 1}},
+		Originals: []storageShare{{"host-a", "claude", "repository:repo-pharos", 3}, {"host-a", "claude", "", 1}},
+		Catalog:   []storageShare{{"host-a", "claude", "repository:repo-pharos", 2}, {"host-b", "conductor", "folder:~/site", 1}},
 		Hosts:     map[string]string{"host-a": "Studio", "host-b": "Air"},
-		Repositories: map[string]string{
-			"repo-pharos": "pharos", "repo-site": "site",
+		Projects: map[string]string{
+			"repository:repo-pharos": "pharos", "folder:~/site": "~/site",
 		},
 		CatalogFree: 300,
 	}
@@ -141,17 +141,18 @@ func TestStorageBreakdownDividesOriginalsAndCatalog(t *testing.T) {
 		t.Fatalf("sources %+v", sources)
 	}
 	// host-a's Claude capture is split three to one; its host files and the
-	// undivided Conductor capture have no repository.
-	repositories := rows("repositories")
-	if repositories["pharos"] != (storageRow{"repo-pharos", "pharos", 750, 800}) || repositories["site"] != (storageRow{"repo-site", "site", 0, 400}) ||
-		repositories["No repository"] != (storageRow{"", "No repository", 250 + 10 + 90, 0}) {
-		t.Fatalf("repositories %+v", repositories)
+	// undivided Conductor capture have no project. A folder is a project as
+	// much as a repository is.
+	projects := rows("projects")
+	if projects["pharos"] != (storageRow{"repository:repo-pharos", "pharos", 750, 800}) || projects["~/site"] != (storageRow{"folder:~/site", "~/site", 0, 400}) ||
+		projects["No project"] != (storageRow{"", "No project", 250 + 10 + 90, 0}) {
+		t.Fatalf("projects %+v", projects)
 	}
 
-	override(t, &storageRepositoryLimit, 1)
-	listed := storageBreakdown(sizes, shares, "")["repositories"].([]storageRow)
-	if len(listed) != 2 || listed[0].Label != "pharos" || listed[1] != (storageRow{"other", "Other repositories", 350, 400}) {
-		t.Fatalf("limited repositories %+v", listed)
+	override(t, &storageProjectLimit, 1)
+	listed := storageBreakdown(sizes, shares, "")["projects"].([]storageRow)
+	if len(listed) != 2 || listed[0].Label != "pharos" || listed[1] != (storageRow{"other", "Other projects", 350, 400}) {
+		t.Fatalf("limited projects %+v", listed)
 	}
 }
 
@@ -171,7 +172,7 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 	execTx(t, catalog.DB,
 		`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo','pharos','x','x')`,
 		`INSERT INTO hosts(id,label,first_seen_at,last_seen_at) VALUES('host-a','Studio','x','x'),('host-b','Air','x','x')`,
-		`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,indexed_at) VALUES('w1','claude','local','w1','repo','One','x'),('w2','codex','local','w2',NULL,'Two','x')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,project_folder,title,indexed_at) VALUES('w1','claude','local','w1','repo',NULL,'One','x'),('w2','codex','local','w2',NULL,NULL,'Two','x')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,origin,origin_host_id) VALUES('c1','w1','claude','local','c1','/a/c1.jsonl','host-a'),
 			('c2','w2','codex','local','c2','/b/c2.jsonl','host-b'),('c3','w1','claude','local','c3','/a/c3.jsonl','merged'),('c4','w2','codex','local','c4','/a/c4.jsonl',NULL)`,
 		`INSERT OR REPLACE INTO meta(key,value) VALUES('`+legacyHostKey+`','host-a')`,
@@ -190,7 +191,7 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 	if shares.CatalogFree < 50*4000 {
 		t.Fatalf("catalog free %d after dropping 200 kB", shares.CatalogFree)
 	}
-	if len(shares.Originals) != 4 || shares.Hosts["host-b"] != "Air" || shares.Repositories["repo"] != "pharos" {
+	if len(shares.Originals) != 4 || shares.Hosts["host-b"] != "Air" || shares.Projects["repository:repo"] != "pharos" {
 		t.Fatalf("shares %+v", shares)
 	}
 	// The merged copy's 40 messages, its largest sighting, are split between
@@ -199,7 +200,7 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 	for _, share := range shares.Catalog {
 		catalogShares[share] = true
 	}
-	for _, want := range []storageShare{{"host-a", "claude", "repo", 50}, {"host-b", "claude", "repo", 20}, {"host-b", "codex", "", 10}, {"host-a", "codex", "", 20}} {
+	for _, want := range []storageShare{{"host-a", "claude", "repository:repo", 50}, {"host-b", "claude", "repository:repo", 20}, {"host-b", "codex", "", 10}, {"host-a", "codex", "", 20}} {
 		if !catalogShares[want] {
 			t.Fatalf("catalog shares %+v, want %+v among them", shares.Catalog, want)
 		}
@@ -235,14 +236,14 @@ func TestStorageBreakdownEndpoint(t *testing.T) {
 	if body["status"] != "measured" || body["total_bytes"] != float64(480) {
 		t.Fatalf("breakdown %v", body)
 	}
-	repositories := map[string]float64{}
-	for _, row := range body["repositories"].([]any) {
+	projects := map[string]float64{}
+	for _, row := range body["projects"].([]any) {
 		row := row.(map[string]any)
-		repositories[row["label"].(string)+" originals"] = row["originals_bytes"].(float64)
-		repositories[row["label"].(string)+" catalog"] = row["catalog_bytes"].(float64)
+		projects[row["label"].(string)+" originals"] = row["originals_bytes"].(float64)
+		projects[row["label"].(string)+" catalog"] = row["catalog_bytes"].(float64)
 	}
-	if repositories["pharos originals"] != 60 || repositories["No repository originals"] != 20 || repositories["pharos catalog"] != 280 || repositories["No repository catalog"] != 120 {
-		t.Fatalf("repositories %v", repositories)
+	if projects["pharos originals"] != 60 || projects["No project originals"] != 20 || projects["pharos catalog"] != 280 || projects["No project catalog"] != 120 {
+		t.Fatalf("projects %v", projects)
 	}
 	for _, row := range body["machines"].([]any) {
 		if id := row.(map[string]any)["id"]; id != "host-a" && id != "host-b" {

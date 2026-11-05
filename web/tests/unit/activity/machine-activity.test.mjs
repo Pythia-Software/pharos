@@ -10,7 +10,7 @@ test("activities keep their labels and other tools get a stable name and colour"
 });
 
 test("filter keys ignore the order of OR and AND members", () => {
-  const a = { field: "repository_name", op: "=", value: "a" }, b = { field: "provider", op: "=", value: "claude" };
+  const a = { field: "project_name", op: "=", value: "a" }, b = { field: "provider", op: "=", value: "claude" };
   assert.equal(machineFilterKey({ any: [a, { all: [a, b] }] }), machineFilterKey({ any: [{ all: [b, a] }, a] }));
   assert.notEqual(machineFilterKey(a), machineFilterKey({ ...a, negated: true }));
 });

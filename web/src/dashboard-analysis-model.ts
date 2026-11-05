@@ -300,13 +300,16 @@ export const canonicalState = <T extends AnalysisState>(catalog: AnalysisCatalog
 // wrote selections as filters (legacySlices), may hold the selection as a
 // filter on the breakdown's single field: that filter becomes the state's
 // selection, and the rest of where stays the population. Either way the
-// result is marked, so it is read the same way again.
+// result is marked, so it is read the same way again. A breakdown the legacy
+// mapping renamed (repository_name, now project_name) wrote its selection on
+// its old field, named by its old id, so that field is read too.
 // A card's link is marked current where it stops being a card link
 // (stampCardChart), since cards always wrote their filters as the population.
 export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[]): { state: T; where: WhereTerm[] } {
   if (state.v === analysisVersion) return { state, where };
-  const fields = catalog.breakdowns[canonicalState(catalog, state).split]?.fields ?? [], field = fields[0];
-  if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
+  const split = canonicalState(catalog, state).split, fields = catalog.breakdowns[split]?.fields ?? [];
+  const field = [fields[0], ...state.split && state.split !== split ? [state.split] : []].find(field => where.some(term => isSliceTerm(term, field)));
+  if (!catalog.legacySlices || fields.length !== 1 || !field) return { state: { ...state, v: analysisVersion }, where };
   const slice = readSlice(where, field);
   return { state: { ...state, v: analysisVersion, selection: { values: slice.values.map(value => value ?? ""), excluded: slice.excluded } }, where: where.filter(term => !isSliceTerm(term, field)) };
 }

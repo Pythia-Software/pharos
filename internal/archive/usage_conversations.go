@@ -33,9 +33,9 @@ func usageConversationRootsFrom(q queryer, ledger []map[string]any) (*usageConve
 func usageConversationRootsWith(q queryer, ledger, derived []map[string]any) (*usageConversationAttribution, error) {
 	conversations, err := queryMaps(q, `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
 		COALESCE(NULLIF(c.model,''),a.model) model,COALESCE(NULLIF(c.effort,''),a.effort) effort,
-		w.title root_title,r.display_name root_repository_name
+		w.title root_title,r.display_name root_repository_name,`+projectNameSQL("w")+` root_project_name
 		FROM conversations c LEFT JOIN agent_sessions a ON a.conversation_id=c.id AND a.native_id='main'
-		LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id ORDER BY c.id`)
+		LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w")+` ORDER BY c.id`)
 	if err != nil {
 		return nil, err
 	}

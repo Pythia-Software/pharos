@@ -124,6 +124,22 @@ Deduplication uses account-scoped native IDs. Conductor aliases are retained as 
 
 No claim is made that ChatGPT desktop’s local cache is complete. ChatGPT is indexed from a user-provided supported export, and its health row makes that acquisition boundary visible.
 
+### Projects
+
+Every dashboard, table and MCP filter groups work by project, so a library
+without Git groups as completely as one with it. A workspace's project is its
+repository; else the one repository with a checkout at or above its folder
+(`folder_repository_id`); else its working folder (`project_folder`, a home
+directory shown as `~`, temporary directories as one `/tmp` project); else
+none, as for a chat export. Ingest, repository merges and capture recovery
+resolve the two workspace columns, and requests only read them through
+`projectJoin`/`projectNameSQL` in `projects.go`. Datasets expose
+`project_name` beside `repository_name`, and analysis catalogs read old
+`repository_*` breakdown links as their project counterparts
+(`web/src/project-analysis.ts`). The rule, the tiers of outcome evidence
+built on it and what Pharos does without Git are in
+[projects-and-outcomes.md](projects-and-outcomes.md).
+
 ## UI feedback
 
 The **Send feedback** header tool reuses element annotations for optional bug
@@ -269,6 +285,16 @@ repository's name or remote: one that matches none is an error rather than an
 empty result. When the value is a checkout path, or a directory name in one of
 at most three repositories' checkout paths (such as a worktree's), the error
 names those repositories.
+
+`list_projects` lists projects instead, repositories and folders alike,
+with the same counts and the number of conversations without a project (a
+chat export without a folder). Its names are what the `project` filter of
+`search_conversations`, `search_work`, `search_messages`, `search_text` and
+`query_statistics` takes: a repository by name or remote, which includes the
+folders checked out inside it, or a folder project as `~/path`, any part of
+it, or an absolute path. A folder name never reaches a repository checked out
+inside that folder, which is a project of its own. `query_statistics` can also group by `project`. A project
+filter that matches nothing is an error that points to `list_projects`.
 
 `list_findings` and `get_finding` read findings: compact cards, then one
 finding's extracted facts kept apart from its evidence handles, which are
