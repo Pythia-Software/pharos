@@ -22,7 +22,7 @@ const claudeAIExport = `[
  {"uuid":"m2","text":"Here is a plan","sender":"assistant","created_at":"2026-10-01T10:01:00Z","parent_message_uuid":"m1","attachments":[],"files":[],
   "content":[{"type":"thinking","thinking":"","summaries":[{"summary":"Weighing destinations"}]},
    {"type":"tool_use","id":"tu1","name":"WebSearch","input":{"query":"quiet beaches"}},
-   {"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"Results"}],"is_error":false},
+   {"type":"tool_result","id":"tr1","tool_use_id":"tu1","content":[{"type":"text","text":"Results"}],"is_error":false},
    {"type":"text","text":"Here is a plan"}]},
  {"uuid":"m3","text":"Make it cheaper","sender":"human","created_at":"2026-10-01T10:02:00Z","parent_message_uuid":"m2","attachments":[],"files":[],"content":[{"type":"text","text":"Make it cheaper"}]},
  {"uuid":"m3b","text":"Make it shorter","sender":"human","created_at":"2026-10-01T10:05:00Z","parent_message_uuid":"m2","attachments":[],"files":[],"content":[{"type":"text","text":"Make it shorter"}]},
@@ -117,6 +117,23 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 	second := records[1].Conversations[0].Messages
 	if len(second) != 3 || !second[1].Selected || second[2].Selected || records[1].Title != "Claude.ai conv-2" {
 		t.Fatalf("second = %+v", records[1])
+	}
+
+	// An export from before tree links holds every turn, in order; a turn
+	// spoken as a voice note is the person's words.
+	older := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-5","name":"Old","chat_messages":[
+ {"uuid":"o1","text":"","sender":"human","created_at":"2025-01-02T10:00:00Z","content":[{"type":"voice_note","title":"Voice note","text":"Name a fruit"}]},
+ {"uuid":"o2","text":"Apple","sender":"assistant","created_at":"2025-01-02T10:01:00Z","content":[{"type":"text","text":"Apple"}]},
+ {"uuid":"o3","text":"Another","sender":"human","created_at":"2025-01-02T10:02:00Z","content":[{"type":"text","text":"Another"}]},
+ {"uuid":"o4","text":"Pear","sender":"assistant","created_at":"2025-01-02T10:03:00Z","content":[{"type":"text","text":"Pear"}]}]}]`))
+	turns := older[0].Conversations[0].Messages
+	if len(turns) != 4 || older[0].Purpose != "Name a fruit" || older[0].Outcome != "Pear" || turns[0].NativeID != "o1" || turns[0].Role != "user" {
+		t.Fatalf("older export = %+v", older[0])
+	}
+	for _, turn := range turns {
+		if !turn.Selected {
+			t.Fatalf("%s is not selected", turn.NativeID)
+		}
 	}
 
 	// The ZIP the export arrives in reads the same, apart from where.

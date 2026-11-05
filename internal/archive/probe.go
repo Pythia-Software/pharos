@@ -256,6 +256,21 @@ var probeTempDirs = func() []string {
 	return dirs
 }
 
+// probeStatusDirs are where the status looks for a tool not yet chosen: its
+// default folder under home, and the one the variable name moves it to, when
+// Pharos was started with it set. The status runs on every page load, so it
+// reads its own environment rather than starting a login shell; a guided
+// probe reads the shell's too.
+func probeStatusDirs(home, name, sub, fallback string) []string {
+	dirs := []string{filepath.Join(home, fallback, sub)}
+	if value := os.Getenv(name); value != "" {
+		if dir := filepath.Join(resolvePath(home, value), sub); dir != dirs[0] {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
 func probeStatus(home string, config Config, catalog *Catalog) ProbeStatus {
 	return probeStatusForKinds(home, config, catalog, nil)
 }
@@ -285,10 +300,11 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 		}
 	}
 	if status.HostFileExists && (kinds == nil || kinds["opencode"]) {
-		dir := filepath.Join(home, ".local", "share", "opencode")
-		if databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "opencode", resolved) == nil {
-				status.NewSources++
+		for _, dir := range probeStatusDirs(home, "XDG_DATA_HOME", "opencode", filepath.Join(".local", "share")) {
+			if databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
+				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "opencode", resolved) == nil {
+					status.NewSources++
+				}
 			}
 		}
 	}
@@ -301,10 +317,11 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 		}
 	}
 	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
-		dir := filepath.Join(home, ".copilot")
-		if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "copilot", resolved) == nil {
-				status.NewSources++
+		for _, dir := range probeStatusDirs(home, "COPILOT_HOME", "", ".copilot") {
+			if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
+				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "copilot", resolved) == nil {
+					status.NewSources++
+				}
 			}
 		}
 	}
