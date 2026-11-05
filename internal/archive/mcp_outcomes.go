@@ -16,7 +16,7 @@ import (
 // and Git adds commits where local Git checked them.
 
 var outcomeMCPTools = []map[string]any{
-	{"name": "list_outcomes", "description": "List sessions with their outcome label (landed, committed, changed_kept, changed_recent, reworked, no_changes, unknown), the evidence that decided it (outcome_why) and its tier (transcript or local Git), newest first, with counts per label for the filters. Works with or without Git: labels come from each session's own tool calls, and local Git adds commit evidence. Pass workspace_ids for full evidence, including each linked commit's method and confidence.",
+	{"name": "list_outcomes", "description": "List sessions with their outcome label (landed, committed, changed_kept, changed_recent, reworked, no_changes, unknown), the evidence that decided it (outcome_why) and its tier (transcript or local Git), newest first, with counts per label for the filters. Works with or without Git: labels come from each session's own tool calls, and local Git adds commit evidence and the lines its commits added (committed_lines, landed_lines). Pass workspace_ids for full evidence, including each linked commit's method and confidence.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 			"project":           map[string]any{"type": "string", "description": "A project name from list_projects: a repository, or a folder as ~/path."},
 			"label":             map[string]any{"type": "string", "enum": outcomeLabels},
@@ -208,7 +208,8 @@ func (c *Catalog) listOutcomes(ctx context.Context, args map[string]any) (map[st
 		` + projectNameSQL("w") + ` project,` + projectKindSQL("w") + ` project_kind,` + outcomeLabelSQL("w") + ` outcome_label,` + outcomeWhySQL("w") + ` outcome_why,
 		` + outcomeEvidenceTierSQL("w") + ` evidence_tier,` + gitCheckSQL("w") + ` git_check,` + gitCheckReasonSQL("w") + ` git_check_reason,
 		so.files_changed,so.lines_added,so.lines_removed,so.kept_lines,so.rework_removed_lines,so.verification,
-		` + gitFactSQL("w", "sg.linked_commits") + ` linked_commits,` + gitFactSQL("w", "sg.landed_commits") + ` landed_commits
+		` + gitFactSQL("w", "sg.linked_commits") + ` linked_commits,` + gitFactSQL("w", "sg.landed_commits") + ` landed_commits,
+		` + gitFactSQL("w", "sg.lines_added") + ` committed_lines,` + gitFactSQL("w", "sg.lines_landed") + ` landed_lines
 		FROM workspaces w` + projectJoin("w") + ` LEFT JOIN session_outcomes so ON so.workspace_id=w.id
 		WHERE ` + strings.Join(where, " AND ")
 	counted, err := queryMapsContext(ctx, c.reader(), `SELECT outcome_label,COUNT(*) n FROM (`+sessions+`) GROUP BY outcome_label`, values...)

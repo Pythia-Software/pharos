@@ -185,11 +185,35 @@ a Conductor workspace. Its delegated agents' calls are its own.
   envelope. Only these commands' output is read. A hash here
   is Tier 1 evidence: it is stored, but "Committed" waits for local Git to
   confirm it (Tier 2).
+- **Git commands.** Every shell call's command line is read for the git
+  invocations that can make a commit (`commit`, `merge`, `rebase`,
+  `cherry-pick`, `revert`, `am`, `pull`, after git's own options such as
+  `-C` and `-c`) and for `gh pr create`
+  (`internal/archive/outcome_git_ops.go`). Each is kept with:
+  - the call's start and end;
+  - the repository it ran in: the directory `git -C` or the last `cd`
+    before it names, when that is absolute or under `~` and inside a
+    checkout Pharos knows; else the session's own;
+  - the hashes the call printed;
+  - a fingerprint of the subject it wrote: its first `-m`, or the first
+    paragraph of a here document its own arguments open (`-F - <<EOF`,
+    `-m "$(cat <<EOF …)"`). A message from a variable, a substitution or a
+    file is unknown, and a here document elsewhere in the command (a
+    script) is not the message;
+  - for `gh pr create`, the pull request's number and repository from the
+    URL it printed.
+
+  This needs only what every harness's shell tool records: a command line,
+  its output, and when it ran. No harness-specific record is read: Conductor
+  turn checkpoints, for example, name a turn's commits exactly, but only
+  Conductor users have them. The subject fingerprint is computed as line
+  fingerprints are, so no message is stored.
 
 Storage: `session_files` (one row per session and file: path, repository,
 first and last edit, edits, lines, and fingerprints of the lines it added
 and kept and of the lines it removed) and `session_outcomes` (one row per
-session: the facts above, the rework judgement and the window it used).
+session: the facts above, its git commands as `git_ops_json`, the rework
+judgement and the window it used).
 They are derived in the tools stage, after the tool ledger, for the
 sessions whose calls changed (`session_outcome_dirty`, filled by triggers on
 `tool_calls` and `workspaces`). Each pass then judges rework again, once,
@@ -211,8 +235,15 @@ transcript it was read from already holds the text.
 ### Tier 2: from local git (repositories only, read-only)
 
 `internal/archive/outcome_git.go` asks local git about the repositories in
-which sessions changed files or printed a commit, using only checkouts this
-Mac recorded that still exist.
+which sessions changed files, printed a commit or ran a git command that
+makes one, using only checkouts this Mac recorded that still exist.
+
+Git is the record of what changed; the transcript is how a commit is tied to
+a session. Most of a repository's commits may have no recorded session at
+all: a person committing by hand, a script or CI job, another Mac, a harness
+Pharos does not read. Pharos never assumes a commit is a session's for lack
+of another owner: a commit nothing links stays unlinked, and a session with
+no linked commit is judged on its Tier 1 facts.
 
 - **When.** In background stages only: after the tool summaries in
   incremental recovery, and as the "linking commits" phase of a library
@@ -221,65 +252,115 @@ Mac recorded that still exist.
   under `nice -n 10` with a 60-second timeout for the log and 10 seconds for
   everything else.
 - **Cache.** A repository's scan key is its refs (heads, remotes, tags and
-  `refs/notes/ai`) and its worktrees' detached HEADs, plus its sessions'
-  edit windows, files (with each file's first and last edit and its kept
-  line fingerprints) and printed commits. An unchanged key runs no `git log` and writes nothing, so the
-  cached views stay valid. A scan that could not start is keyed by its
-  reason; one that timed out is tried again when the repository changes or
-  on the next day.
+  `refs/notes/ai`), its worktrees' detached HEADs, its remote, and its
+  sessions' edit windows, files (with each file's first and last edit and
+  its kept line fingerprints), printed commits and git commands. An
+  unchanged key runs no `git log` and
+  writes nothing, so the cached views stay valid. A scan that could not
+  start is keyed by its reason; one that timed out is tried again when the
+  repository changes or on the next day.
 - **What it reads.** `git log --branches --remotes --tags --no-renames
   --numstat`, plus the worktrees' detached HEADs (`git worktree list
-  --porcelain`), since a day before the earliest session edit or printed
-  commit: each commit's hash, parent count, author and commit times, and
-  lines per file. For a commit several sessions could have made, also its
-  diff and the HEAD reflog of the candidates' checkouts: an entry of a
-  commit made there (a commit, cherry-pick, revert or a commit a rebase
-  wrote), not one checked out, reset to or a rebase's start, finish or
-  abort. The diff's added lines are fingerprinted and compared in memory,
-  never stored. Every diff is read with `--no-textconv --no-ext-diff`: a
-  repository's attributes can name a converter or diff program, which
-  would run, and a converter with a cache writes notes.
-- **Commits linked to the session.** A link comes either from a hash the
-  session's own `git commit` printed (direct, confidence 1.0) or by
-  inference: the commit is not a merge, its author time falls in the
-  session's edit window (plus an hour of grace), and it touches a file the
-  session had edited by then. When several sessions qualify, the commit goes
-  to the one whose checkout's reflog made it (0.9), else to the one whose
-  kept lines it adds at least twice as many of as any other (0.8),
-  comparing line fingerprints in memory; else to the one still editing its files, or that stopped nearest
-  before it, then to the tightest window (CodeBurn's rule), at 0.5; a tie
-  links nothing. A 0.5 link is kept as a candidate but counts toward no
-  session's commits or label (see [Commit-linking
-  calibration](#commit-linking-calibration)). Every link stores its
-  evidence: the printed hash, or the author time, the window, the shared
-  files and the number of candidates.
+  --porcelain`), since a day before the earliest session edit, printed
+  commit or git command:
+  each commit's hash, parents, tree, author email, author and commit times,
+  a fingerprint of its subject, and lines per file. Then the commits only
+  the reflogs still hold (`--reflog --not --branches --remotes --tags` and
+  the detached HEADs),
+  marked replaced: a rebase or amend leaves the hash a session printed
+  there. Git stash's commits are left out. For a commit several sessions
+  could have made, also its diff and the HEAD reflog of the candidates'
+  checkouts: an entry of a commit made there (a commit, cherry-pick, revert
+  or a commit a rebase wrote), not one checked out, reset to or a rebase's
+  start, finish or abort. For mainline's squashes, their messages. The
+  diff's added lines and the messages are compared in memory, never stored.
+  Every diff is read with `--no-textconv --no-ext-diff`: a repository's
+  attributes can name a converter or diff program, which would run, and a
+  converter with a cache writes notes.
+- **Commits linked to the session**, by the first rule that applies (see
+  [Commit-linking rules](#commit-linking-rules-and-confidence)):
+  1. a hash the session's own `git commit` printed (1.0);
+  2. a `git commit` or `git revert` of the session's that was running when
+     the commit was made and wrote its subject (0.95);
+  3. the only such command running when the commit was both written and
+     committed, that wrote no other subject (0.9). A rebase, cherry-pick or
+     `git am` keeps the author time and an amend too, so neither makes the
+     commits it rewrites its own;
+  4. a rewrite of a commit linked by these: the same author email, author
+     time and subject (a rebase, amend or cherry-pick), at the original's
+     confidence;
+  5. for a commit no git command explains, as a commit made by hand:
+     inference. The commit is not a merge, its author time falls in the
+     session's edit window (plus an hour of grace), and it touches a file
+     the session had edited by then (0.7).
+
+  Merges link only by a printed hash. When several sessions' commands or
+  edit windows qualify, the commit goes to the one whose checkout's reflog
+  made it (0.9), else to the one whose kept lines it adds at least twice as
+  many of as any other (0.8), comparing line fingerprints in memory; else,
+  between commands, to the shortest-running, and between edit windows, to
+  the one still editing its files, or that stopped nearest before it, then
+  to the tightest window (CodeBurn's rule), at 0.5; a tie links nothing. A
+  0.5 link is kept as a candidate but counts toward no session's commits or
+  label (see [Commit-linking calibration](#commit-linking-calibration)).
+  Every link stores its evidence: the printed hash; the command, when it
+  ran and the commit time; the original a rewrite copies; or the author
+  time, the window, the shared files and the number of candidates.
 - **Mainline.** Mainline is `origin/HEAD`, else `origin/main` or
   `origin/master`, else a local `main` or `master`. A linked commit landed
-  when mainline reaches it, or when a mainline commit since has the same
-  `git patch-id --stable` (a rebase, cherry-pick or one-commit squash). A
-  cherry-pick keeps the author time, so both copies link to the session;
-  the change is linked once, as the copy, with the stronger evidence of
-  the two (a printed hash still counts when only inference linked the
-  copy). Another session's link to the original stays. In a shallow clone a commit
-  mainline does not reach is unknown, not "not landed", and so is a commit
-  whose patch could not be read.
+  when, in order:
+  - mainline reaches it;
+  - a mainline commit since has the same `git patch-id --stable` (a rebase,
+    cherry-pick or one-commit squash);
+  - a squash on mainline, committed after it, took it in: the squash has the
+    tree of a branch commit descended from it (the branch was squashed as
+    it stood); or it lists the commit's subject as `* subject`, as GitHub's
+    default squash message does, when the subject is at least 16
+    characters and no other commit has it; or its subject ends `(#N)` for
+    the one pull request the commit's session opened in this repository.
+
+  In a shallow clone a commit mainline does not reach is unknown, not "not
+  landed", and so is a commit whose patch could not be read.
+- **Once per change.** A session linked to several copies of one change (a
+  rebase, amend or cherry-pick: the same identity, or the same patch-id on
+  mainline) is linked once: to the copy on mainline, then one a ref still
+  holds, then the newest. The link kept carries the strongest evidence of
+  the copies' links, so a printed hash still counts when only inference
+  linked the copy kept. Another session's link to a copy stays.
 - **Reverts.** A later commit reverts a linked one when its message says
   `This reverts commit <hash>`, or when it changes the same files with the
   added and removed counts swapped and its patch-id equals the linked
   commit's inverse patch-id (read with `--no-prefix`, since `-R` swaps the
   `a/` and `b/` prefixes).
 - **Per-commit numstat** is stored as the commit's file count and line
-  totals.
+  totals, and per file for file history.
 - **Git AI notes** (`refs/notes/ai`) are listed and recorded as a flag on
   the commit. They are never written.
 
 What it stores: `git_commits` (one row per linked commit: hash, times,
 parents, counts, mainline and revert evidence), `session_commit_links`
 (method, confidence and evidence per link), `session_git` (each session's
-state and counts) and `git_repository_scans` (each repository's scan key
-and state on this host). The Library reads them as `git_check`,
-`git_check_reason`, `linked_commits` and `landed_commits`, and the outcome
-label as Landed, Committed or, for a revert, Reworked.
+state, counted commits, and the lines they added and landed) and
+`git_repository_scans` (each repository's scan key and state on this host).
+The Library reads them as `git_check`, `git_check_reason`, `linked_commits`
+and `landed_commits`, the Outcomes dataset also as `committed_lines` and
+`landed_lines`, and the outcome label as Landed, Committed or, for a revert,
+Reworked. Lines are Git's count, whatever tool wrote them: an agent editing
+through a shell script, or a patch the tool ledger cannot see, counts the
+same as an Edit call.
+
+Gaps that stay open, each leaving a commit unlinked rather than guessed:
+
+- An interactive shell whose input the transcript keeps outside the
+  command (Codex's `write_stdin`) records no command line to read.
+- A commit a script makes inside a session's shell call (a merge helper, a
+  release tool) has no git command in the transcript. Unless it printed
+  `[branch hash]`, edit inference is its only route.
+- Commits from another Mac link only when that Mac's sessions are in the
+  library and it scans its own checkouts.
+- A relative `cd` or `-C` path is not resolved: tool calls do not record
+  their working directory, so the command counts in the session's own
+  repository.
 
 ### Tier 3: from the forge
 
@@ -442,21 +523,86 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 |---|---|
 | Hash printed by `git commit` in the session's own tool output, and the commit exists locally | 1.0 |
 | Hash printed by `git commit`, but the commit is not in the local repository | Not linked; it stays a Tier 1 fact (`recorded_commits`) |
-| Inferred: author time in the edit window plus an hour, touching the session's edited files, not a merge, and the only containing session | 0.7 |
+| Message: a `git commit` or `git revert` of the session's was running at the commit time and wrote its subject | 0.95 |
+| Window: the only such command running when the commit was written and committed, writing no other subject | 0.9 |
+| Command, of several sessions', the one whose checkout's reflog made the commit, or whose kept lines it adds (as below) | 0.9 or 0.8 (at most the command's own) |
+| Command, of several sessions', the shortest-running | 0.5, a candidate |
+| Rewrite (same author email, author time and subject) of a commit linked by the rules above | The original's |
+| Inferred: no git command explains it; author time in the edit window plus an hour, touching the session's edited files, not a merge, and the only containing session | 0.7 |
 | Inferred, of several overlapping sessions, the one whose checkout's reflog made the commit | 0.9 |
 | Inferred, of several, the one whose kept lines the commit adds at least twice as many of as any other | 0.8 |
 | Inferred, of several, the one editing nearest the commit (then the tightest window) | 0.5, a candidate: stored with its evidence, never counted |
-| Inferred, and tied for the tightest window | Not linked |
+| Tied for the shortest command or tightest window | Not linked |
 | Inferred from time alone (no file overlap) | Not linked |
 
-Links of 0.7 and above count toward a session's linked and landed commits
-and its label.
+A command's window is its call's start and end, two seconds either side
+(commit times are whole seconds; some harnesses record the end when the
+output arrives). Links of 0.7 and above count toward a session's linked and
+landed commits, its committed and landed lines, and its label.
 
 ## Commit-linking calibration
 
+### Git commands
+
+Measured on 2026-11-04 on a dev copy of a real library (sessions to
+2026-11-02), with read-only git in the 13 repositories whose checkouts this
+Mac still has (`outcome_stages_probe_test.go`). Each repository's commits
+were linked with the printed hashes hidden, and every link scored against
+them; then the commits each pipeline links were counted.
+
+- **Precision.** Of 2,195 commits a single session printed:
+
+  | Method | Right | Wrong |
+  |---|---|---|
+  | Message (0.95) | 1,961 | 0 |
+  | Window (0.9) | 42 | 0 |
+  | Rewrite (0.9 to 0.95) | 11 | 0 |
+  | Edit inference, where no command explained it (0.7 to 0.9) | 10 | 22 |
+  | Edit inference, nearest (0.5, not counted) | 0 | 5 |
+
+  Edit inference does badly here because these are the commits a command
+  should have explained: the printing session usually made no edits, and
+  inference names the session that did. On commits made by hand it is the
+  only evidence, measured below.
+- **What commands miss.** The 192 printed commits no command linked: 90
+  merges (linked only by a printed hash); 22 amends or rebases (the author
+  time is older than the command); 48 with no commit command of the
+  session's in that repository (a cherry-pick, a script, or a `cd` into a
+  checkout Pharos files under another repository); 32 just outside a
+  command's window (13 within a minute, 9 within an hour). A printed hash
+  links all of them.
+- **Coverage.** Of the non-merge commits made while the copy's sessions
+  were active, leaving out GitHub's squash merges:
+
+  | Repository | Commits | Edits alone | Everything | Their lines linked (edits alone → everything) |
+  |---|---|---|---|---|
+  | pharos | 806 | 398 (49%) | 785 (97%) | 43% → 98% |
+  | query-table | 215 | 115 | 200 (93%) | 32% → 90% |
+  | abstrabel | 237 | 72 | 198 (84%) | 62% → 97% |
+  | tl1 | 229 | 158 | 220 (96%) | 70% → 99% |
+  | xlsx-exec | 511 | 347 | 456 (89%) | 94% → 97% |
+  | explo | 12,827 | 3,172 | 3,891 (30%) | |
+  | excel-corpus | 14,591 | 266 | 318 (2%) | |
+
+  explo and excel-corpus are mostly commits an automation makes on its own
+  branches (TL1 experiments), which no session's command made. Leaving them
+  unlinked is right: they are "made outside recorded sessions". This
+  library's owner commits only through agents; a library whose people
+  commit by hand will link far fewer commits by command, and edit inference
+  matters more there.
+- **Landing.** Of the linked commits that reached mainline: 2,763 are in its
+  history, 2,233 have a copy there (patch-id), 954 went in with a squash of
+  their branch's tree, 151 are listed in a squash's message, and 75 are in
+  the squash of the one pull request their session opened.
+- **Speed.** A first pass over every repository took 3 m 57 s; the largest
+  (explo, 12,827 commits) took 2 m 18 s of git. An unreadable reflog
+  (one that times out) leaves out only the replaced commits.
+
+### Edit inference
+
 Measured on 2026-11-04 against the same backup copy as the rework
 calibration, with read-only git in this Mac's 47 recorded repositories
-(`outcome_git_probe_test.go`).
+(`outcome_git_probe_test.go`), before git commands were read.
 
 - **Coverage.** 6,498 sessions were checked. 983 were not checked, each
   with its reason: git could not read 2 repositories (477 sessions), no
@@ -630,11 +776,14 @@ places the checkout, and the reader link opens the edit call at the file's
 first edit.
 
 **Storage.** `git_commit_files` holds, per repository, the commits that
-changed a file some session edited there, with lines added and removed. The
-Tier 2 scan already reads `git log --numstat`; it keeps rows for edited
-paths only, so the table grows with the paths agents touched, not with the
-repository. It stores hashes, paths and counts. A commit no session is
-linked to is written to `git_commits` with only its time and revert state.
+changed a file some session edited there or a session's linked commit
+changed, with lines added and removed. The Tier 2 scan already reads `git
+log --numstat`; it keeps rows for those paths only, so the table grows with
+the paths agents touched, not with the repository. A file an agent changed
+through a shell script has a history once the commit is linked. It stores
+hashes, paths and counts. A commit no session is linked to is written to
+`git_commits` with only its time and revert state; a replaced one (only a
+reflog holds it) is not written unless linked.
 
 **Library file search** reads `session_files` as well as `change_files`, so
 Claude Code, Codex and Antigravity edits are found. Each hit opens the
@@ -717,8 +866,9 @@ fixture.
 - It never runs git on a request. Pages and MCP tools read stored facts.
   Git runs in background stages at low priority, with timeouts and
   cancellation, and caches by the repository's refs.
-- It never stores diffs or file contents. It stores hashes, paths, counts
-  and timestamps.
+- It never stores diffs, file contents or commit messages. It stores
+  hashes, paths, counts and timestamps; a commit subject only as a
+  fingerprint, to compare a commit with the command that made it.
 - It never makes a network call for git data.
 
 ## If you don't use git

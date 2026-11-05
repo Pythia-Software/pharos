@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -29,12 +31,13 @@ import (
 // its last scan is not asked again.
 //
 // Only facts are stored: hashes, times, counts, the files a link shares and
-// how a commit was reverted. No commit message, diff or file content. For
-// file history, every commit that changed a file some session edited keeps
-// that file's path and line counts (git_commit_files).
+// how a commit was reverted. No commit message, diff or file content: a
+// subject is compared as a fingerprint, and squash messages in memory. For
+// file history, every commit that changed a file some session edited or
+// committed keeps that file's path and line counts (git_commit_files).
 
 // outcomeGitVersion scans every repository again when the rules change.
-const outcomeGitVersion = "2"
+const outcomeGitVersion = "3"
 
 // outcomeGitGrace is how long after a session's last edit a commit can still
 // be inferred to be its own: an agent or person commits soon after the work.
@@ -89,7 +92,9 @@ CREATE TABLE IF NOT EXISTS session_git(
   landed_commits INTEGER NOT NULL DEFAULT 0,
   reverted_commits INTEGER NOT NULL DEFAULT 0,
   mainline_unknown INTEGER NOT NULL DEFAULT 0,
-  checked_at TEXT NOT NULL) WITHOUT ROWID;
+  checked_at TEXT NOT NULL,
+  lines_added INTEGER NOT NULL DEFAULT 0,
+  lines_landed INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS git_commit_files(
   repository_id TEXT NOT NULL,
   hash TEXT NOT NULL,
@@ -109,8 +114,19 @@ CREATE TABLE IF NOT EXISTS git_repository_scans(
 `
 
 func (c *Catalog) ensureOutcomeGit() error {
-	_, err := c.DB.Exec(outcomeGitSQL)
-	return err
+	if _, err := c.DB.Exec(outcomeGitSQL); err != nil {
+		return err
+	}
+	for _, column := range []string{"lines_added", "lines_landed"} {
+		if has, err := c.hasColumn("session_git", column); err != nil {
+			return err
+		} else if !has {
+			if _, err := c.DB.Exec("ALTER TABLE session_git ADD COLUMN " + column + " INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // editSpan is when a session first and last edited a file.
@@ -118,7 +134,8 @@ type editSpan struct{ First, Last time.Time }
 
 // gitSession is a session as linking reads it: its edit window, the files
 // it edited in each repository and the lines it kept in them, the hashes its
-// own git commit printed, and its checkouts on this Mac.
+// own git commit printed, the git commands it ran (outcome_git_ops.go), its
+// own repository and its checkouts on this Mac.
 type gitSession struct {
 	ID          string
 	First, Last time.Time
@@ -126,14 +143,24 @@ type gitSession struct {
 	Files       map[string]map[string]editSpan
 	Kept        map[string]map[string]lineSet
 	Printed     []outcomeCommit
+	Ops         []gitOp
+	Repository  string
 	Locations   []string
 	key         []string
 }
 
-// gitCommit is one commit of a scan.
+// gitCommit is one commit of a scan. Subject is a fingerprint of its
+// subject (subjectFingerprint), compared in memory and never stored.
 type gitCommit struct {
-	Hash             string
-	Parents          int
+	Hash          string
+	Parents       int
+	ParentHashes  []string
+	Tree          string
+	AuthorEmail   string
+	Subject       string
+	SubjectLength int
+	// Replaced is a commit only a reflog holds.
+	Replaced         bool
 	Author, Commit   time.Time
 	Files            map[string][2]int64
 	Added, Removed   int64
@@ -158,8 +185,8 @@ type gitScan struct {
 	Status, Reason string
 	Commits        map[string]*gitCommit
 	Links          []gitLink
-	// Edited are the repository's files some session edited: the commits
-	// that changed them are kept for file history.
+	// Edited are the repository's files some session edited or committed:
+	// the commits that changed them are kept for file history.
 	Edited map[string]bool
 	// Since is how far back the scan read: commits before it are not
 	// stored, so file history says it covers only the time since.
@@ -206,6 +233,14 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	remotes, err := queryMapsContext(ctx, c.DB, "SELECT id,normalized_remote FROM repositories WHERE COALESCE(normalized_remote,'')<>''")
+	if err != nil {
+		return err
+	}
+	forges := map[string]string{}
+	for _, row := range remotes {
+		forges[firstString(row["id"])] = firstString(row["normalized_remote"])
+	}
 	host := currentHost().ID
 	stored, err := queryMapsContext(ctx, c.DB, "SELECT repository_id,scan_key,status,reason FROM git_repository_scans WHERE host_id=?", host)
 	if err != nil {
@@ -239,7 +274,7 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 		case dir == "":
 			scan.Reason = reason
 		default:
-			key, heads, err = gitScanKey(ctx, dir, sessions, members, repository)
+			key, heads, err = gitScanKey(ctx, dir, sessions, members, repository, forges[repository])
 			if err != nil {
 				scan.Reason = gitFailure(err)
 			} else {
@@ -254,7 +289,7 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 			continue
 		}
 		if scan.Reason == "" {
-			scan = scanRepository(ctx, dir, sessions, members, repository, heads)
+			scan = scanRepository(ctx, dir, sessions, members, repository, forges[repository], heads)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -271,11 +306,12 @@ func (c *Catalog) refreshSessionGit(ctx context.Context) error {
 }
 
 // readGitSessions reads the sessions that could have commits: those that
-// edited files in a repository or printed a commit, outside mirrors.
+// edited files in a repository, printed a commit or ran a git command that
+// makes one, outside mirrors.
 func (c *Catalog) readGitSessions(ctx context.Context) (map[string]*gitSession, map[string][]string, error) {
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT so.workspace_id,so.first_edit_at,so.last_edit_at,so.commits_json,COALESCE(w.repository_id,w.folder_repository_id) repository_id
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT so.workspace_id,so.first_edit_at,so.last_edit_at,so.commits_json,so.git_ops_json,COALESCE(w.repository_id,w.folder_repository_id) repository_id
 		FROM session_outcomes so JOIN workspaces w ON w.id=so.workspace_id
-		WHERE so.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) AND (so.files_changed>0 OR so.commits_json<>'[]')`)
+		WHERE so.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) AND (so.files_changed>0 OR so.commits_json<>'[]' OR so.git_ops_json<>'[]')`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -292,10 +328,16 @@ func (c *Catalog) readGitSessions(ctx context.Context) (map[string]*gitSession, 
 		last, lastOK := parseTime(firstString(row["last_edit_at"]))
 		session.First, session.Last, session.Timed = first, last, firstOK && lastOK
 		_ = json.Unmarshal([]byte(firstString(row["commits_json"])), &session.Printed)
-		session.key = []string{firstString(row["first_edit_at"]), firstString(row["last_edit_at"]), firstString(row["commits_json"])}
+		_ = json.Unmarshal([]byte(firstString(row["git_ops_json"])), &session.Ops)
+		session.Repository = firstString(row["repository_id"])
+		session.key = []string{firstString(row["first_edit_at"]), firstString(row["last_edit_at"]), firstString(row["commits_json"]), firstString(row["git_ops_json"])}
 		sessions[session.ID] = session
 		if len(session.Printed) > 0 {
-			add(firstString(row["repository_id"]), session.ID)
+			add(session.Repository, session.ID)
+		}
+		// A git command counts in the repository it named, else the session's.
+		for _, op := range session.Ops {
+			add(defaultString(op.Repository, session.Repository), session.ID)
 		}
 	}
 	files, err := queryMapsContext(ctx, c.DB, "SELECT workspace_id,repository_id,path,first_edit_at,last_edit_at,kept_lines FROM session_files WHERE repository_id IS NOT NULL ORDER BY workspace_id,repository_id,path")
@@ -367,14 +409,17 @@ func (c *Catalog) gitLocations(ctx context.Context) (map[string][]string, error)
 }
 
 // gitCheckout is the first recorded checkout that still exists, or why none
-// can be used.
+// can be used. A deleted worktree's directory can keep a .git that holds no
+// repository (only info/exclude, say): it is gone too.
 func gitCheckout(locations []string) (string, string) {
 	if len(locations) == 0 {
 		return "", "No checkout of this repository was recorded on this Mac."
 	}
 	for _, location := range locations {
-		if _, err := integrationCommonDir(location); err == nil {
-			return location, ""
+		if common, err := integrationCommonDir(location); err == nil {
+			if _, err := os.Stat(filepath.Join(common, "HEAD")); err == nil {
+				return location, ""
+			}
 		}
 	}
 	return "", "The checkouts recorded on this Mac are gone."
@@ -388,9 +433,10 @@ func gitFailure(err error) string {
 }
 
 // gitScanKey identifies what a scan would read: the repository's refs, its
-// worktrees' detached HEADs and the sessions linked against it. An unchanged
-// key needs no scan. It also gives the detached HEADs, which no ref holds.
-func gitScanKey(ctx context.Context, dir string, sessions map[string]*gitSession, members []string, repository string) (string, []string, error) {
+// worktrees' detached HEADs, its remote and the sessions linked against it.
+// An unchanged key needs no scan. It also gives the detached HEADs, which no
+// ref holds.
+func gitScanKey(ctx context.Context, dir string, sessions map[string]*gitSession, members []string, repository, forge string) (string, []string, error) {
 	refs, err := outcomeGitCommand(ctx, dir, outcomeGitShortTimeout, nil, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes", "refs/tags", "refs/notes/ai")
 	if err != nil {
 		return "", nil, err
@@ -401,7 +447,7 @@ func gitScanKey(ctx context.Context, dir string, sessions map[string]*gitSession
 	}
 	heads := detachedHeads(string(worktrees))
 	hash := sha256.New()
-	fmt.Fprintf(hash, "%s\x00%s\x00%s\x00", outcomeGitVersion, outcomeGitGrace, repository)
+	fmt.Fprintf(hash, "%s\x00%s\x00%s\x00%s\x00", outcomeGitVersion, outcomeGitGrace, repository, forge)
 	hash.Write(refs)
 	fmt.Fprintf(hash, "\x00%s", strings.Join(heads, " "))
 	for _, id := range members {
@@ -432,8 +478,8 @@ func detachedHeads(worktrees string) []string {
 
 // scanRepository reads a repository's commits since its sessions began and
 // links them.
-func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSession, members []string, repository string, heads []string) gitScan {
-	// From the first edit or printed commit of its sessions.
+func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSession, members []string, repository, forge string, heads []string) gitScan {
+	// From the first edit, git command or printed commit of its sessions.
 	since := time.Time{}
 	earliest := func(at time.Time) {
 		if since.IsZero() || at.Before(since) {
@@ -445,6 +491,11 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 		if session.Timed {
 			earliest(session.First)
 		}
+		for _, op := range session.opsIn(repository) {
+			if from, _, ok := op.window(); ok {
+				earliest(from)
+			}
+		}
 		for _, printed := range session.Printed {
 			if at, ok := parseTime(printed.At); ok {
 				earliest(at)
@@ -452,7 +503,7 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 		}
 	}
 	if since.IsZero() {
-		return gitScan{Status: "not_checked", Reason: "Its sessions have no edit or commit times to link commits by."}
+		return gitScan{Status: "not_checked", Reason: "Its sessions have no edit or git command times to link commits by."}
 	}
 	// A day of slack for clocks and for commits printed before the first edit.
 	after := "--since=" + strconv.FormatInt(since.Add(-24*time.Hour).Unix(), 10)
@@ -476,13 +527,17 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 	}
 	common, _ := integrationCommonDir(dir)
 	shallow := integrationShallow(common)
-	if err := markMainline(ctx, dir, after, linked, shallow); err != nil {
+	if err := markMainline(ctx, dir, after, commits, linked, pullRequests(scan.Links, sessions, forge), shallow); err != nil {
 		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
 	}
-	scan.Links = linkCopiesOnce(scan.Links, linked)
+	scan.Links = linkOnce(scan.Links, commits)
 	linked = map[string]*gitCommit{}
 	for _, link := range scan.Links {
 		linked[link.Hash] = commits[link.Hash]
+		// What a session committed has a file history, whatever tool wrote it.
+		for path := range commits[link.Hash].Files {
+			scan.Edited[path] = true
+		}
 	}
 	if err := markReverts(ctx, dir, after, commits, linked); err != nil {
 		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
@@ -497,56 +552,75 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 	return scan
 }
 
-// linkCopiesOnce links each session once to a change it also linked as its
-// copy on mainline: a cherry-pick or rebase keeps the author time, so the
-// copy links to the session too. The link kept is the copy's, with the
-// stronger evidence of the two, so a printed hash still counts when only
-// inference linked the copy. Another session's link to the original stays.
-func linkCopiesOnce(links []gitLink, linked map[string]*gitCommit) []gitLink {
-	index := map[[2]string]int{}
-	for at, link := range links {
-		index[[2]string{link.Session, link.Hash}] = at
+// stashSubject is the subject git stash gives the commits it makes, which
+// are not work a session committed: the stash itself, a merge, and the
+// commits of its index (one parent) and untracked files (none).
+var stashSubject = regexp.MustCompile(`^(?:(WIP on|On) [^:\n]+: |(index|untracked files) on [^:\n]+: [0-9a-f]{7,} )`)
+
+func stashCommit(subject string, parents int) bool {
+	match := stashSubject.FindStringSubmatch(subject)
+	switch {
+	case match == nil:
+		return false
+	case match[2] == "index":
+		return parents == 1
+	case match[2] == "untracked files":
+		return parents == 0
+	default:
+		return parents >= 2
 	}
-	copied := map[int]bool{}
-	for at, link := range links {
-		copy, ok := index[[2]string{link.Session, linked[link.Hash].SameAs}]
-		if !ok || copy == at {
-			continue
-		}
-		copied[at] = true
-		if link.Confidence > links[copy].Confidence {
-			links[copy].Method, links[copy].Confidence, links[copy].Evidence = link.Method, link.Confidence, link.Evidence
-		}
-	}
-	kept := []gitLink{}
-	for at, link := range links {
-		if !copied[at] {
-			kept = append(kept, link)
-		}
-	}
-	return kept
 }
 
 // readGitCommits reads every commit on a branch, remote-tracking branch or
 // tag, or behind a detached HEAD, since a time, with the lines each changed
-// per file.
+// per file; then the commits only the reflogs still hold, as replaced: those
+// a rebase, amend or reset replaced, which is where a hash a session printed
+// may now be. Git stash's commits are left out. Reflogs that cannot be read
+// in time leave out only theirs.
 func readGitCommits(ctx context.Context, dir, after string, heads ...string) (map[string]*gitCommit, error) {
-	args := append(append([]string{"-c", "core.quotePath=false", "log", "--branches", "--remotes", "--tags"}, heads...),
-		after, "--no-renames", "--numstat", "--format=%x1e%H%x1f%P%x1f%at%x1f%ct")
-	output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, append(args, gitRawDiff...)...)
-	if err != nil {
-		return nil, err
-	}
 	commits := map[string]*gitCommit{}
-	for _, record := range strings.Split(string(output), "\x1e") {
+	for _, replaced := range []bool{false, true} {
+		args := append([]string{"-c", "core.quotePath=false", "log", "--branches", "--remotes", "--tags"}, heads...)
+		if replaced {
+			args = append([]string{"-c", "core.quotePath=false", "log", "--reflog", "--not", "--branches", "--remotes", "--tags"}, heads...)
+		}
+		output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, append(append(args, after, "--no-renames", "--numstat",
+			"--format=%x1e%H%x1f%P%x1f%at%x1f%ct%x1f%T%x1f%ae%x1f%s"), gitRawDiff...)...)
+		if err != nil && (!replaced || ctx.Err() != nil) {
+			return nil, err
+		} else if err != nil {
+			output = nil
+		}
+		for hash, commit := range parseGitCommits(string(output)) {
+			if commits[hash] == nil {
+				commit.Replaced = replaced
+				commits[hash] = commit
+			}
+		}
+	}
+	return commits, nil
+}
+
+// parseGitCommits reads readGitCommits's log.
+func parseGitCommits(output string) map[string]*gitCommit {
+	commits := map[string]*gitCommit{}
+	for _, record := range strings.Split(output, "\x1e") {
 		header, body, _ := strings.Cut(record, "\n")
-		fields := strings.Split(header, "\x1f")
-		if len(fields) != 4 || !gitCommitID.MatchString(fields[0]) {
+		fields := strings.SplitN(header, "\x1f", 7)
+		if len(fields) != 7 || !gitCommitID.MatchString(fields[0]) {
+			continue
+		}
+		parents := strings.Fields(fields[1])
+		if stashCommit(fields[6], len(parents)) {
 			continue
 		}
 		author, _ := strconv.ParseInt(fields[2], 10, 64)
 		committed, _ := strconv.ParseInt(fields[3], 10, 64)
-		commit := &gitCommit{Hash: fields[0], Parents: len(strings.Fields(fields[1])), Author: time.Unix(author, 0).UTC(), Commit: time.Unix(committed, 0).UTC(), Files: map[string][2]int64{}}
+		commit := &gitCommit{Hash: fields[0], Parents: len(parents), ParentHashes: parents, Tree: fields[4], AuthorEmail: strings.ToLower(fields[5]),
+			Author: time.Unix(author, 0).UTC(), Commit: time.Unix(committed, 0).UTC(), Files: map[string][2]int64{}}
+		if subject := messageSubject(fields[6]); subject != "" {
+			commit.Subject, commit.SubjectLength = subjectFingerprint(subject), len(subject)
+		}
 		for _, line := range strings.Split(body, "\n") {
 			parts := strings.SplitN(line, "\t", 3)
 			if len(parts) != 3 {
@@ -565,7 +639,7 @@ func readGitCommits(ctx context.Context, dir, after string, heads ...string) (ma
 		}
 		commits[commit.Hash] = commit
 	}
-	return commits, nil
+	return commits
 }
 
 // inferLinks links a repository's commits, reading signals for the
@@ -580,18 +654,26 @@ func inferLinks(ctx context.Context, dir, after string, sessions map[string]*git
 	return links, signals
 }
 
-// linkCommits links a repository's commits to its sessions:
-//   - a hash the session's own git commit printed links directly (1.0);
-//   - any other commit, outside merges, links to a session whose edit window
-//     (plus outcomeGitGrace) holds its author time and that edited one of its
-//     files: 0.7 when it is the only such session. Time alone links nothing.
+// linkCommits links a repository's commits to its sessions, outside merges,
+// by the first of these that applies:
+//   - a hash the session's own git commit printed (1.0);
+//   - a git command of the session's that ran when the commit was made
+//     (commandLinks): 0.95 when the command wrote its subject, 0.9 when it is
+//     the only command that could have made it;
+//   - a rewrite (rebase, amend, cherry-pick) of a commit linked so: the same
+//     author, author time and subject, at the original's confidence;
+//   - for a commit no git command explains, as one made by hand: the session
+//     whose edit window (plus outcomeGitGrace) holds its author time and that
+//     edited one of its files, 0.7 when it is the only such session. Time
+//     alone links nothing.
 //
 // A commit several sessions could have made is contested. With signals
 // (outcome_git_signals.go), it goes to the one candidate the checkout that
 // made it or the lines it adds point to, in that order, at that signal's
-// confidence; else to the candidate editing its files nearest the commit,
-// then with the tightest window, at 0.5. linkCommits
-// returns the contested commits and their candidates, for reading signals.
+// confidence; else, between commands, to the one that ran the shortest, and
+// between edit windows, to the candidate editing its files nearest the
+// commit, then with the tightest window, at 0.5. linkCommits returns the
+// contested commits and their candidates, for reading signals.
 func linkCommits(sessions map[string]*gitSession, members []string, repository string, commits map[string]*gitCommit, signals *gitSignals) ([]gitLink, map[string][]string) {
 	links := []gitLink{}
 	contested := map[string][]string{}
@@ -615,9 +697,24 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 		hashes = append(hashes, hash)
 	}
 	slices.Sort(hashes)
+	windows := readOpWindows(sessions, members, repository)
+	for _, hash := range hashes {
+		if commit := commits[hash]; !direct[hash] && commit.Parents <= 1 {
+			if link, ids := commandLink(windows, sessions, repository, commit, signals); link != nil {
+				links = append(links, *link)
+				direct[hash] = true
+			} else if len(ids) > 0 {
+				contested[hash] = ids
+			}
+		}
+	}
+	links = append(links, rewriteLinks(links, commits)...)
+	for _, link := range links {
+		direct[link.Hash] = true
+	}
 	for _, hash := range hashes {
 		commit := commits[hash]
-		if direct[hash] || commit.Parents > 1 {
+		if direct[hash] || contested[hash] != nil || commit.Parents > 1 {
 			continue
 		}
 		candidates := commitCandidates(sessions, members, repository, commit)
@@ -654,6 +751,182 @@ func linkCommits(sessions map[string]*gitSession, members []string, repository s
 		links = append(links, gitLink{Session: chosen.id, Hash: hash, Method: "inferred", Confidence: confidence, Evidence: evidence})
 	}
 	return links, contested
+}
+
+// gitOpSlack widens a git command's window for whole-second commit times
+// and for a harness that records a call's end when its output arrives.
+var gitOpSlack = 2 * time.Second
+
+// window is when a git command could have made a commit: while its call ran,
+// give or take gitOpSlack. A harness that records no end gives the start.
+func (op gitOp) window() (from, until time.Time, ok bool) {
+	from, ok = parseTime(op.At)
+	if !ok {
+		return
+	}
+	until = from
+	if ended, endedOK := parseTime(op.Until); endedOK && ended.After(from) {
+		until = ended
+	}
+	return from.Add(-gitOpSlack), until.Add(gitOpSlack), true
+}
+
+// opsIn are a session's git commands in a repository: those that named it,
+// and those that named none, in the session's own.
+func (session *gitSession) opsIn(repository string) []gitOp {
+	ops := []gitOp{}
+	for _, op := range session.Ops {
+		if defaultString(op.Repository, session.Repository) == repository {
+			ops = append(ops, op)
+		}
+	}
+	return ops
+}
+
+// gitOpWindow is a git command that makes new commits, a commit or a
+// revert, and when it ran. The others keep the commits' author times
+// (rebase, cherry-pick, am) or make merges, and link nothing by time.
+type gitOpWindow struct {
+	session     string
+	op          gitOp
+	from, until time.Time
+}
+
+// gitOpWindows are a repository's, by start, with the longest's span.
+type gitOpWindows struct {
+	windows []gitOpWindow
+	longest time.Duration
+}
+
+func readOpWindows(sessions map[string]*gitSession, members []string, repository string) gitOpWindows {
+	index := gitOpWindows{}
+	for _, id := range members {
+		for _, op := range sessions[id].opsIn(repository) {
+			if from, until, ok := op.window(); ok && (op.Kind == "commit" || op.Kind == "revert") {
+				index.windows = append(index.windows, gitOpWindow{id, op, from, until})
+				index.longest = max(index.longest, until.Sub(from))
+			}
+		}
+	}
+	slices.SortFunc(index.windows, func(a, b gitOpWindow) int { return cmp.Or(a.from.Compare(b.from), cmp.Compare(a.session, b.session)) })
+	return index
+}
+
+// holding are the commands running at a time.
+func (index gitOpWindows) holding(at time.Time) []gitOpWindow {
+	first, _ := slices.BinarySearchFunc(index.windows, at.Add(-index.longest), func(window gitOpWindow, target time.Time) int { return window.from.Compare(target) })
+	held := []gitOpWindow{}
+	for _, window := range index.windows[first:] {
+		if window.from.After(at) {
+			break
+		}
+		if !window.until.Before(at) {
+			held = append(held, window)
+		}
+	}
+	return held
+}
+
+// commandLink links a commit to the session whose git command made it: one
+// that ran when it was committed and wrote its subject, else one that ran
+// when it was both written and committed (an amend keeps the author time)
+// and wrote no other subject. Between several sessions, the signals decide,
+// else the command that ran the shortest, at 0.5. It returns no link and the
+// candidates when they need signals.
+func commandLink(windows gitOpWindows, sessions map[string]*gitSession, repository string, commit *gitCommit, signals *gitSignals) (*gitLink, []string) {
+	type candidate struct {
+		gitOpWindow
+		message bool
+	}
+	best := map[string]candidate{}
+	for _, window := range windows.holding(commit.Commit) {
+		message := commit.Subject != "" && slices.Contains(window.op.Subjects, commit.Subject)
+		if !message && (len(window.op.Subjects) > 0 || commit.Author.Before(window.from) || commit.Author.After(window.until)) {
+			continue
+		}
+		current, seen := best[window.session]
+		if span := window.until.Sub(window.from); !seen || message && !current.message || message == current.message && span < current.until.Sub(current.from) {
+			best[window.session] = candidate{window, message}
+		}
+	}
+	candidates := slices.SortedFunc(maps.Values(best), func(a, b candidate) int { return cmp.Compare(a.session, b.session) })
+	if slices.ContainsFunc(candidates, func(c candidate) bool { return c.message }) {
+		candidates = slices.DeleteFunc(candidates, func(c candidate) bool { return !c.message })
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	chosen, method, confidence, by := candidates[0], "window", 0.9, ""
+	if chosen.message {
+		method, confidence = "message", 0.95
+	}
+	if len(candidates) > 1 {
+		ids := make([]string, len(candidates))
+		for index, candidate := range candidates {
+			ids[index] = candidate.session
+		}
+		if signals == nil {
+			return nil, ids
+		}
+		checkout, lines := signals.picks(commit.Hash, repository, sessions, ids)
+		for index, pick := range []string{checkout, lines} {
+			if pick != "" {
+				chosen = candidates[slices.Index(ids, pick)]
+				confidence, by = min(confidence, linkTieBreaks[index].confidence), linkTieBreaks[index].name
+				break
+			}
+		}
+		if by == "" {
+			span := func(c candidate) time.Duration { return c.until.Sub(c.from) }
+			slices.SortStableFunc(candidates, func(a, b candidate) int { return cmp.Compare(span(a), span(b)) })
+			if span(candidates[0]) == span(candidates[1]) {
+				return nil, ids
+			}
+			chosen, confidence, by = candidates[0], 0.5, "shortest"
+		}
+	}
+	evidence := map[string]any{"command": chosen.op.Kind, "at": chosen.op.At, "committed_at": commit.Commit.Format(time.RFC3339), "candidates": len(candidates)}
+	if by != "" {
+		evidence["chosen_by"] = by
+	}
+	return &gitLink{Session: chosen.session, Hash: commit.Hash, Method: method, Confidence: confidence, Evidence: evidence}, nil
+}
+
+// commitIdentity is what a rebase, amend or cherry-pick keeps of a commit:
+// its author, author time and subject. Empty without a subject.
+func commitIdentity(commit *gitCommit) string {
+	if commit.Subject == "" {
+		return ""
+	}
+	return commit.AuthorEmail + "\x00" + strconv.FormatInt(commit.Author.Unix(), 10) + "\x00" + commit.Subject
+}
+
+// rewriteLinks links each rewrite of a commit a session is linked to, at
+// the original link's confidence, to the same session.
+func rewriteLinks(links []gitLink, commits map[string]*gitCommit) []gitLink {
+	byIdentity := map[string][]string{}
+	for hash, commit := range commits {
+		if identity := commitIdentity(commit); identity != "" && commit.Parents <= 1 {
+			byIdentity[identity] = append(byIdentity[identity], hash)
+		}
+	}
+	linked := map[string]bool{}
+	for _, link := range links {
+		linked[link.Session+"\x00"+link.Hash] = true
+	}
+	rewrites := []gitLink{}
+	for _, link := range links {
+		copies := byIdentity[commitIdentity(commits[link.Hash])]
+		slices.Sort(copies)
+		for _, hash := range copies {
+			if !linked[link.Session+"\x00"+hash] {
+				linked[link.Session+"\x00"+hash] = true
+				rewrites = append(rewrites, gitLink{Session: link.Session, Hash: hash, Method: "rewrite", Confidence: link.Confidence,
+					Evidence: map[string]any{"of": link.Hash, "by": link.Method}})
+			}
+		}
+	}
+	return rewrites
 }
 
 // linkCandidate is a session that could have made a commit: how long since
@@ -745,11 +1018,55 @@ func mainlineTip(ctx context.Context, dir string) (tip, ref string, err error) {
 	return "", "", nil
 }
 
-// markMainline records whether each linked commit reached mainline: it is
-// in mainline's history, or a commit there has the same change (a rebase or
-// cherry-pick, by patch-id). A squash of several commits is not recognized.
+// pullRequests gives each linked commit the pull request its session opened
+// in this repository (forge is its normalized remote), when the session
+// opened exactly one there and every session linked to the commit agrees.
+func pullRequests(links []gitLink, sessions map[string]*gitSession, forge string) map[string]int {
+	pulls := map[string]int{}
+	if forge == "" {
+		return pulls
+	}
+	for _, link := range links {
+		if link.Confidence < outcomeGitCounted {
+			continue
+		}
+		opened := 0
+		for _, op := range sessions[link.Session].Ops {
+			if op.Kind == "pull_request" && "github.com/"+op.Forge == forge && op.PullRequest != opened {
+				if opened != 0 {
+					opened = -1
+					break
+				}
+				opened = op.PullRequest
+			}
+		}
+		if previous, seen := pulls[link.Hash]; seen && previous != opened {
+			opened = -1
+		}
+		pulls[link.Hash] = opened
+	}
+	return pulls
+}
+
+// squashSubjectMinimum is the shortest subject a squash's list of commits is
+// matched by: "Fix tests" names too many commits to name one.
+const squashSubjectMinimum = 16
+
+var squashPullRequest = regexp.MustCompile(`\(#(\d+)\)\s*$`)
+
+// markMainline records whether each linked commit reached mainline, by the
+// first of these:
+//   - it is in mainline's history;
+//   - a commit there has the same change (a rebase or cherry-pick, by
+//     patch-id);
+//   - a squash on mainline took it in, committed after it: the squash has
+//     the tree of a branch commit descended from it; or, like GitHub's,
+//     lists its subject as "* subject" (a subject of at least
+//     squashSubjectMinimum that no other commit has); or names the one pull
+//     request its session opened, as "Title (#N)".
+//
 // Without a mainline, or in a shallow clone that lacks it, it stays unknown.
-func markMainline(ctx context.Context, dir, after string, linked map[string]*gitCommit, shallow bool) error {
+func markMainline(ctx context.Context, dir, after string, commits, linked map[string]*gitCommit, pulls map[string]int, shallow bool) error {
 	tip, ref, err := mainlineTip(ctx, dir)
 	if err != nil || tip == "" {
 		return err
@@ -788,15 +1105,190 @@ func markMainline(ctx context.Context, dir, after string, linked map[string]*git
 	for hash, id := range theirs {
 		byPatch[id] = hash
 	}
+	squashed := []string{}
 	for _, hash := range missing {
 		commit := linked[hash]
 		if match := byPatch[mine[hash]]; mine[hash] != "" && match != "" {
 			commit.OnMainline, commit.MainlineEvidence, commit.SameAs = new(true), "same change as "+match[:12]+" on "+strings.TrimPrefix(ref, "refs/"), match
+		} else {
+			squashed = append(squashed, hash)
+		}
+	}
+	if len(squashed) == 0 {
+		return nil
+	}
+	squashes, err := readSquashes(ctx, dir, after, tip, commits, on)
+	if err != nil {
+		return nil
+	}
+	for _, hash := range squashed {
+		commit := linked[hash]
+		if squash, how := squashes.find(commit, pulls[hash]); squash != "" {
+			commit.OnMainline, commit.MainlineEvidence = new(true), how+" "+squash[:12]+" on "+strings.TrimPrefix(ref, "refs/")
 		} else if !shallow {
 			commit.OnMainline = new(false)
 		}
 	}
 	return nil
+}
+
+// gitSquashes is what mainline's squashes say about the commits they took
+// in, each keyed to the earliest squash that says it.
+type gitSquashes struct {
+	commits map[string]*gitCommit
+	// byTree are the commits a squash has the tree of a descendant of.
+	byTree map[string]string
+	// listed are the subjects squashes list; byPull, the pull requests they
+	// name.
+	listed map[string]string
+	byPull map[int]string
+	// subjects counts the changes (not copies) with each subject.
+	subjects map[string]int
+}
+
+// readSquashes reads mainline's non-merge commits since after, with their
+// messages, compared in memory and never stored.
+func readSquashes(ctx context.Context, dir, after, tip string, commits map[string]*gitCommit, on map[string]bool) (*gitSquashes, error) {
+	squashes := &gitSquashes{commits: commits, byTree: map[string]string{}, listed: map[string]string{}, byPull: map[int]string{}, subjects: map[string]int{}}
+	earlier := func(hash, current string) bool {
+		return current == "" || commits[hash].Commit.Before(commits[current].Commit)
+	}
+	trees := map[string][]string{}
+	identities := map[string]bool{}
+	for hash, commit := range commits {
+		if on[hash] && commit.Parents <= 1 {
+			trees[commit.Tree] = append(trees[commit.Tree], hash)
+		}
+		if identity := commitIdentity(commit); identity != "" && !identities[identity] {
+			identities[identity] = true
+			squashes.subjects[commit.Subject]++
+		}
+	}
+	// A branch commit with a squash's tree, and every commit it descends
+	// from off mainline, went in with that squash.
+	tips := []string{}
+	for hash, commit := range commits {
+		if !on[hash] && len(trees[commit.Tree]) > 0 {
+			tips = append(tips, hash)
+		}
+	}
+	slices.SortFunc(tips, func(a, b string) int { return cmp.Or(commits[a].Commit.Compare(commits[b].Commit), cmp.Compare(a, b)) })
+	for _, tip := range tips {
+		squash := ""
+		for _, hash := range trees[commits[tip].Tree] {
+			if !commits[hash].Commit.Before(commits[tip].Commit) && earlier(hash, squash) {
+				squash = hash
+			}
+		}
+		for stack := []string{tip}; squash != "" && len(stack) > 0; {
+			hash := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if commit := commits[hash]; commit != nil && !on[hash] && squashes.byTree[hash] == "" {
+				squashes.byTree[hash] = squash
+				stack = append(stack, commit.ParentHashes...)
+			}
+		}
+	}
+	output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, nil, "log", "--no-merges", after, "--format=%x1e%H%x1f%B", tip)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range strings.Split(string(output), "\x1e") {
+		hash, body, ok := strings.Cut(record, "\x1f")
+		if !ok || commits[hash] == nil {
+			continue
+		}
+		lines := strings.Split(body, "\n")
+		if match := squashPullRequest.FindStringSubmatch(lines[0]); match != nil {
+			if number, _ := strconv.Atoi(match[1]); earlier(hash, squashes.byPull[number]) {
+				squashes.byPull[number] = hash
+			}
+		}
+		for _, line := range lines[1:] {
+			if item, ok := strings.CutPrefix(strings.TrimSpace(line), "* "); ok {
+				if subject := messageSubject(item); len(subject) >= squashSubjectMinimum {
+					if fingerprint := subjectFingerprint(subject); earlier(hash, squashes.listed[fingerprint]) {
+						squashes.listed[fingerprint] = hash
+					}
+				}
+			}
+		}
+	}
+	return squashes, nil
+}
+
+// find is the squash that took a commit in, and how it says so, given the
+// one pull request its session opened (0 or less for none).
+func (squashes *gitSquashes) find(commit *gitCommit, pull int) (string, string) {
+	after := func(squash string) bool {
+		return squash != "" && !squashes.commits[squash].Commit.Before(commit.Commit)
+	}
+	if squash := squashes.byTree[commit.Hash]; after(squash) {
+		return squash, "squashed into"
+	}
+	if squash := squashes.listed[commit.Subject]; commit.Subject != "" && squashes.subjects[commit.Subject] == 1 && after(squash) {
+		return squash, "listed in"
+	}
+	if squash := squashes.byPull[pull]; pull > 0 && after(squash) {
+		return squash, "pull request #" + strconv.Itoa(pull) + ","
+	}
+	return "", ""
+}
+
+// linkOnce links each session once to each change: of the copies a rebase,
+// amend or cherry-pick made (the same author, author time and subject, or
+// the same change on mainline), to the one on mainline, then one a ref
+// still holds, then the newest.
+func linkOnce(links []gitLink, commits map[string]*gitCommit) []gitLink {
+	change := func(hash string) string {
+		commit := commits[hash]
+		if commit.SameAs != "" && commits[commit.SameAs] != nil {
+			commit = commits[commit.SameAs]
+		}
+		return cmp.Or(commitIdentity(commit), commit.Hash)
+	}
+	// On mainline itself, then by a copy there, then unknown, then off it.
+	rank := func(hash string) int {
+		switch commit := commits[hash]; {
+		case commit.OnMainline == nil:
+			return 1
+		case !*commit.OnMainline:
+			return 0
+		case commit.SameAs == "":
+			return 3
+		}
+		return 2
+	}
+	held := func(hash string) int {
+		if commits[hash].Replaced {
+			return 0
+		}
+		return 1
+	}
+	better := func(a, b string) bool {
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(held(a), held(b)), commits[a].Commit.Compare(commits[b].Commit), cmp.Compare(a, b)) > 0
+	}
+	best := map[string]int{}
+	for index, link := range links {
+		key := link.Session + "\x00" + change(link.Hash)
+		if current, ok := best[key]; !ok || better(link.Hash, links[current].Hash) {
+			best[key] = index
+		}
+	}
+	// The link kept carries the strongest evidence of the change's links, so
+	// a printed hash still counts when only inference linked the copy kept.
+	for index, link := range links {
+		if keep := best[link.Session+"\x00"+change(link.Hash)]; keep != index && link.Confidence > links[keep].Confidence {
+			links[keep].Method, links[keep].Confidence, links[keep].Evidence = link.Method, link.Confidence, link.Evidence
+		}
+	}
+	kept := []gitLink{}
+	for index, link := range links {
+		if best[link.Session+"\x00"+change(link.Hash)] == index {
+			kept = append(kept, link)
+		}
+	}
+	return kept
 }
 
 // patchIDs gives each commit's patch-id, of its change or of its inverse.
@@ -853,7 +1345,7 @@ func markReverts(ctx context.Context, dir, after string, commits, linked map[str
 			continue
 		}
 		for other, later := range commits {
-			if other == hash || later.Parents > 1 || later.Commit.Before(commit.Commit) || len(later.Files) != len(commit.Files) {
+			if other == hash || later.Parents > 1 || later.Replaced || later.Commit.Before(commit.Commit) || len(later.Files) != len(commit.Files) {
 				continue
 			}
 			inverse := true
@@ -941,8 +1433,11 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 			}
 			// Commits no session is linked to are kept too where they changed
 			// an edited file, without a mainline answer: only linked commits
-			// are asked about.
+			// are asked about. A replaced one is a copy of another.
 			for hash, commit := range scan.Commits {
+				if commit.Replaced && !written[hash] {
+					continue
+				}
 				touched := false
 				for path, lines := range commit.Files {
 					if !scan.Edited[path] {
@@ -977,10 +1472,15 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 // writeSessionGit records each session's Tier 2 state from its
 // repositories' scans: checked when every one was, else not checked with the
 // first reason, and not applicable for a session that changed no file in a
-// repository; and its linked, landed and reverted commits, counting only
-// links of at least outcomeGitCounted. Only the sessions
+// repository; and its linked, landed and reverted commits and the lines they
+// add, counting only links of at least outcomeGitCounted. Only the sessions
 // whose state changed are written, so a pass that found nothing new leaves
 // the cached views alone.
+// sessionGitTotals are a session's counts over its counted links, in
+// session_git's column order.
+const sessionGitTotals = `COUNT(*) linked,COALESCE(SUM(g.on_mainline=1),0) landed,COALESCE(SUM(g.reverted_by IS NOT NULL),0) reverted,
+	COALESCE(SUM(g.on_mainline IS NULL),0) unknown,COALESCE(SUM(g.lines_added),0) added,COALESCE(SUM(CASE WHEN g.on_mainline=1 THEN g.lines_added END),0) added_landed`
+
 func (c *Catalog) writeSessionGit(ctx context.Context, sessions map[string]*gitSession, byRepository map[string][]string) error {
 	return c.writeTransaction(ctx, "session-git-state", func(tx *sql.Tx) error {
 		scans, err := queryMapsContext(ctx, tx, "SELECT repository_id,status,reason FROM git_repository_scans WHERE host_id=?", currentHost().ID)
@@ -1023,17 +1523,16 @@ func (c *Catalog) writeSessionGit(ctx context.Context, sessions map[string]*gitS
 				}
 			}
 		}
-		counts, err := queryMapsContext(ctx, tx, `SELECT l.workspace_id,COUNT(*) linked,COALESCE(SUM(g.on_mainline=1),0) landed,
-			COALESCE(SUM(g.reverted_by IS NOT NULL),0) reverted,COALESCE(SUM(g.on_mainline IS NULL),0) unknown
+		counts, err := queryMapsContext(ctx, tx, `SELECT l.workspace_id,`+sessionGitTotals+`
 			FROM session_commit_links l JOIN git_commits g ON g.repository_id=l.repository_id AND g.hash=l.hash WHERE l.confidence>=? GROUP BY l.workspace_id`, outcomeGitCounted)
 		if err != nil {
 			return err
 		}
 		tally := map[string]string{}
 		for _, row := range counts {
-			tally[firstString(row["workspace_id"])] = fmt.Sprint(row["linked"], "|", row["landed"], "|", row["reverted"], "|", row["unknown"])
+			tally[firstString(row["workspace_id"])] = fmt.Sprint(row["linked"], "|", row["landed"], "|", row["reverted"], "|", row["unknown"], "|", row["added"], "|", row["added_landed"])
 		}
-		stored, err := queryMapsContext(ctx, tx, "SELECT workspace_id,status,COALESCE(reason,'') reason,linked_commits,landed_commits,reverted_commits,mainline_unknown FROM session_git")
+		stored, err := queryMapsContext(ctx, tx, "SELECT workspace_id,status,COALESCE(reason,'') reason,linked_commits,landed_commits,reverted_commits,mainline_unknown,lines_added,lines_landed FROM session_git")
 		if err != nil {
 			return err
 		}
@@ -1048,10 +1547,10 @@ func (c *Catalog) writeSessionGit(ctx context.Context, sessions map[string]*gitS
 			}
 			counted := tally[id]
 			if counted == "" {
-				counted = "0|0|0|0"
+				counted = "0|0|0|0|0|0"
 			}
 			if want == [2]string{firstString(row["status"]), firstString(row["reason"])} &&
-				counted == fmt.Sprint(row["linked_commits"], "|", row["landed_commits"], "|", row["reverted_commits"], "|", row["mainline_unknown"]) {
+				counted == fmt.Sprint(row["linked_commits"], "|", row["landed_commits"], "|", row["reverted_commits"], "|", row["mainline_unknown"], "|", row["lines_added"], "|", row["lines_landed"]) {
 				delete(state, id)
 			}
 		}
@@ -1061,8 +1560,8 @@ func (c *Catalog) writeSessionGit(ctx context.Context, sessions map[string]*gitS
 		}
 		slices.Sort(ids)
 		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO session_git(workspace_id,status,reason,linked_commits,landed_commits,reverted_commits,mainline_unknown,checked_at)
-				SELECT ?,?,?,COUNT(*),COALESCE(SUM(g.on_mainline=1),0),COALESCE(SUM(g.reverted_by IS NOT NULL),0),COALESCE(SUM(g.on_mainline IS NULL),0),?
+			if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO session_git(workspace_id,status,reason,linked_commits,landed_commits,reverted_commits,mainline_unknown,lines_added,lines_landed,checked_at)
+				SELECT ?,?,?,`+sessionGitTotals+`,?
 				FROM session_commit_links l JOIN git_commits g ON g.repository_id=l.repository_id AND g.hash=l.hash WHERE l.workspace_id=? AND l.confidence>=?`,
 				id, state[id][0], nilIfEmpty(state[id][1]), now(), id, outcomeGitCounted); err != nil {
 				return err
