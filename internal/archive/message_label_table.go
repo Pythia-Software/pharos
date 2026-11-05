@@ -15,9 +15,14 @@ const messageLabelMessagePredicate = "m.kind IN " + messageLabelKindsSQL + " AND
 // inputs so label counts need not visit the large transcript-body pages.
 const messageLabelMessageIndexSQL = "CREATE INDEX IF NOT EXISTS messages_label_modes_idx ON messages(created_at,conversation_id,id,role,kind,model) WHERE kind IN " + messageLabelKindsSQL + " AND selected=1"
 
+// Incremental refreshes seek conversations, rather than a time range. Keep
+// their inputs covered too, without visiting tool payloads or transcript pages.
+const messageLabelConversationIndexSQL = "CREATE INDEX IF NOT EXISTS messages_label_conversation_idx ON messages(conversation_id,created_at,id,role,kind,model) WHERE kind IN " + messageLabelKindsSQL + " AND selected=1"
+
 // The classifier ledger contains probabilities and other per-message blobs;
 // dashboard joins consume just this small accepted-label projection.
 const messageLabelLedgerIndexSQL = "CREATE INDEX IF NOT EXISTS message_labels_query_idx ON message_labels(message_id,model,labels,segment,labeled_at)"
+const messageLabelMaskIndexSQL = "CREATE INDEX IF NOT EXISTS message_labels_masks_idx ON message_labels(conversation_id,model,labels)"
 
 var messageLabelDataset = messageLabelLiveDataset("")
 

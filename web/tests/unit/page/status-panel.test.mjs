@@ -39,17 +39,71 @@ test("each top-level operation is one line: label, step N of M, its measured amo
   // A unit count, and a state that is not running says its word.
   const waiting = plain(panel.operationLine(operation("c", { state: "blocked", state_label: "Waiting", step: { index: 2, count: 4, name: "Indexing", unit: "conversation", done: 1, total: 1 } })));
   assert.deepEqual(waiting.primary, ["Waiting", "step 2 of 4", "1 of 1 conversation"]);
-  assert.deepEqual(waiting.secondary, ["Indexing"]);
+  assert.deepEqual(waiting.secondary, ["Indexing", "Detail c"]);
   // A state word that only repeats the label is left out.
   assert.deepEqual(plain(panel.operationLine(operation("d", { state: "blocked", state_label: "Label d" }))).primary, []);
 });
 
-test("Now shows foreground work, else the first background work", () => {
-  const busy = model(view({ operations: [operation("a"), operation("b", { priority: "background" }), operation("old", { state: "succeeded" })] }));
-  assert.deepEqual(busy.lines.map(line => line.id), ["a"]);
+test("Now shows concurrent background work alongside foreground work, foreground first", () => {
+  const busy = model(view({ operations: [operation("b", { priority: "background" }), operation("a"), operation("old", { state: "succeeded" })] }));
+  assert.deepEqual(busy.lines.map(line => line.id), ["a", "b"]);
   const background = model(view({ operations: [operation("b", { priority: "background" }), operation("c", { priority: "background" })] }));
-  assert.deepEqual(background.lines.map(line => line.id), ["b"]);
+  assert.deepEqual(background.lines.map(line => line.id), ["b", "c"]);
   assert.equal(model(view()).lines.length, 0);
+});
+
+test("unknown totals retain completed counts, a current phase, and elapsed time", () => {
+  const started = '2026-11-05T12:00:00Z';
+  const now = Date.parse(started) + 120000;
+  const pending = plain(panel.operationLine(operation('labels', {started_at: started,
+    step: {name: 'Indexing message labels', unit: 'conversation', done: 1200, total: null},
+  }), now));
+  assert.deepEqual(pending.primary, ['1,200 conversations processed']);
+  assert.ok(pending.secondary.includes('Indexing message labels'));
+  assert.ok(pending.secondary.includes('2 min elapsed'));
+  assert.equal(pending.fraction, null);
+  assert.equal(panel.stepAmount({unit: 'byte', done: 4200, total: null}), '4.2 KB processed');
+  assert.equal(panel.stepAmount({unit: 'conversation', done: 0, total: 0}), '0 of 0 conversations');
+  const starting = plain(panel.operationLine(operation('new', {verb: 'Finding work'})));
+  assert.equal(starting.progressLabel, 'Finding work');
+  assert.ok(starting.secondary.includes('Finding work'));
+});
+
+test("all operation kinds show their active child's progress and actual wait state", () => {
+  const child = operation('child', {kind: 'analysis.git', label: 'Check repositories', state: 'blocked',
+    state_label: 'Waiting', detail: 'Waiting for the catalog writer',
+    step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}});
+  const parent = operation('parent', {step: {index: 2, count: 4, name: 'Analysis'}, children: [child]});
+  const shown = plain(panel.operationLine(parent));
+  assert.equal(shown.label, parent.label);
+  assert.equal(shown.currentLabel, child.label);
+  assert.deepEqual(shown.primary, ['Waiting', 'step 2 of 4', '2 of 5 repositories']);
+  assert.ok(shown.secondary.includes('Waiting for the catalog writer'));
+  assert.equal(shown.fraction, .4);
+  assert.equal(shown.waiting, true);
+  assert.equal(plain(panel.operationLine({...parent, state: 'stopping', state_label: 'Stopping…'})).state, 'stopping');
+  child.step = null;
+  assert.equal(plain(panel.operationLine(parent)).fraction, null, 'an unmeasured child never inherits an old parent percentage');
+
+  // An ancestor can wait on its own write while its child remains live.
+  // Keep the child's measurements and the actual blocking ancestor's state.
+  child.step = {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4};
+  child.state = 'running';
+  child.state_label = 'Checking repositories';
+  child.detail = null;
+  const blocked = {...parent, state: 'blocked', state_label: 'Waiting', detail: 'Waiting for the catalog writer',
+    time: {label: 'about 3 min'}};
+  for (const ancestor of [blocked, {...parent, children: [{...blocked, id: 'chain', children: [child]}]}]) {
+    const line = plain(panel.operationLine(ancestor));
+    assert.equal(line.state, 'blocked');
+    assert.equal(line.waiting, true);
+    assert.ok(line.primary.includes('Waiting'));
+    assert.ok(line.secondary.includes('Waiting for the catalog writer'));
+    assert.equal(line.currentLabel, child.label);
+    assert.equal(line.fraction, .4);
+    assert.equal(line.time, '', 'a blocked ancestor must not keep showing a running countdown');
+  }
+  assert.equal(plain(panel.operationLine({...blocked, children: [{...child, state: 'stopping', state_label: 'Stopping…'}]})).state, 'stopping');
 });
 
 test("the app's operations that touch the selected library are on the Now row and make the chip busy, even with the library's service stopped", () => {
@@ -107,14 +161,14 @@ test("the schedule and load stay out while the snapshot has none", () => {
 test("the load row is CPU, RAM and disk in one row, the server's line and each process's in its tooltip; in the app, every Pharos process's", () => {
   const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, disk_bytes_per_second: 12e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
   const own = plain(model(view({ resources: library, library: { drive: { name: "Euclid", ejectable: true }, path: "/Volumes/Euclid/Pharos", storage_bytes: 48e9, wal_bytes: 64e6 } })).load);
-  assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"], ["wal", "WAL", "64 MB"]]);
+  assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"]]);
   assert.ok(own.tooltip.startsWith("Library line\n"));
   assert.ok(own.tooltip.endsWith("Service line\nTerminal line"));
   // The broker's total, when the store has one, wins over the library's.
   const app = plain(model(view({ resources: library }, { resources: { label: "Machine line", cpu_percent: 337, memory_bytes: 8.2e9, disk_bytes_per_second: null, processes: [] } })).load);
-  assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—", "—"], "a figure not measured yet is a dash");
+  assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—"], "a figure not measured yet is a dash");
   // A service that does not measure I/O: no I/O.
-  assert.deepEqual(plain(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.metrics).map(metric => metric.id), ["cpu", "memory", "disk", "wal"]);
+  assert.deepEqual(plain(model(view({ resources: { cpu_percent: 45.4, memory_bytes: 1.2e9 } })).load.metrics).map(metric => metric.id), ["cpu", "memory", "disk"]);
   assert.equal(model(view({ resources: {} })).load, null);
 });
 
@@ -123,9 +177,36 @@ test("the broker load remains visible during a service timeout, and partial rate
     resources: {cpu_percent: 12, cpu_partial: true, memory_bytes: 2e9, disk_bytes_per_second: 4e6, disk_partial: true, label: "Pharos is using resources"},
     lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
   assert.equal(unavailable.available, false);
-  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["12%", "2.0 GB", "4.0 MB/s", "last 48 GB", "last 64 MB"]);
+  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["12%", "2.0 GB", "4.0 MB/s", "last 48 GB"]);
   assert.match(unavailable.load.tooltip, /may temporarily undercount/);
   assert.match(unavailable.load.tooltip, /last reported/);
+});
+
+test("GPU load is scoped to Pharos processes, including idle and unavailable states", () => {
+  const load = gpu => model(view({ resources: { cpu_percent: 12, gpu } })).load;
+  for (const [percent, value] of [[62.4, "62%"], [0, "0%"], [null, "—"]]) {
+    const result = load({ utilization_percent: percent });
+    assert.equal(result.metrics.find(metric => metric.id === "gpu").value, value);
+    assert.equal(result.metrics.find(metric => metric.id === "gpu").label, "GPU");
+    assert.match(result.tooltip, /these Pharos processes and their subprocesses/);
+  }
+  assert.ok(!load(undefined).metrics.some(metric => metric.id === "gpu"));
+  const app = model(view({ resources: { cpu_percent: 12, gpu: { utilization_percent: 10 } } },
+    { resources: { cpu_percent: 20, gpu: { utilization_percent: 60 } } })).load;
+  assert.equal(app.metrics.find(metric => metric.id === "gpu").value, "60%", "use the broker process-tree reading");
+});
+
+
+test("WAL appears only above one decimal GB, including a last known size", () => {
+  const load = (wal, stale = false) => model(stale
+    ? {library: null, resources: {cpu_percent: 1}, lastLibrarySizes: {storage: 48e9, wal}, appOperations: [], attention: []}
+    : view({resources: {cpu_percent: 1}, library: {wal_bytes: wal}})).load;
+  for (const wal of [undefined, null, 0, 64e6, 1e9]) {
+    assert.ok(!load(wal).metrics.some(metric => metric.id === "wal"));
+  }
+  assert.equal(load(1e9 + 1).metrics.find(metric => metric.id === "wal").value, "1.0 GB");
+  assert.equal(load(2e9, true).metrics.find(metric => metric.id === "wal").value, "last 2.0 GB");
+  assert.match(model(view({resources: {cpu_percent: 1, gpu: {utilization_percent: 10, partial: true}}})).load.tooltip, /may undercount/);
 });
 
 const at = Date.parse("2026-10-27T12:00:00Z");

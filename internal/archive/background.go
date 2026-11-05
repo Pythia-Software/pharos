@@ -116,8 +116,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
-	{ID: "writing", Label: "Your writing", Verb: "Updating your writing", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceHourly, Adaptive: true,
-		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Decides which messages you wrote. Today it reads all of your messages each time."},
+	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceFrequent,
+		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -126,6 +126,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
+	{ID: "writing-refine", Label: "Refine writing history", Verb: "Refining writing history", Feeds: "Writing classifications and copied-text evidence", Cadence: cadenceDaily, afterChain: true,
+		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
 	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
 		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks' summaries for questions worth suggesting, after the analyses they read change."},
 }
@@ -487,6 +489,8 @@ type backgroundInputs struct {
 	// findingsToday is whether today's full findings pass ran;
 	// findingsBuilt whether any did.
 	findingsToday, findingsBuilt bool
+	writingPending               bool
+	writingRefinedAt             string
 	upgradePending               bool
 	otherSources                 []string
 	backupDestination            string
@@ -513,6 +517,9 @@ type backgroundInputs struct {
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
 	in.verificationNext = c.queuedVerificationNext(ctx)
+	want, built, err := c.authorshipEstimateGenerations()
+	in.writingPending = err != nil || want != built || c.authorshipQuickPending()
+	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -598,6 +605,24 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				standaloneNext(&plan, settings, quiet, at)
 				plan.Next = maxTime(plan.Next, in.verificationNext)
 			}
+		case item.ID == "writing":
+			row := in.deferred["authorship"]
+			plan.Pending = in.writingPending || row.generation > row.completed
+			if completed, ok := parseTime(row.completedAt); ok {
+				plan.LastDone = maxTime(plan.LastDone, completed)
+			}
+			if plan.Pending {
+				standaloneNext(&plan, settings, quiet, at)
+				if plan.Cadence == cadenceHourly {
+					plan.Next = maxTime(plan.LastDone.Add(hourlyEvery), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
+				}
+			}
+		case item.ID == "writing-refine":
+			if refined, ok := parseTime(in.writingRefinedAt); ok {
+				plan.LastDone = maxTime(plan.LastDone, refined)
+			}
+			plan.Pending = true
+			standaloneNext(&plan, settings, quiet, at)
 		case len(item.Stages) > 0:
 			plan.LastDone = time.Time{}
 			first := true

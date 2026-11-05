@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -135,13 +136,7 @@ const lowerFirst = (text: string) => /^[A-Z]([a-z]|\s)/.test(text) && !properNou
 const num = (value: unknown) => { const n = Number(value); return Number.isFinite(n) ? n : 0; };
 
 function money(value: unknown): string {
-  const amount = num(value);
-  const size = Math.abs(amount);
-  if (size >= 1e6) return `$${amount.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`;
-  if (size >= 10) return `$${Math.round(amount).toLocaleString()}`;
-  if (size >= 0.995) return `$${amount.toFixed(2)}`;
-  if (size >= 0.005) return `$${amount.toFixed(2)}`;
-  return "$0";
+  return formatUSD(num(value));
 }
 /** Rounds to two significant figures for estimates that say "about". */
 function aboutMoney(value: unknown): string {

@@ -29,10 +29,11 @@ func (c *Catalog) indexTextSearchBatch(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	var cursor, last int64
+	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key='text_search_documents_cursor'),0)`).Scan(&cursor); err != nil {
 		return false, err
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM (SELECT rowid FROM messages WHERE rowid>? ORDER BY rowid LIMIT 2000)`, cursor).Scan(&last); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0),COUNT(*) FROM (SELECT rowid FROM messages WHERE rowid>? ORDER BY rowid LIMIT 2000)`, cursor).Scan(&last, &count); err != nil {
 		return false, err
 	}
 	if last == 0 {
@@ -41,6 +42,8 @@ func (c *Catalog) indexTextSearchBatch(ctx context.Context) (bool, error) {
 		}
 		return false, tx.Commit()
 	}
+	completed := maintenanceBatch(ctx, tx, "Building text search", "message", count,
+		"SELECT count(*) FROM messages WHERE rowid>?", cursor)
 	_, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO text_search_documents(message_rowid,message_id,conversation_id,surface,byte_length)
  SELECT rowid,id,conversation_id,CASE WHEN kind IN ('thinking','reasoning','analysis') THEN 'reasoning' ELSE role END,length(CAST(text AS BLOB))
  FROM messages WHERE rowid>? AND rowid<=? AND kind IN ('message','thinking','reasoning','analysis')
@@ -51,7 +54,9 @@ func (c *Catalog) indexTextSearchBatch(ctx context.Context) (bool, error) {
 	if _, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key,value) VALUES('text_search_documents_cursor',?)`, fmt.Sprint(last)); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return true, err
 }
 func (c *Catalog) maintainTextSearch(ctx context.Context) {
 	schedule := searchScheduleGate{}
@@ -59,7 +64,7 @@ func (c *Catalog) maintainTextSearch(ctx context.Context) {
 	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	for {
-		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(pass.context(ctx)) != nil {
 			return
 		}
 		if pass == nil {
@@ -67,8 +72,8 @@ func (c *Catalog) maintainTextSearch(ctx context.Context) {
 		}
 		var more bool
 		var err error
-		pass.runIO(func() { more, err = c.indexTextSearchBatch(ctx) })
-		if more {
+		pass.runIO(ctx, func(ctx context.Context) { more, err = c.indexTextSearchBatch(ctx) })
+		if more && err == nil {
 			pass.worked(1)
 		}
 		delay := 20 * time.Millisecond

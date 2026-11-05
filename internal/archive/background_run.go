@@ -35,6 +35,26 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		return err
 	case "backup":
 		return s.backgroundBackup(ctx, op)
+	case "writing-refine":
+		ctx, child := op.Child(OperationSpec{Kind: "analysis.authorship.refine", Trigger: triggerChained})
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		child.setStopper(cancel)
+		ctx = withWorkProgress(ctx, child.mirrorWork)
+		err := s.Catalog.RefineAuthorship(ctx)
+		child.Finish(err)
+		if err != nil {
+			return err
+		}
+		// Refinement can change the human spans consumed by downstream work.
+		return s.Catalog.writeTransaction(ctx, "schedule refined writing consumers", func(tx *sql.Tx) error {
+			for _, name := range []string{"labels", "findings"} {
+				if err := markSyncDeferredStage(tx, name); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	case "suggestions":
 		ctx, child := op.Child(OperationSpec{Kind: "ask.suggestions", Trigger: triggerChained})
 		err := s.refreshAskSuggestions(ctx)

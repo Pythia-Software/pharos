@@ -75,7 +75,7 @@ const humanPromptParts = [
 ];
 function classifiedPrompt(id, parts) {
   let end=0;
-  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
+  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,provisional:true,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
 }
 const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
 const authoredTurnMessages = [authoredPrompt,
@@ -149,7 +149,8 @@ const backgroundTaskStatus = { ...busyStatus,
         {id: 'rebuild', kind: 'analysis.authorship', label: 'Classify your writing', state: 'running',
           step: {name: 'classifying authorship', unit: 'message', done: 601, total: 42918, fraction: 601 / 42918}, children: []},
       ]},
-    ]}] }],
+    ]}] }, {id: 'label-index', kind: 'maintenance.labels.query', label: 'Index message labels', state: 'running', priority: 'background',
+      step: {name: 'Indexing message labels', unit: 'conversation', done: 1200, total: null}, children: []}],
   background: { ...idleStatus.background,
     items: idleStatus.background.items.map(item => item.id === 'writing' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
     cadences: idleStatus.background.cadences.map(cadence => cadence.id === 'frequent' ? { ...cadence, state: 'running', state_label: 'Updating now' } : cadence),
@@ -274,11 +275,24 @@ const ROUTES = [
       // Every cadence row open, its items listed.
       const closed = page.locator('#pharosStatusPanel .pharos-status-cadences details:not([open]) summary');
       while (await closed.count()) await closed.first().click();
+      const oneLine = await page.locator('.pharos-status-load').evaluate(row => {
+        const cells = [...row.children].map(cell => cell.getBoundingClientRect());
+        return cells.every(cell => Math.abs(cell.top - cells[0].top) < 1) && row.scrollWidth <= row.clientWidth;
+      });
+      assert.ok(oneLine, 'the resource metrics fit on one line');
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/status/stream': eventStream(backgroundTaskStatus), 'GET /api/status': backgroundTaskStatus},
     open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosStatusPanel .pharos-status-position-track',
+    check: async page => {
+      const measured = page.getByRole('progressbar', {name: 'Classify your writing progress', exact: true});
+      const unmeasured = page.getByRole('progressbar', {name: 'Index message labels progress', exact: true});
+      await measured.waitFor();
+      await unmeasured.waitFor();
+      assert.notEqual(await measured.getAttribute('aria-valuenow'), null, 'measured progress is accessible');
+      assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
+    },
   },
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
@@ -349,6 +363,7 @@ const ROUTES = [
   // Older Analyze and Tools links open what replaced their pages.
   { name: "Analyze legacy link", url: '/analyze?analyze_view=carbon&analyze_chart={"metric":"energy"}', ready: ".usage-dashboard #carbonSummary" },
   { name: "Tools legacy link", url: "/tools?tools_view=summary", ready: ".usage-workspace-table .qt-row" },
+  { name: "Writing estimates awaiting refinement", url: "/analyze?analyze_topic=human", ready: '[aria-label="Human Words summary"][aria-busy="false"]' },
   { name: "Conversations dashboard", url: "/analyze?analyze_topic=activity", ready: '.dashboard-stats[aria-label="Conversations summary"][aria-busy="false"]' },
   {name:'Message Labels dashboard',url:'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels',ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels specific hierarchy',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend',metric:'messages',split:'label'})}),ready:'.usage-labels-dashboard .usage-chart'},
@@ -487,13 +502,13 @@ const ROUTES = [
   ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
-  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#agentEventsEnabled", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
       status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." },
       agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled)." } },
   } },
-  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
@@ -1117,6 +1132,49 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
   assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
 });
 
+
+test("Card Library timeline ticks fit full dollar amounts", { skip }, async t => {
+  let suppliedLargeCosts = false;
+  const app = await open(t, {
+    url: "/cards?cards=library&card_search=cumulative-api-cost&card_window=30",
+    ready: ".query-timeline-ticks > span",
+    api: { "* /api/query/:dataset/:operation": call => {
+      const response = defaultApi["* /api/query/:dataset/:operation"](call);
+      if (call.params.dataset !== "usage" || !response?.metrics) return response;
+      const cost = call.body?.metrics?.find(metric => metric.field === "cost_usd" && metric.groupBy?.includes("day"));
+      if (!cost) return response;
+      suppliedLargeCosts = response.metrics.some(metric => metric.id === cost.id && metric.buckets.length);
+      return { ...response, metrics: response.metrics.map(metric => metric.id !== cost.id ? metric : {
+        ...metric, buckets: metric.buckets.map(bucket => ({ ...bucket, value: 1_250_000 / metric.buckets.length })),
+      }) };
+    } },
+  });
+  assert.ok(suppliedLargeCosts, "the fixture supplied six- and seven-figure cost ticks");
+  const chart = app.page.locator('[data-card-id="cumulative-api-cost"] .query-cover-timeline');
+  await chart.waitFor();
+  for (const width of [1440, 320]) {
+    await app.page.setViewportSize({ width, height: 900 });
+    await chart.scrollIntoViewIfNeeded();
+    const problems = await chart.evaluate(chart => {
+      const clip = chart.closest(".query-card-open").getBoundingClientRect();
+      const plot = chart.querySelector(".query-cover-columns").getBoundingClientRect();
+      const dates = chart.querySelector(".query-timeline-dates > span").getBoundingClientRect();
+      const ticks = [...chart.querySelectorAll(".query-timeline-ticks > span")].map(tick => tick.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+      const problems = [];
+      for (const tick of ticks) {
+        if (tick.left < clip.left || tick.right > clip.right) problems.push("a dollar tick is clipped by its card");
+        if (tick.right > plot.left) problems.push("a dollar tick overlaps the plot");
+      }
+      if (ticks.some((tick, index) => index && tick.top < ticks[index - 1].bottom)) problems.push("dollar ticks overlap each other");
+      if (Math.abs(dates.left - plot.left) > 1) problems.push("dates do not align with the plot");
+      if (plot.width <= 0) problems.push("the gutter leaves no room for the plot");
+      return problems;
+    });
+    assert.deepEqual(problems, [], `timeline at ${width}px`);
+    assert.deepEqual(await layoutProblems(app.page), []);
+    await app.shot(`full-dollar-timeline-${width}`);
+  }
+});
 
 // IndexedDB and painting saved charts during navigation require a real browser.
 test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {

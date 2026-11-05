@@ -31,6 +31,7 @@ var operationReasons = map[string]string{
 	"capture-running":     "Waiting for a capture to finish",
 	"ingest-busy":         "Waiting for another index to finish",
 	"catalog-busy":        "Waiting for the catalog",
+	"interactive-query":   "Waiting for interactive queries to finish",
 	"destination-busy":    "Waiting for the destination",
 	"waiting-for-drive":   "Waiting for the drive",
 	"waiting-for-network": "Waiting for the network",
@@ -449,7 +450,7 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 		case activity.Label == "Updating findings":
 			ok = running(kinds("analysis.findings"))
 		case activity.Label == "Classifying your writing":
-			ok = running(kinds("analysis.authorship"))
+			ok = running(kinds("analysis.authorship", "analysis.authorship.refine"))
 		case activity.Label == "Indexing the Library view":
 			ok = running(kinds("maintenance.library-view"))
 		}

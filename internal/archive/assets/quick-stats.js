@@ -8,7 +8,7 @@ function quickStatsMetrics(concurrency = false) {
     ['Human words', 'human_words', 'Words you typed yourself: not pasted, quoted, templated, or sent by a tool', '', 'writing'],
     ['Tokens', 'tokens', 'All tokens, cache reads and writes included', '', 'tokens'],
     ['CO₂e', 'co2e_g', 'Estimated inference emissions using the settings in Analyze → Carbon Impact', '', 'carbon'],
-    ['API cost', 'cost_usd', 'API-equivalent cost at list prices', '$', 'tokens'],
+    ['API cost', 'cost_usd', 'API-equivalent cost at list prices', '$', 'tokens', 'usd'],
   ];
   rows.push(
     ['Conversations active', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their root conversation.', '', 'conversations'],
@@ -43,6 +43,7 @@ const QUICK_STATS_DETAIL_METRICS = quickStatsMetrics().map(row => row[1]).filter
 function formatQuickStatsValue(value, format) {
   if (value == null || !Number.isFinite(Number(value))) return '—';
   const number = Number(value);
+  if (format === 'usd') return pharosCurrency.formatUSD(number);
   if (format === 'percent') return `${Number(number.toFixed(1))}%`;
   if (format === 'duration') {
     if (number > 0 && number < 1000) return `${Math.round(number)}ms`;

@@ -306,9 +306,11 @@ async function holdsFocus(page, surface, opener) {
 // across a pushed snapshot. Stop and Eject decisions are unit tested in
 // web/tests/unit/page/status-panel.test.mjs.
 test("Unified activity panel holds focus and its disclosure across refreshes", { skip }, async t => {
+  const snapshot = {...busyStatus, operations: busyStatus.operations.map(operation => operation.id === 'op-index'
+    ? {...operation, children: [], children_count: 0} : operation)};
   const app = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
-    "GET /api/status/stream": eventStream(busyStatus),
-    "GET /api/status": busyStatus,
+    "GET /api/status/stream": eventStream(snapshot),
+    "GET /api/status": snapshot,
   } });
   const { page, push } = app;
   const chip = page.locator("#pharosDrive");
@@ -326,10 +328,35 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   await daily.locator("summary").click();
   const stop = panel.getByRole("button", { name: "Stop", exact: true });
   await stop.focus();
-  push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
+  push("/api/status/stream", { ...snapshot, revision: 3, operations: snapshot.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
+  const progress = panel.getByRole('progressbar').first();
+  assert.notEqual(await progress.getAttribute('aria-valuenow'), null);
+  push('/api/status/stream', {...snapshot, revision: 4, operations: snapshot.operations.map(operation => operation.id === 'op-index'
+    ? {...operation, step: {...operation.step, total: null, fraction: null}} : operation)});
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 4);
+  assert.equal(await progress.getAttribute('aria-valuenow'), null, 'a new unknown-total phase must remove the old percentage');
+  assert.ok(await stop.evaluate(element => document.activeElement === element), 'changing progress mode moved focus');
+  push('/api/status/stream', {...snapshot, revision: 5});
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 5);
+  assert.notEqual(await progress.getAttribute('aria-valuenow'), null, 'measured progress returns when inventory is known');
+  const detail = 'Waiting for the catalog writer';
+  const child = {id: 'git', kind: 'analysis.git', label: 'Check repositories', state: 'running', state_label: 'Checking repositories',
+    step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}, children: []};
+  const waiting = {state: 'blocked', state_label: 'Waiting', detail};
+  for (const [index, ancestor] of [
+    {...snapshot.operations[0], ...waiting, children: [child]},
+    {...snapshot.operations[0], children: [{id: 'chain', kind: 'analysis.chain', label: 'Update analyses', ...waiting, children: [child]}]},
+  ].entries()) {
+    const revision = 6 + index;
+    push('/api/status/stream', {...snapshot, revision, operations: snapshot.operations.map(operation => operation.id === 'op-index' ? ancestor : operation)});
+    await page.waitForFunction(revision => window.pharosStatusStore.current()?.view?.library?.revision === revision, revision);
+    await panel.getByText(detail).waitFor();
+    await panel.getByRole('progressbar', {name: `${child.label} progress`, exact: true}).waitFor();
+    assert.ok(await stop.evaluate(element => document.activeElement === element), 'an ancestor wait moved focus');
+  }
   await app.shot("refreshed");
 });
 
@@ -1976,6 +2003,10 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   assert.ok(await dialog.getByRole('textbox',{name:'Title',exact:true}).evaluate(el=>el===document.activeElement));
   await holdsFocus(page,dialog,create);
   await create.click();
+  for(const [width,height] of [[1440,900],[320,568]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.scrollWidth<=el.clientWidth;}),'default card copy fits the viewport');
+  }
   await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
   await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
   await dialog.getByRole('combobox',{name:'Category',exact:true}).selectOption('cost');

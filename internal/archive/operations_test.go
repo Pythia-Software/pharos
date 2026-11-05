@@ -36,6 +36,23 @@ func TestOperationLifecycleFollowsTheContract(t *testing.T) {
 	if view := op.view(); view.Step.Index != 2 || view.Step.Done != 41 || view.Step.Total != 100 || len(view.Plan) != 2 {
 		t.Fatalf("step: %+v", view.Step)
 	}
+	// Worker phases describe the active task; they do not add planned tasks.
+	reportWork(op.Context(), "Reading input records", "record", 3, 10)
+	reportWork(op.Context(), "Saving indexed records", "record", 4, 10)
+	if step := operationStep(op.view()); step["index"] != 2 || step["count"] != 2 || step["done"] != float64(4) {
+		t.Fatalf("worker phases changed the planned position or lost their counts: %+v", step)
+	}
+	// Revising a plan preserves the active task even while a worker's phase
+	// name differs from its task name, then the next explicit task advances.
+	op.Plan(StepPlan{Name: "Discover inputs"}, StepPlan{Name: "Claude Code"}, StepPlan{Name: "Verify"})
+	if step := operationStep(op.view()); step["index"] != 2 || step["count"] != 3 {
+		t.Fatalf("replanning lost the active task: %+v", step)
+	}
+	op.Step("Verify", "input", 1)
+	reportWork(op.Context(), "Reading verification inputs", "input", 1, 1)
+	if step := operationStep(op.view()); step["index"] != 3 || step["count"] != 3 {
+		t.Fatalf("the next planned task did not advance: %+v", step)
+	}
 	op.Block("capture-running", "the capture on Mac B")
 	state(op, opBlocked)
 	op.Unblock()
@@ -162,6 +179,7 @@ func TestDaemonPassIsForgottenWhenItDidNothing(t *testing.T) {
 	catalog := &Catalog{ops: newOpRegistry("service")}
 	before := catalog.ops.currentRevision()
 	idle := catalog.beginPass(context.Background(), "maintenance.previews", triggerChained)
+	idle.worked(0)
 	if len(catalog.ops.running()) != 1 {
 		t.Fatal("a pass is not registered while it runs")
 	}
@@ -174,6 +192,86 @@ func TestDaemonPassIsForgottenWhenItDidNothing(t *testing.T) {
 	busy.end(nil)
 	if views := catalog.ops.views(); len(views) != 1 || views[0].State != opSucceeded || views[0].Step.Done != 25 {
 		t.Fatalf("a working pass: %+v", views)
+	} else if step := operationStep(views[0]); step == nil || step["unit"] == nil || step["done"] != float64(25) {
+		t.Fatalf("a working pass lost its high-level counts: %+v", step)
+	}
+}
+
+func TestWorkerProgressReachesOperationAndObserver(t *testing.T) {
+	reg := newOpRegistry("service")
+	ctx, parent := reg.begin(t.Context(), OperationSpec{Kind: "background.update"})
+	var observed activityWork
+	ctx = withWorkProgress(ctx, func(w activityWork) { observed = w })
+	ctx, child := parent.childFrom(ctx, OperationSpec{Kind: "analysis.git"})
+	reportWork(ctx, "Checking repositories", "repository", 2, 5)
+	view := reg.views()[slices.IndexFunc(reg.views(), func(v opView) bool { return v.ID == child.ID() })]
+	step := operationStep(view)
+	if step == nil || step["fraction"] != 0.4 || observed.Done != 2 || observed.Total != 5 {
+		t.Fatalf("worker progress lost its stage or observer: step=%+v observer=%+v", step, observed)
+	}
+	child.Finish(nil)
+	revision := reg.currentRevision()
+	reportWork(ctx, "Late worker", "repository", 5, 5)
+	if reg.currentRevision() != revision {
+		t.Fatal("a late worker changed an ended operation")
+	}
+	parent.Finish(nil)
+}
+
+func TestMaintenanceProgressCountsOnlyCommittedWorkAndRefreshesInventory(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	catalog.ops = newOpRegistry("service")
+	override(t, &maintenanceInventoryInterval, time.Duration(0))
+	execTx(t, catalog.DB, "CREATE TABLE progress_items(id INTEGER PRIMARY KEY); INSERT INTO progress_items VALUES(1),(2),(3)")
+	pass := catalog.beginPass(t.Context(), "maintenance.labels.query", triggerChained)
+	defer pass.end(nil)
+	var beforeCommit activityWork
+	ctx := withWorkProgress(t.Context(), func(work activityWork) { beforeCommit = work })
+	batch := func(commit bool) {
+		t.Helper()
+		pass.runIO(ctx, func(ctx context.Context) {
+			tx, err := catalog.DB.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			completed := maintenanceBatch(ctx, tx, "Indexing message labels", "conversation", 1, "SELECT count(*) FROM progress_items")
+			if _, err = tx.ExecContext(ctx, "DELETE FROM progress_items WHERE id=(SELECT min(id) FROM progress_items)"); err != nil {
+				t.Fatal(err)
+			}
+			if !commit {
+				completed(errors.New("rolled back"))
+				return
+			}
+			err = tx.Commit()
+			completed(err)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	batch(false)
+	if beforeCommit.Done != 0 || beforeCommit.Total != 3 {
+		t.Fatalf("first batch must be visible before commit and never count rollback: %+v", beforeCommit)
+	}
+	batch(true)
+	if beforeCommit.Done != 1 || beforeCommit.Total != 3 {
+		t.Fatalf("committed batch: %+v", beforeCommit)
+	}
+	execTx(t, catalog.DB, "INSERT INTO progress_items VALUES(4),(5)")
+	batch(true)
+	if beforeCommit.Done != 2 || beforeCommit.Total != 5 {
+		t.Fatalf("new work must revise the denominator: %+v", beforeCommit)
+	}
+	for range 3 {
+		batch(true)
+	}
+	if beforeCommit.Done != 5 || beforeCommit.Total != 5 {
+		t.Fatalf("drained queue: %+v", beforeCommit)
+	}
+	step := operationStep(catalog.ops.views()[0])
+	if step == nil || step["fraction"] != float64(1) || step["unit"] != "conversation" {
+		t.Fatalf("committed work did not reach the status API: %+v", step)
 	}
 }
 

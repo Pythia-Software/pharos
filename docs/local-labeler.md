@@ -134,8 +134,14 @@ labels_mlx_runtime = "/path/to/pharos/build/mlx/libpharos_mlx.dylib"
 ```
 
 One GPU worker is admitted across both models, with at least 3,072 MB reserved
-from the existing memory budget. Idle workers are evicted when the other model
-needs the GPU; active contention returns the existing budget-exhausted error.
+from the existing memory budget. The native engine sets MLX's soft evaluation
+limit to 3 GiB and its unused-buffer cache limit to 512 MiB. These are allocator
+guidelines, not a hard process-memory cap; MLX can temporarily exceed them
+during evaluation. Without an explicit cache limit, varied batch shapes can
+retain tens of gigabytes of unused Metal buffers on a large-memory Mac.
+Closing the model also clears that buffer cache. Idle workers are evicted when
+the other model needs the GPU; active contention returns the existing
+budget-exhausted error.
 Admission conservatively reserves this capacity for eligible `auto` sessions
 even when startup subsequently falls back to CPU. Power, cancellation, restart
 and idle-expiry policies still apply. Batches respect the worker's 256-row and 16,384

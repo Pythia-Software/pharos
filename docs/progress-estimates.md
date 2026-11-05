@@ -91,6 +91,16 @@ retained snapshots, flushing, and maintenance can still follow. The UI has no
 fixed capture/index/upgrade percentages, elapsed-time animation toward 100%,
 or percentage floor carried over from another run.
 
+The unified Background Processing panel shows every running operation and its
+active stage. Maintenance batches expose their inventory and committed counts
+in the same operation tree as indexing and analysis work. Queue inventories
+can grow when new work arrives; their fractions measure processed work units,
+not elapsed time. A named phase with an unknown total still shows completed
+counts and an accessible indeterminate indicator. Query pauses and catalog
+writer waits retain the last committed counts and say why work is waiting.
+Analysis progress reaches its stage operation whether or not a run-history
+meter is attached. Unknown phases never borrow a previous stage's percentage.
+
 `GET /api/library/status` exposes `work`, measured `progress`, and `estimate`
 per activity. `work.size` is the optional input-volume measure. `estimate`
 includes a state, basis, rate/unit and lower/upper seconds when available.

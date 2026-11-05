@@ -21974,7 +21974,7 @@
     },
     {
       "id": "habits-streak",
-      "title": "Your streak",
+      "title": "Your daily activity streak",
       "description": "Days in a row with a message you typed; your longest run; and your engaged time yesterday and over the last seven days.",
       "category": "human",
       "idea": "rhythm-01",
@@ -21998,7 +21998,7 @@
     },
     {
       "id": "habits-weekday-streak",
-      "title": "Your weekday streak",
+      "title": "Your weekday activity streak",
       "description": "Days in a row with a message you typed, counting weekdays only; your longest run; and your engaged time yesterday and over the last seven days.",
       "category": "human",
       "idea": "rhythm-01",
@@ -22025,7 +22025,7 @@
     {
       "id": "habits-calendar-you",
       "title": "Your active days",
-      "description": "Each square is a day of you; darker is more time.",
+      "description": "Past 17 weeks. Each square shows your engaged time; darker is more time. Open the dashboard for all 53 weeks.",
       "category": "human",
       "idea": "rhythm-01",
       "dataset": "rhythm",
@@ -22049,7 +22049,7 @@
     {
       "id": "habits-calendar-agents",
       "title": "Days with agents you started",
-      "description": "Each square is a day of agents you started; darker is more time.",
+      "description": "Past 17 weeks. Each square shows time with agents you started; darker is more time. Open the dashboard for all 53 weeks.",
       "category": "machines",
       "idea": "rhythm-03",
       "dataset": "rhythm",
@@ -22075,7 +22075,7 @@
     {
       "id": "habits-punchcard-you",
       "title": "When you work",
-      "description": "Minutes per week of you in each weekday hour, coloured by time of day.",
+      "description": "Past 90 days. Time for you in each weekday hour, in minutes per week, coloured by time of day.",
       "category": "human",
       "idea": "rhythm-01",
       "dataset": "rhythm",
@@ -22099,7 +22099,7 @@
     {
       "id": "habits-punchcard-away",
       "title": "When agents work while you're away",
-      "description": "Minutes per week of agents you started, while you're away in each weekday hour, coloured by time of day.",
+      "description": "Past 90 days. Time for agents you started, while you're away in each weekday hour, in minutes per week, coloured by time of day.",
       "category": "machines",
       "idea": "rhythm-03",
       "dataset": "rhythm",
@@ -22124,7 +22124,7 @@
     },
     {
       "id": "habits-days",
-      "title": "Your days",
+      "title": "Your daily work schedule",
       "description": "Each of the last 28 days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.",
       "category": "human",
       "idea": "rhythm-01",
@@ -22148,7 +22148,7 @@
     },
     {
       "id": "habits-pace",
-      "title": "Your pace",
+      "title": "Your work and rest patterns",
       "description": "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.",
       "category": "human",
       "idea": "rhythm-01",
@@ -22173,7 +22173,7 @@
     {
       "id": "habits-automations",
       "title": "Automatic agent runs",
-      "description": "What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
+      "description": "Past 30 days. What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
       "category": "machines",
       "idea": "rhythm-03",
       "dataset": "rhythm",

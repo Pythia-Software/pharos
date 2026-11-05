@@ -41,6 +41,36 @@ covers; dashboard drilldowns and return navigation use the dashboard's own state
 The historical implementation phases and gap inventory below describe the audit
 that led to this adoption; consult the destination audit for current routing.
 
+## Titles and context when creating cards
+
+`dashboardCardMetadata` in `web/src/dashboard-card-model.ts` owns the defaults
+for every dashboard card target. The creation dialog reads the current chart
+and population into a URL, then derives both title and description from that
+definition. Switching targets or the card's group count updates unedited copy;
+author edits stay intact. Relative ranges keep their relative wording.
+
+Catalog dashboards share `dashboard-card-copy.ts`, which names the measure,
+view, grouping, unit and reduction, including shares, cumulative values and
+smoothing. Context describes the population filters, legend selection, range,
+thresholds and chart controls. Filter readings reuse the supporting query's
+schema labels and AND/OR/negation grammar. Defaults fit the editor's 200-character
+title and 500-character description limits; the URL retains the full definition.
+
+Habits, Thinking and the Parallelism ribbon supply their own naming and context
+functions. Habits' library recipes and page headings share the same names.
+These functions describe only inputs the target actually reads: the Habits
+summary and ribbon do not inherit the catalog chart's `analyze_filters`.
+Calendar context distinguishes the weeks visible on the card from the longer
+dashboard range. Thinking context describes the chosen grid, normalization and
+period; ribbon context includes counting, activity mode, gap and date selection.
+
+New catalogs inherit this behavior. New bespoke targets must supply meaningful
+standalone names and context through the same contract. The discovered-target
+matrix in `web/tests/unit/cards/dashboard-card.test.mjs` exercises registered
+catalog measures/views and all Thinking views/breakdowns; targeted cases check
+controls, predicates, Habits selectors, limits and relative windows. Extend these
+cases when adding a new target or control.
+
 ## Today and Last 24 hours
 
 Today runs from midnight in the viewing Mac's local timezone to the current
