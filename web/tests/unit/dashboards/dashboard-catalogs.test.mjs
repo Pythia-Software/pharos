@@ -33,7 +33,7 @@ const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], quer
 // A cycle's per-occurrence clause is planned into plain calendar metrics
 // before it is sent, as runAnalysisQuery does.
 const compiles = (catalog, query, label) => {
-  for (const part of core.planMetricSeries(query, schemas[catalog.dataset], { now })?.queries ?? [query]) assert.deepEqual(core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], label);
+  for (const part of core.planMetricSeries(query, schemas[catalog.dataset], { now })?.queries ?? [query]) assert.doesNotThrow(() => core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }), label);
 };
 
 test("every view of every measure and breakdown executes over its own dataset", () => {
@@ -457,7 +457,7 @@ test("a catalog's request: its parameters reach every request, and its note ever
   await runAnalysisQuery("mcp_calls", schemas.mcp_calls, compare.query, { params: catalog.request.params });
   await runAnalysisQuery("mcp_calls", schemas.mcp_calls, trendQuery(catalog, { metric: "calls", split: "tool_name", period: "hour" }, where, { now }).query, { params: catalog.request.params });
   const encoded = new URLSearchParams(catalog.request.params).toString();
-  assert.deepEqual(requests, [`/api/query/mcp_calls/metrics?${encoded}`, "/api/query/mcp_calls/capabilities", `/api/query/mcp_calls/query-v3?${encoded}`]);
+  assert.deepEqual(requests, ["/api/query/mcp_calls/capabilities", `/api/query/mcp_calls/query-v3?${encoded}`, "/api/query/mcp_calls/capabilities", `/api/query/mcp_calls/query-v3?${encoded}`]);
 });
 
 

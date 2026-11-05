@@ -139,8 +139,8 @@ export const attentionTargets = [
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search; an alias for view.find. Opens page Find, highlights matches and reveals the first. Several text targets become one escaped OR regex. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
-  query_table_json_cells: {status:"blocked",version:"0.9.9",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
-  query_table_attention: {status:"partial",version:"0.9.9",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_json_cells: {status:"blocked",version:"1.0.0",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_attention: {status:"partial",version:"1.0.0",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
 };
 export const viewExclusions = {
   settings: "Settings values and their read-only diagnostics; section openness uses disclosures.",

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // LibraryFind searches the evidence itself. Text results are grouped by the
@@ -256,7 +258,7 @@ func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]library
 		}
 	}
 	if o.WorkspaceRows && options.Cursor != "" {
-		return nil, fmt.Errorf("workspace searches use the table's Limit and offset; restart without a message cursor")
+		return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: "workspace searches use the table's Limit and offset; restart without a message cursor"}
 	}
 	result, err := c.SearchText(ctx, options)
 	if err != nil {

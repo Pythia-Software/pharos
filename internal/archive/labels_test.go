@@ -860,7 +860,7 @@ func TestMessageLabelQueryProjection(t *testing.T) {
 	read := func() []map[string]any {
 		table, _ := c.sqlDatasetFor("message_labels")
 		table, _ = table.project([]string{"id", "message_id", "label_status", "label", "family"}).preferCoveringScan(nil)
-		rows, err := queryMapsContext(context.Background(), c.reader(), table.v2Source(PharosMessageLabelsSchema()))
+		rows, err := queryMapsContext(context.Background(), c.reader(), table.querySourceSQL(PharosMessageLabelsSchema()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1023,7 +1023,7 @@ func TestMessageLabelFacts(t *testing.T) {
  ('facts-b1','facts-b','b1','assistant','thinking','Thinking','b1','2026-01-01T14:00:00Z')`)
 	read := func(table sqlDataset) map[string]map[string]any {
 		t.Helper()
-		rows, err := queryMapsContext(ctx, c.reader(), table.v2Source(PharosMessageLabelsSchema()))
+		rows, err := queryMapsContext(ctx, c.reader(), table.querySourceSQL(PharosMessageLabelsSchema()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1100,8 +1100,8 @@ func TestMessageLabelFacts(t *testing.T) {
 	// Parent + descendant masks emit only leaves. Overlapping children count
 	// once as messages in both the parent filter and family grouping.
 	srv := testServer(t, config, c)
-	query := qt.MetricQuery{Version: 2, Limit: 20, Where: []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "label", Op: "=", Value: "P.request"}, {Field: "label", Op: "starts_with", Value: "P.request."}}}}, Metrics: []qt.AggSpec{{ID: "messages", Op: "count_distinct", Field: "message_id", GroupBy: []string{"family"}}}}
-	out, err := srv.executeQueryV2(ctx, "message_labels", nil, PharosMessageLabelsSchema(), nil, &query)
+	query := queryFixtureMetrics{Version: 2, Limit: 20, Where: []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "label", Op: "=", Value: "P.request"}, {Field: "label", Op: "starts_with", Value: "P.request."}}}}, Metrics: []qt.AggSpec{{ID: "messages", Op: "count_distinct", Field: "message_id", GroupBy: []string{"family"}}}}
+	out, err := srv.executeQueryFixture(ctx, "message_labels", nil, PharosMessageLabelsSchema(), nil, &query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1226,7 +1226,7 @@ func TestMessageLabelFacts(t *testing.T) {
 	}
 	defer readonly.Close()
 	stored, _ := readonly.sqlDatasetFor("message_labels")
-	rows, err := queryMapsContext(ctx, readonly.reader(), stored.v2Source(PharosMessageLabelsSchema()))
+	rows, err := queryMapsContext(ctx, readonly.reader(), stored.querySourceSQL(PharosMessageLabelsSchema()))
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("read-only stored labels: %v %v", rows, err)
 	}

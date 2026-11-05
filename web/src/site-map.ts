@@ -775,7 +775,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),
     query_state: {
       select:"Ordered columns: {field, width?, render?, display?}[]; [] uses dataset defaults.",
-      fitToScreen:"Boolean; false keeps explicit widths.",
+      fit:"Sizing: screen/content; omitted keeps widths.",
       where:"Native filter terms and AND/OR groups; timestamps can be relative (-7d, +0s).",
       orderBy:"Ordered {field, dir:asc|desc, nulls?:first|last, extract?}[]",
       limit:"Page size", offset:"Zero-based result offset",

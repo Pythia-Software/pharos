@@ -133,8 +133,8 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			all := qt.ServerQueryV2{WireQuery: qt.WireQuery{Select: []string{"id", "model", "effort", "model_effort"}, Limit: 1000}, Version: 2, Profile: qt.SQLiteExpressionProfile}
-			loaded, err := server.executeQueryV2(ctx, dataset, nil, v2Schema, &all, nil)
+			all := queryFixtureRows{WireQuery: qt.WireQuery{Select: []string{"id", "model", "effort", "model_effort"}, Limit: 1000}, Version: 2, Profile: qt.SQLiteExpressionProfile}
+			loaded, err := server.executeQueryFixture(ctx, dataset, nil, v2Schema, &all, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,12 +171,12 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 					t.Fatal(err)
 				}
 				wire := qt.WireQuery{Select: []string{"id", "model", "effort", "model_effort"}, Limit: 50,
-					OrderBy: qt.OrderBys{{Field: "model", Dir: "asc"}, {Field: "effort", Dir: "desc"}}}
+					OrderBy: []qt.OrderBy{{Field: "model", Dir: "asc"}, {Field: "effort", Dir: "desc"}}}
 				for _, term := range where {
 					wire.Where = append(wire.Where, qt.WhereTerm{Field: term.Field, Op: term.Op, Value: term.Value})
 				}
-				v2 := qt.ServerQueryV2{WireQuery: wire, Version: 2, Profile: qt.SQLiteExpressionProfile}
-				live, err := server.executeQueryV2(ctx, dataset, nil, v2Schema, &v2, nil)
+				v2 := queryFixtureRows{WireQuery: wire, Version: 2, Profile: qt.SQLiteExpressionProfile}
+				live, err := server.executeQueryFixture(ctx, dataset, nil, v2Schema, &v2, nil)
 				if err != nil || len(live.Rows.Rows) != 1 || live.Rows.Rows[0]["model_effort"] != "claude-opus-5-5 · high" {
 					t.Fatalf("live V2 pair filter: %v %v", live, err)
 				}
@@ -199,7 +199,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 					t.Fatal(err)
 				}
 				metrics := metricRequest(qt.AggSpec{ID: "pairs", Op: "count", GroupBy: grouping})
-				live, err := server.executeQueryV2(ctx, dataset, nil, v2Schema, nil, &metrics)
+				live, err := server.executeQueryFixture(ctx, dataset, nil, v2Schema, nil, &metrics)
 				if err != nil || len(live.Metrics.Metrics[0].Buckets) != 4 {
 					t.Fatalf("live V2 pair grouping: %v %v", live, err)
 				}
@@ -235,8 +235,8 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 				for _, key := range sort {
 					wire.OrderBy = append(wire.OrderBy, qt.OrderBy{Field: key.Field, Dir: key.Dir, Nulls: key.Nulls})
 				}
-				v2 := qt.ServerQueryV2{WireQuery: wire, Version: 2, Profile: qt.SQLiteExpressionProfile}
-				live, err := server.executeQueryV2(ctx, dataset, nil, v2Schema, &v2, nil)
+				v2 := queryFixtureRows{WireQuery: wire, Version: 2, Profile: qt.SQLiteExpressionProfile}
+				live, err := server.executeQueryFixture(ctx, dataset, nil, v2Schema, &v2, nil)
 				if err != nil || len(live.Rows.Rows) != len(result.Rows) {
 					t.Fatalf("live V2 pair sort: %v %v", live, err)
 				}
@@ -268,7 +268,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 			t.Fatal(err)
 		}
 		grouped := metricRequest(qt.AggSpec{ID: "pairs", Op: "count", GroupBy: []string{field}})
-		if _, err := qt.CompileSQLiteMetrics(ctx, grouped, v2Schema, qt.PlanOptions{SourceSQL: (sqlDataset{}).v2Source(v2Schema)}); err != nil {
+		if _, err := queryFixtureSourcePlan(ctx, v2Schema, grouped); err != nil {
 			t.Fatalf("%s grouping combined field: %v", dataset, err)
 		}
 	}

@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import {messageLabelConversationQuery} from "./message-label-results-model";
 import { NULLARY_OPS, branchesOf, groupKeyField, isCalendarGroupKey, isOrGroup, type FieldSchema, type GroupKey, type QueryState, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { groupedDashboardQuery } from "./usage-dashboard-model";
@@ -121,7 +122,7 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
     ...(explorations.length ? explorations : [{ title: `${usageDatasets[dataset].label} records`, query: records }]),
   ];
   return destinations.map(destination => {
-    const query = { ...orderedUsageQuery(dataset, destination.query), fitToScreen: true };
+    const query = fitQueryToScreen(orderedUsageQuery(dataset, destination.query));
     const details = dashboardQueryDetails(schema, query);
     return { ...destination, query, dataset: usageDatasets[dataset].label,
       href: usageWorkspaceURL({ mode: "query", search: true, dataset, query }, params),

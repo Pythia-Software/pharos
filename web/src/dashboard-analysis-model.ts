@@ -105,7 +105,7 @@ export type AnalysisCatalog = {
   // trend offers it disabled.
   periods: Partial<Record<TrendPeriodField, string>>;
   // The day-boundary rule. Days, weeks and months are the recorded calendar
-  // fields (periods), as the cards group them, so the trend runs on /metrics
+  // fields (periods), as the cards group them, so the trend runs on /query-v3
   // and its supporting query is grouped. Records with a true timestamp group
   // it for hours, in the viewer's zone (UTC clock hours placed at the local
   // hour, dateGrouping), as the hour and weekday cycles do. A day-grained

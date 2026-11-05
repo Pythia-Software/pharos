@@ -44,17 +44,16 @@ function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: 
   const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, active,
     syncUrl: true, queryParameter: `q_${table.schema.name}`, onRefresh: () => { void window.pharosSync.refresh(); } });
   const ref = useRef(api); ref.current = api;
-  const stableApi = useMemo(() => new Proxy({} as QueryTableApi<SyncRecord>, { get: (_target, key) => ref.current[key as keyof QueryTableApi<SyncRecord>] }), []);
   useEffect(() => {
     if (!active) return;
-    void stableApi.restoreLocation(location.href).catch(() => {}); // The native API exposes restoration errors in api.error.
-  }, [active, locationRevision, stableApi]);
+    void ref.current.restoreLocation(location.href).catch(() => {}); // The native API exposes restoration errors in api.error.
+  }, [active, locationRevision]);
   // Loading until this exact query's rows have arrived (or failed).
   const loading = api.execution?.rows !== "succeeded" && api.execution?.rows !== "failed";
   const fields = api.query.grouping ? api.schema!.fields : api.computed.catalogue;
   return <div className="sync-query-table pharos-query-page" role="region" aria-label={label}>
-    <QueryBuilder compact api={stableApi} fields={fields} total={api.total} running={api.loading} collapsed={collapsed} onCollapsedChange={setCollapsed} />
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={fields} renderers={renderers} onInspect={(bucket, clause) => {
+    <QueryBuilder compact api={api} fields={fields} total={api.total} running={api.loading} collapsed={collapsed} onCollapsedChange={setCollapsed} />
+    <MetricsPanel api={api} aggregations={api.aggregations} fields={fields} renderers={renderers} onInspect={(bucket, clause) => {
       const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query);
     }} />
     <DataTable fields={api.visibleFields} rows={api.rows} query={api.query} onQueryChange={api.setQuery} renderers={renderers} rowId={api.rowId} columnDrag={api.columnDrag} total={api.total} loading={loading}
