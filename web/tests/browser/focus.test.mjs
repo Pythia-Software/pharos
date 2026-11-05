@@ -1037,7 +1037,6 @@ test('Capture & index keeps run details focus, table scrolling and query edits t
   }
 
   // The query editor keeps focus and its edit across refreshes.
-  await history.getByRole('button', { name: 'Expand query builder', exact: true }).click();
   const limit = history.getByRole('spinbutton');
   await limit.fill('2');
   await page.evaluate(() => window.pharosSync.refresh());

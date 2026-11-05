@@ -1,8 +1,8 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
-import { applyQuery, EMPTY_QUERY } from "@pythia-software/query-table-core";
+import { applyQuery, EMPTY_QUERY, isFilterable, isSortable, isMeasurable, isGroupable, opsForField } from "@pythia-software/query-table-core";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
@@ -187,11 +187,22 @@ test('work history queries include analyses and backups alongside indexing', () 
     { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
   ];
   const history = operationHistoryTable(operations);
+  for (const schema of Object.values(syncSchemas)) {
+    for (const field of schema.fields) {
+      assert.ok(isFilterable(field), `${schema.name}.${field.name} is offered in the filter picker`);
+      assert.ok(opsForField(field)?.length, `${schema.name}.${field.name} offers typed filter conditions`);
+      assert.ok(isSortable(field), `${schema.name}.${field.name} is offered in the sort picker`);
+      assert.ok(isMeasurable(field), `${schema.name}.${field.name} is offered in the metric editor`);
+      assert.ok(isGroupable(field), `${schema.name}.${field.name} is offered in the grouping editor`);
+    }
+  }
   assert.deepEqual(history.rows.map(row => row.work), ['Index changes', 'Update findings', 'Back up']);
   const result = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'seconds', op: '>=', value: 60 }], orderBy: [{ field: 'seconds', dir: 'desc' }] }, history.schema);
   assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
   assert.equal(history.rows[2].result, 'Failed');
   assert.equal(history.rows[2].error, 'Drive unavailable');
+  const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{field:'started_at',op:'>=',value:new Date(reference - 120000).toISOString()}] }, history.schema);
+  assert.deepEqual(recent.rows.map(row => row.id), ['index', 'analysis']);
 });
 
 test('run results distinguish postponed verification from errors and indexing failures', () => {

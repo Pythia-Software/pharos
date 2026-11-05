@@ -276,6 +276,7 @@
   {"path":"settings/preferences","url":"/settings/preferences"},
   {"path":"settings/logs","url":"/settings/logs"},
   {"path":"settings/libraries","url":"/settings/libraries"},
+  {"path":"settings/sync","url":"/settings/sync?q_sync_operations=2d.VYw7DoAwDEPPQmbEASpxEsRQJUFULWlF-QxV745XNj_r2Y1eckujLWgSchSDCY2UC_IwIz0-3Qo4fLBLzRvrxLtyLBkF9RXy76EqZ5OKqYQTLFoZWv8A&query_layout=%7B%22sync_operations%22%3Afalse%2C%22sync_sources%22%3Atrue%7D","state":{"history":"Exclude catalog saves and sort by elapsed time"},"decoded":{"q_sync_operations":{"where":[{"field":"kind","op":"!=","value":"maintenance.checkpoint"}],"orderBy":[{"field":"seconds","dir":"desc"}]}}},
   {"path":"work","url":"/work/workspace-1","state":{"work_id":"workspace-1"}},
   {"path":"work","url":"/work/workspace-1?conversation=conversation-2&message=message-3&call=call-4","state":{"work_id":"workspace-1","conversation":"conversation-2","message":"message-3","call":"call-4"}},
   {"path":"work","url":"/work/workspace-1?conversation=conversation-2&at=2026-01-01T12%3A00%3A00Z","state":{"work_id":"workspace-1","conversation":"conversation-2","at":"2026-01-01T12:00:00Z"}},
