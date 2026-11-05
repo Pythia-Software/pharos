@@ -55,10 +55,12 @@ func unpackLines(packed []byte) lineSet {
 }
 
 // editChange is the lines one edit call adds and removes from its file; a
-// rewrite gives the file's whole new content.
+// rewrite gives the file's whole new content. Partial says some changed
+// lines were left out, being perhaps only parts of lines (wholeLines).
 type editChange struct {
 	Added, Removed lineSet
 	Rewrite        bool
+	Partial        bool
 }
 
 // fileEdit is one file's change in an edit call. Path is absolute; an edit
@@ -71,10 +73,11 @@ type fileEdit struct {
 }
 
 // readEditChanges reads an edit call's input, as its call message stores
-// it: a replacement (Claude and Codex Edit, MultiEdit, Antigravity), a whole
-// file (Write) or a patch (apply_patch, including one inside a Codex
-// code-mode script), which may change several files. An input it cannot
-// read gives no files.
+// it: a replacement (Claude and Codex Edit, MultiEdit, Antigravity and its
+// batches), a whole file (Write) or a patch (apply_patch, including one
+// inside a Codex code-mode script), which may change several files. A list
+// of changed files without their lines (an older Codex patch) gives those
+// files alone. An input it cannot read gives no files.
 func readEditChanges(text, path string) []fileEdit {
 	var message struct {
 		Input any `json:"input"`
@@ -88,8 +91,10 @@ func readEditChanges(text, path string) []fileEdit {
 			old, oldOK := fields[pair[0]].(string)
 			replacement, newOK := fields[pair[1]].(string)
 			if oldOK || newOK {
-				fingerprintLines(old, change.Removed)
-				fingerprintLines(replacement, change.Added)
+				removed, added, partial := wholeLines(old, replacement)
+				fingerprintLines(removed, change.Removed)
+				fingerprintLines(added, change.Added)
+				change.Partial = change.Partial || partial
 				return true
 			}
 		}
@@ -97,7 +102,7 @@ func readEditChanges(text, path string) []fileEdit {
 	}
 	switch input := message.Input.(type) {
 	case map[string]any:
-		if edits, ok := input["edits"].([]any); ok {
+		if edits, ok := firstNonNil(input["edits"], input["ReplacementChunks"]).([]any); ok {
 			found := false
 			for _, edit := range edits {
 				found = replace(mapValue(edit)) || found
@@ -105,6 +110,14 @@ func readEditChanges(text, path string) []fileEdit {
 			if !found {
 				return nil
 			}
+		} else if changes, ok := input["changes"].([]any); ok {
+			var files []fileEdit
+			for _, item := range changes {
+				if file := firstString(mapValue(item)["path"]); filepath.IsAbs(file) {
+					files = append(files, fileEdit{Path: filepath.Clean(file)})
+				}
+			}
+			return files
 		} else if content, ok := firstNonNil(input["content"], input["CodeContent"], input["file_text"]).(string); ok {
 			change.Rewrite = true
 			fingerprintLines(content, change.Added)
@@ -118,6 +131,33 @@ func readEditChanges(text, path string) []fileEdit {
 		return nil
 	}
 	return []fileEdit{{Path: path, Change: settle(change)}}
+}
+
+// wholeLines is the text of a replacement's whole lines, removed and added.
+// A replacement can start or end inside a line, so a changed first or last
+// line may be only part of one, whose fingerprint would never match the whole
+// line another session adds or removes: it is left out (partial). An
+// unchanged one is the same on both sides, and settles. Nothing replaced is
+// a new file's content, all of it whole.
+func wholeLines(old, replacement string) (removed, added string, partial bool) {
+	if old == "" {
+		return "", replacement, false
+	}
+	olds, news := strings.Split(old, "\n"), strings.Split(replacement, "\n")
+	oldFrom, newFrom, oldTo, newTo := 0, 0, len(olds), len(news)
+	if strings.TrimSpace(olds[0]) != strings.TrimSpace(news[0]) {
+		oldFrom, newFrom, partial = 1, 1, true
+	}
+	if strings.TrimSpace(olds[len(olds)-1]) != strings.TrimSpace(news[len(news)-1]) {
+		oldTo, newTo, partial = len(olds)-1, len(news)-1, true
+	}
+	join := func(lines []string, from, to int) string {
+		if from >= to {
+			return ""
+		}
+		return strings.Join(lines[from:to], "\n")
+	}
+	return join(olds, oldFrom, oldTo), join(news, newFrom, newTo), partial
 }
 
 // settle drops the lines both removed and added: moved or reindented, not
@@ -226,6 +266,10 @@ type fileLines struct {
 }
 
 func (lines *fileLines) apply(change editChange) {
+	if change.Partial && !change.Rewrite && len(change.Added) == 0 && len(change.Removed) == 0 {
+		// Only parts of lines changed: nothing here can be judged.
+		return
+	}
 	if lines.Kept == nil {
 		lines.Kept, lines.Removed = lineSet{}, lineSet{}
 	}

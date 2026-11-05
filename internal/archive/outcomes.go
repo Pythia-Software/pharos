@@ -28,7 +28,7 @@ import (
 // since a change stops being too recent to judge without any write.
 
 // outcomesVersion derives every session again when its rules change.
-const outcomesVersion = "2"
+const outcomesVersion = "3"
 
 // defaultReworkDays is how long after a session's last edit a later session's
 // edits to the same files count as rework (outcome_rework_days).
@@ -211,32 +211,35 @@ func laterThan(a, b string) bool {
 type fileResolver func(path string) (repoPath, repositoryID, scope string)
 
 // deriveSessionFacts reads a session's facts from its calls, in call order.
-// A patch's other files than the call's own are placed by resolve.
+// Each file an edit call changed counts on its own, so a patch's work files
+// count when its first file is scratch, and a patch the tool ledger found no
+// file for (one inside a code-mode script) counts by the files it names. A
+// patch's other files than the call's own are placed by resolve.
 func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts {
 	facts := sessionFacts{}
 	files := map[string]*sessionFile{}
 	lastEdit := -1
 	for index, call := range calls {
-		if !outcomeEdit(call) {
+		if call.Category != "edit" || call.Status != "ok" {
 			continue
 		}
-		lastEdit = index
 		edits := readEditChanges(call.Input, call.Path)
-		if len(edits) == 0 {
+		if len(edits) == 0 && call.Path != "" {
 			// Unreadable: the call's own file, without its lines.
 			edits = []fileEdit{{Path: call.Path}}
 		}
 		for _, edit := range edits {
 			target := call
-			if filepath.Clean(edit.Path) != filepath.Clean(call.Path) {
+			if call.Path == "" || filepath.Clean(edit.Path) != filepath.Clean(call.Path) {
 				target.Path, target.RepoPath, target.RepositoryID, target.Scope = edit.Path, "", "", ""
 				if resolve != nil {
 					target.RepoPath, target.RepositoryID, target.Scope = resolve(edit.Path)
 				}
-				if !outcomeEdit(target) {
-					continue
-				}
 			}
+			if !outcomeEdit(target) {
+				continue
+			}
+			lastEdit = index
 			if edit.Added != nil {
 				target.LinesAdded, target.LinesRemoved = edit.Added, edit.Removed
 			}
