@@ -537,16 +537,13 @@ func repairClaudeAdvisorUsage(tx *sql.Tx, conversationID string, conversation *C
 	return writer != nil, nil
 }
 
-// rederiveRecoveredClaudeUsage derives a recovered Claude Code workspace's
-// usage again where its stored usage records differ from those it was saved
-// with (saved): writing them settled their replies' copies against the
-// conversations this catalog holds, or it was saved without the advisor
-// records its replies hold (claudeAdvisorUsage). Otherwise the usage it was
-// saved with stands.
+// rederiveRecoveredClaudeUsage derives a recovered workspace's Claude usage
+// again where it was saved without the advisor records its replies hold
+// (claudeAdvisorUsage), or, for Claude Code's, where its stored usage records
+// differ from those it was saved with (saved): writing them settled their
+// replies' copies against the conversations this catalog holds. Otherwise
+// the usage it was saved with stands.
 func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved WorkspaceRecord, workspaceID string) error {
-	if saved.SourceKind != "claude" {
-		return nil
-	}
 	records := map[string]string{}
 	for _, conversation := range saved.Conversations {
 		for _, message := range conversation.Messages {
@@ -554,6 +551,9 @@ func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved Workspa
 				records[conversation.NativeID+"\x00"+message.NativeID] = message.RawText
 			}
 		}
+	}
+	if len(records) == 0 {
+		return nil
 	}
 	conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
 	if err != nil {
@@ -563,7 +563,7 @@ func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved Workspa
 	for index := range conversations {
 		conversation := &conversations[index]
 		for _, message := range conversation.Messages {
-			if claudeUsageRecord(message) && message.RawText != records[conversation.NativeID+"\x00"+message.NativeID] {
+			if saved.SourceKind == "claude" && claudeUsageRecord(message) && message.RawText != records[conversation.NativeID+"\x00"+message.NativeID] {
 				changed[ids[index]] = true
 				break
 			}
@@ -583,6 +583,9 @@ func rederiveRecoveredClaudeUsage(ctx context.Context, tx *sql.Tx, saved Workspa
 		if _, err := tx.Exec("DELETE FROM tool_ledger_inputs WHERE conversation_id=?", id); err != nil {
 			return err
 		}
+	}
+	if saved.SourceKind != "claude" {
+		return rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed)
 	}
 	return settleClaudeUsage(ctx, tx, WorkspaceRecord{SourceKind: "claude", Conversations: conversations}, ids, nil, workspaceID, changed)
 }

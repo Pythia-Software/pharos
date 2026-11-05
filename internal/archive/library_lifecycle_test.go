@@ -1377,6 +1377,24 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 		if err := c.DB.QueryRow(`SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions WHERE provider='claude'`).Scan(&tokens); err != nil || tokens != 330 {
 			t.Fatalf("Claude tokens = %d, %v; want 330", tokens, err)
 		}
+		// Its requests are those of a library that indexed both sessions.
+		requests := func(c *Catalog) string {
+			rows, err := queryMaps(c.DB, `SELECT c.native_id conversation,r.native_id,r.sequence,r.total_tokens,r.context_growth_tokens
+				FROM model_requests r JOIN conversations c ON c.id=r.conversation_id ORDER BY 1,2`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return jsonText(rows)
+		}
+		indexed, _ := testCatalog(t)
+		for _, record := range []WorkspaceRecord{claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1), resumed} {
+			if result := indexed.Ingest(newCopyFixture(t, record), nil); result.Error != nil {
+				t.Fatal(result)
+			}
+		}
+		if got, want := requests(c), requests(indexed); got != want {
+			t.Fatalf("imported requests %s, want %s", got, want)
+		}
 	})
 	t.Run("Claude group delegation", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)

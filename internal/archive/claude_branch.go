@@ -21,7 +21,7 @@ import (
 // off that path without leaving the conversation. They are on it with the
 // entry they belong to, as are the attachments and notes under an entry on
 // it. An entry with no uuid, or none of whose kind has a parent, is never
-// off it.
+// off it, nor is any entry of a transcript whose turns have no parents.
 func claudeActiveBranch(events []map[string]any) map[string]bool {
 	type entry struct {
 		uuid, parent, reply, kind string
@@ -63,15 +63,17 @@ func claudeActiveBranch(events []map[string]any) map[string]bool {
 		entries = append(entries, e)
 	}
 	turn := func(e entry) bool { return e.kind == "user" || e.kind == "assistant" }
-	leaf := -1
+	leaf, linked := -1, false
 	for i := len(entries) - 1; i >= 0; i-- {
 		if turn(entries[i]) {
-			leaf = i
-			break
+			leaf = max(leaf, i)
+			linked = linked || entries[i].parent != ""
 		}
 	}
 	on := make(map[string]bool, len(entries))
-	if leaf < 0 {
+	// A transcript whose turns name no parents (one written by another tool)
+	// has one branch.
+	if !linked {
 		for _, e := range entries {
 			on[e.uuid] = true
 		}
@@ -151,6 +153,11 @@ func claudeAdvisorUsage(base MessageRecord, event map[string]any, usage map[stri
 	records := []MessageRecord{}
 	iterations, _ := usage["iterations"].([]any)
 	message := mapValue(event["message"])
+	// A reply without a message ID is named by its request, else its line.
+	reply := firstString(message["id"], event["requestId"])
+	if reply == "" {
+		reply = base.NativeID
+	}
 	for index, raw := range iterations {
 		iteration := mapValue(raw)
 		if firstString(iteration["type"]) != "advisor_message" {
@@ -161,14 +168,14 @@ func claudeAdvisorUsage(base MessageRecord, event map[string]any, usage map[stri
 			counts = iteration
 		}
 		model := defaultString(iteration["model"], base.Model)
-		id := firstString(message["id"]) + ":advisor:" + strconv.Itoa(index)
-		envelope := map[string]any{"type": "assistant", "advisor_of": firstString(message["id"]), "requestId": event["requestId"],
+		id := reply + ":advisor:" + strconv.Itoa(index)
+		envelope := map[string]any{"type": "assistant", "advisor_of": reply, "requestId": event["requestId"],
 			"message": map[string]any{"id": id, "model": model, "usage": counts}}
 		record := base
 		record.NativeID = base.NativeID + ":advisor:" + strconv.Itoa(index)
 		record.Model = model
 		record.RawText = jsonText(envelope)
-		record.Text = jsonText(map[string]any{"type": "token_usage", "usage": counts, "usage_message_id": id, "advisor_of": firstString(message["id"])})
+		record.Text = jsonText(map[string]any{"type": "token_usage", "usage": counts, "usage_message_id": id, "advisor_of": reply})
 		records = append(records, record)
 	}
 	return records

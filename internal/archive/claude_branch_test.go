@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -122,6 +123,18 @@ func TestClaudeSelectsTheActiveBranch(t *testing.T) {
 	if total != 11+11+11+22+33+44 {
 		t.Fatalf("total tokens = %v, want %d", total, 11+11+11+22+33+44)
 	}
+	// A transcript another tool wrote, whose turns name no parents, is one
+	// branch.
+	flat := parseJSONL(t, "claude", filepath.Join(t.TempDir(), "flat.jsonl"),
+		claudeTurn("s", "p1", "", "user", "List the files", nil),
+		claudeReply("s", "a1", "", "msg_1", "req_1", text("Two files"), usage(10, 1)),
+		claudeTurn("s", "u2", "", "user", "Delete them", nil),
+		claudeReply("s", "a2", "", "msg_2", "req_2", text("Deleted"), usage(20, 2)))
+	for entry, on := range entrySelected(t, flat) {
+		if !on {
+			t.Errorf("%s of a transcript without parents is not selected", entry)
+		}
+	}
 }
 
 func TestClaudeCountsAdvisorIterationsUnderTheirModel(t *testing.T) {
@@ -130,16 +143,39 @@ func TestClaudeCountsAdvisorIterationsUnderTheirModel(t *testing.T) {
 		map[string]any{"type": "message", "input_tokens": 100, "output_tokens": 10},
 		map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 50, "output_tokens": 5},
 	}}
+	// Replies without a message ID have advisors of their own too.
+	anonymous := map[string]any{"input_tokens": 100, "output_tokens": 10, "iterations": []any{
+		map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 60, "output_tokens": 5},
+	}}
 	messages := parseJSONL(t, "claude", path,
 		claudeTurn("s", "p1", "", "user", "Plan it", nil),
-		claudeReply("s", "a1", "p1", "msg_1", "req_1", text("Planned"), withAdvisor))
+		claudeReply("s", "a1", "p1", "msg_1", "req_1", text("Planned"), withAdvisor),
+		claudeTurn("s", "p2", "a1", "user", "And this?", nil),
+		claudeReply("s", "a2", "p2", "", "req_2", text("Planned"), anonymous),
+		claudeTurn("s", "p3", "a2", "user", "And that?", nil),
+		claudeReply("s", "a3", "p3", "", "req_3", text("Planned"), anonymous))
 	byModel := map[string]float64{}
 	requests, _ := buildToolLedger(messages, "claude-test")
 	for _, request := range requests {
 		byModel[request.Model] += request.Counts["total_tokens"]
 	}
-	if byModel["claude-test"] != 110 || byModel["claude-advisor"] != 55 || len(byModel) != 2 {
-		t.Fatalf("tokens by model = %v, want claude-test 110 and claude-advisor 55", byModel)
+	if byModel["claude-test"] != 330 || byModel["claude-advisor"] != 55+65+65 || len(byModel) != 2 {
+		t.Fatalf("tokens by model = %v, want claude-test 330 and claude-advisor 185", byModel)
+	}
+	if total := conversationTokenCounts(messages)["total_tokens"]; total != 330+185 {
+		t.Fatalf("total tokens = %v, want %d", total, 330+185)
+	}
+	// The reader counts a usage message ID once.
+	advisors := map[string]bool{}
+	for _, message := range messages {
+		if claudeAdvisorRequest(message) {
+			value := map[string]any{}
+			json.Unmarshal([]byte(message.Text), &value)
+			advisors[firstString(value["usage_message_id"])] = true
+		}
+	}
+	if len(advisors) != 3 {
+		t.Fatalf("advisor usage message IDs = %v, want one for each reply", advisors)
 	}
 }
 
@@ -529,10 +565,26 @@ func TestClaudeRepairAddsAdvisorUsageFromStoredReplies(t *testing.T) {
 	if _, err := catalog.DB.Exec("DELETE FROM messages WHERE native_id LIKE '%:advisor:%'"); err != nil {
 		t.Fatal(err)
 	}
+	// The run, saved before its advisor records were, and recovered.
+	tx := seedTx(t, catalog.DB)
+	var workspaceID string
+	if err := tx.QueryRow("SELECT id FROM workspaces WHERE source_kind='tl1'").Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := exportHistoryRecovery(t.Context(), tx, historyUnit{Kind: "catalog-workspace", Original: workspaceID}, "")
+	tx.Rollback()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 3 {
 		t.Fatalf("repair = %d, %v", repaired, err)
 	}
 	wantLibraryTokens(t, catalog, 165+165)
+	recovered, _ := testCatalog(t)
+	if outcome, err := recovered.applyHistoryRecovery(t.Context(), envelope); err != nil || outcome != "catalog-derived" {
+		t.Fatal(outcome, err)
+	}
+	wantLibraryTokens(t, recovered, 165)
 }
 
 func TestClaudeSessionCountsAReplyOnceWhateverItsDepths(t *testing.T) {

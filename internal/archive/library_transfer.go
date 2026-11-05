@@ -617,6 +617,11 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 			return err
 		}
 	}
+	// The imported tool ledger rows replace this library's, whose fingerprints
+	// no longer describe them.
+	if _, err = tx.ExecContext(ctx, "DELETE FROM tool_ledger_inputs WHERE conversation_id IN (SELECT id FROM delivered_conversations)"); err != nil {
+		return err
+	}
 	// Integer row IDs are destination-local. Replace per-workspace metrics only
 	// when the source owns that revision; union-derived totals are rebuilt below.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM metrics WHERE workspace_id IN (SELECT id FROM delivered_workspaces);
