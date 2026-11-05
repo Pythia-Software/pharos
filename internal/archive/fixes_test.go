@@ -637,6 +637,93 @@ func TestFixesObstacleTitles(t *testing.T) {
 	}
 }
 
+func TestFixesNearDuplicatesPlansAndConfusions(t *testing.T) {
+	item := func(category string, sentences ...string) *fixItem {
+		out := &fixItem{Category: category, Target: "repo:app", TargetLabel: "app"}
+		for i, sentence := range sentences {
+			out.events = append(out.events, fixesEvent{ID: int64(i), Workspace: fmt.Sprint("w", i), Sentence: sentence})
+		}
+		return out
+	}
+	// One obstacle described two ways in one place is one card: the words
+	// most members use overlap by half the smaller card's.
+	killed := item("env", "The dev server got killed due to the default 30-minute background limit.",
+		"The service got killed because it hit the default 30-minute time limit.",
+		"The dev server got killed by the 30-minute background limit again.")
+	stopped := item("env", "The dev server hit the 30-minute background limit and was stopped.",
+		"The annotation server hit its 30-minute background limit and stopped.",
+		"The dev server hit the 30-minute limit on background tasks and was stopped.")
+	if !fixesSameObstacle(killed, stopped) {
+		t.Errorf("the 30-minute limit cards are one obstacle:\n%v\n%v", fixesSignature(killed.events), fixesSignature(stopped.events))
+	}
+	// Two versions of one tool are a strong signal even across wordings.
+	node := item("env", "I could not run `npm test` because the shell has Node 20 and the runner requires Node 24.",
+		"The default Node is 20; with installed Node 24, the runner failed.", "The approval for `npm test` was missing.")
+	nvm := item("env", "I see Node v20 is installed, but CLAUDE.md requires Node 24.", "The shell defaults to Node 20, and the runner requires Node 24.")
+	if !fixesSameObstacle(node, nvm) {
+		t.Errorf("the Node 20 vs 24 cards are one obstacle")
+	}
+	if title := fixesProblemTitle(node); title != "Wrong Node version in app's environment (20 vs 24)" {
+		t.Errorf("version clash title: %q", title)
+	}
+	// Sharing the place and a couple of words is not enough.
+	port := item("env", "The dev server could not bind port 8861; it was already in use.", "The dev server port 8861 was already in use by another workspace.")
+	if fixesSameObstacle(stopped, port) {
+		t.Errorf("a busy port is not the background limit")
+	}
+
+	// Plans are not problems; a plan that names an obstacle, or a rule, is.
+	for sentence, want := range map[string]bool{
+		"I should verify the test actually fails without the fix.":                            true,
+		"I should search the repo for VACUUM-related code, then check catalog stats.":         true,
+		"Next I'll rebuild the frontend and rerun the browser tier.":                          true,
+		"Re-arming with a glob-safe condition.":                                               true,
+		"I want to verify this is worth doing now — it's blocking a real E2E scenario.":       false,
+		"I must not hold a read transaction on the live catalog, so I'll read a backup copy.": false,
+		"The read-only sandbox denied Go's temporary build directory.":                        false,
+		"Glob error in the waiter (zsh); re-arming with a glob-safe condition.":               false,
+	} {
+		if got := fixesPlanOnly(sentence); got != want {
+			t.Errorf("plan %q: got %v, want %v", sentence, got, want)
+		}
+	}
+	if got := fixesLeadTitle("Glob error in the waiter (zsh); re-arming with a glob-safe condition."); got != "Glob error in the waiter (zsh)" {
+		t.Errorf("a trailing plan is cut: %q", got)
+	}
+
+	// A confusion is named by what differs and from what.
+	branch := item("knowledge", "The branch name in my environment doesn't match what the instructions mention.",
+		"I notice a discrepancy: the instructions mention branch `gbdubs/svfu8`, but the git status shows another.",
+		"The branch name doesn't match what was expected, but the instructions say to stay on it.")
+	if title := fixesProblemTitle(branch); title != "Branch name differs from the instructions (app)" {
+		t.Errorf("mismatch title: %q", title)
+	}
+	shell := item("harness", "The shell choked on that echo command because zsh interpreted \"==\" as an expansion.",
+		"That echo command with equal signs errored out in zsh.", "I realize zsh treats `=====` oddly in echo.")
+	if title := fixesProblemTitle(shell); title != "Zsh trips on echo (app)" {
+		t.Errorf("shell title: %q", title)
+	}
+	scheduler := item("obstacle", "The Go fast tier failed in one background-scheduler test.",
+		"The Go fast tier still fails the previously reproduced background-scheduler test.",
+		"The Go fast tier failed in the same background scheduler test.")
+	if title := fixesProblemTitle(scheduler); title != "Go fast tier fails in background-scheduler test (app)" {
+		t.Errorf("failure title: %q", title)
+	}
+
+	if name := fixesCheckName(scheduler.events[:0:0]); name != "" {
+		t.Errorf("no members, no name: %q", name)
+	}
+	named := []fixesEvent{{Sentence: "Go's fast tier failed `TestBackgroundPassRunsDueStagesAndRecordsThem` again."}, {Sentence: "The unrelated `TestBackgroundPassRunsDueStagesAndRecordsThem` scheduler test fails."}}
+	if name := fixesCheckName(named); name != "`TestBackgroundPassRunsDueStagesAndRecordsThem`" {
+		t.Errorf("a test named in code names the check: %q", name)
+	}
+
+	// "A test my change doesn't touch" is a known failing check.
+	if !fixesCategoryTerms["flaky"].MatchString("That failure is a last-digit floating-point mismatch in a card recipe, which my changes don't touch.") {
+		t.Error("an untouched failing test is a known failure")
+	}
+}
+
 func TestFixesTimeLostInReplies(t *testing.T) {
 	// A reply reports a problem after the fact: its time runs from the turn's
 	// first failed call to the report.

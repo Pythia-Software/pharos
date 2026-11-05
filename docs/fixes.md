@@ -36,9 +36,14 @@ has changed: event count, latest event, messages read, latest day and today's da
 The grouping in `fixes.go` and `fixes_grouping.go` is a port of the Agent Experience
 lab's "v3" grouping:
 
-1. **Leave out request events first.** Events about the person's request are
-   dropped: unclear instructions, disagreeing, and assumptions, confusion or
-   mistakes that refer to the request.
+1. **Leave out request events and plans first.** Events about the person's
+   request are dropped: unclear instructions, disagreeing, and assumptions,
+   confusion or mistakes that refer to the request. So are plans: sentences
+   that only say what the agent will or should do next ("I should verify…",
+   "Next I'll…", "Re-arming with…"). A plan that also names an obstacle in a
+   later clause is kept, and so is a rule ("I must not…", "never…"). An
+   obstacle inside what the agent means to check ("I should verify the test
+   fails") is hypothetical and doesn't count.
 2. **Group similar sentences.** The remaining sentences are tokenized with the
    event lexicon's cue words removed and paraphrases folded. They are clustered by
    TF-IDF similarity:
@@ -58,24 +63,42 @@ lab's "v3" grouping:
 7. **Title it.** An item's title names the problem from its key term, kind and
    place, for example "`trimesh` missing from corpus's environment", "`gh pr edit`
    keeps failing for agents" or "Known failing check: …". Without a key term
-   most members name, the title comes from the stop most members describe:
-   what blocks or lacks what ("Read-only sandbox blocks Go’s temporary build
-   directory (pharos)", "Some parts lack qualified analysis solids"). Failing
-   that, it is the lead cut to the problem. The item's best
+   most members name, the title comes from what most members describe, in
+   their commonest words:
+   - a version clash: "Wrong Node version in pharos's environment (20 vs 24)";
+   - a confusion: "Branch name differs from the instructions (pharos)";
+   - a shell surprise: "Zsh trips on echo (pharos)";
+   - an obstacle: what blocks, lacks, renames, fails in, hits or conflicts in
+     what ("Read-only sandbox blocks Go’s temporary build directory",
+     "Merges keep conflicting in generated site map").
+
+   Failing that, it is the lead cut to the problem, without first-person
+   openers or a trailing plan. The item's best
    self-contained member sentence (first person, plans and back-references ranked
    down) is kept as its **lead** and quoted under the title.
 8. **Split off and merge known failing checks.** Known-failure sentences in a
    group about something else are split off, so an aside does not name or
-   hide the group's own problem. A check that fails regardless of the change
+   hide the group's own problem. A test named in code
+   ("`TestBackgroundPass…`") names the check.
+9. **Merge near-duplicates.** Two items of one kind in one place merge when
+   they describe the same obstacle:
+   - they share a key term most of each item's members name;
+   - or they name the same confusion;
+   - or their signatures overlap: at least three shared words, covering at
+     least half of the smaller item's signature. An item's signature is the
+     content words at least 40% of its members use, roughly stemmed, plus the
+     tool versions ("node 24") at least a quarter of them name.
+
+   "Dev server" alone does not join a busy port to a background time limit. A check that fails regardless of the change
    (fails on master, unrelated to this change) is a known failing check, not an
    environment problem. Items in the same place that name the same check (a quoted
    name, or two shared distinctive words such as "dashboard parity") merge into one.
-9. **Mark intended constraints.** When at least two events, and a fifth of the
+10. **Mark intended constraints.** When at least two events, and a fifth of the
    item's, cite a rule they are following ("per CLAUDE.md", "the guidance says
    never…"), the item is marked **Guidance already covers this (intended)** and left
    off Open whatever the bounds. Guides read include the repository's CLAUDE.md and
    AGENTS.md and the Claude memory files for its clone.
-10. **Assign a status.**
+11. **Assign a status.**
    - *Still recurring* means it was seen in the last three days the pass read.
    - *Quiet* means its expected count since then is at least three, but none
      appeared.

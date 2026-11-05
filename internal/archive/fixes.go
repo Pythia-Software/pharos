@@ -97,6 +97,8 @@ var fixesCategoryTerms = map[string]*regexp.Regexp{
 		`\bnode\b|\bnvm\b|\bpython\d?\b|\bpip\b|\bnpm\b|\bbrew\b|\bpath\b|dependency|load average|heavily loaded|congest|` +
 		`\b\d+[- ]?(minute|second)|time limit|timeout|timed out|disk|memory|cores|amd64|arm64|toolchain`),
 	"flaky": regexp.MustCompile(`(?i)flaky|pre-?existing|unrelated (to|test|failure)|passed on rerun|passes on rerun|same \d+ failures|` +
+		`(my|this|the) changes? (don.t|doesn.t|didn.t|do not|does not|did not) touch|test (that )?my changes? (don.t|doesn.t|didn.t) touch|` +
+		`unrelated (\S+ ){1,3}(test|failure|check|assertion)|reproduces (on|with) (the )?(original|master|main)|previously reproduced|` +
 		`already fail|base commit|untouched checkout|not something i introduced|on master too|also fails on|fails (the same way )?on (a )?(clean )?(origin/)?(master|main)|` +
 		`outside (the|my) (change|changes|ui|code|work)\b|(isn.t|is not|wasn.t|not) (related|caused) (to|by) (my|this)`),
 }
@@ -1191,6 +1193,8 @@ func fixesBuild(input fixesInput) ([]fixItem, map[string]int, error) {
 			safeguards[e.ConversationID]++
 		case fixesRequestKinds[e.Family] || fixesAboutRequest(e.Family, e.Sentence):
 			excluded[e.Family]++
+		case fixesPlanOnly(e.Sentence):
+			excluded["plan"]++
 		default:
 			inScope = append(inScope, e)
 		}
@@ -1453,6 +1457,15 @@ func fixesMergeSame(input fixesInput, items []*fixItem) []*fixItem {
 				}
 			}
 		}
+		// Cards that describe one obstacle in one place are one fix.
+		if host == nil {
+			for _, other := range out {
+				if other.Target == item.Target && other.Category == item.Category && fixesSameObstacle(other, item) {
+					host, key = other, "near"
+					break
+				}
+			}
+		}
 		if key == "" || host == nil {
 			if key != "" {
 				hosts[key] = item
@@ -1572,7 +1585,7 @@ func fixesStaleFileItems(input fixesInput, events []fixesEvent, taken map[int64]
 var (
 	fixesAntecedent  = regexp.MustCompile(`(?i)^\W*(?:the same|same|that|this|these|those|it|they|also|again|still|odd|hmm+|ok(?:ay)?|so|but|and|then|now|here|there|i notice|i see|it seems|seems|it looks|looks like)\b`)
 	fixesFirstPerson = regexp.MustCompile(`(?i)\b(?:i|i'm|i've|i'll|i’m|i’ve|i’ll|me|my|we|our)\b`)
-	fixesPlan        = regexp.MustCompile(`(?i)\s*[,;:—–]\s*(?:so|and|but|then|which)\s+(?:i|i'm|i've|i'll|i’m|i’ve|i’ll|we|let me)\b.*$`)
+	fixesPlan        = regexp.MustCompile(`(?i)\s*[,;:—–]\s*(?:(?:so|and|but|then|which)\s+(?:i|i'm|i've|i'll|i’m|i’ve|i’ll|we|let me)\b|(?:i|we)\s+(?:should|will|need to|must|have to)\b|(?:re-?)?[a-z]+ing\s+(?:with|it|them|the|a)\b).*$`)
 	fixesMissing     = regexp.MustCompile(`(?i)not installed|isn.t installed|missing|lacks?\b|no module|command not found|not found|unavailable|not available`)
 	fixesSlow        = regexp.MustCompile(`(?i)timed? ?out|timeout|too slow|slow\b|\b\d+[- ]?(?:minute|second)|load average|heavily loaded`)
 	fixesVersionWord = regexp.MustCompile(`(?i)\bversion\b|\bnode \d+|\bpython ?3\.\d+|requires node`)
@@ -1583,6 +1596,7 @@ var (
 		same way issue issues error errors my mine me i i'm i've i'll it its that this which so likely just seems seem flaky flake still also again
 		there here pass passes passed passing all now left out tier fast go npm prefix assertion assert something introduced caused cause related
 		without with clean dashboard's itself note noted opening open pr current currently today verify verified against confirm confirmed
+		previously reproduced reproduces identified isolated including alone hit hits
 		broader summary lines line known output truncated lost list probably maybe might`)
 	fixesNoticing    = regexp.MustCompile(`(?i)^\W*(?:actually,?\s*|so,?\s*|now,?\s*)?(?:i'?m|i’m|i am|i(?:'ve| have)?|i’ve)\s+(?:realizing|noticing|seeing|realize[sd]?|notice[sd]?|see|saw|found|confirmed|spotted)\s+(?:that\s+|now\s+)?`)
 	fixesReportLabel = regexp.MustCompile(`(?i)^\W*(?:test status|status|verification|tests?|testing|result|results|note|blocker|caveat)[\s*_]*:[\s*_]*`)
@@ -1691,13 +1705,14 @@ func fixesSameCheck(a, b []fixesEvent) bool {
 	if name := fixesCheckQuoted(a); name != "" && name == fixesCheckQuoted(b) {
 		return true
 	}
+	// Compared by stem: "scheduler" and "scheduling" are one check.
 	top := map[string]bool{}
 	for _, word := range fixesCheckTop(a, 8) {
-		top[word] = true
+		top[fixesCheckStem(word)] = true
 	}
 	shared := 0
 	for _, word := range fixesCheckTop(b, 8) {
-		if top[word] {
+		if top[fixesCheckStem(word)] {
 			shared++
 		}
 	}
@@ -1730,7 +1745,28 @@ func fixesCheckName(events []fixesEvent) string {
 	if name := fixesCheckQuoted(events); name != "" {
 		return "“" + name + "”"
 	}
-	top := fixesCheckTop(events, 3)
+	// A test named in code ("`TestBackgroundPass…`") names the check.
+	tests := map[string]int{}
+	for _, e := range events {
+		seen := map[string]bool{}
+		for _, match := range fixesTestName.FindAllStringSubmatch(e.Sentence, -1) {
+			if !seen[match[1]] {
+				seen[match[1]] = true
+				tests[match[1]]++
+			}
+		}
+	}
+	if name := fixesTopCount(tests); name != "" && tests[name] >= 2 {
+		return "`" + name + "`"
+	}
+	top := []string{}
+	stems := map[string]bool{}
+	for _, word := range fixesCheckTop(events, 6) {
+		if stem := fixesCheckStem(word); !stems[stem] && len(top) < 3 {
+			stems[stem] = true
+			top = append(top, word)
+		}
+	}
 	if len(top) == 0 {
 		return ""
 	}
@@ -1775,6 +1811,9 @@ func fixesProblemTitle(item *fixItem) string {
 	switch {
 	case item.Category == "flaky" && item.Check != "":
 		return "Known failing check: " + item.Check
+	case item.Category == "env" && fixesVersionClash(item.events) != "":
+		tool, versions := fixesVersionClashParts(item.events)
+		return "Wrong " + tool + " version in " + place + "'s environment (" + versions + ")"
 	case item.Category == "env" && term != "":
 		switch {
 		case share(fixesMissing) >= 0.3:
@@ -1858,4 +1897,166 @@ func fixesNamesTerm(events []fixesEvent, terms []string) bool {
 		}
 	}
 	return false
+}
+
+// A sentence that only says what the agent will do next ("I should verify
+// the test fails without the fix", "Re-arming with a glob-safe condition")
+// is a plan, not a problem: it neither seeds nor titles a group.
+var fixesPlanOpener = regexp.MustCompile(`(?i)^\W*(?:(?:so|now|next|then|first|ok(?:ay)?),?\s+)*(?:` +
+	`(?:i|we)\s+(?:should|will|need to|must|have to|want to|plan to|am going to|'m going to|’m going to)|i'll|i’ll|we'll|let me|let's|` +
+	`(?:i'm|i’m|i am)\s+(?:going to|about to|re-?arming|retrying|restarting|re-?running)|re-?arming|retrying|restarting|re-?running|trying again)\b`)
+
+// A plan that also names an obstacle is kept: "I want to verify this, since
+// it's blocking a real scenario". An obstacle inside what the agent means to
+// check ("I should verify the test fails without the fix") is hypothetical,
+// and a rule ("I must not hold a read…") is not a plan.
+func fixesPlanOnly(sentence string) bool {
+	text := fixesListMarker.ReplaceAllString(strings.TrimSpace(sentence), "")
+	loc := fixesPlanOpener.FindStringIndex(text)
+	if loc == nil || fixesPlanRule.MatchString(text) {
+		return false
+	}
+	rest := text[loc[1]:]
+	clauses := fixesClauseCut.Split(rest, 2)
+	if len(clauses) == 2 && fixesObstacleWord.MatchString(clauses[1]) {
+		return false
+	}
+	return fixesPlanCheck.MatchString(rest) || !fixesObstacleWord.MatchString(clauses[0])
+}
+
+var (
+	fixesPlanRule     = regexp.MustCompile(`(?i)\b(?:never|must not|mustn.t|avoid|not to|shouldn.t)\b`)
+	fixesPlanCheck    = regexp.MustCompile(`(?i)^\s*(?:also\s+|first\s+|then\s+|just\s+)?(?:verify|check|confirm|see|test|make sure|figure out|investigate|look|search|find out|try|run|re-?run|restart|use|wait|inspect|read|open)\b`)
+	fixesObstacleWord = regexp.MustCompile(`(?i)fail|error|block|denied|refus|lack|missing|can.t|cannot|could not|couldn.t|unable|\bbr(?:eak|oke|oken)\b|wrong|conflict|time ?out|timed out|killed|stopped|not (?:installed|found|available)|mismatch|differ|stale|out of date|\blimit|reject|crash|\bbug\b|isn.t|doesn.t|didn.t|won.t|aren.t`)
+)
+
+// fixesSameObstacle says whether two cards in one place and of one kind
+// describe the same obstacle: they share a key term most of each card's
+// members name, or the words most of their members use overlap. Overlap is
+// the shared words over the smaller card's words, at least 0.5 and at least
+// three words, so "dev server" alone doesn't join two problems.
+func fixesSameObstacle(a, b *fixItem) bool {
+	if thing := fixesMismatchThing(a); thing != "" && thing == fixesMismatchThing(b) {
+		return true
+	}
+	for _, x := range fixesCommonTerms(a.events, a.Terms) {
+		for _, y := range fixesCommonTerms(b.events, b.Terms) {
+			if strings.EqualFold(x, y) && !fixesNumeric.MatchString(x) {
+				return true
+			}
+		}
+	}
+	wa, wb := fixesSignature(a.events), fixesSignature(b.events)
+	shared := 0
+	for word := range wa {
+		if wb[word] {
+			shared++
+		}
+	}
+	smaller := min(len(wa), len(wb))
+	return shared >= 3 && float64(shared) >= 0.5*float64(smaller)
+}
+
+// fixesSignature are the content words at least 40% of the members use,
+// folded to a rough stem ("conflicts", "conflicted" → "conflict"), and the
+// tool versions ("node 24") at least a quarter of them name.
+func fixesSignature(events []fixesEvent) map[string]bool {
+	counts := map[string]int{}
+	for _, e := range events {
+		seen := map[string]bool{}
+		// A tool and its version ("Node 20", "node v24") count as one word.
+		for _, match := range fixesToolVersion.FindAllStringSubmatch(strings.ToLower(e.Sentence), -1) {
+			if word := match[1] + " " + match[2]; !seen[word] {
+				seen[word] = true
+				counts[word]++
+			}
+		}
+		for _, word := range fixesCheckSplit.Split(strings.ToLower(e.Sentence), -1) {
+			if len(word) < 3 || fixesStop[word] || fixesDiscourse[word] || fixesCheckFiller[word] || fixesNumeric.MatchString(word) || fixesSignatureFiller[word] {
+				continue
+			}
+			word = fixesStem(strings.TrimPrefix(word, "v"))
+			if !seen[word] {
+				seen[word] = true
+				counts[word]++
+			}
+		}
+	}
+	out := map[string]bool{}
+	for word, n := range counts {
+		share := 0.4
+		if strings.Contains(word, " ") {
+			share = 0.25 // a tool and its version is a strong signal
+		}
+		if n >= 2 && float64(n) >= share*float64(len(events)) {
+			out[word] = true
+		}
+	}
+	return out
+}
+
+var fixesTestName = regexp.MustCompile("`((?:Test|test)[A-Za-z0-9_]{3,80}|[a-z0-9-]+\\.test\\.m?[jt]s)`")
+
+var fixesToolVersion = regexp.MustCompile(`\b(node|python|go|npm|swift|xcode|java|ruby|postgres|sqlite)\s+(?:is\s+|version\s+)?v?(\d+(?:\.\d+)?)\b`)
+
+var fixesSignatureFiller = fixesWordSet(`could couldn't can't cannot not did didn't does doesn't don't was were would will should need needs needed
+	get got gets getting make made because since after before then when while into onto over about only again also
+	notice noticed noticing realize realized realizing seems seem see saw wonder wondering`)
+
+func fixesCheckStem(word string) string {
+	if len(word) > 6 && strings.HasSuffix(word, "er") {
+		word = strings.TrimSuffix(word, "er")
+	}
+	return fixesStem(word)
+}
+
+func fixesStem(word string) string {
+	for _, suffix := range []string{"ing", "ed", "es", "s"} {
+		if len(word) > len(suffix)+3 && strings.HasSuffix(word, suffix) {
+			return strings.TrimSuffix(word, suffix)
+		}
+	}
+	return word
+}
+
+// fixesVersionClash is the tool whose versions members disagree on ("the
+// shell has Node 20 and the runner requires Node 24"): two or more versions
+// of it, each named by at least a fifth of them.
+func fixesVersionClash(events []fixesEvent) string {
+	tool, _ := fixesVersionClashParts(events)
+	return tool
+}
+
+func fixesVersionClashParts(events []fixesEvent) (string, string) {
+	counts := map[string]map[string]int{}
+	for _, e := range events {
+		seen := map[string]bool{}
+		for _, match := range fixesToolVersion.FindAllStringSubmatch(strings.ToLower(e.Sentence), -1) {
+			if key := match[1] + " " + match[2]; !seen[key] {
+				seen[key] = true
+				if counts[match[1]] == nil {
+					counts[match[1]] = map[string]int{}
+				}
+				counts[match[1]][match[2]]++
+			}
+		}
+	}
+	tools := make([]string, 0, len(counts))
+	for tool := range counts {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	for _, tool := range tools {
+		versions := []string{}
+		for version, n := range counts[tool] {
+			if float64(n) >= 0.2*float64(len(events)) && n >= 2 {
+				versions = append(versions, version)
+			}
+		}
+		if len(versions) >= 2 {
+			sort.Strings(versions)
+			return fixesCapital(tool), strings.Join(versions, " vs ")
+		}
+	}
+	return "", ""
 }
