@@ -178,9 +178,10 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-// Tokens stand for every dashboard topic: all share usage-chart.tsx.
-for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} inspection focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: 'tokens', analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+// Habits surrounds the shared chart with its own panels; exercise that page
+// at both widths so panel styles cannot break chart hit targets or gestures.
+for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['habits', 'interval', 1440], ['habits', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
   await bar.focus();
@@ -194,6 +195,7 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
   assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
   await bar.click();
   await details.waitFor();
+  assert.equal(await bar.getAttribute('aria-pressed'), 'true', 'pointer inspection selects the period under the pointer');
   await page.locator('.usage-chart-headline > h2').click();
   await details.waitFor({ state: 'hidden' });
   await settled();
@@ -201,6 +203,7 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
 
   // Pointer capture snaps to columns and treats a drag back to its anchor as inspection.
   const bars = chart.locator('.usage-chart-bars > button');
+  await bars.nth(1).scrollIntoViewIfNeeded();
   const before = page.url();
   const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
   await page.mouse.move(start.x + start.width / 2, start.y + 30);
@@ -214,11 +217,13 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
   assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),new URL(before).searchParams.get('analyze_filters'),'one-period inspection leaves date filters alone');
   assert.ok(Object.keys(JSON.parse(new URL(page.url()).searchParams.get('chart_pins'))).length,'a deliberate pinned bucket is represented in the URL');
   await page.locator('.usage-chart-headline > h2').click();
-  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await bars.nth(1).scrollIntoViewIfNeeded();
+  const dragStart = await bars.nth(4).boundingBox(), dragEnd = await bars.nth(1).boundingBox();
+  await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + 30);
   await page.mouse.down();
-  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.move(dragEnd.x + dragEnd.width / 2, dragEnd.y + 30);
   await page.mouse.up();
-  await page.waitForFunction(previous => location.href !== previous, before);
+  await page.waitForFunction(previous => new URLSearchParams(location.search).get('analyze_filters') !== previous, new URL(before).searchParams.get('analyze_filters'));
   await settled();
 });
 
