@@ -1112,7 +1112,7 @@
 button.lt-session-identity.is-interactive{border:0;border-radius:0;color:var(--ink);text-align:left;padding-top:0;padding-bottom:0;cursor:pointer;font:inherit}
 button.lt-session-identity.is-interactive strong{color:var(--accent)}
 button.lt-session-identity.is-interactive:hover strong,button.lt-session-identity.is-interactive:focus-visible strong{text-decoration:underline}
-button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:-2px}
 .is-preview button.lt-session-identity.is-interactive{z-index:11}
 .lt-session-row-label.is-root{gap:5px;font-variant-numeric:tabular-nums}
 .lt-session-row-label.is-root .lt-event-count{font:500 11px/1 var(--sans)}
