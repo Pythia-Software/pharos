@@ -598,10 +598,13 @@ them; then the commits each pipeline links were counted.
   library's owner commits only through agents; a library whose people
   commit by hand will link far fewer commits by command, and edit inference
   matters more there.
-- **Landing.** Of the linked commits that reached mainline: 2,763 are in its
-  history, 2,233 have a copy there (patch-id), 954 went in with a squash of
-  their branch's tree, 151 are listed in a squash's message, and 75 are in
-  the squash of the one pull request their session opened.
+- **Landing.** Of the linked commits that reached mainline, measured again
+  on 2026-11-05 with the pull request rule requiring the squash to change
+  every file the commit changed: 3,736 are in its history, 890 have a copy
+  there (patch-id), 1,585 went in with a squash of their branch's tree, 159
+  are listed in a squash's message, and 285 are in the squash of the one
+  pull request their session opened. (The repositories gained commits
+  since the 2026-11-04 measurement, so these do not compare one to one.)
 - **Speed.** A first pass over every repository took 3 m 57 s; the largest
   (explo, 12,827 commits) took 2 m 18 s of git. An unreadable reflog
   (one that times out) leaves out only the replaced commits.
