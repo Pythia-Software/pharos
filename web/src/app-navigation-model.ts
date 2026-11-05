@@ -39,7 +39,7 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents", agent_event_rates: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
-  tokens: "Outcomes", carbon: "Outcomes", scatter: "Outcomes",
+  tokens: "Outcomes", carbon: "Outcomes", scatter: "Outcomes", outcomes: "Outcomes",
 };
 
 // Query tables are grouped by the records they contain, not dashboard topic.
@@ -68,7 +68,9 @@ export function analyzePages(params: URLSearchParams, previews = agentEventsEnab
   for (const key of [...datasetContext.keys()]) if (/^(?:q_|record_|window_|analyze_|card_|label_)/.test(key)) datasetContext.delete(key);
   return [
     { id: "dashboards", label: "Dashboards", children: (["People", "Agents", "Outcomes"] as const).map(label => ({
-      id: `dashboards:${label.toLowerCase()}`, label,
+      // A group's id differs from its dashboards' (dashboards:<topic>): the
+      // Outcomes group holds the Outcomes dashboard.
+      id: `dashboard-group:${label.toLowerCase()}`, label,
       children: Object.entries(usageTopics).filter(([topic]) => dashboardGroups[topic as UsageTopic] === label && (previews || !agentEventTopics.has(topic)))
         .map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode: "dashboards", topic: topic as UsageTopic, dataset: usageTopicDatasets[topic as UsageTopic], report: "" }, params) })),
     })) },
