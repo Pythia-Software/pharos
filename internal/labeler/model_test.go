@@ -193,3 +193,77 @@ func TestModelInputContracts(t *testing.T) {
 		t.Fatal("max_seq below the framing's longest sequence was accepted")
 	}
 }
+
+func TestModelMLXCompanion(t *testing.T) {
+	dir := writeModelDir(t, nil)
+	model := []byte("FP32 ONNX reference")
+	weights := []byte("stand-in native tensors")
+	for name, data := range map[string][]byte{"model.fp32.onnx": model, "model.mlx.safetensors": weights} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	var man map[string]any
+	if err := json.Unmarshal(raw, &man); err != nil {
+		t.Fatal(err)
+	}
+	files := man["files"].(map[string]any)
+	sums := man["sha256"].(map[string]any)
+	files["onnx_fp32"] = "model.fp32.onnx"
+	sums["model.fp32.onnx"] = sha(model)
+	sums["model.mlx.safetensors"] = sha(weights)
+	man["input_contract"] = InputContractIDsAttentionPool
+	artifact := &MLXArtifact{Format: "pharos-mlx-v1", Architecture: "ettin-68m-v1", Task: "kestrel", Weights: "model.mlx.safetensors", SourceSHA256: sha(model)}
+	man["mlx"] = artifact
+	save := func() {
+		t.Helper()
+		raw, err := json.Marshal(man)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save()
+	fp32, err := LoadModel(dir, "fp32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp32.SHA256 != sha(model) || fp32.MLXPath != filepath.Join(dir, artifact.Weights) {
+		t.Fatalf("wrong canonical identity or companion: %+v", fp32)
+	}
+	int8, err := LoadModel(dir, "int8")
+	if err != nil || int8.MLXPath != "" {
+		t.Fatalf("int8 acquired native FP32 weights: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		change func()
+	}{
+		{"source", func() { artifact.SourceSHA256 = sha([]byte("another model")) }},
+		{"task", func() { artifact.Task = "jayhawk" }},
+		{"format", func() { artifact.Format = "unknown" }},
+		{"path", func() { artifact.Weights = "../model.mlx.safetensors" }},
+		{"checksum", func() { sums["model.mlx.safetensors"] = sha([]byte("other tensors")) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			original := *artifact
+			c.change()
+			save()
+			if _, err := LoadModel(dir, "fp32"); !errors.Is(err, ErrModelUnavailable) {
+				t.Fatalf("broken companion accepted: %v", err)
+			}
+			*artifact = original
+			sums["model.mlx.safetensors"] = sha(weights)
+			save()
+		})
+	}
+	if err := os.Remove(filepath.Join(dir, artifact.Weights)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadModel(dir, "fp32"); !errors.Is(err, ErrModelUnavailable) {
+		t.Fatalf("missing weights accepted: %v", err)
+	}
+}

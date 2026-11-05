@@ -104,7 +104,7 @@ func agentEventSettingsFrom(root map[string]any, base string) AgentEventSettings
 	if dir == "" {
 		dir = resolvePath(base, stringValue(root, "agent_events_model_dir", ""))
 	}
-	return AgentEventSettings{Enabled: boolValue(root, "agent_events_enabled", false), ModelDir: dir, Variant: stringValue(root, "agent_events_variant", "int8"),
+	return AgentEventSettings{Enabled: boolValue(root, "agent_events_enabled", false), ModelDir: dir, Variant: stringValue(root, "agent_events_variant", labelsAssets.AgentEventsModel.modelVariant(dir)),
 		Days: intValue(root, "agent_events_days", 90), Threads: intValue(root, "agent_events_threads", 0)}
 }
 
@@ -389,7 +389,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			}
 			labels = next
 			if runner == nil {
-				cfg := labelrt.RunnerConfig{Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
+				cfg := labelrt.RunnerConfig{GPU: verifier.model.MayUseGPU(labels.Backend), Worker: labels.Worker, Args: runtimeArgs(labels), Workers: max(1, labels.Workers), Threads: labels.Threads,
 					MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
 					OnRestart: func(slot int, cause error) { progress("agent events: restarting worker %d after: %v", slot, cause) }}
 				var err error
