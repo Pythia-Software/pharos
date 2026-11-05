@@ -2,7 +2,8 @@ import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
 import { isTrendView, changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
+import { trendPeriodCount, trendQuery, trendSeries } from "./dashboard-trend-model";
+import { analysisCardCopy } from "./dashboard-card-copy";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, updateSliceValues, type LegendAction } from "./chart-selection";
 import { dashboardChartURL } from "./dashboard-chart-links";
@@ -87,7 +88,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
     : "No earlier point has a value, so there is no norm yet.");
   const bounds = timeBounds(where, catalog.time);
-  const title = trendTitle(catalog, view);
+  const title = analysisCardCopy(catalog, view, where, schema).title;
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
