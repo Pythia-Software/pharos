@@ -30,7 +30,7 @@ func probeHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
-	for _, name := range probeEnvNames {
+	for _, name := range probeEnvNames() {
 		t.Setenv(name, "")
 	}
 	stubShellEnv(t, nil)
@@ -264,23 +264,23 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 	t.Setenv("CODEX_HOME", "")
 	// Arguments are -l -i -c SCRIPT.
 	noisy := script("noisy", "echo 'Welcome!'\nprintf 'prompt junk'\neval \"$4\"\necho 'logout junk'\nexit 3\n")
-	values, err := loginShellEnv(noisy, probeEnvNames, 2*time.Second)
+	values, err := loginShellEnv(noisy, probeEnvNames(), 2*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] != "/profiles/claude work" || len(values) != 1 {
 		t.Fatalf("noisy shell = %v, %v", values, err)
 	}
 	// Waiting for the shell would take 30 s.
 	started := time.Now()
-	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames, 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
+	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames(), 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
 		t.Fatalf("hanging shell returned %v after %s", err, time.Since(started))
 	}
 	// A background job holding stdout open must not hold up the probe: waiting
 	// for it would take until the 10 s timeout.
 	started = time.Now()
-	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames, 10*time.Second)
+	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames(), 10*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] == "" || time.Since(started) > 5*time.Second {
 		t.Fatalf("background job: %v, %v after %s", values, err, time.Since(started))
 	}
-	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames, time.Second); err == nil {
+	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames(), time.Second); err == nil {
 		t.Fatal("a shell that printed nothing was accepted")
 	}
 	t.Run("cache follows selected tools", func(t *testing.T) {
@@ -295,14 +295,14 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 		override(t, &shellEnvCache.at, time.Time{})
 		override(t, &shellEnvCache.values, map[string]string{})
 		override(t, &shellEnvCache.err, error(nil))
-		for _, name := range probeEnvNames {
+		for _, name := range probeEnvNames() {
 			values, err := cachedLoginShellEnv([]string{name})
 			if err != nil || len(values) != 1 || values[name] == "" {
 				t.Fatal("previous tool choice hid this tool's override", name, values, err)
 			}
 		}
-		values, err := cachedLoginShellEnv(probeEnvNames)
-		if err != nil || len(values) != len(probeEnvNames) {
+		values, err := cachedLoginShellEnv(probeEnvNames())
+		if err != nil || len(values) != len(probeEnvNames()) {
 			t.Fatal("full CLI discovery reused a partial result", values, err)
 		}
 	})

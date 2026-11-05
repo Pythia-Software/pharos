@@ -105,6 +105,8 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 
 ## Sources and identity
 
+Each kind of source is one entry in `providerRegistry` (`provider_registry.go`). Its `providerSpec` declares the adapter, what capture copies and which of a database's tables it keeps, how retained inputs are acquired and named, where probe looks for it, whether setup offers it and in what order, whether background updates read it, and its rank among mirrors. Code that depends on a source's kind reads the spec rather than switching on the kind, so adding a provider is one entry plus its adapter (`TestAProviderNeedsOnlyItsSpec`). Parsers still name their own harnesses and channels.
+
 | Kind | Acquisition | Mutation capability |
 | --- | --- | --- |
 | `tl1` | Registered installations via consistent SQLite snapshots and native transcripts | None |

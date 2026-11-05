@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -21,13 +22,12 @@ type retainedInput struct {
 	Unavailable []captureError
 }
 
+// productionAdapter says whether adapter is the kind MakeAdapter makes for
+// its source. Synthetic record adapters are package/test inputs, never
+// MakeAdapter results.
 func productionAdapter(adapter Adapter) bool {
-	switch adapter.(type) {
-	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *clineAdapter, *vscodeCopilotAdapter, *cursorAdapter, *cursorCLIAdapter, *zedAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
-		return true
-	}
-	// Synthetic record adapters are package/test inputs, never MakeAdapter results.
-	return false
+	spec, ok := providerFor(adapter.Config().Kind)
+	return ok && reflect.TypeOf(spec.New(baseAdapter{})) == reflect.TypeOf(adapter)
 }
 
 // Filesystem inventories currently retain every acquired revision. Keep that
@@ -38,7 +38,12 @@ func retainedAcquisitionEnabled(source SourceConfig) bool {
 }
 
 func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, progress ProgressFunc) (input retainedInput, failure error) {
-	acquired := captureViewOf(adapter) == nil && productionAdapter(adapter) && retainedAcquisitionEnabled(adapter.Config()) && !isConductorSource(adapter.Config().Kind) && !strings.EqualFold(adapter.Config().Kind, "cursor") && (!strings.EqualFold(adapter.Config().Kind, "tl1") && !strings.EqualFold(adapter.Config().Kind, "antigravity") && !strings.EqualFold(adapter.Config().Kind, "opencode") && !strings.EqualFold(adapter.Config().Kind, "zed") || adapter.Config().Options["sqlite_record_capture"] == true)
+	// Only a production adapter is acquired, so its kind has a provider.
+	spec, ok := providerFor(adapter.Config().Kind)
+	if !ok {
+		spec = &providerSpec{}
+	}
+	acquired := captureViewOf(adapter) == nil && productionAdapter(adapter) && retainedAcquisitionEnabled(adapter.Config()) && spec.Acquisition.acquires(adapter.Config())
 	defer func() {
 		if !acquired {
 			return
@@ -67,18 +72,10 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 	if !retainedAcquisitionEnabled(source) {
 		return result, nil
 	}
-	if isConductorSource(source.Kind) {
-		return result, nil
-	} // session exporter; production-size gate remains opt-in
-	if strings.EqualFold(source.Kind, "cursor") || strings.EqualFold(source.Kind, "cursor-cli") {
-		// Only Cursor's snapshots leave out what it keeps beside its chats
-		// (captureTables): no rows are copied before indexing.
+	if !spec.Acquisition.acquires(source) {
 		return result, nil
 	}
-	if strings.EqualFold(source.Kind, "tl1") || strings.EqualFold(source.Kind, "antigravity") || strings.EqualFold(source.Kind, "opencode") || strings.EqualFold(source.Kind, "zed") {
-		if source.Options["sqlite_record_capture"] != true {
-			return result, nil
-		} // staged SQLite rollout, exposed in status
+	if spec.Acquisition == acquireSQLiteGroup {
 		return c.acquireLogicalGroup(ctx, source, progress)
 	}
 	if progress != nil {
