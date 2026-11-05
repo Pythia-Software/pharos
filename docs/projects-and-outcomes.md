@@ -223,7 +223,10 @@ is this document's shorthand and the stored names' (`session_outcomes`,
   - the call's start and end;
   - the repository it ran in: the directory `git -C` or the last `cd`
     before it names, when that is absolute or under `~` and inside a
-    checkout Pharos knows; else the session's own;
+    checkout Pharos knows; else the session's own. A `cd` inside a subshell
+    (`( … )` or `$( … )`) closed before the git command moved only the
+    subshell. When the quotes before it do not balance, which subshell a
+    `cd` was in is unknown, and the command counts in the session's own;
   - the hashes the call printed;
   - a fingerprint of the subject it wrote: its first `-m`, or the first
     paragraph of a here document its own arguments open (`-F - <<EOF`,
@@ -320,7 +323,9 @@ no linked commit is judged on its Tier 1 facts.
   `gpg.program` (or SSH signing program) for each signed commit.
 - **Commits linked to the session**, by the first rule that applies (see
   [Commit-linking rules](#commit-linking-rules-and-confidence)):
-  1. a hash the session's own `git commit` printed (1.0);
+  1. a hash the session's own `git commit`, `cherry-pick` or `revert`
+     printed (1.0), in the repository the command ran in, even when a later
+     step failed the call;
   2. a `git commit` or `git revert` of the session's that was running when
      the commit was made and wrote its subject (0.95);
   3. the only such command running when the commit was both written and
@@ -361,7 +366,10 @@ no linked commit is judged on its Tier 1 facts.
     it stood); or it lists the commit's subject as `* subject`, as GitHub's
     default squash message does, when the subject is at least 16
     characters and no other commit has it; or its subject ends `(#N)` for
-    the one pull request the commit's session opened in this repository.
+    the one pull request the commit's session opened in this repository,
+    and it changed every file the commit changed. A session's pull request
+    is not tied to each of its commits: one it made on another branch, after
+    opening it, changes files the squash did not.
 
   In a shallow clone a commit mainline does not reach is unknown, not "not
   landed", and so is a commit whose patch could not be read or is empty

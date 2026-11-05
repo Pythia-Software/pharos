@@ -717,7 +717,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	// The checkout is the repository's by its remote (gitIdentity.holds).
 	execTx(t, f.catalog.DB, `UPDATE repositories SET normalized_remote='github.com/acme/app' WHERE id='repo-app'`)
 	repo.git(time.Now(), "remote", "add", "origin", "git@github.com:acme/app.git")
-	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled"} {
+	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled", "picker"} {
 		f.session(id, "")
 	}
 	base := time.Now().Add(-20 * 24 * time.Hour).Truncate(time.Second)
@@ -800,9 +800,22 @@ func TestSessionGitCommandLinks(t *testing.T) {
 	f.command("pulled", `git commit -qm "Short two"`, "", at(20, 10), 3*time.Second)
 	pulledMore := repo.commitAt(at(20, 11), "Short two", map[string]string{"pulled-2.go": "package pulled\n"})
 	f.command("pulled", "gh pr create --fill", "https://github.com/acme/app/pull/13\n", at(20, 30), 5*time.Second)
+	// A commit on another branch after opening the pull request is not one
+	// of its commits: the squash changed none of its files.
+	repo.git(at(20, 40), "checkout", "-q", "-b", "side-branch", "main")
+	f.command("pulled", `git commit -qm "Side work"`, "", at(20, 40), 3*time.Second)
+	side := repo.commitAt(at(20, 41), "Side work", map[string]string{"side.go": "package side\n"})
 	repo.git(at(20, 0), "checkout", "-q", "main")
 	repo.commitAt(at(21, 0), "Main moves once more", map[string]string{"main-3.go": "package main3\n"})
 	prSquash := squash("pr-branch", 22, "PR squash (#13)")
+	// A cherry-pick prints the hash it made: linked directly, without an
+	// edit or a commit message.
+	repo.git(at(23, 0), "checkout", "-q", "-b", "pick-source")
+	source := repo.commitAt(at(23, 1), "Picked by a command", map[string]string{"pick.go": "package pick\n"})
+	repo.git(at(23, 0), "checkout", "-q", "main")
+	repo.git(at(23, 10), "cherry-pick", source)
+	cherry := repo.git(at(23, 10), "rev-parse", "HEAD")
+	f.command("picker", "git cherry-pick "+source[:7], "[main "+cherry[:7]+"] Picked by a command\n", at(23, 10), 3*time.Second)
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.refresh()
 
@@ -819,7 +832,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 		"quiet": messages(quiet), "heredoc": messages(heredoc), "scripted": scripted[:7] + " window 0.9",
 		"hand": hand[:7] + " inferred 0.7", "nested": messages(nested), "rebased": rebased[:7] + " rewrite 1",
 		"short": concurrent[:7] + " window 0.5", "treed": messages(treed, treedMore), "listed": messages(listed, common),
-		"twin": messages(twin), "pulled": messages(pulled, pulledMore),
+		"twin": messages(twin), "pulled": messages(pulled, pulledMore, side), "picker": cherry[:7] + " transcript 1",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -830,8 +843,8 @@ func TestSessionGitCommandLinks(t *testing.T) {
 			t.Errorf("%s links: %v", id, links[id])
 		}
 	}
-	rows, err := queryMaps(f.catalog.DB, `SELECT hash,COALESCE(on_mainline,-1) on_mainline,COALESCE(mainline_evidence,'') evidence FROM git_commits WHERE hash IN (?,?,?,?,?,?,?,?)`,
-		treed, treedMore, listed, common, twin, pulled, pulledMore, rebased)
+	rows, err := queryMaps(f.catalog.DB, `SELECT hash,COALESCE(on_mainline,-1) on_mainline,COALESCE(mainline_evidence,'') evidence FROM git_commits WHERE hash IN (?,?,?,?,?,?,?,?,?)`,
+		treed, treedMore, listed, common, twin, pulled, pulledMore, rebased, side)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -843,6 +856,7 @@ func TestSessionGitCommandLinks(t *testing.T) {
 		treed: "1 squashed into " + treeSquash[:12] + " on remotes/origin/main", treedMore: "1 squashed into " + treeSquash[:12] + " on remotes/origin/main",
 		listed: "1 listed in " + listSquash[:12] + " on remotes/origin/main", common: "0 ", twin: "0 ", rebased: "0 ",
 		pulled: "1 pull request #13, " + prSquash[:12] + " on remotes/origin/main", pulledMore: "1 pull request #13, " + prSquash[:12] + " on remotes/origin/main",
+		side: "0 ",
 	} {
 		if mainline[hash] != want {
 			t.Errorf("%s on mainline: %q, want %q", hash[:7], mainline[hash], want)
