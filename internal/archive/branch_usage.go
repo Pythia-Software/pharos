@@ -47,6 +47,38 @@ func (c *Catalog) ensureBranchUsage() error {
 	return err
 }
 
+// scheduleToolDerivations marks the tools stage pending when the rules of a
+// derivation it runs changed (outcomes, commit links, spend by branch), on a
+// new library or an upgraded one. Each derives everything again when its
+// version changes, but only when the stage runs: a library that indexes
+// nothing new would otherwise wait for the next index or a manual run.
+func (c *Catalog) scheduleToolDerivations() error {
+	want := outcomesVersion + ":" + outcomeGitVersion + ":" + branchUsageVersion
+	stored, err := c.metaValue(context.Background(), "tool_derivations_version")
+	if err != nil || stored == want {
+		return err
+	}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// A library with nothing indexed derives as it indexes.
+	var indexed bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM workspaces)").Scan(&indexed); err != nil {
+		return err
+	}
+	if indexed {
+		if err := markSyncDeferredStage(tx, "tools"); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('tool_derivations_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, want); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // branchEvent is one stored event of a conversation that kept its source
 // record: its session, hour, model and the record itself.
 type branchEvent struct {
