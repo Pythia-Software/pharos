@@ -198,6 +198,12 @@ Developer ID releases retain hardened runtime and library validation. Ad hoc
 and self-signed local builds use a development-only library-validation exception.
 Generated framework binaries must not be committed.
 
+Model artifacts have a separate [cleanroom publication workflow](local-labeler.md#cleanroom-model-publication).
+The development Mac prepares the trained ONNX/MLX release kit; the cleanroom
+publishes those opaque archives. After verified model pins are committed and
+merged, the ordinary app release builds from source and pins without training
+files or model conversion dependencies.
+
 ### Separate development and deployment Macs
 
 Development Macs build and test without either release private key. Production

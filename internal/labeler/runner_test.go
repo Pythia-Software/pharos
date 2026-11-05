@@ -142,3 +142,63 @@ func TestManagerSetBudget(t *testing.T) {
 		t.Fatalf("budget %+v", got)
 	}
 }
+
+func TestManagerGPUAdmission(t *testing.T) {
+	first, err := LoadModel(writeModelDir(t, nil), "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := LoadModel(writeModelDir(t, nil), "int8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Budget{Threads: 16, MemoryMB: 8192}, time.Minute)
+	defer manager.Close()
+	cfg := fakeRunnerConfig(t)
+	cfg.GPU = true
+	cfg.Workers = 4
+	a, release, err := manager.Runner(t.Context(), first, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threads, memory, runners := manager.Usage(); threads != 1 || memory != 3072 || runners != 1 {
+		t.Fatalf("GPU reservation: %d threads %d MB %d runners", threads, memory, runners)
+	}
+	if _, _, err := manager.Runner(t.Context(), second, cfg); !errors.Is(err, ErrBudget) {
+		t.Fatalf("competing GPU worker admitted: %v", err)
+	}
+	// CPU work may coexist under the same memory/thread budget.
+	cpu := cfg
+	cpu.GPU = false
+	cpu.Workers = 1
+	_, releaseCPU, err := manager.Runner(t.Context(), second, cpu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseCPU()
+	release()
+	b, releaseB, err := manager.Runner(t.Context(), second, cfg)
+	if err != nil || b == a {
+		t.Fatalf("idle GPU not reclaimed: %v", err)
+	}
+	releaseB()
+	manager.SetBudget(Budget{Threads: 16, MemoryMB: 3000})
+	if _, _, err := manager.Runner(t.Context(), first, cfg); !errors.Is(err, ErrBudget) {
+		t.Fatalf("GPU memory estimate ignored: %v", err)
+	}
+}
+
+func TestRunnerIdentityIncludesLaunchConfiguration(t *testing.T) {
+	model := &Model{Path: "model", SHA256: "sum"}
+	base := RunnerConfig{Worker: "worker", Workers: 1, Threads: 1}
+	key := runnerKey(model, base)
+	for _, cfg := range []RunnerConfig{
+		{Worker: "worker", Workers: 1, Threads: 1, Args: []string{"--backend", "mlx"}},
+		{Worker: "worker", Workers: 1, Threads: 1, Env: []string{"PHAROS_MLX_LIBRARY=/engine"}},
+		{Worker: "worker", Workers: 1, Threads: 1, GPU: true},
+	} {
+		if runnerKey(model, cfg) == key {
+			t.Fatalf("launch configuration reused the old runner: %+v", cfg)
+		}
+	}
+}

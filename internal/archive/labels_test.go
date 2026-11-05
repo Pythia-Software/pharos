@@ -499,6 +499,9 @@ func TestLabelsRunInTheAnalysisChainOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestLabelsStatusAndExplain(t *testing.T) {
+	// Lower the backend budget so the existing long-message fixture needs
+	// multiple requests, even though its chunks fit the row limit.
+	t.Setenv(labelertest.FakeMaxTokensEnv, "512")
 	catalog := labeledCatalog(t)
 	settings := labelsTestSettings(t, "ok")
 	status, err := catalog.LabelsStatus(t.Context(), settings)
@@ -524,6 +527,45 @@ func TestLabelsStatusAndExplain(t *testing.T) {
 	if err != nil || explained["excluded"].(map[string]any)["reason"] != "unselected_branch" {
 		t.Fatalf("explain m-branch: %v %v", explained, err)
 	}
+	t.Run("long message respects backend token budget", func(t *testing.T) {
+		model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		explained, err := catalog.LabelsExplain(t.Context(), settings, "m-n2", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items := explained["items"].([]map[string]any)
+		inferred := explained["inferred"].(map[string]any)
+		chunks := inferred["chunks"].([]map[string]any)
+		if len(items) < 2 || len(chunks) != len(items) {
+			t.Fatalf("long explanation lost chunks: %d items, %d inferred", len(items), len(chunks))
+		}
+		longest := 0
+		var union uint64
+		for row, item := range items {
+			ids, _ := model.Tokenizer.FrameWithSpans(labelrt.FrameInput{
+				Segment: item["segment"].(string), Cohort: item["cohort"].(string), Sender: item["sender_role"].(string),
+				Context: item["context"].(string), Text: item["text"].(string),
+			})
+			longest = max(longest, len(ids))
+			probs := make([]float32, model.Labels())
+			for label := range probs {
+				probs[label] = labelertest.FakeProb(ids, label)
+			}
+			if !reflect.DeepEqual(chunks[row]["probs"], labelProbMap(model, probs)) {
+				t.Fatalf("chunk %d probabilities lost their input order", row)
+			}
+			union |= model.Decide(probs, item["segment"].(string))
+		}
+		if len(items)*labelrt.PadLength(longest, model.PadMultiple) <= 512 {
+			t.Fatal("fixture does not exceed the backend token budget")
+		}
+		if !reflect.DeepEqual(inferred["labels"], model.LabelNames(union)) {
+			t.Fatal("chunk labels were not merged")
+		}
+	})
 }
 
 // A model whose input contract adds a pooling mask over the target text
@@ -1229,5 +1271,23 @@ func TestMessageLabelFacts(t *testing.T) {
 	rows, err := queryMapsContext(ctx, readonly.reader(), stored.v2Source(PharosMessageLabelsSchema()))
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("read-only stored labels: %v %v", rows, err)
+	}
+}
+
+func TestLabelerBackendSettings(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("PHAROS_ORT_LIBRARY", "")
+	t.Setenv("PHAROS_MLX_LIBRARY", "/environment/libpharos_mlx.dylib")
+	defaults := labelerSettingsFrom(nil, base)
+	if defaults.Backend != "auto" || defaults.MLXRuntime != "/environment/libpharos_mlx.dylib" {
+		t.Fatalf("defaults: %+v", defaults)
+	}
+	configured := labelerSettingsFrom(map[string]any{"labels_backend": "mlx", "labels_mlx_runtime": "native/engine.dylib", "labels_runtime": "native/ort.dylib"}, base)
+	if configured.Backend != "mlx" || configured.MLXRuntime != filepath.Join(base, "native/engine.dylib") {
+		t.Fatalf("configured: %+v", configured)
+	}
+	want := []string{"--runtime", filepath.Join(base, "native/ort.dylib"), "--backend", "mlx", "--mlx-runtime", filepath.Join(base, "native/engine.dylib")}
+	if got := runtimeArgs(configured); !slices.Equal(got, want) {
+		t.Fatalf("worker arguments: %v", got)
 	}
 }

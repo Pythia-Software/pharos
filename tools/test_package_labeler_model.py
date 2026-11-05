@@ -57,6 +57,28 @@ class PackageTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             packager.package(self.model, self.root / "out", "1", "int8")
 
+    def test_fp32_archive_includes_verified_mlx_companion(self):
+        manifest_path = self.model / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        for name in ("model.fp32.onnx", "model.mlx.safetensors"):
+            data = name.encode()
+            (self.model / name).write_bytes(data)
+            manifest["sha256"][name] = hashlib.sha256(data).hexdigest()
+        manifest["mlx"] = {"weights": "model.mlx.safetensors", "source_onnx_sha256": manifest["sha256"]["model.fp32.onnx"]}
+        manifest_path.write_text(json.dumps(manifest))
+        path, *_ = packager.package(self.model, self.root / "out", "1", "fp32")
+        with tarfile.open(path) as archive:
+            self.assertEqual(archive.getnames(), ["manifest.json", "model.fp32.onnx", "model.mlx.safetensors", "tokenizer.json"])
+        # The default int8 asset remains a CPU artifact.
+        self.assertNotIn("model.mlx.safetensors", packager.model_files(self.model, "int8"))
+        (self.model / "model.mlx.safetensors").write_bytes(b"corrupt")
+        with self.assertRaises(SystemExit):
+            packager.model_files(self.model, "fp32")
+        manifest["mlx"]["source_onnx_sha256"] = "wrong"
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaises(SystemExit):
+            packager.model_files(self.model, "fp32")
+
     def test_pin_updates_only_the_model(self):
         descriptor = self.root / "assets.json"
         runtime = {"name": "onnxruntime-osx-arm64", "version": "1.31.1", "sha256": "ab" * 32, "size": 7}

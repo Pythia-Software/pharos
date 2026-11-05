@@ -188,6 +188,8 @@ type LabelerSettings struct {
 	// Worker is the worker executable; Runtime the ONNX Runtime library it
 	// loads (passed as --runtime).
 	Worker, Runtime string
+	// Backend is auto (default), cpu or mlx; MLXRuntime overrides the native engine.
+	Backend, MLXRuntime string
 	// Threads per worker, workers, and the padded-token budget of a batch.
 	Threads, Workers, BatchTokens, MaxBatch int
 	// ThreadBudget and MemoryBudgetMB bound every model's workers together
@@ -206,13 +208,16 @@ func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
 		}
 		return expandPath(os.Getenv(key))
 	}
+	dir := env("PHAROS_LABELS_MODEL_DIR", resolvePath(base, stringValue(root, "labels_model_dir", "")))
 	settings := LabelerSettings{
-		Enabled:  boolValue(root, "labels_enabled", false),
-		ModelDir: env("PHAROS_LABELS_MODEL_DIR", resolvePath(base, stringValue(root, "labels_model_dir", ""))),
-		Variant:  stringValue(root, "labels_variant", "int8"),
-		Worker:   env("PHAROS_LABELS_WORKER", resolvePath(base, stringValue(root, "labels_worker", ""))),
-		Runtime:  env("PHAROS_ORT_LIBRARY", resolvePath(base, stringValue(root, "labels_runtime", ""))),
-		Threads:  intValue(root, "labels_threads", 4), Workers: intValue(root, "labels_workers", 1),
+		Enabled:    boolValue(root, "labels_enabled", false),
+		ModelDir:   dir,
+		Variant:    stringValue(root, "labels_variant", labelsAssets.Model.modelVariant(dir)),
+		Worker:     env("PHAROS_LABELS_WORKER", resolvePath(base, stringValue(root, "labels_worker", ""))),
+		Runtime:    env("PHAROS_ORT_LIBRARY", resolvePath(base, stringValue(root, "labels_runtime", ""))),
+		Backend:    stringValue(root, "labels_backend", "auto"),
+		MLXRuntime: env("PHAROS_MLX_LIBRARY", resolvePath(base, stringValue(root, "labels_mlx_runtime", ""))),
+		Threads:    intValue(root, "labels_threads", 4), Workers: intValue(root, "labels_workers", 1),
 		BatchTokens: intValue(root, "labels_batch_tokens", 16384), MaxBatch: intValue(root, "labels_max_batch", 64),
 		ThreadBudget: intValue(root, "labels_thread_budget", 0), MemoryBudgetMB: intValue(root, "labels_memory_budget_mb", 8192),
 		IdleSeconds: intValue(root, "labels_idle_seconds", 120),
@@ -764,7 +769,7 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 		return nil
 	}
 	started := time.Now()
-	cfg := labelrt.RunnerConfig{Worker: r.settings.Worker, Args: runtimeArgs(r.settings), Workers: max(1, r.settings.Workers), Threads: r.settings.Threads,
+	cfg := labelrt.RunnerConfig{GPU: r.model.MayUseGPU(r.settings.Backend), Worker: r.settings.Worker, Args: runtimeArgs(r.settings), Workers: max(1, r.settings.Workers), Threads: r.settings.Threads,
 		MaxBatch: max(1, r.settings.MaxBatch), Backoff: labelsWorkerBackoff,
 		OnRestart: func(slot int, cause error) { r.progress("labels: restarting worker %d after: %v", slot, cause) }}
 	if r.opts.OneAtATime {
@@ -863,7 +868,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		for i, seq := range window {
 			lengths[i] = len(seq.message.seqs[seq.chunk])
 		}
-		for _, indices := range labelrt.PackBatches(lengths, r.settings.BatchTokens, r.maxBatch(), r.model.PadMultiple) {
+		for _, indices := range labelrt.PackBatches(lengths, r.runner.TokenBudget(r.settings.BatchTokens), r.maxBatch(), r.model.PadMultiple) {
 			batch := labelsBatch{}
 			for _, index := range indices {
 				batch.seqs = append(batch.seqs, window[index])
