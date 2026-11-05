@@ -3,6 +3,8 @@ import {compareStates,functionStates,labelFamilies,shortLabel,stateColor,type La
 import {authorshipSegments,callerSources} from './timeline-caller-model';
 import {labelIntervals,type ActivityMark} from './label-session-ribbon-model';
 import type {TimeRange} from './timeline-label-model';
+import {EventLinkLegend} from './event-link-overlay';
+import type {AgentEventLink} from './event-link-layout';
 
 /** Use the same elapsed attribution and text composition as the drawn ribbons. */
 export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[];marks:ActivityMark[];neighbors?:LabelMessage[];caller?:boolean}[],range:TimeRange){
@@ -30,7 +32,7 @@ export function timelineModeGroups(messages:LabelMessage[],taxonomy:Taxonomy=[])
   });
 }
 
-export function TimelineLegend({messages,origins,taxonomy,tools,error}:{messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean}){
+export function TimelineLegend({messages,origins,taxonomy,tools,error,events=[]}:{messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;events?:AgentEventLink[]}){
   const modes=timelineModeGroups(messages,taxonomy),uncategorized=messages.some(message=>!functionStates(message,'label').length);
   const sources=callerSources.filter(source=>origins.includes(source.id));
   return <div className="lt-timeline-legend">
@@ -38,6 +40,8 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error}:{messages
       <span className="lt-mode-parent">{family.direct?<i className="lt-label-swatch" style={{background:stateColor(family.id)}}/>:null}{family.name}</span>
       {family.labels.map(id=><span className="lt-mode-label" key={id}><i className="lt-label-swatch" style={{background:stateColor(id)}}/>{shortLabel(id,taxonomy)}</span>)}
     </span>)}</div></div>:null;})}{uncategorized?<span className="lt-ontology-role lt-mode-label" role="group" aria-label="Coverage"><strong>Coverage</strong><i className="lt-label-swatch" style={{background:stateColor('?')}}/>Uncategorized</span>:null}</div></div>:null}
+    {/* The rows' order: message modes, agent events, tool actions. */}
+    <EventLinkLegend events={events}/>
     {Object.keys(tools).length||error?<div className="lt-legend-line"><strong>Tool actions</strong>{Object.entries(tools).map(([id,name])=><span key={id}><i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>{name}</span>)}{error?<span><i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>Error</span>:null}</div>:null}
     {sources.length?<div className="lt-legend-line"><strong>Caller text</strong>{sources.map(source=><span key={source.id} title={source.hint}><i className={`lt-source-swatch is-${source.pattern}`}/>{source.id==='typed'?'Human typed':source.name}</span>)}</div>:null}
   </div>;

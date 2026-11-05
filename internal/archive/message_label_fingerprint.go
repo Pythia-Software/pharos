@@ -161,7 +161,21 @@ func (s *Server) getMessageLabelFingerprint(w http.ResponseWriter, r *http.Reque
 	conversation["main_session"] = mains[id]
 	conversation["messages"] = messages
 	conversation["sessions"] = sessions
+	// Agent events with their targets (agent_event_links.go): message ids,
+	// kinds, short sentences and target excerpts; still no message bodies.
+	// A workspace fingerprint draws none.
+	events := []map[string]any{}
+	if !workspace {
+		found, err := s.Catalog.agentEventLinks(r.Context(), id)
+		if err != nil {
+			writeError(w, err, 500)
+			return
+		}
+		if found != nil {
+			events = found
+		}
+	}
 	// Avoid a stale partial ribbon being cached as if it were the full transcript.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, map[string]any{"conversation": conversation, "taxonomy": taxonomy, "truncated": truncated, "pending": pending}, 200)
+	writeJSON(w, map[string]any{"conversation": conversation, "taxonomy": taxonomy, "truncated": truncated, "pending": pending, "agent_events": events}, 200)
 }

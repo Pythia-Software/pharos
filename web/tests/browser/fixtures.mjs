@@ -37,6 +37,11 @@ for (const c of conversationLabelsFixture.conversations) {
     event('grandchild-2','message','fixture-grandchild',2,[]),event('grandchild-3','message','fixture-grandchild',3,[['C.report.product',.95]]));
   c.messages.sort((a,b)=>a.order-b.order);
 }
+// Agent events on the first conversation's fingerprint: two point back at
+// the same prompt (one arc), one at another, one has no target.
+const linkEvent=(id,message,group,target)=>({id,message_id:message,kind:'assumption',label:'Assumption',group,probability:.9,source:'reply',sentence:'I assume the explorer means the sidebar list.',
+  target:target?{method:'quote',message_id:target,role:'user',kind:'message',start:0,end:8,text:'Invented',strong:true}:null});
+const fingerprintEvents=[linkEvent('e1','first-2','Choices you may not see','first-0'),linkEvent('e2','first-4','Reactions and learning','first-0'),linkEvent('e3','first-6','Friction','first-3'),linkEvent('e4','first-4','Friction',null)];
 for(const c of conversationLabelsFixture.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
 conversationLabelsFixture.version=2;
 export const sourceSetupCandidates = [
@@ -185,7 +190,7 @@ function workPreview(id, query) {
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
   return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:conversationLabelsFixture.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
-    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false}:{}),
+    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false,agent_events:[{id:'e-'+id,message_id:'thought-'+id,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'I assume the change means the importer.',target:{method:'quote',message_id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',start:0,end:9,text:'Implement',strong:true,at:new Date(start+10000).toISOString()}},{id:'e-'+id+'-open',message_id:'thought-'+id,kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.8,source:'thinking',sentence:'The build failed once.',target:null}]}:{}),
     model_inferred: [{ start: Math.max(from, start + 1000), end: Math.min(to, sessionEnd - 1000) }], episodes: [{ start, end: sessionEnd }], truncated: false,
     marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1", preview: "/repo/README.md", status: "ok" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2", preview: "npm test", status: "error" }] })) };
 }
@@ -663,7 +668,7 @@ export const defaultApi = {
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
-  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
+  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
   "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
   // Query Table, on the production transport.
   "POST /api/query/usage/carbon": carbon,
