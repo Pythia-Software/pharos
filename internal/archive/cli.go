@@ -245,6 +245,7 @@ func Run(arguments []string) error {
 		defer catalog.Close()
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.ReworkDays = config.OutcomeReworkDays
 		catalog.setCaptureRoot(config.CaptureRoot)
 		openBrowser := false
 		for _, arg := range args {
@@ -272,6 +273,7 @@ func Run(arguments []string) error {
 	return runLeasedCatalogCommand(config, command, cliCatalogOperation(command, args), func(ctx context.Context, op *Op, catalog *Catalog) error {
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.ReworkDays = config.OutcomeReworkDays
 		catalog.setCaptureRoot(config.CaptureRoot)
 		switch command {
 		case "ingest":

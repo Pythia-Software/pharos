@@ -424,7 +424,7 @@ func TestLibraryDefaultPageReadsNoLongTextForOtherRows(t *testing.T) {
 		func(column libraryColumn) string { return "(" + column.expr + ")" },
 	} {
 		statement := libraryRowSelect(value, catalog.library.fields)
-		for _, text := range []string{"w.*", "purpose", "outcome", "summary_", "changed_files", "pr_details"} {
+		for _, text := range []string{"w.*", "purpose", "w.outcome", "summary_", "changed_files", "pr_details"} {
 			if strings.Contains(statement, text) {
 				t.Fatalf("default request reads %s for every row:\n%s", text, statement)
 			}

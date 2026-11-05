@@ -140,6 +140,16 @@ resolve the two workspace columns, and requests only read them through
 built on it and what Pharos does without Git are in
 [projects-and-outcomes.md](projects-and-outcomes.md).
 
+Session outcomes (`outcomes.go`) are Tier 1 facts every harness that records
+tool calls gives: the files a session edited, verification after its last
+edit, commits and pull requests printed in its tool output, and rework, the
+share of its added lines later sessions removed within the
+`outcome_rework_days` window (`outcome_lines.go` keeps lines only as
+fingerprints). The tools stage derives them after the tool ledger for the
+sessions `session_outcome_dirty` marks, into `session_files` and
+`session_outcomes`; the Library reads the label from them
+(`outcome_label`, `outcome_why`, `web/src/outcomes.ts`).
+
 ## UI feedback
 
 The **Send feedback** header tool reuses element annotations for optional bug
