@@ -34,6 +34,8 @@ func PharosOutcomesSchema() querytable.Schema {
 			"kept_change":          {Name: "kept_change", Kind: querytable.FieldNumber, Expr: "r.\"kept_change\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"kept_change\""},
 			"linked_commits":       {Name: "linked_commits", Kind: querytable.FieldNumber, Expr: "r.\"linked_commits\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"linked_commits\""},
 			"landed_commits":       {Name: "landed_commits", Kind: querytable.FieldNumber, Expr: "r.\"landed_commits\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"landed_commits\""},
+			"committed_lines":      {Name: "committed_lines", Kind: querytable.FieldNumber, Expr: "r.\"committed_lines\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"committed_lines\""},
+			"landed_lines":         {Name: "landed_lines", Kind: querytable.FieldNumber, Expr: "r.\"landed_lines\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"landed_lines\""},
 		},
 		DefaultSort:  []querytable.OrderBy{{Field: "started_at", Dir: "desc", Nulls: "last"}},
 		TiebreakSort: []querytable.OrderBy{{Field: "id", Dir: "asc"}},

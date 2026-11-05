@@ -62,9 +62,17 @@ export function commitState(commit: FileHistoryCommit): string {
   return "";
 }
 
+const linkMethods: Record<string, string> = {
+  transcript: "printed by the session",
+  message: "its git command wrote the message",
+  window: "its git command ran then",
+  rewrite: "a rebase or amend of its commit",
+  inferred: "inferred from its edits",
+};
+
 // linkText is how a session is linked to a commit: counted links are the
 // session's own; below the counting threshold a link is a candidate.
 export function linkText(link: FileHistoryLink): string {
-  const method = link.method === "transcript" ? "printed by the session" : link.method === "inferred" ? "inferred from its edits" : link.method;
+  const method = linkMethods[link.method] ?? link.method;
   return link.counted ? method : `candidate, ${method}`;
 }

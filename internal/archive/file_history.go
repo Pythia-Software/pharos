@@ -49,8 +49,11 @@ func (c *Catalog) FileHistory(ctx context.Context, options FileHistoryOptions) (
 		if options.Project != "" {
 			// The project filter takes what every project filter takes: a
 			// name, a remote, a folder key or path (projectPredicate).
-			in, err := queryMapsContext(ctx, c.reader(), `SELECT 1 FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id`+projectJoin("w")+`
-				WHERE sf.file_key=? AND `+projectPredicate("w")+` LIMIT 1`, append([]any{key}, projectArgs(options.Project)...)...)
+			repository, path, _ := repositoryFileKey(key)
+			in, err := queryMapsContext(ctx, c.reader(), `SELECT 1 FROM workspaces w`+projectJoin("w")+`
+				WHERE w.id IN (SELECT workspace_id FROM session_files WHERE file_key=?
+					UNION SELECT l.workspace_id FROM git_commit_files f JOIN session_commit_links l ON l.repository_id=f.repository_id AND l.hash=f.hash
+					WHERE f.repository_id=? AND f.path=?) AND `+projectPredicate("w")+` LIMIT 1`, append([]any{key, repository, path}, projectArgs(options.Project)...)...)
 			if err != nil {
 				return nil, err
 			}
@@ -71,9 +74,9 @@ func (c *Catalog) FileHistory(ctx context.Context, options FileHistoryOptions) (
 // reading an empty or Git-less answer.
 func fileHistoryNote(files []map[string]any) string {
 	if len(files) == 0 {
-		return "No session in this library edited a file at this path. File history lists files sessions edited through their tool calls; try a repository-relative path, a folder path, or Library file search."
+		return "No session in this library edited or committed a file at this path. File history lists files sessions edited through their tool calls or changed in their linked commits; try a repository-relative path, a folder path, or Library file search."
 	}
-	return "Sessions are those that edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, from git.commits_since: Git is read from the repository's first session edit, so earlier commits are not listed."
+	return "Sessions are those that edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, each with the sessions linked to it, which may have changed the file another way. They start at git.commits_since: Git is read from the repository's first session edit, so earlier commits are not listed."
 }
 
 // fileFilterSQL matches workspace w when it changed a file whose path
@@ -95,9 +98,10 @@ func fileFilterArgs(file string) []any {
 	return []any{pattern, pattern, pattern}
 }
 
-// fileHistoryKeys are the session_files keys a query names: an exact path,
-// a path ending in it, a folder path, or an absolute path sessions edited in
-// a repository checkout.
+// fileHistoryKeys are the file keys a query names: an exact path, a path
+// ending in it, a folder path, or an absolute path sessions edited in a
+// repository checkout; of the files sessions edited (session_files), and of
+// those a session's counted commit changed, though no edit call named them.
 func (c *Catalog) fileHistoryKeys(ctx context.Context, query string) ([]string, error) {
 	clean := filepath.ToSlash(query)
 	candidates := []any{clean}
@@ -110,9 +114,18 @@ func (c *Catalog) fileHistoryKeys(ctx context.Context, query string) ([]string, 
 	if err != nil {
 		return nil, err
 	}
+	committed, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT 'repository:'||f.repository_id||':'||f.path file_key FROM git_commit_files f
+		WHERE (f.path=? OR substr(f.path,-length(?)-1)='/'||?)
+		AND EXISTS(SELECT 1 FROM session_commit_links l WHERE l.repository_id=f.repository_id AND l.hash=f.hash AND l.confidence>=?)
+		ORDER BY 1 LIMIT 50`, clean, clean, clean, outcomeGitCounted)
+	if err != nil {
+		return nil, err
+	}
 	keys := []string{}
-	for _, row := range rows {
-		keys = append(keys, firstString(row["file_key"]))
+	for _, row := range append(rows, committed...) {
+		if key := firstString(row["file_key"]); !slices.Contains(keys, key) {
+			keys = append(keys, key)
+		}
 	}
 	if filepath.IsAbs(query) {
 		// An absolute path is a repository file at its path in a checkout a
@@ -160,6 +173,14 @@ func firstEditCallSQL(sf, fields string) string {
 			ORDER BY t.sequence LIMIT 1))`
 }
 
+// repositoryFileKey reads a repository file's key (outcomeFileKey).
+func repositoryFileKey(key string) (repository, path string, ok bool) {
+	if rest, found := strings.CutPrefix(key, "repository:"); found {
+		return strings.Cut(rest, ":")
+	}
+	return "", "", false
+}
+
 // fileTimeline is one file's sessions and commits.
 func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[string]any, error) {
 	sessions, err := queryMapsContext(ctx, c.reader(), `SELECT sf.workspace_id,sf.path,sf.repository_id,sf.first_edit_at,sf.last_edit_at,sf.edits,sf.lines_added,sf.lines_removed,sf.rewrote,
@@ -173,7 +194,7 @@ func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[
 		return nil, err
 	}
 	file := map[string]any{"file_key": key}
-	if repository, path, ok := strings.Cut(strings.TrimPrefix(key, "repository:"), ":"); ok && strings.HasPrefix(key, "repository:") {
+	if repository, path, ok := repositoryFileKey(key); ok {
 		file["repository_id"], file["path"] = repository, path
 	} else {
 		file["path"] = folderKey(strings.TrimPrefix(key, "path:"))
