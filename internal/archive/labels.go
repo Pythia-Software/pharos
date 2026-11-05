@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS message_labels_models (
   model TEXT PRIMARY KEY,
   labels_json TEXT NOT NULL
 );
-` + messageLabelLedgerIndexSQL + ";"
+` + messageLabelLedgerIndexSQL + ";" + messageLabelMaskIndexSQL + ";"
 
 // labelsDirtyTriggers mark a conversation dirty when anything its items are
 // built from changes: its messages, their classification, reasoning

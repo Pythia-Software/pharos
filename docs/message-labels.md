@@ -93,9 +93,27 @@ Messages without an accepted label retain an explicit coverage observation.
 `messageLabelFactsAlgorithm` versions the projection independently of inference;
 the library's local calendar is included in its build version. Transactional
 invalidation triggers queue changed conversations. The `maintenance.labels.query`
-daemon backfills and refreshes a bounded number per transaction and resumes after
-restart. Edits to messages, authorship, accepted labels, coverage or taxonomy
+daemon backfills and refreshes batches with a soft budget of 500 eligible
+messages and at most 128 conversations, and resumes after restart. It adjusts
+the message budget toward 250 ms of catalog-writer time; one conversation stays
+atomic and can exceed that target. Edits to messages, authorship, accepted labels, coverage or taxonomy
 invalidate affected conversations. Titles and repositories are read at source.
+
+Preparation reads a consistent snapshot into connection-local temporary tables
+without holding the catalog writer. A conversation-leading partial index covers
+eligible message metadata; label joins and mask enumeration use narrow covering
+indexes. Publication checks the shared source generation after acquiring the
+writer and retries a preparation overtaken by source changes. After two stale
+attempts it prepares the bounded batch under the writer to guarantee progress.
+Read snapshots end before waiting for the writer. Surviving facts keep their
+row IDs, and publication updates only changed facts and label memberships.
+
+The worker coalesces each new burst for 250 ms, then drains its backlog without
+a fixed pause per commit. The FIFO writer gate gives queued inference-result
+saves their turn between batches. Slow preparations and publications log their
+message counts, changed-row counts, preparation time, writer wait, fact and
+membership update times, and commit time. Commit and checkpoint durability are
+unchanged.
 
 A queued conversation immediately leaves the stored branch. Its live projection
 supplies observations in the same query snapshot until replacement commits.
