@@ -98,7 +98,7 @@ const discoveryTaxonomy=['P','P.request','P.request.work','P.request.work.review
 test('session ribbons partition thinking before function roles and keep every coexisting label down to a single observation',()=>{
  const at=n=>new Date(n).toISOString(),normal=message('plain','C.report.product',{at:at(10)}),thinking=message('thought','C.report',{kind:'reasoning',at:at(20),labels:[['C.report.progress',.9],['P.request.work.review',.8]]}),unknown=message('unknown',null,{at:at(30)}),untimed=message('untimed','C.report');
  const tree=sessionRibbonTree([normal,thinking,unknown,untimed],[],[],discoveryTaxonomy,[0,40]);
- assert.deepEqual(ribbonCounts(tree.items),{messages:3,thinking:1,activity:0,inferred:0});
+ assert.deepEqual(ribbonCounts(tree.items),{events:0,messages:3,thinking:1,activity:0,inferred:0});
  assert.equal(ribbonEventCount(tree.items),3);
  const sharedTool={...tree.items[0],id:'shared-tool',message:undefined,mark:{message_id:'plain',count:1}};
  const distinctTool={...sharedTool,id:'new-tool',mark:{message_id:'tool-message',count:1}};
@@ -332,4 +332,20 @@ test('overlap envelopes remain symmetric, grow beyond three branches and stop at
  const shapes=parallelEnvelopes(segments([0,1,3,16,0,64]));assert.deepEqual(shapes.map(s=>s.peak),[16,64]);
  const heights=shapes[0].points.map(p=>p.lower-p.upper);assert.ok(heights[0]<heights[1]&&heights[1]<heights[2]);assert.ok(shapes[1].points[0].lower-shapes[1].points[0].upper>heights[2]);
  for(const envelope of shapes){assert.ok(envelope.path.endsWith('Z')&&!envelope.path.includes('NaN'));for(const point of envelope.points){assert.ok(point.upper>0&&point.lower<38);assert.ok(Math.abs((point.upper+point.lower)/2-19)<1e-12);}}
+});
+
+test('session ribbons decompose agent events by group and kind beside tool actions, counting them once',()=>{
+ const at=n=>new Date(n).toISOString(),reply=message('reply','C.report',{at:at(10)}),later=message('later','C.report',{at:at(30)});
+ const event=(id,kind,label,group,messageID)=>({id,message_id:messageID,kind,label,group,probability:.9,source:'reply',sentence:`${label} sentence`,target:null});
+ const events=[event('e1','obstacle','Obstacle','Friction','reply'),event('e2','obstacle','Obstacle','Friction','later'),event('e3','discovery','Discovery','Reactions and learning','reply'),event('gone','obstacle','Obstacle','Friction','elsewhere')];
+ const tree=sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events);
+ const node=tree.children.find(child=>child.id==='events');
+ assert.equal(node.title,'Agent events');
+ assert.deepEqual(node.children.map(child=>[child.title,ribbonEventCount(child.items)]),[['Friction',2],['Learning',1]]);
+ assert.deepEqual(node.children[0].children.map(child=>[child.title,child.children.length]),[['Obstacle',2]]);
+ // The whole session still counts its two messages, not the events said in them.
+ assert.equal(ribbonEventCount(tree.items),2);
+ assert.equal(ribbonCounts(node.items).events,3);
+ // Outside the window an event is not shown.
+ assert.equal(sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[20,40],true,false,undefined,undefined,events).children.find(child=>child.id==='events').items.length,1);
 });

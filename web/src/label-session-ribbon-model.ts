@@ -1,9 +1,10 @@
+import {EVENT_GROUPS,eventColor,eventGroup,type AgentEventLink} from './event-link-layout';
 import {compareStates,functionRole,functionStates,shortLabel,stateColor,type LabelMessage,type LabelTool,type Taxonomy} from './conversation-labels';
 import {eventTime,type TimeRange} from './timeline-label-model';
 import {authorshipSegments,authorshipExcerpt,callerSource} from './timeline-caller-model';
 
 export type ActivityMark={start:number;end:number;end_known:boolean;category:string;count:number;error:boolean;tool_id?:string;message_id?:string;preview?:string;preview_truncated?:boolean;status?:string;name:string};
-export type RibbonObservation={id:string;start:number;end:number;title:string;color:string;thinking:boolean;label?:string;message?:LabelMessage;mark?:ActivityMark;inferred?:boolean;authorship?:string;excerpt?:{text:string;truncated:boolean}|null;composition?:{start:number;end:number};share?:number;attribution?:'preceding'|'following'|'instant'};
+export type RibbonObservation={event?:AgentEventLink;id:string;start:number;end:number;title:string;color:string;thinking:boolean;label?:string;message?:LabelMessage;mark?:ActivityMark;inferred?:boolean;authorship?:string;excerpt?:{text:string;truncated:boolean}|null;composition?:{start:number;end:number};share?:number;attribution?:'preceding'|'following'|'instant'};
 export type RibbonNode={id:string;title:string;items:RibbonObservation[];children:RibbonNode[]};
 const isThinking=(m:LabelMessage)=>m.kind==='thinking'||m.kind==='reasoning';
 const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other',model:'Model / orchestration · inferred'};
@@ -36,7 +37,7 @@ export function ribbonOriginParts(item:RibbonObservation):RibbonObservation[]{
 }
 
 /** Thinking is a message kind, not a third function. Split it out before roles. */
-export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],inferred:{start:number;end:number}[],taxonomy:Taxonomy,range:TimeRange,detail=true,caller=false,neighbors=messages,boundaryMarks=marks):RibbonNode{
+export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],inferred:{start:number;end:number}[],taxonomy:Taxonomy,range:TimeRange,detail=true,caller=false,neighbors=messages,boundaryMarks=marks,events:AgentEventLink[]=[]):RibbonNode{
  const intervals=labelIntervals(messages,boundaryMarks,30*60*1000,neighbors);
  const labels:RibbonObservation[]=intervals.flatMap(({message,start,end,attribution})=>{if(start>range[1]||end<range[0])return [];const ids=functionStates(message,detail?'label':'family');return (ids.length?ids:['?']).map(label=>({id:JSON.stringify(['label',message.id,label]),start,end,attribution,title:shortLabel(label,taxonomy),color:stateColor(label),thinking:isThinking(message),label,message}));});
  const activities:RibbonObservation[]=[...marks.flatMap(mark=>mark.start>range[1]||Math.max(mark.start,mark.end_known?mark.end:mark.start)<range[0]?[]:[{id:JSON.stringify(['activity',mark.message_id,mark.tool_id,mark.name,mark.start,mark.end,mark.category]),start:mark.start,end:mark.end_known?Math.max(mark.start,mark.end):mark.start,title:mark.name,color:mark.error?'var(--activity-error)':`var(--activity-${mark.category})`,thinking:false,mark}]),...inferred.filter(span=>span.start<=range[1]&&span.end>=range[0]).map(span=>({id:JSON.stringify(['inferred',span.start,span.end]),...span,title:'Inferred orchestration',color:'var(--activity-model)',thinking:false,inferred:true}))];
@@ -64,16 +65,23 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
   return [group(path,`${message.role} · ${new Date(start).toLocaleTimeString()}`,parts)];
  }):[];
  const authorship=group('authorship','Text origin',originMessages);
- return group('session','Session',[labelNode,authorship,activityNode].filter(node=>node.items.length));
+ // Agent events decompose like Tool actions: group, then kind, then each event.
+ // They draw through the event overlay (shapes and arcs), not as ribbon glyphs.
+ const times=new Map<string,number>();for(const m of [...neighbors,...messages]){const at=m.at?Date.parse(m.at):NaN;if(Number.isFinite(at))times.set(m.id,at);}
+ const eventItems:RibbonObservation[]=events.flatMap(e=>{const at=times.get(e.message_id);return at===undefined||at<range[0]||at>range[1]?[]:[{id:JSON.stringify(['event',e.id]),start:at,end:at,title:e.label,color:eventColor(e.group),thinking:e.source==='thinking',event:e}];});
+ const eventNode=group('events','Agent events',EVENT_GROUPS.flatMap(g=>{const items=eventItems.filter(item=>eventGroup(item.event!.group).key===g.key);if(!items.length)return [];const kinds=[...new Set(items.map(item=>item.title))];return [{id:'events:'+g.key,title:g.short,items,children:kinds.map(kind=>{const found=items.filter(item=>item.title===kind),id='events:'+g.key+':'+kind;return group(id,kind,found.map(item=>({id:id+':'+item.event!.id,title:item.event!.sentence,items:[item],children:[]})));})}];}));
+ return group('session','Session',[labelNode,authorship,activityNode,eventNode].filter(node=>node.items.length));
 }
 /** Count a retained event once even if it has labels, origin runs and a tool glyph. */
 export function ribbonEventCount(items:RibbonObservation[]){
+ // Agent events are already counted as their messages; a row of only events counts them.
+ if(items.length&&items.every(item=>item.event))return new Set(items.map(item=>item.event!.id)).size;
  const messages=new Set(items.flatMap(item=>item.message?[item.message.id]:[]));
  const marks=new Map(items.filter(item=>item.mark).map(item=>[item.id,item.mark!]));
  const inferred=new Set(items.filter(item=>item.inferred).map(item=>item.id));
  return messages.size+[...marks.values()].reduce((total,mark)=>total+Math.max(0,(mark.count??1)-(mark.message_id&&messages.has(mark.message_id)?1:0)),0)+inferred.size;
 }
-export function ribbonCounts(items:RibbonObservation[]){return {messages:new Set(items.flatMap(item=>item.message?[item.message.id]:[])).size,thinking:new Set(items.flatMap(item=>item.message&&item.thinking?[item.message.id]:[])).size,activity:items.reduce((n,item)=>n+(item.mark?.count??0),0),inferred:items.filter(item=>item.inferred).length};}
+export function ribbonCounts(items:RibbonObservation[]){return {events:new Set(items.flatMap(item=>item.event?[item.event.id]:[])).size,messages:new Set(items.flatMap(item=>item.message?[item.message.id]:[])).size,thinking:new Set(items.flatMap(item=>item.message&&item.thinking?[item.message.id]:[])).size,activity:items.reduce((n,item)=>n+(item.mark?.count??0),0),inferred:items.filter(item=>item.inferred).length};}
 /** Hit testing includes every overlapping glyph/span, including covered marks. */
 export function ribbonHits(items:RibbonObservation[],at:number,tolerance:number){
  const hits=items.filter(item=>item.start<=at+tolerance&&item.end>=at-tolerance);

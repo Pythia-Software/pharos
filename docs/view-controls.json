@@ -322,6 +322,10 @@
     {
       "file": "web/src/timeline-columns.tsx",
       "field": "timeline_columns"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_idle"
     }
   ],
   "controls": [
@@ -2880,15 +2884,6 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
-      "key": "33a5f57b635ece71:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "add",
-      "tag": "button",
-      "control": "'button', `event-link-note is-${side} ${eventGroupClass(link.group)}`",
-      "contract": "reader",
-      "reason": "A linked agent event note reveals the other end of its pair and selects it; the selection is the reader_event_link field (bindEventLinks writes and restores it through window.pharosView). Reveal scrolls and highlights without moving keyboard focus."
-    },
-    {
       "key": "b870c6c6bfff5a5a:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "addExpandableRow",
@@ -3011,6 +3006,15 @@
       "control": "'button', 'copy-value'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "0f1d2d3f55722167:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "decorateEventLinks",
+      "tag": "button",
+      "control": "'button', `event-link-n ${side==='target'?'is-target':'is-observation'} ${eventGroupClass(link.group)}`, String(link.n)",
+      "contract": "reader",
+      "reason": "An agent event's inline number reveals the other end of its pair and selects it; the selection is the reader_event_link field (bindEventLinks writes and restores it through window.pharosView). Reveal scrolls and highlights without moving keyboard focus."
     },
     {
       "key": "02fdb8dab79aa534:0",
@@ -5162,6 +5166,16 @@
       "reason": "Reset cancels any transient drag and restores the whole canonical timeline range through the existing parent change callback."
     },
     {
+      "key": "e55561cdcf8c53a5:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_idle\" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}",
+      "binding": "timeline_idle",
+      "contract": "view.timeline_idle",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "5be3bc0bf7116573:0",
       "file": "web/src/event-link-overlay.tsx",
       "owner": "EventLinkCard",
@@ -6258,11 +6272,11 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "8d7caea92cf9866c:0",
+      "key": "743453f66bfd77ad:0",
       "file": "web/src/label-session-ribbon.tsx",
       "owner": "RecursiveRibbonRow",
       "tag": "button",
-      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
+      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
       "binding": "delegation_event",
       "contract": "view.delegation_event",
       "reason": "Bound directly to the registered view field."
