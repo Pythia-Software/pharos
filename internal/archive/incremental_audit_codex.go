@@ -101,7 +101,7 @@ func readCodexAuditNames(ctx context.Context, adapter *jsonlAdapter, identities,
 		if err != nil {
 			return result, err
 		}
-		db, err := openReadOnlySQLite(readable)
+		db, err := openSourceSQLite(readable)
 		if err != nil {
 			return result, err
 		}

@@ -338,7 +338,7 @@ func copySQLiteRows(ctx context.Context, src, dst string, keep map[string]captur
 }
 
 func copySQLiteRowsOnce(ctx context.Context, src, dst string, keep map[string]captureTable) error {
-	source, err := openReadOnlySQLite(src)
+	source, err := openSourceSQLite(src)
 	if err != nil {
 		return err
 	}
@@ -485,7 +485,7 @@ func snapshotSQLite(ctx context.Context, src, dst string) error {
 var backupStepPages int32 = 4096
 
 func backupSQLite(ctx context.Context, src, dst string) error {
-	db, err := openReadOnlySQLite(src)
+	db, err := openSourceSQLite(src)
 	if err != nil {
 		return err
 	}

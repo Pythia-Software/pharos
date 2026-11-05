@@ -340,7 +340,7 @@ func (a *tl1Adapter) database(installation tl1Installation, emit func(WorkspaceR
 	if err != nil {
 		return snapshot, err
 	}
-	db, err := openReadOnlySQLite(readable)
+	db, err := openSourceSQLite(readable)
 	if err != nil {
 		return snapshot, err
 	}

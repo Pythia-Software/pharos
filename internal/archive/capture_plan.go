@@ -294,7 +294,7 @@ func (p *capturePlan) walk(root string, info fs.FileInfo, prefix string, include
 }
 
 func conductorConversationDatabase(file string) (bool, error) {
-	db, err := openReadOnlySQLite(file)
+	db, err := openSourceSQLite(file)
 	if err != nil {
 		return false, err
 	}

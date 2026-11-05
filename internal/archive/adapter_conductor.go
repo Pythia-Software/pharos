@@ -192,7 +192,7 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 	if err != nil {
 		return err
 	}
-	db, err := openReadOnlySQLite(readable)
+	db, err := openSourceSQLite(readable)
 	if err != nil {
 		return err
 	}

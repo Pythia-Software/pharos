@@ -110,7 +110,7 @@ func (a *opencodeAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := openReadOnlySQLite(readable)
+	db, err := openSourceSQLite(readable)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -589,7 +589,7 @@ func opencodeProbeStats(database string) (probeStats, error) {
 	if err != nil {
 		return stats, err
 	}
-	db, err := openReadOnlySQLite(database)
+	db, err := openSourceSQLite(database)
 	if err != nil {
 		return stats, err
 	}
