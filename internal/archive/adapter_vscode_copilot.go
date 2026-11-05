@@ -46,7 +46,7 @@ func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, []error, error) {
 	folders := []folder{}
 	var failures []error
 	storage := filepath.Join(a.config.Path, "workspaceStorage")
-	entries, err := os.ReadDir(storage)
+	entries, err := a.files().ReadDir(storage)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		failures = append(failures, err)
 	}
@@ -62,7 +62,7 @@ func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, []error, error) {
 		if err := a.context().Err(); err != nil {
 			return nil, nil, err
 		}
-		entries, err := os.ReadDir(folder.dir)
+		entries, err := a.files().ReadDir(folder.dir)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
@@ -71,7 +71,7 @@ func (a *vscodeCopilotAdapter) sessions() ([]vscodeSession, []error, error) {
 		}
 		workspace := ""
 		if folder.workspace != "" {
-			if info, err := os.Stat(folder.workspace); err == nil && info.Mode().IsRegular() {
+			if info, err := a.files().Stat(folder.workspace); err == nil && info.Mode().IsRegular() {
 				workspace = folder.workspace
 			}
 		}

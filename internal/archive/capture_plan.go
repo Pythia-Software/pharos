@@ -96,7 +96,7 @@ func (p *capturePlan) codex(ctx context.Context, source SourceConfig, info fs.Fi
 	})
 	p.files = preferRollouts(p.files)
 	if info.IsDir() {
-		databases, err := codexNamingDatabases(ctx, source.Path)
+		databases, err := codexNamingDatabases(sourceFiles{ctx: ctx}, source.Path)
 		if err != nil {
 			return fmt.Errorf("Codex names are unavailable: %w", err)
 		}

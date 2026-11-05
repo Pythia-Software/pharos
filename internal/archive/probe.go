@@ -184,54 +184,27 @@ func probeTools(home string, config Config) []ProbeTool {
 			found[kind] = ProbeTool{kind, tildeWithin(home, path), reason}
 		}
 	}
-	for _, spec := range providerRegistry {
-		if spec.Probe != nil {
-			for _, path := range spec.Probe.Folders {
-				check(spec.Kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
+	host := hostEnv{Home: home, Getenv: os.Getenv, Applications: probeApplicationDirs(home),
+		// Alternate profiles need only a bounded listing of names, never a walk.
+		List: func(dir string) []fs.DirEntry {
+			resolved, err := resolveUnprotected(home, dir)
+			if err != nil {
+				return nil
 			}
-		}
-	}
-	// Alternate profiles need only a bounded listing of names, never a walk.
-	for _, spec := range providerRegistry {
-		if spec.Probe == nil || spec.Probe.Profiles == nil {
-			continue
-		}
-		if _, exists := found[spec.Kind]; exists {
-			continue
-		}
-		dir := filepath.Join(home, spec.Probe.Profiles.Dir)
-		resolved, err := resolveUnprotected(home, dir)
-		if err != nil {
-			continue
-		}
-		listing, err := os.Open(resolved)
-		if err != nil {
-			continue
-		}
-		entries, _ := listing.ReadDir(512)
-		listing.Close()
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), spec.Probe.Profiles.Prefix) && !antigravityBackup(entry.Name()) && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) {
-				check(spec.Kind, filepath.Join(dir, entry.Name()), "profile folder")
+			listing, err := os.Open(resolved)
+			if err != nil {
+				return nil
 			}
-		}
-	}
-	for _, root := range probeApplicationDirs(home) {
-		for _, spec := range providerRegistry {
-			if spec.Probe != nil {
-				for _, bundle := range spec.Probe.Applications {
-					check(spec.Kind, filepath.Join(root, bundle), "application")
-				}
-			}
-		}
-	}
-	for _, spec := range providerRegistry {
-		if spec.Probe == nil {
-			continue
-		}
-		for _, env := range spec.Probe.Env {
-			if path := os.Getenv(env.Name); path != "" {
-				check(spec.Kind, filepath.Join(resolvePath(home, path), env.Sub), env.Name)
+			defer listing.Close()
+			entries, _ := listing.ReadDir(512)
+			return entries
+		}}
+	for index := range providerRegistry {
+		spec := &providerRegistry[index]
+		for root := range resolveRoots(spec, host) {
+			check(spec.Kind, root.Path, root.FoundBy)
+			if _, exists := found[spec.Kind]; exists {
+				break
 			}
 		}
 	}
@@ -362,7 +335,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			report.Environment = append(report.Environment, ProbeVariable{Name: name, Value: value, From: from})
 			foundBy := name + " (" + from + ")"
 			for _, variable := range variables[name] {
-				path := filepath.Join(resolvePath(home, value), variable.Sub)
+				path := variable.path(home, value)
 				timed(variable.spec.Kind, func() { variable.spec.Probe.Folder(run, path, foundBy) })
 			}
 		}
@@ -1372,4 +1345,10 @@ func readSmallFile(path string) ([]byte, error) {
 		err = fmt.Errorf("%s is larger than %d bytes", path, probeSmallFileLimit)
 	}
 	return data, err
+}
+
+// readJSON reads a JSON file where probe finds it, live.
+func readJSON(path string) (any, error) {
+	value, _, err := sourceFiles{}.ReadJSONVersion(path)
+	return value, err
 }

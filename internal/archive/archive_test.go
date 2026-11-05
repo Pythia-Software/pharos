@@ -432,7 +432,7 @@ func TestNativeReasoningRetention(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "exec.jsonl")
 	writeSourceFile(t, path, "{\"type\":\"thread.started\",\"thread_id\":\"exec\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"thought\",\"type\":\"reasoning\",\"text\":\"Now I see\"}}\n")
-	exec, ok, err := parseCodexExec(path, path)
+	exec, ok, err := sourceFiles{}.parseCodexExec(path, path)
 	if err != nil || !ok || len(exec.Messages) != 1 || exec.Messages[0].Kind != "reasoning" || exec.Messages[0].ReasoningFormat != "summary" {
 		t.Fatalf("Codex exec: %+v %v %v", exec.Messages, ok, err)
 	}

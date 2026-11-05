@@ -29,7 +29,7 @@ func (a *copilotAdapter) partExtractor() string { return copilotExtractor }
 
 // sessionsDir is the folder holding the sessions.
 func (a *copilotAdapter) sessionsDir() string {
-	if info, err := os.Stat(filepath.Join(a.config.Path, "session-state")); err == nil && info.IsDir() {
+	if info, err := a.files().Stat(filepath.Join(a.config.Path, "session-state")); err == nil && info.IsDir() {
 		return filepath.Join(a.config.Path, "session-state")
 	}
 	return a.config.Path
@@ -43,7 +43,7 @@ type copilotSession struct{ id, events, workspace, flat string }
 // is read from both: the folder's log need not repeat what the flat one holds.
 func (a *copilotAdapter) sessions() ([]copilotSession, error) {
 	dir := a.sessionsDir()
-	entries, err := os.ReadDir(dir)
+	entries, err := a.files().ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -55,11 +55,11 @@ func (a *copilotAdapter) sessions() ([]copilotSession, error) {
 		name := entry.Name()
 		if entry.IsDir() {
 			events := filepath.Join(dir, name, "events.jsonl")
-			if info, err := os.Stat(events); err != nil || !info.Mode().IsRegular() {
+			if info, err := a.files().Stat(events); err != nil || !info.Mode().IsRegular() {
 				continue
 			}
 			session := copilotSession{id: name, events: events}
-			if info, err := os.Stat(filepath.Join(dir, name, "workspace.yaml")); err == nil && info.Mode().IsRegular() {
+			if info, err := a.files().Stat(filepath.Join(dir, name, "workspace.yaml")); err == nil && info.Mode().IsRegular() {
 				session.workspace = filepath.Join(dir, name, "workspace.yaml")
 			}
 			byID[name] = session

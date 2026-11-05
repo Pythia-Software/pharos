@@ -382,3 +382,16 @@ func sqliteFallbackReads(root string) []map[string]any {
 	sort.Slice(reads, func(i, j int) bool { return reads[i]["at"].(string) > reads[j]["at"].(string) })
 	return reads
 }
+
+// openReadOnlySQLite opens a database Pharos owns or has already copied (its
+// catalog, a backup, a snapshot generation capture indexing materialized)
+// read-only, never down the locked-database ladder.
+func openReadOnlySQLite(path string) (*sql.DB, error) {
+	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
+}

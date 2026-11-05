@@ -26,7 +26,7 @@ const claudeAIRoot = "00000000-0000-4000-8000-000000000000"
 func (a *claudeAIAdapter) indexVersion() string { return claudeAIExtractor }
 
 func (a *claudeAIAdapter) exportFile() string {
-	info, err := os.Stat(a.config.Path)
+	info, err := a.files().Stat(a.config.Path)
 	if err == nil && info.IsDir() {
 		return filepath.Join(a.config.Path, "conversations.json")
 	}
@@ -35,10 +35,10 @@ func (a *claudeAIAdapter) exportFile() string {
 
 func (a *claudeAIAdapter) Fingerprint() (string, error) {
 	file := a.exportFile()
-	if _, err := os.Stat(file); err != nil {
+	if _, err := a.files().Stat(file); err != nil {
 		return "", fmt.Errorf("Claude.ai export is missing %s", file)
 	}
-	fingerprint, err := pathFingerprint(file, func(string, os.DirEntry) bool { return true })
+	fingerprint, err := a.files().pathFingerprint(file, func(string, os.DirEntry) bool { return true })
 	return a.indexVersion() + ":" + fingerprint, err
 }
 
