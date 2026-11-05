@@ -1,19 +1,16 @@
-/* Agent events inside a ribbon. Colours: --event-* (ui.py), deep in light
-   mode and pale in dark mode so they stand apart from the bright message-mode
-   stripes and the mid-tone tool rails; --event-halo rings every mark so it
-   reads over stripes, hatching and the page alike. */
+/* Agent events inside a ribbon. Colours: --event-* (ui.py), the primaries
+   (red, yellow, green, blue), deep in light mode and pale in dark mode, while
+   tool dots take secondary hues. No halos, outlines or backing shapes: at a
+   zoomed-out timeline's density they distort more than they separate, so
+   marks keep apart by placement (ribbon-marks.ts) instead. The overlay takes
+   no pointer events; the ribbon under it hit-tests everything. */
 .event-link-overlay{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1}
-.event-link-overlay .event-link-hit{fill:transparent;pointer-events:all;cursor:pointer}
-.event-link-halo{fill:none;stroke:var(--event-halo);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
 .event-link-path{fill:none;stroke:var(--event-link);stroke-width:1.1;stroke-linecap:round;stroke-linejoin:round;opacity:.8}
 .event-link-anchor{fill:none;stroke:var(--event-link);stroke-width:2;stroke-linecap:round;paint-order:stroke}
-.event-link-marker-halo{fill:var(--event-halo);stroke:var(--event-halo);stroke-width:2.4;stroke-linejoin:round}
-.event-link-marker.is-unlinked{opacity:.85}
+.event-link-marker.is-unlinked{stroke-linejoin:round}
 .event-link-arc,.event-link-marker{transition:opacity .12s}
 .event-link-overlay.has-focus .is-dim{opacity:.18}
 .event-link-arc.is-focus .event-link-path{stroke-width:2.2;opacity:1}
-.event-link-arc.is-focus .event-link-halo{stroke-width:4.4}
-.event-link-marker.is-focus .event-link-marker-halo{stroke-width:3.4}
 .event-link-glyph{flex:none;overflow:visible;vertical-align:-1px}
 .event-link-cards>p{margin:0 0 8px}
 .event-link-card+.event-link-card{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}

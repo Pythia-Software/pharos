@@ -253,6 +253,13 @@ test('Timeline segments pin exact content before revealing their conversation so
  const link=pinned.getByRole('link'),url=new URL(await link.getAttribute('href'),'http://localhost');
  assert.equal(url.searchParams.get('conversation'),rootConversation);assert.equal(url.searchParams.get('message'),'m-1');assert.equal(url.searchParams.get('call'),'tool-read');
  await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
+ // Agent event marks share that hit test and pin: a click on the mark itself.
+ const mark=await root.locator('[data-agent-event="e-s-root"]').boundingBox();
+ await page.mouse.click(mark.x+mark.width/2,mark.y+mark.height/2);await pinned.waitFor();
+ assert.equal(path(page),before,'pinning an event does not navigate or toggle disclosures');
+ const eventLink=pinned.getByRole('link',{name:/Show both in conversation/});
+ assert.equal(new URL(await eventLink.getAttribute('href'),'http://localhost').searchParams.get('reader_event_link'),'e-s-root');
+ await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
  // Keyboard inspection pins the focused message and makes the source link reachable.
  const caller=page.locator('.lt-caller-row').getByRole('button',{name:/Inspect Events ribbon/});await caller.focus();await caller.press('Enter');await pinned.waitFor();
  assert.equal(await pinned.getByRole('link').first().evaluate(el=>el===document.activeElement),true);

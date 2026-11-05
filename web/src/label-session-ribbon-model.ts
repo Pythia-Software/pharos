@@ -2,6 +2,7 @@ import {EVENT_GROUPS,eventColor,eventGroup,type AgentEventLink} from './event-li
 import {compareStates,functionRole,functionStates,shortLabel,stateColor,type LabelMessage,type LabelTool,type Taxonomy} from './conversation-labels';
 import {eventTime,type TimeRange} from './timeline-label-model';
 import {authorshipSegments,authorshipExcerpt,callerSource} from './timeline-caller-model';
+import {laneCandidates,laneMark,nearestMark,placeMarks,type HitTarget,type PlacedMark} from './ribbon-marks';
 
 export type ActivityMark={start:number;end:number;end_known:boolean;category:string;count:number;error:boolean;tool_id?:string;message_id?:string;preview?:string;preview_truncated?:boolean;status?:string;name:string};
 export type RibbonObservation={event?:AgentEventLink;id:string;start:number;end:number;title:string;color:string;thinking:boolean;label?:string;message?:LabelMessage;mark?:ActivityMark;inferred?:boolean;authorship?:string;excerpt?:{text:string;truncated:boolean}|null;composition?:{start:number;end:number};share?:number;attribution?:'preceding'|'following'|'instant'};
@@ -92,53 +93,35 @@ export function ribbonHits(items:RibbonObservation[],at:number,tolerance:number)
  return hits.filter(item=>!item.composition||!messages.has(item.message!.id)||exact.has(item));
 }
 
-/** Partition each connected overlap group into reusable tracks. Touching
- * durations may share a track; simultaneous point observations may not. */
-export function ribbonToolTracks(items:RibbonObservation[]){
- const result=new Map<string,{slot:number;total:number}>();
- const ordered=items.filter(item=>item.mark).sort((a,b)=>a.start-b.start||b.end-a.end||a.id.localeCompare(b.id));
- let group:RibbonObservation[]=[],end=-Infinity,pointAtEnd=false;
- const finish=()=>{
-  const tracks:{end:number;point:boolean}[]=[],assigned:{item:RibbonObservation;slot:number}[]=[];
-  for(const item of group){
-   let slot=tracks.findIndex(track=>track.end<item.start||track.end===item.start&&!track.point);
-   if(slot<0)slot=tracks.length;
-   tracks[slot]={end:item.end,point:item.end===item.start};assigned.push({item,slot});
-  }
-  for(const {item,slot} of assigned)result.set(item.id,{slot,total:tracks.length});
- };
- for(const item of ordered){
-  if(group.length&&(item.start>end||item.start===end&&!pointAtEnd)){finish();group=[];end=-Infinity;pointAtEnd=false;}
-  group.push(item);
-  if(item.end>end){end=item.end;pointAtEnd=item.end===item.start;}
-  else if(item.end===end&&item.start===item.end)pointAtEnd=true;
- }
- if(group.length)finish();
- return result;
+/** Tool dots use the ribbon's shared mark placement (ribbon-marks.ts): each
+ * call takes the first lane, centre out, where its dot and duration touch no
+ * other call or event marker, so simultaneous and near-simultaneous calls sit
+ * apart whenever the row has room. x maps a time to the ribbon's pixels. */
+export const TOOL_RADIUS=3,MARK_GAP=.5;
+export function ribbonToolPlacement(items:RibbonObservation[],x:(at:number)=>number,height:number,occupied:PlacedMark[]=[],r=TOOL_RADIUS,gap=MARK_GAP){
+ const lanes=laneCandidates(height,r,gap),tools=[...new Map(items.filter(item=>item.mark).map(item=>[item.id,item])).values()];
+ return new Map(placeMarks(tools.map(item=>laneMark(item.id,x(item.start),r,lanes,item.end>item.start?x(item.end):x(item.start))),{gap,occupied}).map(m=>[m.id,m]));
+}
+export type RibbonHitTarget=HitTarget&{ids:string[]};
+/** One hit test for every mark in a ribbon: the tool dot or event marker
+ * nearest the pointer (within slack pixels) wins; otherwise the message
+ * spans under it. pointer is in the ribbon's pixels. */
+export function ribbonPointerHits<T extends RibbonHitTarget>(items:RibbonObservation[],at:number,tolerance:number,pointer:{x:number;y:number},targets:T[],slack=4):{items:RibbonObservation[];target:T|null}{
+ const target=nearestMark(targets,pointer.x,pointer.y,slack);
+ if(target){const ids=new Set(target.ids);return {items:items.filter(item=>ids.has(item.id)),target};}
+ return {items:ribbonHits(items.filter(item=>!item.mark&&!item.event),at,tolerance),target:null};
 }
 
-/** Prefer the tool track actually under the pointer, preserving every call
- * in the layout while keeping one call's hover content unambiguous. */
-export function ribbonPointerHits(items:RibbonObservation[],at:number,tolerance:number,y:number,unitsPerPixel:number,tracks=ribbonToolTracks(items)){
- const hits=ribbonHits(items,at,tolerance);
- const tools=hits.filter(item=>item.mark).map(item=>{
-  const track=tracks.get(item.id)!,center=32*(track.slot+.5)/track.total,dy=Math.abs(center-y),size=Math.min(8*unitsPerPixel,32/track.total*.75);
-  return {item,dy,dx:Math.max(item.start-at,at-item.end,0),near:dy<=Math.max(3*unitsPerPixel,size/2+unitsPerPixel)};
- }).filter(hit=>hit.near).sort((a,b)=>a.dy-b.dy||a.dx-b.dx||b.item.start-a.item.start||a.item.id.localeCompare(b.item.id));
- return tools.length?[tools[0].item]:hits.filter(item=>!item.mark);
-}
-
-/** Common modes form the backdrop. Rarer modes sit above them, then tool rails.
+/** Common modes form the backdrop. Rarer modes sit above them, then tool rails
+ * (placed by ribbonToolPlacement).
  * Counts use distinct messages, so coexisting labels do not inflate support. */
 export function ribbonLayers(items:RibbonObservation[]){
- const tracks=ribbonToolTracks(items);
  const support=new Map<string,Set<string>>();
  for(const item of items)if(item.label&&item.message){const ids=support.get(item.label)??new Set<string>();ids.add(item.message.id);support.set(item.label,ids);}
  const frequencies=[...new Set([...support.values()].map(ids=>ids.size))].sort((a,b)=>b-a);
  return [...items].sort((a,b)=>Number(!a.message)-Number(!b.message)||(support.get(b.label??'')?.size??0)-(support.get(a.label??'')?.size??0)||(b.end-b.start)-(a.end-a.start)||a.id.localeCompare(b.id)).map(item=>{
   const rank=Math.max(0,frequencies.indexOf(support.get(item.label??'')?.size??0)),height=item.message?Math.max(8,32-rank*5):item.inferred?4:8;
-  const track=tracks.get(item.id);
-  return {item,height,y:item.message?(32-height)/2:track?32*(track.slot+.5)/track.total-height/2:16-height/2,trackCount:track?.total??1};
+  return {item,height,y:item.message?(32-height)/2:16-height/2};
  });
 }
 

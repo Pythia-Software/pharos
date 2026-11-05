@@ -38,7 +38,8 @@ import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon} from '../../../src/conversation-fingerprint-model.ts';
 
-import {sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolTracks,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
 
@@ -121,23 +122,24 @@ test('ribbon hit testing includes smaller covered symbols and activity observati
  assert.equal(sessionRibbonTree([],marks,[],[],[101,200]).items.length,0);
 });
 
-test('tool tracks separate overlapping calls, reuse ended tracks and preserve point observations',()=>{
+test('tool dots take free lanes for overlapping calls, hit-test by position and preserve point observations',()=>{
  const marks=[{start:0,end:10,end_known:true,name:'long',category:'run',count:1,error:false,tool_id:'long',preview:'npm test'},{start:1,end:4,end_known:true,name:'first',category:'read',count:1,error:false,tool_id:'first'},{start:2,end:3,end_known:true,name:'second',category:'read',count:1,error:false,tool_id:'second'},{start:4,end:7,end_known:true,name:'reuse',category:'read',count:1,error:false,tool_id:'reuse'},{start:11,end:12,end_known:true,name:'solo',category:'read',count:1,error:false,tool_id:'solo'}];
- const items=sessionRibbonTree([],marks,[],[],[0,20]).items,tracks=ribbonToolTracks(items),byName=name=>items.find(item=>item.title===name);
- for(const name of ['long','first','second'])assert.equal(tracks.get(byName(name).id).total,3);
- assert.equal(new Set(['long','first','second'].map(name=>tracks.get(byName(name).id).slot)).size,3);
- assert.equal(tracks.get(byName('first').id).slot,tracks.get(byName('reuse').id).slot);
- assert.equal(tracks.get(byName('solo').id).total,1);
- assert.deepEqual(ribbonToolTracks([...items].reverse()),tracks);
- const layers=ribbonLayers(items);
- for(const name of ['long','first','second']){
-  const layer=layers.find(layer=>layer.item.title===name),hits=ribbonPointerHits(items,2.5,.01,layer.y+layer.height/2,1);
-  assert.deepEqual(hits.map(item=>item.title),[name]);
+ const items=sessionRibbonTree([],marks,[],[],[0,20]).items,px=at=>at*50,placed=ribbonToolPlacement(items,px,32),byName=name=>placed.get(items.find(item=>item.title===name).id);
+ assert.equal(new Set(['long','first','second'].map(name=>byName(name).y)).size,3,'simultaneous calls sit in separate lanes');
+ assert.notEqual(byName('reuse').y,byName('long').y);
+ assert.equal(byName('solo').y,16,'a call with room stays on the axis');
+ assert.deepEqual(overlapping([...placed.values()]),[]);
+ assert.deepEqual(ribbonToolPlacement([...items].reverse(),px,32),placed);
+ const targets=[...placed.values()].map(m=>({...m,ids:[m.id]}));
+ for(const name of ['long','first','second','reuse','solo']){
+  const m=byName(name),{items:hits,target}=ribbonPointerHits(items,m.x/50,.01,{x:m.x+1,y:m.y+1},targets);
+  assert.deepEqual(hits.map(item=>item.title),[name]);assert.equal(target.id,m.id);
  }
- const long=layers.find(layer=>layer.item.title==='long');assert.equal(ribbonPointerHits(items,2.5,.01,long.y+long.height/2,1)[0].mark.preview,'npm test');
+ const long=byName('long');assert.equal(ribbonPointerHits(items,8,.01,{x:400,y:long.y},targets).items[0].mark.preview,'npm test','the duration is part of the dot');
+ assert.deepEqual(ribbonPointerHits(items,15,.01,{x:750,y:16},targets).items,[],'nothing under the pointer');
  const points=sessionRibbonTree([],['a','b','c'].map(tool_id=>({...marks[0],tool_id,start:5,end:99,end_known:false})),[],[],[0,10]).items;
  assert.ok(points.every(item=>item.end===item.start));
- assert.equal(new Set([...ribbonToolTracks(points).values()].map(track=>track.slot)).size,3);
+ assert.equal(new Set([...ribbonToolPlacement(points,at=>at*100,32).values()].map(m=>m.y)).size,3);
  assert.equal(ribbonHits(points,6,.01).length,0);
  assert.equal(sessionRibbonTree([],points.map(item=>item.mark),[],[],[6,10]).items.length,0);
 });

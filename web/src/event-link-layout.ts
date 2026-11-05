@@ -21,14 +21,17 @@
 //     starts beneath, so arcs never cross. Levels map to lifts between
 //     minLift and maxLift; above two levels, alternate levels mirror below
 //     the axis so neither half compresses too far.
+//   - Markers avoid one another (ribbon-marks.ts): a marker with a target
+//     slides along its arc; one without moves between the row's lanes.
 //   - Parallelism: the fingerprint's hatched envelopes are centred on the
 //     same axis and grow with overlapping branches. Arcs and markers draw
-//     above them with a halo in the surface colour, so they read over hatching
-//     and stripes alike; the envelope still shows through between them. On
+//     above them with no halo or outline: at the density of a zoomed-out
+//     timeline, rings around every mark distort more than they separate. On
 //     the timeline each session has its own row, so an event is drawn in the
 //     row of the session that said it; a target in another row (a subagent
 //     pointing at the caller's prompt) ends its arc at the target's x with an
 //     off-row anchor, and hovering bands both ends across every row.
+import {laneCandidates,laneMark,placeMarks,type MarkInput,type PlacedMark} from './ribbon-marks';
 export type EventTarget={method:'quote'|'overlap'|'file';message_id?:string;role?:string;kind?:string;start?:number;end?:number;text?:string;strong?:boolean;shared?:string[];score?:number;files?:string[];at?:string|null};
 export type AgentEventLink={id:string;message_id:string;kind:string;label:string;group:string;probability:number;source:string;sentence:string;target:EventTarget|null};
 export type EventShape='up'|'down'|'diamond'|'square';
@@ -48,9 +51,9 @@ export const weakTarget=(t:EventTarget)=>t.method==='overlap'||t.method==='quote
 
 export type LayoutEvent={id:string;x:number;targetKey:string|null;targetX:number|null;weak?:boolean};
 export type ArcLayout={key:string;x0:number;x1:number;level:number;side:1|-1;lift:number;rise:number;path:string;events:string[];weak:boolean};
-export type MarkerLayout={id:string;x:number;y:number;arc:string|null};
+export type MarkerLayout=PlacedMark&{arc:string|null};
 export type EventLayout={arcs:ArcLayout[];markers:MarkerLayout[];axis:number};
-export type LayoutOptions={width:number;height:number;marker?:number;minLift?:number;maxLift?:number;sweep?:number;minSpan?:number};
+export type LayoutOptions={width:number;height:number;marker?:number;gap?:number;minLift?:number;maxLift?:number;sweep?:number;minSpan?:number};
 
 const ease=(u:number)=>1-(1-u)*(1-u);
 /** y of an arc at x: eased from the axis to its lift over rise pixels, then flat. */
@@ -65,7 +68,7 @@ export function arcLevels(spans:{x0:number;x1:number}[]):number[]{
 }
 const round=(n:number)=>Math.round(n*10)/10;
 export function layoutEventArcs(events:LayoutEvent[],options:LayoutOptions):EventLayout{
- const {width,height}=options,axis=height/2,marker=options.marker??3.2;
+ const {width,height}=options,axis=height/2,marker=options.marker??3.2,gap=options.gap??1;
  const maxLift=options.maxLift??Math.max(4,axis-marker-1.5),minLift=Math.min(maxLift,options.minLift??Math.max(marker*2+1,maxLift*.5));
  const sweep=options.sweep??Math.max(3,Math.min(7,width/90)),minSpan=options.minSpan??marker*3;
  const groups=new Map<string,{key:string;x0:number;events:LayoutEvent[]}>();
@@ -84,11 +87,18 @@ export function layoutEventArcs(events:LayoutEvent[],options:LayoutOptions):Even
   return {key:g.key,x0,x1,level:levels[i],side,lift,rise,path:'M'+points.join('L'),events:g.events.map(e=>e.id),weak:g.events.every(e=>e.weak)};
  });
  const byKey=new Map(arcs.map(a=>[a.key,a]));
- const markers:MarkerLayout[]=[];
- // Markers of one arc at the same spot spread along it, so each stays hoverable.
- const spread=new Map<string,LayoutEvent[]>();
- for(const e of events){const arc=e.targetKey!==null?byKey.get(e.targetKey):undefined;if(!arc){markers.push({id:e.id,x:e.x,y:axis,arc:null});continue;}const k=arc.key+'@'+Math.round(e.x/(marker*2));spread.set(k,[...(spread.get(k)??[]),e]);}
- for(const [k,list] of spread){const arc=byKey.get(k.slice(0,k.lastIndexOf('@')))!;list.forEach((e,i)=>{const x=Math.max(arc.x0+marker,Math.min(width-marker,e.x+(i-(list.length-1)/2)*marker*2));markers.push({id:e.id,x,y:arcY(arc,axis,x),arc:arc.key});});}
+ // Markers avoid one another with the ribbon's shared placement
+ // (ribbon-marks.ts): a marker with a target slides along its arc, never off
+ // it; one without stays in the row's lanes, the axis first.
+ const unlinked=marker*.72,lanes=laneCandidates(height,unlinked,gap),pitch=2*marker+gap;
+ const inputs:MarkInput[]=events.map(e=>{
+  const arc=e.targetKey!==null?byKey.get(e.targetKey):undefined;
+  if(!arc)return laneMark(e.id,e.x,unlinked,lanes);
+  const lo=Math.min(width-marker,arc.x0+marker),hi=Math.max(lo,Math.min(width-marker,arc.x1)),xs=[0,1,-1,2,-2,3,-3].map(k=>Math.max(lo,Math.min(hi,e.x+k*pitch)));
+  return {id:e.id,x:e.x,r:marker,candidates:[...new Set(xs)].map(x=>({x,y:arcY(arc,axis,x)}))};
+ });
+ const arcOf=new Map(events.map(e=>[e.id,e.targetKey!==null&&byKey.has(e.targetKey)?e.targetKey:null]));
+ const markers:MarkerLayout[]=placeMarks(inputs,{gap}).map(m=>({...m,arc:arcOf.get(m.id)??null}));
  return {arcs,markers,axis};
 }
 /** Whether two arcs' drawn curves cross (sampled), for tests and QC. */

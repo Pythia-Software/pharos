@@ -2,15 +2,15 @@ import React,{useEffect,useId,useLayoutEffect,useMemo,useRef,useState} from 'rea
 import {Icon,type IconName} from './icons';
 import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry} from './view-state';
-import {useRibbonInspector} from './label-ribbon-inspector';
+import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
 import {timelinePreviewText} from './timeline-preview';
-import {ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolTracks,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
-import {EventGlyph,EventLinkCard,EventLinkOverlay,useEventLinkFocus} from './event-link-overlay';
-import type {AgentEventLink} from './event-link-layout';
+import {EventGlyph,EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,eventTargetFocus,placeEvents,setEventLinkFocus,useEventLinkFocus} from './event-link-overlay';
+import {linkedTarget,type AgentEventLink} from './event-link-layout';
 import {timeScale,type TimeScale} from './timeline-idle-model';
 
 // Agent events draw in each session's summary row, the way they draw in the
@@ -82,7 +82,7 @@ function EventFocusBand({node,x}:{node:RibbonNode;x:(at:number)=>number}){
  return <g pointerEvents="none">{[[focus.target,'is-target'],[focus.message,'is-observation']].flatMap(([id,kind])=>{const span=id?spans.get(id):undefined;if(!span)return [];const left=x(span[0]),right=Math.max(left+4,x(span[1]));return [<rect key={kind} className={`event-link-band ${kind}`} x={left-2} y={1} width={right-left+4} height={30} vectorEffect="non-scaling-stroke"/>];})}</g>;
 }
 function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,sourceHref,disabled=false,eventLayer}:{clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean}){
- const pattern=useId().replace(/:/g,''),container=useRef<HTMLDivElement>(null),eventInspector=useRibbonInspector({interactive:true});
+ const pattern=useId().replace(/:/g,''),container=useRef<HTMLDivElement>(null);
  const [scale,setScale]=useState({x:1,y:1});
  useEffect(()=>{inspector.close();},[range[0],range[1],node.id]);
  // Counter the SVG's nonuniform stretch so pattern cells stay in CSS pixels,
@@ -92,19 +92,30 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
   const resize=()=>{const rect=element.getBoundingClientRect();if(!rect.width||!rect.height)return;const x=1000/rect.width,y=32/rect.height;setScale(previous=>previous.x===x&&previous.y===y?previous:{x,y});};
   resize();const observer=new ResizeObserver(resize);observer.observe(element);return()=>observer.disconnect();
  },[]);
+ const width=1000/scale.x,height=32/scale.y;
  const drawn=useMemo(()=>node.items.filter(item=>!item.event),[node.items]);
  const items=useMemo(()=>{const labeled=new Set(drawn.filter(item=>item.label&&!item.authorship).map(item=>item.message?.id));return ribbonLayers(drawn.filter(item=>!item.authorship||!labeled.has(item.message?.id)));},[drawn]);
- const inspectItems=useMemo(()=>{if(!caller)return drawn;const composed=new Set(drawn.filter(item=>item.composition).map(item=>item.message?.id));return drawn.flatMap(item=>item.message&&!item.composition&&!composed.has(item.message.id)?[item,...ribbonOriginParts(item)]:[item]);},[caller,node.items]);
- const toolTracks=useMemo(()=>ribbonToolTracks(inspectItems),[inspectItems]);
+ const inspectItems=useMemo(()=>{if(!caller)return drawn;const composed=new Set(drawn.filter(item=>item.composition).map(item=>item.message?.id));return drawn.flatMap(item=>item.message&&!item.composition&&!composed.has(item.message.id)?[item,...ribbonOriginParts(item)]:[item]);},[caller,drawn]);
+ // Marks in the row's pixels: agent events (with their arcs) first, then
+ // tool dots in the lanes they leave free (ribbon-marks.ts). Both take the
+ // same hit test, hover and pin below, alongside the message spans.
+ const placedEvents=useMemo(()=>eventLayer?placeEvents(eventLayer.events,eventLayer.position,eventLayer.targetPosition):[],[eventLayer]);
+ const layout=useMemo(()=>eventLayout(placedEvents,width,height),[placedEvents,width,height]);
+ const eventItems=useMemo(()=>{const own=new Map(node.items.flatMap(item=>item.event?[[item.event.id,item] as const]:[]));return new Map(placedEvents.map(p=>[p.event.id,own.get(p.event.id)??{id:JSON.stringify(['event',p.event.id]),start:0,end:0,title:p.event.label,color:'',thinking:p.event.source==='thinking',event:p.event}]));},[node.items,placedEvents]);
+ const px=(at:number)=>Math.max(0,Math.min(width,clock.fraction(at)*width));
+ const tools=useMemo(()=>ribbonToolPlacement(inspectItems,px,height,layout?.markers??[]),[inspectItems,clock,width,height,layout]);
+ const targets=useMemo(()=>[...[...tools.values()].map(m=>({...m,ids:[m.id],event:null as string|null,arc:null as string|null,events:[] as string[]})),...eventHitTargets(layout).map(t=>({...t,ids:t.events.map(id=>eventItems.get(id)!.id)}))],[tools,layout,eventItems]);
+ const hitItems=useMemo(()=>[...inspectItems,...eventItems.values()],[inspectItems,eventItems]);
+ const events=useMemo(()=>new Map(placedEvents.map(p=>[p.event.id,p.event])),[placedEvents]);
  const x=(at:number)=>Math.max(0,Math.min(1000,clock.fraction(at)*1000)),patternTransform=`scale(${scale.x} ${scale.y})`;
  const typed=new Map<string,{left:number;width:number;y:number;height:number}>();
- const glyphs=items.map(({item,height,y,trackCount})=>{
+ const glyphs=items.map(({item,height,y})=>{
   const instantPart=item.end===item.start?item.composition:undefined;
   const width=instantPart?2*(instantPart.end-instantPart.start):item.authorship?x(item.end)-x(item.start):Math.max(2,x(item.end)-x(item.start)),left=instantPart?Math.min(998,x(item.start))+2*instantPart.start:Math.min(998,x(item.start));
   // A round zero-length stroke remains circular in screen space.
   if(item.mark){
-   const center=y+height/2,spacing=32/scale.y/trackCount,diameter=Math.min(8,spacing*.75);
-   return <g key={item.id} data-tool-id={item.mark.tool_id}>{item.mark.end_known&&item.end>item.start?<line x1={x(item.start)} x2={x(item.end)} y1={center} y2={center} stroke={item.color} strokeWidth={Math.min(1,spacing/4)} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${x(item.start)} ${center}h0`} fill="none" stroke={item.color} strokeWidth={diameter} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
+   const m=tools.get(item.id);if(!m)return null;const cx=m.x*scale.x,cy=m.y*scale.y;
+   return <g key={item.id} data-tool-id={item.mark.tool_id}>{item.mark.end_known&&item.end>item.start?<line x1={cx} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={1} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
   }
   const parts=caller&&item.message?item.authorship?[{category:item.authorship,start:0,end:1}]:authorshipSegments(item.message):[];
   return <g key={item.id}><rect x={left} y={y} width={width} height={height} fill={item.color} opacity={item.inferred ? .3 : 1}/>{parts.map((part,index)=>{
@@ -118,15 +129,19 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
    return source.pattern==='solid'?null:<rect key={index} x={partLeft} y={y} width={partWidth} height={height} fill={`url(#${pattern}-${source.pattern})`}/>;
   })}</g>;
  });
- const candidates=[...new Map(inspectItems.map(item=>[item.mark?item.id:JSON.stringify([item.message?.id,item.composition]),item])).values()].sort((a,b)=>a.start-b.start||a.id.localeCompare(b.id));
- const cursor=useRef(0);
- const hitsAt=(event:React.MouseEvent<SVGSVGElement>)=>{const rect=event.currentTarget.getBoundingClientRect(),f=(event.clientX-rect.left)/rect.width,step=5/rect.width,at=clock.time(f),tolerance=(clock.time(Math.min(1,f+step))-clock.time(Math.max(0,f-step)))/2;return ribbonPointerHits(inspectItems,at,tolerance,(event.clientY-rect.top)/rect.height*32,32/rect.height,toolTracks);};
- const pin=(target:Element,hits:RibbonObservation[],x?:number,focus=false)=>inspector.pin(target,<ObservationCard items={hits} sourceHref={sourceHref} close={inspector.close}/>,x,focus);
- return <div ref={container} className={`lt-session-ribbon ${node.id==='session'?'is-session':'is-detail'}`} {...(disabled?{}:brushHandlers)} onPointerLeave={inspector.leave}><svg viewBox="0 0 1000 32" preserveAspectRatio="none" role={!disabled&&sourceHref&&node.children.length?'button':'img'} tabIndex={!disabled&&sourceHref&&node.children.length?0:undefined} aria-label={!disabled&&sourceHref&&node.children.length?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} aria-describedby={inspector.id}
-  onFocus={event=>{if(disabled)return;const item=candidates[cursor.current]??candidates[0];if(item)inspector.show(event.currentTarget,<ObservationCard items={[item]}/>);}} onBlur={inspector.leave}
-  onKeyDown={event=>{if(disabled||!sourceHref||!['ArrowLeft','ArrowRight','Enter',' '].includes(event.key)||!candidates.length)return;event.preventDefault();event.stopPropagation();if(event.key==='ArrowLeft'||event.key==='ArrowRight'){cursor.current=(cursor.current+(event.key==='ArrowLeft'?-1:1)+candidates.length)%candidates.length;inspector.close();inspector.show(event.currentTarget,<ObservationCard items={[candidates[cursor.current]]}/>);}else pin(event.currentTarget,[candidates[cursor.current]??candidates[0]],undefined,true);}}
-  onClick={event=>{if(disabled||!sourceHref)return;const hits=hitsAt(event);if(!hits.length)return;event.preventDefault();event.stopPropagation();pin(event.currentTarget,hits,event.clientX);}}
-  onPointerMove={event=>{if(disabled)return;if(preview){inspector.close();return;}const hits=hitsAt(event);if(hits.length)inspector.show(event.currentTarget,<ObservationCard items={hits}/>,event.clientX);else inspector.leave();}}>
+ const card=(hits:RibbonObservation[])=>(pinned:boolean)=>pinned?<ObservationCard items={hits} sourceHref={sourceHref} eventHref={eventLayer?.href} close={inspector.close}/>:<ObservationCard items={hits}/>;
+ const eventHover=(e:AgentEventLink)=>()=>setEventLinkFocus({event:e.id,target:linkedTarget(e)?.message_id??null,message:e.message_id});
+ const unhover=()=>setEventLinkFocus(null);
+ const candidates=useMemo(()=>[...new Map(hitItems.map(item=>[item.mark||item.event?item.id:JSON.stringify([item.message?.id,item.composition]),item])).values()].sort((a,b)=>a.start-b.start||a.id.localeCompare(b.id)).map((item):RibbonHit=>({card:card([item]),hover:item.event?eventHover(item.event):unhover})),[hitItems,sourceHref,eventLayer?.href]);
+ const hitAt=(event:React.MouseEvent<Element>):RibbonHit|null=>{
+  const rect=event.currentTarget.getBoundingClientRect(),f=(event.clientX-rect.left)/rect.width,step=5/rect.width,at=clock.time(f),tolerance=(clock.time(Math.min(1,f+step))-clock.time(Math.max(0,f-step)))/2;
+  const {items:hits,target}=ribbonPointerHits(hitItems,at,tolerance,{x:(event.clientX-rect.left)/rect.width*width,y:(event.clientY-rect.top)/rect.height*height},targets);
+  if(!hits.length)return null;
+  return {card:card(hits),hover:target&&(target.event||target.arc)?()=>setEventLinkFocus(eventTargetFocus(target,events)):unhover};
+ };
+ const interactive=!disabled&&!!sourceHref&&node.children.length>0;
+ const pointer=useRibbonPointer({inspector,hitAt,candidates,pinnable:!!sourceHref,disabled,suspended:!!preview,unhover});
+ return <div ref={container} className={`lt-session-ribbon ${node.id==='session'?'is-session':'is-detail'}`} {...(disabled?{}:brushHandlers)} onPointerLeave={inspector.leave}><svg viewBox="0 0 1000 32" preserveAspectRatio="none" role={interactive?'button':'img'} tabIndex={interactive?0:undefined} aria-label={interactive?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} aria-describedby={inspector.id} {...pointer}>
 
   <defs>
    <pattern id={pattern+'-diagonal'} width="7" height="7" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><path d="M-2 2 2 -2M0 7 7 0M5 9 9 5" stroke="var(--ink)" strokeWidth="1.3" opacity=".65"/></pattern>
@@ -142,7 +157,7 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
   {clock.cuts.map(cut=><line key={cut.end} className="lt-idle-cut-line" x1={cut.fraction*1000} x2={cut.fraction*1000} y1="0" y2="32" vectorEffect="non-scaling-stroke"/>)}
   {preview?<rect x={x(preview[0])} y="0" width={x(preview[1])-x(preview[0])} height="32" fill="var(--gold)" opacity=".25"/>:null}
   <EventFocusBand node={node} x={x}/>
- </svg>{eventLayer?.events.length?<EventLinkOverlay events={eventLayer.events} position={eventLayer.position} targetPosition={eventLayer.targetPosition} inspector={eventInspector} href={eventLayer.href} label={`${eventLayer.events.length} agent events`}/>:null}{inspector.portal}{eventInspector.portal}</div>;
+ </svg>{eventLayer?.events.length?<EventLinkOverlay placed={placedEvents} layout={layout} width={width} height={height} label={`${placedEvents.length} agent events`}/>:null}{inspector.portal}</div>;
 }
 function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
  const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
