@@ -963,6 +963,31 @@ test('Message Labels category menus apply to descendants and restore mixed selec
  await page.keyboard.press('Escape');assert.equal(await category.evaluate(node=>node===document.activeElement),true);
 });
 
+test('Habits panels and the standard dashboard restore their independent controls',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.usage-chart-bars:not(.loading) > button'}),{page}=app;
+ await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
+ await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
+ await page.getByRole('combobox',{name:'Punchcard range',exact:true}).selectOption('30');
+ await page.locator('.habits-settings > summary').click();await app.settled();
+ const population=new URL(page.url()).searchParams.get('analyze_filters');
+ await page.locator('.usage-chart').scrollIntoViewIfNeeded();
+ const actor=page.locator('.usage-chart-legend').getByRole('button').first(),actorName=await actor.getAttribute('aria-label');
+ await actor.click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ assert.equal(await actor.getAttribute('aria-pressed'),'true');
+ const view=page.getByRole('combobox',{name:'View',exact:true});
+ await view.selectOption('compare');await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
+ await view.selectOption('trend');await page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),population,'legend and view changes preserve the population');
+ const fresh=await open(t,{url:path(page),ready:'.usage-chart-bars:not(.loading) > button'});
+ assert.equal(await fresh.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend');
+ assert.equal(await fresh.page.locator('.usage-chart-legend').getByRole('button',{name:actorName,exact:true}).getAttribute('aria-pressed'),'true');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Whose days',exact:true}).inputValue(),'agents');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Calendar range',exact:true}).inputValue(),'13');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard range',exact:true}).inputValue(),'30');
+ assert.equal(await fresh.page.locator('.habits-settings').evaluate(element=>element.open),true);
+ await fresh.shot('habits-restored');
+});
+
 test('native Message Labels dashboards and conversation cards share standard navigation and saved query presentation',{skip},async t=>{
  const definitions=new Map(),api={'PUT /api/query-snapshots':({body})=>{definitions.set(body.code,body);return body},'GET /api/query-snapshots':({query})=>definitions.get(query.get('code'))};
  const read=page=>{const token=new URL(page.url()).searchParams.get('q_message_labels');return decodeQueryStrict(token?.startsWith('@')?definitions.get(token.slice(1)).token:token)};

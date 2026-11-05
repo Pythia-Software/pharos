@@ -50,7 +50,10 @@ function useHabits(mode: HabitsMode, days: number) {
   return { ...state, settings, update };
 }
 
-export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
+// Keep one summary request and view state for the panels on either side of
+// CatalogDashboard. The chart stays in the standard dashboard flow, outside
+// the panels' styling and loading/error boundary.
+export function HabitsPanels({ children }: { children: (before: React.ReactNode, after: React.ReactNode) => React.ReactNode }) {
   const [mode, setMode] = useViewState<HabitsMode>("habits_streak", "all");
   const [weeks, setWeeks] = useViewState<string>("habits_weeks", "53");
   const [calendar, setCalendar] = useViewState<StreakActor>("habits_calendar", "you");
@@ -60,11 +63,10 @@ export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
   const [shapeDays, setShapeDays] = useViewState<string>("habits_shape_days", "28");
   const [selected, setSelected] = useViewState<string>("habits_day", "");
   const { data, error, loading, settings, update } = useHabits(mode, punchcardDays === "all" ? 0 : Number(punchcardDays));
-  if (error && !data) return <p className="query-table-error" role="alert">{error}</p>;
-  if (!data) return <p className="muted" role="status">Loading your habits…</p>;
-  const day = validDay(selected) ? data.days.find(item => item.day === selected) : undefined;
+  const day = validDay(selected) ? data?.days.find(item => item.day === selected) : undefined;
   const cardView: HabitsCardView = { mode, weeks: Number(weeks), calendar, weekends: weekends !== "hide", punchcard: view, range: punchcardDays, shapeDays: Number(shapeDays) };
-  return <HabitsViewContext.Provider value={cardView}><section className="habits-panel" aria-label="Habits" aria-busy={loading}>
+  const before = !data ? error ? <p className="query-table-error" role="alert">{error}</p> : <p className="muted" role="status">Loading your habits…</p>
+    : <section className="habits-panel" aria-label="Habits" aria-busy={loading}>
     <div className="habits-streaks-head">
       <div className="usage-chart-controls habits-controls">
         <ChartSelect label="Streaks count" value={mode} onChange={setMode} options={[["all", "Every day"], ["weekdays", "Weekdays only"]]} />
@@ -90,11 +92,13 @@ export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
       <Punchcard data={data} view={view} onView={setView} days={punchcardDays} onDays={setPunchcardDays} />
       <WorkdayShape data={data} days={Number(shapeDays)} onDays={setShapeDays} />
     </div>
-    {analysis}
+  </section>;
+  const after = data ? <section className="habits-panel" aria-label="Habit automations and settings" aria-busy={loading}>
     <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
     <Automations data={data} />
     <HabitsSettingsPanel settings={settings} onChange={update} />
-  </section></HabitsViewContext.Provider>;
+  </section> : null;
+  return <HabitsViewContext.Provider value={cardView}>{children(before, after)}</HabitsViewContext.Provider>;
 }
 
 // A section's heading, with the standard control that makes it a Home card.

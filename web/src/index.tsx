@@ -101,7 +101,7 @@ import { Icon } from "./icons";
 import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
-import { HabitsPanel } from "./habits";
+import { HabitsPanels } from "./habits";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
@@ -1104,14 +1104,15 @@ function CarbonDashboard() {
     frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
 }
 
-// Habits: the panel titles the page; the catalog chart below keeps its own title.
+// Habits: summary panels surround the standard catalog dashboard, as the
+// Parallelism ribbon does. The chart keeps its own title below the panels.
 function HabitsDashboard() {
   const headline = useDashboardHeadline();
-  return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
-    frame={views => <>
+  return <HabitsPanels>{(before, after) => <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
+    before={<>
       {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
-      <HabitsPanel analysis={views(habitsAnalysisCatalog)} />
-    </>} />;
+      {before}
+    </>} after={after} />}</HabitsPanels>;
 }
 
 // Parallelism's views follow the saved counting and gap, with which the

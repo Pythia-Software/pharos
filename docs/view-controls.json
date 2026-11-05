@@ -5652,67 +5652,67 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "782e951cbf10c182:0",
+      "key": "00c6447476393db3:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "HabitsSettingsPanel",
-      "control": "onChange={update}",
-      "contract": "settings",
-      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
-    },
-    {
-      "key": "807c26364addf6f8:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "CalendarChart",
       "control": "onSelect={setSelected}",
       "contract": "view.habits_day",
       "reason": "Selects or clears the calendar day through habits_day."
     },
     {
-      "key": "a2a903535d89bfce:0",
+      "key": "26e0848933ff750e:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={calendar} onChange={setCalendar}",
-      "contract": "view.habits_calendar",
-      "reason": "Writes habits_calendar through useViewState."
-    },
-    {
-      "key": "afce7374875b6312:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={mode} onChange={setMode}",
-      "contract": "view.habits_streak",
-      "reason": "Writes habits_streak through useViewState."
-    },
-    {
-      "key": "bb9fd842bddd5bee:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "DayDetail",
       "control": "onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))}",
       "contract": "view.habits_day",
       "reason": "Selects the calendar day through habits_day; its vacation switch saves to the habit settings (pharos-habits-v1), not the view."
     },
     {
-      "key": "d73e684db4c89234:0",
+      "key": "384e3fe78886bc91:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={weeks} onChange={setWeeks}",
-      "contract": "view.habits_weeks",
-      "reason": "Writes habits_weeks through useViewState."
+      "owner": "HabitsPanels",
+      "tag": "HabitsSettingsPanel",
+      "control": "onChange={update}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
     },
     {
-      "key": "dc058267a3b501a8:0",
+      "key": "399a2db4800b62d7:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={calendar} onChange={setCalendar}",
+      "contract": "view.habits_calendar",
+      "reason": "Writes habits_calendar through useViewState."
+    },
+    {
+      "key": "62c663a43b279ae5:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
       "tag": "ChartSelect",
       "control": "value={weekends} onChange={setWeekends}",
       "contract": "view.habits_weekends",
       "reason": "Writes habits_weekends through useViewState."
+    },
+    {
+      "key": "a998566b759387ca:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={mode} onChange={setMode}",
+      "contract": "view.habits_streak",
+      "reason": "Writes habits_streak through useViewState."
+    },
+    {
+      "key": "d58768ff4d085138:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={weeks} onChange={setWeeks}",
+      "contract": "view.habits_weeks",
+      "reason": "Writes habits_weeks through useViewState."
     },
     {
       "key": "7d1a49d4d82e3d7d:0",
@@ -5786,7 +5786,7 @@
       "tag": "ChartSelect",
       "control": "value={String(days)} onChange={onDays}",
       "contract": "view.habits_shape_days",
-      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanel's useViewState binding."
+      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanels' useViewState binding."
     },
     {
       "key": "0cc6b34321064cd2:0",
