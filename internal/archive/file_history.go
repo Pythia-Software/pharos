@@ -73,7 +73,7 @@ func fileHistoryNote(files []map[string]any) string {
 	if len(files) == 0 {
 		return "No session in this library edited a file at this path. File history lists files sessions edited through their tool calls; try a repository-relative path, a folder path, or Library file search."
 	}
-	return "Sessions are those that edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository."
+	return "Sessions are those that edited the file through their tool calls, newest first. Commits are listed where local Git checked the repository, from git.commits_since: Git is read from the repository's first session edit, so earlier commits are not listed."
 }
 
 // fileHistoryKeys are the session_files keys a query names: an exact path,
@@ -96,10 +96,24 @@ func (c *Catalog) fileHistoryKeys(ctx context.Context, query string) ([]string, 
 		keys = append(keys, firstString(row["file_key"]))
 	}
 	if filepath.IsAbs(query) {
-		// An absolute path is the repository file the edits at it changed.
-		rows, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT sf.file_key FROM tool_calls t
-			JOIN session_files sf ON sf.workspace_id=t.workspace_id AND sf.repository_id=t.path_repository_id AND sf.path=t.repo_path
-			WHERE t.path_absolute=? AND t.tool_category='edit' LIMIT 50`, query)
+		// An absolute path is a repository file at its path in a checkout a
+		// session edited in. Any of the session's edits in the checkout
+		// places it, so a patch's other files, which only session_files
+		// records, are found too.
+		absolute := filepath.ToSlash(filepath.Clean(query))
+		splits := []map[string]string{}
+		for dir := filepath.ToSlash(filepath.Dir(absolute)); ; dir = filepath.ToSlash(filepath.Dir(dir)) {
+			root := strings.TrimSuffix(dir, "/") + "/"
+			splits = append(splits, map[string]string{"root": root, "path": strings.TrimPrefix(absolute, root)})
+			if dir == "/" || dir == "." {
+				break
+			}
+		}
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT DISTINCT sf.file_key FROM json_each(?) s
+			JOIN session_files sf ON sf.path=json_extract(s.value,'$.path') AND sf.repository_id IS NOT NULL
+			WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=sf.workspace_id AND t.path_repository_id=sf.repository_id
+				AND t.tool_category='edit' AND t.path_absolute=json_extract(s.value,'$.root')||t.repo_path)
+			LIMIT 50`, jsonText(splits))
 		if err != nil {
 			return nil, err
 		}
@@ -112,16 +126,27 @@ func (c *Catalog) fileHistoryKeys(ctx context.Context, query string) ([]string, 
 	return keys, nil
 }
 
+// firstEditCallSQL selects fields of the call where a session first edited
+// the session_files row sf: its first edit call that recorded the file as
+// its own or, for a patch's other files, which only session_files records,
+// its edit call at the file's first edit.
+func firstEditCallSQL(sf, fields string) string {
+	return `COALESCE((SELECT ` + fields + ` FROM tool_calls t
+			WHERE t.workspace_id=` + sf + `.workspace_id AND t.tool_category='edit'
+			AND (` + sf + `.repository_id IS NOT NULL AND t.path_repository_id=` + sf + `.repository_id AND t.repo_path=` + sf + `.path
+				OR ` + sf + `.repository_id IS NULL AND 'path:'||t.path_absolute=` + sf + `.file_key)
+			ORDER BY COALESCE(t.started_at,''),t.sequence LIMIT 1),
+		(SELECT ` + fields + ` FROM tool_calls t
+			WHERE t.workspace_id=` + sf + `.workspace_id AND t.tool_category='edit' AND t.status='ok' AND t.started_at=` + sf + `.first_edit_at
+			ORDER BY t.sequence LIMIT 1))`
+}
+
 // fileTimeline is one file's sessions and commits.
 func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[string]any, error) {
 	sessions, err := queryMapsContext(ctx, c.reader(), `SELECT sf.workspace_id,sf.path,sf.repository_id,sf.first_edit_at,sf.last_edit_at,sf.edits,sf.lines_added,sf.lines_removed,sf.rewrote,
 		w.title,w.source_kind,`+projectNameSQL("w")+` project,`+projectKindSQL("w")+` project_kind,
 		`+outcomeLabelSQL("w")+` outcome_label,`+outcomeWhySQL("w")+` outcome_why,
-		(SELECT t.conversation_id||char(31)||COALESCE(t.call_message_id,'')||char(31)||COALESCE(t.call_id,'') FROM tool_calls t
-			WHERE t.workspace_id=sf.workspace_id AND t.tool_category='edit'
-			AND (sf.repository_id IS NOT NULL AND t.path_repository_id=sf.repository_id AND t.repo_path=sf.path
-				OR sf.repository_id IS NULL AND 'path:'||t.path_absolute=sf.file_key)
-			ORDER BY COALESCE(t.started_at,''),t.sequence LIMIT 1) edit
+		`+firstEditCallSQL("sf", "t.conversation_id||char(31)||COALESCE(t.call_message_id,'')||char(31)||COALESCE(t.call_id,'')")+` edit
 		FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id`+projectJoin("w")+`
 		WHERE sf.file_key=? AND sf.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
 		ORDER BY COALESCE(sf.last_edit_at,'') DESC,sf.workspace_id LIMIT ?`, key, limit+1)
@@ -181,14 +206,16 @@ func (c *Catalog) fileCommits(ctx context.Context, file map[string]any, limit in
 	if repository == "" {
 		return []map[string]any{}, map[string]any{"status": "not_applicable", "reason": "This file is in a folder, not a Git repository; its history comes from transcripts."}, nil
 	}
-	scans, err := queryMapsContext(ctx, c.reader(), `SELECT status,reason,scanned_at FROM git_repository_scans WHERE repository_id=? AND host_id=?`, repository, currentHost().ID)
+	scans, err := queryMapsContext(ctx, c.reader(), `SELECT status,reason,scanned_at,history_since FROM git_repository_scans WHERE repository_id=? AND host_id=?`, repository, currentHost().ID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(scans) == 0 {
 		return []map[string]any{}, map[string]any{"status": "not_checked", "reason": "Local Git has not checked this repository on this Mac yet."}, nil
 	}
-	git := map[string]any{"status": scans[0]["status"], "reason": scans[0]["reason"], "checked_at": scans[0]["scanned_at"]}
+	// The scan reads history from its sessions' first edit, so commits
+	// cover only the time since (commits_since), not the file's whole life.
+	git := map[string]any{"status": scans[0]["status"], "reason": scans[0]["reason"], "checked_at": scans[0]["scanned_at"], "commits_since": scans[0]["history_since"]}
 	if scans[0]["status"] != "checked" {
 		git["reason"] = defaultString(scans[0]["reason"], "Local Git could not check this repository.")
 	}

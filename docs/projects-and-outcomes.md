@@ -698,12 +698,19 @@ a file:
   sessions linked to it. A link below the counting threshold (0.7) shows as a
   candidate. Outside a repository the page says Git does not apply; in a
   repository not checked here it gives the reason. Neither is an error or an
-  empty list.
+  empty list. The scan reads Git from a day before the repository's first
+  session edit, the window commit linking needs, so the list covers only
+  that time: the page says "since" that date (`git.commits_since`), and that
+  earlier commits are not read. Reading a file's whole history would mean
+  another `git log` per edited file; it is not done.
 
 A path can be repository-relative (`src/main.go`, matching that path in
 every repository, or the end of a longer one), a folder path
-(`~/notes/plan.md`), or an absolute path a session edited, which maps to its
-repository file.
+(`~/notes/plan.md`), or an absolute path in a checkout a session edited in,
+which maps to its repository file. A patch's other files than the one its
+call recorded are found too: any of the session's edits in the checkout
+places the checkout, and the reader link opens the edit call at the file's
+first edit.
 
 **Storage.** `git_commit_files` holds, per repository, the commits that
 changed a file some session edited there, with lines added and removed. The
@@ -715,7 +722,8 @@ linked to is written to `git_commits` with only its time and revert state.
 **Library file search** reads `session_files` as well as `change_files`, so
 Claude Code, Codex and Antigravity edits are found. Each hit opens the
 conversation at its first edit, and a File history link opens the file's
-timeline.
+timeline. A file a change set also found is listed once, with the session's
+project and first edit added to the change set's hit.
 
 **Line-level blame is not built.** It would map a line to its commit with
 `git blame`, then to a session. The commit-to-session links would support
@@ -736,12 +744,17 @@ rules.
   (`outcome_why`) and its tier, the local Git state with its reason, and
   the transcript facts, plus counts per label for the filters. Filters:
   `project`, `label`, `workspace_ids`, `from`, `to`, with `limit`, `offset`
-  and `max_output_tokens`. Asked by `workspace_ids`, each session also lists
-  its linked commits with method, confidence, evidence and whether they
-  count.
+  and `max_output_tokens`. `from` and `to` are compared as instants, so a
+  timestamp's offset counts; a date `to` includes its day. Asked by
+  `workspace_ids`, each session also lists its linked commits with method,
+  confidence, evidence and whether they count.
 - `get_file_history`: the file timeline above. It sheds the oldest sessions
-  and commits first to fit `max_output_tokens`, and marks the file
-  `truncated`.
+  and commits first to fit `max_output_tokens`, marking the file
+  `truncated`, then files past the first (`files_truncated`).
+
+A budget too small for one session, or one file with one session and one
+commit, is an error naming `max_output_tokens`, never an empty page whose
+`next_offset` does not advance.
 
 Both read stored facts only and answer as fully for folders as for
 repositories. The no-git parity test calls both on the folder fixture.
