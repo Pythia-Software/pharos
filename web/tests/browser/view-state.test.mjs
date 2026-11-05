@@ -281,6 +281,41 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
  }
 });
 
+test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-timeline-legend .usage-legend-item'}),{page}=app;
+ await app.settled();
+ const key=page.locator('.lt-timeline-legend'),button=name=>key.getByRole('button',{name,exact:true});
+ const choices=button('Choices');
+ await choices.focus();await choices.press('ArrowDown');
+ const menu=page.getByRole('menu',{name:'Filter Choices',exact:true});
+ assert.equal(await menu.getByRole('menuitem',{name:/Show only this value/}).evaluate(el=>el===document.activeElement),true);
+ await menu.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
+ assert.equal(await choices.getAttribute('aria-pressed'),'false');
+ assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-agent-event="e-s-root-open"]').count());
+ await button('Read / search').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ await page.locator('.lt-session-root [data-tool-id="tool-error"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-read"]').count());
+ await button('Human typed').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ await button('Sender category').click();await page.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
+ const saved=path(page),fresh=await open(t,{url:saved,ready:'.lt-timeline-legend .usage-legend-item'});
+ await fresh.settled();
+ const restored=fresh.page.locator('.lt-timeline-legend');
+ for(const [name,pressed] of [['Choices','false'],['Friction','true'],['Read / search','true'],['Error','false'],['Human typed','true'],['Likely pasted','false'],['Sender category','true'],['Receiver category','false']]){
+  assert.equal(await restored.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
+ }
+ assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('timeline_visibility')),JSON.parse(new URL(page.url()).searchParams.get('timeline_visibility')));
+ await page.setViewportSize({width:390,height:900});await choices.click();
+ const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
+ await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await choices.click();await page.getByRole('menuitem',{name:'Show all values',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ assert.equal(await button('Choices').getAttribute('aria-pressed'),'false','an unfiltered key has no explicit selection, matching dashboard keys');
+ assert.equal(await button('Read / search').getAttribute('aria-pressed'),'true','resetting events preserves the tool selection');
+ await app.shot('timeline-key-visibility');
+});
+
 test('Timeline segments pin exact content before revealing their conversation source',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-session-root'}),{page}=app;
  const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary'),pinned=page.getByRole('group',{name:'Ribbon segment details',exact:true});
