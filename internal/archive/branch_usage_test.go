@@ -57,6 +57,7 @@ func TestBranchUsageRows(t *testing.T) {
 		usageEvent("s-switch", "r1", "-", "2026-09-02T10:01:00Z", 1000),
 		usageEvent("s-switch", "r2", "feature/a", "2026-09-02T10:20:00Z", 3000),
 		usageEvent("s-switch", "r3", "feature/b", "2026-09-02T11:05:00Z", 2000),
+		usageEvent("s-switch", "r4", "feature/b", "2026-09-02T15:30:00Z", 1000),
 	}, ""))
 	writeClaudeSession(t, library.claude, "s-plain", strings.Join([]string{
 		fmt.Sprintf(`{"type":"user","uuid":"s-plain-u","sessionId":"s-plain","cwd":%q,"timestamp":"2026-09-02T12:00:00Z","message":{"role":"user","content":"No branch here"}}`, app) + "\n",
@@ -84,19 +85,22 @@ func TestBranchUsageRows(t *testing.T) {
 	for _, row := range queryRows(t, library.catalog, `SELECT id,source_id FROM workspaces`) {
 		ids[firstString(row["id"])] = filepath.Base(firstString(row["source_id"]))
 	}
+	// Rows keep the ledger's hours, for hourly trends and time ranges.
 	tokens := map[string]int64{}
 	for _, row := range rows {
 		session := ids[firstString(row["workspace_id"])]
 		if session == "s-notes-usage" {
 			t.Fatalf("a folder session has spend by branch: %#v", row)
 		}
-		tokens[fmt.Sprintf("%s %v %v %v", session, row["branch"], row["coverage"], row["branch_source"])] += integer(row["tokens"])
+		hour := strings.TrimPrefix(firstString(row["usage_at"]), "2026-09-02T")
+		tokens[fmt.Sprintf("%s %v %v %v %s", session, row["branch"], row["coverage"], row["branch_source"], hour)] += integer(row["tokens"])
 	}
 	want := map[string]int64{
-		"s-switch <nil> unknown <nil>":       1000,
-		"s-switch feature/a on_branch turn":  3000,
-		"s-switch feature/b on_branch turn":  2000,
-		"s-plain <nil> no_branch_data <nil>": 500,
+		"s-switch <nil> unknown <nil> 10:00:00Z":       1000,
+		"s-switch feature/a on_branch turn 10:00:00Z":  3000,
+		"s-switch feature/b on_branch turn 11:00:00Z":  2000,
+		"s-switch feature/b on_branch turn 15:00:00Z":  1000,
+		"s-plain <nil> no_branch_data <nil> 12:00:00Z": 500,
 	}
 	for key, value := range want {
 		if tokens[key] != value {
@@ -121,8 +125,8 @@ func TestBranchUsageRows(t *testing.T) {
 				total += floatOr(row["cost_usd"])
 			}
 		}
-		// 6,000 input tokens at $10 a million.
-		if math.Abs(total-floatOr(item["cost_usd"])) > 1e-9 || math.Abs(total-0.06) > 1e-9 {
+		// 7,000 input tokens at $10 a million.
+		if math.Abs(total-floatOr(item["cost_usd"])) > 1e-9 || math.Abs(total-0.07) > 1e-9 {
 			t.Fatalf("branch cost %v, library %v", total, item["cost_usd"])
 		}
 	}

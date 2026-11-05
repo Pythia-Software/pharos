@@ -3,7 +3,7 @@ import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-mode
 import { projectBreakdown, projectLegacy } from "./project-analysis";
 
 // Spend by branch over the branch_usage dataset: one record is one session's
-// priced usage on one branch, with one model, on one local day. Only sessions
+// priced usage on one branch, with one model, in one hour. Only sessions
 // in Git repositories have records. A session that switched branches spends
 // on each in turn (docs/projects-and-outcomes.md#spend-by-branch).
 
@@ -32,7 +32,7 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
 
 export const branchAnalysisCatalog: AnalysisCatalog = {
   dataset: "branch_usage", time: { first: "usage_at", last: "usage_at" }, measures, breakdowns,
-  records: { label: "Usage row", plural: "Usage rows", note: "One session's usage on one branch, with one model, on one local day." },
+  records: { label: "Usage row", plural: "Usage rows", note: "One session's usage on one branch, with one model, in one hour." },
   units: {}, periods: {}, timestamp: "usage_at",
   cycle: { hour: { kind: "timestamp", field: "usage_at" }, weekday: { kind: "timestamp", field: "usage_at" } },
   trend: { metric: "cost", split: "coverage" }, scatter: ["cost", "tokens"], legacy: projectLegacy(),
