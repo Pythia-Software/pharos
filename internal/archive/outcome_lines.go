@@ -180,16 +180,9 @@ var patchEscapes = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\"`, `"`, `\'`, 
 // the patch's first file; a deleted file is rewritten empty, so every line
 // it had is removed.
 func readPatch(patch, path string) []fileEdit {
-	start := strings.Index(patch, "*** Begin Patch")
-	if start < 0 {
+	patch = patchText(patch)
+	if patch == "" {
 		return nil
-	}
-	patch = patch[start:]
-	if end := strings.Index(patch, "*** End Patch"); end >= 0 {
-		patch = patch[:end]
-	}
-	if !strings.Contains(patch, "\n") || strings.Count(patch, `\n`) > strings.Count(patch, "\n") {
-		patch = patchEscapes.Replace(patch)
 	}
 	type section struct {
 		name           string

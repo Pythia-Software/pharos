@@ -149,9 +149,10 @@ a Conductor workspace. Its delegated agents' calls are its own.
   `apply_patch`, Antigravity's edits). The ledger keeps one path per call,
   so a patch's files are read from the patch itself and placed the way the
   ledger places paths, each on its own: a patch whose first file is scratch
-  still changes its other files, and a patch in a Codex code-mode script,
-  which the ledger finds no path for, changes the files it names. An older
-  Codex patch that lists its files without their lines changes those files.
+  still changes its other files. A patch in a Codex code-mode script, where
+  the script holds it as a string literal, changes the files it names; the
+  ledger (from `tools-v11`) records its first file too. An older Codex
+  patch that lists its files without their lines changes those files.
   Files in temporary directories and the agent's own home (plans, memory)
   are left out. A file in a repository
   is identified by repository and repository-relative path, so every

@@ -19,8 +19,10 @@ import (
 // "pnpm exec", "uv run") by what they run, formatters, and checks. v11
 // retains explicit request speed from accounting envelopes. v13 records the
 // messages that carried each request's usage (model_requests.source_message_id,
-// final_message_id), which occurrence ownership classifies requests by.
-const toolLedgerVersion = "tools-v13-request-sources"
+// final_message_id), which occurrence ownership classifies requests by. v14
+// reads the file of a patch a code-mode script holds as a string literal, and
+// of a patch recorded as a list of changes.
+const toolLedgerVersion = "tools-v14-code-mode-patches"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -674,13 +676,38 @@ func toolFilePath(name string, input any) string {
 	if lower == "apply_patch" || lower == "applypatch" {
 		patch := firstString(input)
 		if fields := mapValue(input); fields != nil {
+			// A patch recorded as its changes names each file.
+			if changes, ok := fields["changes"].([]any); ok && len(changes) > 0 {
+				return clipText(firstString(mapValue(changes[0])["path"]), 500)
+			}
 			patch = firstString(fields["patch"], fields["input"])
+		}
+		if decoded := patchText(patch); decoded != "" {
+			patch = decoded
 		}
 		if match := patchFilePattern.FindStringSubmatch(patch); len(match) == 2 {
 			return clipText(strings.TrimSpace(match[1]), 500)
 		}
 	}
 	return ""
+}
+
+// patchText is the patch from "*** Begin Patch" to "*** End Patch" in text,
+// with the escapes undone when a code-mode script holds it as a string
+// literal (its line breaks written \n); empty when text holds none.
+func patchText(text string) string {
+	start := strings.Index(text, "*** Begin Patch")
+	if start < 0 {
+		return ""
+	}
+	patch := text[start:]
+	if end := strings.Index(patch, "*** End Patch"); end >= 0 {
+		patch = patch[:end]
+	}
+	if !strings.Contains(patch, "\n") || strings.Count(patch, `\n`) > strings.Count(patch, "\n") {
+		patch = patchEscapes.Replace(patch)
+	}
+	return patch
 }
 
 // shellCommandText reads the command line from the input shapes providers use.
