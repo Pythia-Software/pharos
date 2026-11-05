@@ -600,6 +600,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureQueryPlannerStatistics(context.Background()); err != nil {
 		return fmt.Errorf("initialize query planner statistics: %w", err)
 	}
+	if err := c.scheduleToolDerivations(); err != nil {
+		return fmt.Errorf("schedule derivations: %w", err)
+	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()
 }

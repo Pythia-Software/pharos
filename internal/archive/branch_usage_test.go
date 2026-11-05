@@ -152,3 +152,28 @@ func queryRows(t *testing.T, catalog *Catalog, statement string) []map[string]an
 	}
 	return rows
 }
+
+// A derivation whose rules changed runs on the next background pass, with
+// nothing new to index, and only once.
+func TestToolDerivationsScheduleTheToolsStage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB, `INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('tools',1,1,'x')
+		ON CONFLICT(name) DO UPDATE SET completed_generation=generation`)
+	pending := func() int {
+		return countRows(t, catalog, `SELECT generation-completed_generation FROM sync_deferred WHERE name='tools'`)
+	}
+	if err := catalog.scheduleToolDerivations(); err != nil || pending() != 0 {
+		t.Fatalf("unchanged rules: %d pending, %v", pending(), err)
+	}
+	execTx(t, catalog.DB, `UPDATE meta SET value='older' WHERE key='tool_derivations_version'`)
+	if err := catalog.scheduleToolDerivations(); err != nil || pending() != 0 {
+		t.Fatalf("an empty library: %d pending, %v", pending(), err)
+	}
+	execTx(t, catalog.DB, `UPDATE meta SET value='older' WHERE key='tool_derivations_version'`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,activity_at,indexed_at) VALUES('w','claude','local','w','w','x','x')`)
+	for range 2 {
+		if err := catalog.scheduleToolDerivations(); err != nil || pending() != 1 {
+			t.Fatalf("changed rules: %d pending, %v", pending(), err)
+		}
+	}
+}
