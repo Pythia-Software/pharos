@@ -931,7 +931,7 @@ around it. Its default view is the one it always opened on.
 | Parallelism | `parallelism`: one local hour of one agent at one level of agents at once, under the saved settings | agent | `agent_hours`, `active_hours`, `parallel_hours` | `started_at` (timestamp) | Over time, below the ribbon |
 | Session Shape | `session_shape`: one agent session | agent session; root conversation (no breakdowns) | `active_time` (`active_seconds`), `turn_cycle`, `context_peak`, `autonomy` | `started_at` (timestamp), or `last_message_at` placed by last message | Over time: sessions by length band, weekly shares |
 | Outcomes | `outcomes`: one Library workspace, at its start | none | `cost`, `tokens`, `files_changed`, lines | `started_at` (timestamp) | Over time |
-| Spend by Branch | `branch_usage`: one session's usage on one branch, with one model, on one local day | none | `cost`, `tokens` | `usage_at` (timestamp) | Compare |
+| Spend by Branch | `branch_usage`: one session's usage on one branch, with one model, in one hour | none | `cost`, `tokens` | `usage_at` (timestamp) | Compare |
 
 - **Tools** (`tools-analysis-catalog.ts`). Calls, failed calls, failure
   rate (`error_count` / `call_count`), truncation rate (`truncated_count` /
