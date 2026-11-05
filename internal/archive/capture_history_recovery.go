@@ -244,7 +244,6 @@ func exportHistoryRecovery(ctx context.Context, tx *sql.Tx, u historyUnit, oracl
 	msgs := recoveryMaps(result, "messages")
 	for _, c := range recoveryMaps(result, "conversations") {
 		conversation := ConversationRecord{NativeID: firstString(c["native_id"]), Provider: firstString(c["provider"]), Account: firstString(c["account"]), Origin: firstString(c["origin"]), Model: firstString(c["model"]), Effort: firstString(c["effort"]), Coverage: firstString(c["coverage"]), StartedAt: firstString(c["started_at"]), EndedAt: firstString(c["ended_at"]), ParentNativeID: byID[firstString(c["parent_id"])], AgentDepth: int(integer(c["agent_depth"])), AgentPath: firstString(c["agent_path"]), AgentNickname: firstString(c["agent_nickname"]), Harness: firstString(c["harness"]), HarnessVersionFirst: firstString(c["harness_version_first"]), HarnessVersionLast: firstString(c["harness_version_last"]), HarnessVersionSource: firstString(c["harness_version_source"]), Extractor: firstString(c["extractor"])}
-		conversation.Coverage, conversation.Extractor = legacyCoverage(conversation.Coverage, conversation.Extractor)
 		_ = json.Unmarshal([]byte(firstString(c["aliases_json"])), &conversation.Aliases)
 		var selected []map[string]any
 		for _, m := range msgs {
@@ -782,8 +781,9 @@ func (c *Catalog) reconcileHistoryLinks(ctx context.Context) error {
 // conversations' coverage before they had an extractor of their own.
 const legacyCoveragePrefix = "conductor-"
 
-// legacyCoverage reads a saved conversation's coverage and extractor as this
-// build stores them.
+// legacyCoverage reads a conversation's coverage and extractor as this build
+// stores them, whatever wrote the record: an older parse, a saved catalog or
+// a recovery envelope.
 func legacyCoverage(coverage, extractor string) (string, string) {
 	if strings.HasPrefix(coverage, legacyCoveragePrefix) {
 		return "complete", defaultString(extractor, coverage)

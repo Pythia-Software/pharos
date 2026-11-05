@@ -194,11 +194,29 @@ func TestConductorExtractorLeavesCoverage(t *testing.T) {
 	if got := jsonText(rows); got != `[{"coverage":"complete","extractor":"conductor-v12","id":"old"},{"coverage":"partial","extractor":"","id":"partial"}]` {
 		t.Fatal(got)
 	}
-	for _, saved := range [][2]string{{"conductor-v12", ""}, {"complete", "conductor-v13"}, {"partial", ""}} {
-		coverage, extractor := legacyCoverage(saved[0], saved[1])
-		if coverage == "conductor-v12" || saved[0] == "conductor-v12" && extractor != "conductor-v12" || saved[1] != "" && extractor != saved[1] {
-			t.Fatal(saved, coverage, extractor)
-		}
+	// A record in the old form, from a recovery envelope saved before, is
+	// stored in the new one.
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := ConversationRecord{NativeID: "envelope", Provider: "codex", Account: "local", Coverage: "conductor-v12"}
+	if _, _, err := ingestWorkspace(tx, WorkspaceRecord{SourceID: "s2", SourceKind: "conductor", Account: "local", Title: "Saved", Conversations: []ConversationRecord{legacy}}, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var coverage, extractor string
+	if err := catalog.DB.QueryRow("SELECT coverage,extractor FROM conversations WHERE native_id='envelope'").Scan(&coverage, &extractor); err != nil || coverage != "complete" || extractor != "conductor-v12" {
+		t.Fatal(coverage, extractor, err)
+	}
+	// Delivery checkpoints taken of the old form still match the new one.
+	current := legacy
+	current.Coverage, current.Extractor = "complete", "conductor-v12"
+	if conversationDeliveryDigest("w", current) != conversationDeliveryDigest("w", legacy) {
+		t.Fatal("a checkpoint of the old form no longer matches")
 	}
 }
 

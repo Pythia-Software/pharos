@@ -286,7 +286,7 @@
         {
           "key": "harness_version",
           "label": "Tool version",
-          "note": "From the Claude Code or Codex session it ran.",
+          "note": "When the Claude Code or Codex session it ran is also a source.",
           "support": "varies"
         },
         {
@@ -356,7 +356,8 @@
         {
           "key": "subagents",
           "label": "Subagents",
-          "support": "unsupported"
+          "note": "Codex runs that record which session started another.",
+          "support": "varies"
         },
         {
           "key": "title",
@@ -1295,12 +1296,14 @@
         {
           "key": "tool_calls",
           "label": "Tool calls",
-          "support": "supported"
+          "note": "Not in older exports, which flatten each message to text.",
+          "support": "varies"
         },
         {
           "key": "tool_results",
           "label": "Tool results",
-          "support": "supported"
+          "note": "Not in older exports, which flatten each message to text.",
+          "support": "varies"
         },
         {
           "key": "reasoning",

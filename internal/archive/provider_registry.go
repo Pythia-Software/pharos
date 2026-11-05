@@ -360,7 +360,7 @@ func init() {
 		{
 			Kind: "conductor", DisplayName: "Conductor", Mutation: "retrieval-only", Automatic: true, Setup: 3, MirrorRank: 9,
 			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results reasoning", Varies: "git_branch effort message_tokens timestamps title harness_version",
-				Notes: map[string]string{"harness_version": "From the Claude Code or Codex session it ran.", "subagents": "Recorded by the Claude Code or Codex session it ran."}, VariesNote: "When Conductor stores it."},
+				Notes: map[string]string{"harness_version": "When the Claude Code or Codex session it ran is also a source.", "subagents": "Recorded by the Claude Code or Codex session it ran."}, VariesNote: "When Conductor stores it."},
 			New:  func(base baseAdapter) Adapter { return &conductorAdapter{baseAdapter: base} },
 			Plan: (*capturePlan).conductor,
 			Preservation: func(source SourceConfig) string {
@@ -380,8 +380,8 @@ func init() {
 		},
 		{
 			Kind: "tl1", DisplayName: "TL1", Mutation: "retrieval-only", Setup: 4, MirrorRank: 0,
-			Content: contentCapabilities{Supported: "cwd model effort tool_calls title", Varies: "git_branch message_tokens tool_results reasoning timestamps harness_version cost",
-				Notes: map[string]string{"cwd": "The repository's folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "harness_version": "Claude Code runs only.", "cost": "From TL1's run summary."}, VariesNote: "When the run records it."},
+			Content: contentCapabilities{Supported: "cwd model effort tool_calls title", Varies: "git_branch message_tokens tool_results reasoning timestamps subagents harness_version cost",
+				Notes: map[string]string{"cwd": "The repository's folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1's run summary."}, VariesNote: "When the run records it."},
 			New: func(base baseAdapter) Adapter { return &tl1Adapter{baseAdapter: base} },
 			Plan: func(p *capturePlan, ctx context.Context, source SourceConfig, info fs.FileInfo) error {
 				return p.tl1(source)
@@ -422,8 +422,8 @@ func init() {
 		},
 		{
 			Kind: "claude-ai", DisplayName: "Claude.ai", Mutation: "retrieval-only", MirrorRank: 1,
-			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps", Varies: "reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
-				Notes: map[string]string{"model": "The export names no model.", "message_tokens": "Exports have no token counts.", "reasoning": "A summary, when the export holds one."}, VariesNote: "When the export holds it."},
+			Content: contentCapabilities{Supported: "timestamps", Varies: "tool_calls tool_results reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
+				Notes: map[string]string{"tool_calls": "Not in older exports, which flatten each message to text.", "tool_results": "Not in older exports, which flatten each message to text.", "model": "The export names no model.", "message_tokens": "Exports have no token counts.", "reasoning": "A summary, when the export holds one."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &claudeAIAdapter{base} },
 			Plan: (*capturePlan).claudeAI, Preservation: retainedInputs,
 		},
