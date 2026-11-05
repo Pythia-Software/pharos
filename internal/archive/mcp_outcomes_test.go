@@ -16,6 +16,10 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 	app, notes := library.folders["app"], library.folders["notes"]
 	writeClaudeSession(t, library.claude, "s-app-edit", claudeEditSession("s-app-edit", app, filepath.Join(app, "cmd", "serve.go"), []string{"package main", "", "func serve() {}"}, 30))
 	writeClaudeSession(t, library.claude, "s-notes-edit", claudeEditSession("s-notes-edit", notes, filepath.Join(notes, "serve-plan.md"), []string{"# Serving", "- one"}, 31))
+	// The fixture's own folders are temporary; this one is the only one
+	// treated so.
+	override(t, &temporaryFolders, []string{"/private/tmp"})
+	writeClaudeSession(t, library.claude, "s-scratch", claudeSession("s-scratch", "/private/tmp/pharos-scratch", "", "Try it in scratch", 32))
 	library.ingestClaude(t)
 	ctx := context.Background()
 	if err := library.catalog.ensureToolRollup(ctx); err != nil {
@@ -31,7 +35,8 @@ func TestOutcomeToolsForAgents(t *testing.T) {
 
 	// A working directory below any session's, in a repository or a folder,
 	// is in its project.
-	for path, want := range map[string]string{filepath.Join(app, "cmd", "deeper"): "app", filepath.Join(notes, "drafts"): folderKey(notes)} {
+	// A temporary folder is in /tmp, as the project rule places it.
+	for path, want := range map[string]string{filepath.Join(app, "cmd", "deeper"): "app", filepath.Join(notes, "drafts"): folderKey(notes), "/private/tmp/pharos-scratch/sub": "/tmp"} {
 		found := callProjectTool(t, library.catalog, "list_projects", map[string]any{"path": path})
 		if items := projectItems(found); len(items) != 1 || items[want] == nil {
 			t.Fatalf("list_projects path=%s: %#v", path, found)

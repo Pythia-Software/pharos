@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"path/filepath"
 	"strings"
@@ -142,16 +143,29 @@ func TestBranchUsageRows(t *testing.T) {
 		row := item.(map[string]any)
 		branches[firstString(row["branch"])] = fmt.Sprintf("%v %v %v", row["tokens"], row["sessions"], row["recorded"])
 	}
-	if branches["feature/a"] != "3000 1 [turn]" || branches["feature/b"] != "2000 1 [turn]" || len(branches) != 2 {
+	if branches["feature/a"] != "3000 1 [turn]" || branches["feature/b"] != "3000 1 [turn]" || len(branches) != 2 {
 		t.Fatalf("get_branch_spend branches: %#v", spend)
 	}
 	coverage := spend["coverage"].(map[string]any)
-	if integer(coverage["on_branch"].(map[string]any)["tokens"]) != 5000 || integer(coverage["unknown"].(map[string]any)["tokens"]) != 1000 ||
+	if integer(coverage["on_branch"].(map[string]any)["tokens"]) != 6000 || integer(coverage["unknown"].(map[string]any)["tokens"]) != 1000 ||
 		integer(coverage["no_branch_data"].(map[string]any)["tokens"]) != 500 {
 		t.Fatalf("get_branch_spend coverage: %#v", coverage)
 	}
-	if narrowed := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": "app", "branch": "feature/b", "from": "2026-09-02T11:00:00Z"}); len(narrowed["items"].([]any)) != 1 {
-		t.Fatalf("get_branch_spend narrowed: %#v", narrowed)
+	// Bounds select the hours of use, as instants: 13:00Z with an offset.
+	for _, bounds := range []map[string]any{{"from": "2026-09-02T13:00:00Z"}, {"from": "2026-09-02T09:00:00-04:00"}, {"from": "2026-09-02T11:00:00Z", "to": "2026-09-02T12:00:00Z"}} {
+		args := map[string]any{"project": "app", "branch": "feature/b"}
+		maps.Copy(args, bounds)
+		narrowed := callProjectTool(t, library.catalog, "get_branch_spend", args)
+		want := map[bool]int64{true: 2000, false: 1000}[bounds["to"] != nil]
+		if items := narrowed["items"].([]any); len(items) != 1 || integer(items[0].(map[string]any)["tokens"]) != want {
+			t.Fatalf("get_branch_spend %v: %#v", bounds, narrowed)
+		}
+	}
+	if _, err := callMCP(library.catalog, "get_branch_spend", map[string]any{"from": "yesterday"}); err == nil {
+		t.Fatal("a from that is not a time should be an error")
+	}
+	if day := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": "app", "to": "2026-09-02"}); integer(day["coverage"].(map[string]any)["on_branch"].(map[string]any)["tokens"]) != 6000 {
+		t.Fatalf("a date to includes its day: %#v", day)
 	}
 	if folder := callProjectTool(t, library.catalog, "get_branch_spend", map[string]any{"project": library.folders["notes"]}); integer(folder["total"]) != 0 || len(folder["coverage"].(map[string]any)) != 0 {
 		t.Fatalf("a folder has spend by branch: %#v", folder)
