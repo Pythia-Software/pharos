@@ -1213,9 +1213,32 @@ func (r *labelsRun) buildConversation(ctx context.Context, builder *labelsItemBu
 	return builder.conversation(ctx, id)
 }
 
+// labelsWriteGrace bounds the whole writer's drain after inference stops,
+// including time waiting for the catalog. While inference is running, waiting
+// behind another catalog writer must not exhaust a per-flush deadline.
+var labelsWriteGrace = 30 * time.Second
+
+func labelsWriteContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	grace := labelsWriteGrace
+	stop := context.AfterFunc(parent, func() {
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			cancel()
+		case <-ctx.Done():
+		}
+	})
+	return ctx, func() { stop(); cancel() }
+}
+
 // write stores finished jobs in batched transactions: at most about 500
-// rows or two seconds' worth each.
+// rows or two seconds' worth each. The run owns the writes' lifetime; only
+// stopping starts the grace period for storing already finished jobs.
 func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
+	ctx, cancel := labelsWriteContext(ctx)
+	defer cancel()
 	var pending []*labelsJob
 	rows := 0
 	var failure error
@@ -1225,14 +1248,11 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 			return
 		}
 		started := time.Now()
-		// What is finished is stored even when the run is stopping.
-		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
 		labeledAt := now()
-		err := r.c.writeTransaction(writeCtx, "store message labels", func(tx *sql.Tx) error {
+		err := r.c.writeTransaction(ctx, "store message labels", func(tx *sql.Tx) error {
 			for _, job := range pending {
 				for _, id := range job.stale {
-					if _, err := tx.ExecContext(writeCtx, `DELETE FROM message_labels WHERE message_id=? AND conversation_id=?`, id, job.conversation); err != nil {
+					if _, err := tx.ExecContext(ctx, `DELETE FROM message_labels WHERE message_id=? AND conversation_id=?`, id, job.conversation); err != nil {
 						return err
 					}
 				}
@@ -1242,7 +1262,7 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 						complete = false
 						continue
 					}
-					if _, err := tx.ExecContext(writeCtx, `INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at)
+					if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at)
 						VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET conversation_id=excluded.conversation_id,segment=excluded.segment,labels=excluded.labels,
 						probs=excluded.probs,chunks=excluded.chunks,tokens=excluded.tokens,input_hash=excluded.input_hash,model=excluded.model,contract=excluded.contract,labeled_at=excluded.labeled_at`,
 						message.id, message.conversation, message.segment, int64(message.mask), encodeLabelProbs(message.probs), len(message.seqs), message.tokens,
@@ -1253,14 +1273,14 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 				if !complete {
 					continue
 				}
-				if _, err := tx.ExecContext(writeCtx, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES(?,?,?,?)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES(?,?,?,?)
 					ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure,units=excluded.units,built_at=excluded.built_at`,
 					job.conversation, job.structure, job.units, labeledAt); err != nil {
 					return err
 				}
 				// A mark written after this run read it carries another token
 				// and stays.
-				if _, err := tx.ExecContext(writeCtx, `DELETE FROM message_labels_dirty WHERE conversation_id=? AND token=?`, job.conversation, job.token); err != nil {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM message_labels_dirty WHERE conversation_id=? AND token=?`, job.conversation, job.token); err != nil {
 					return err
 				}
 			}

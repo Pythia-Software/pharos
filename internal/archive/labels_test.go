@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
@@ -426,6 +427,91 @@ func TestLabelsBuilderWaitsForTheWorkers(t *testing.T) {
 	}
 	if stats.PeakPending > 8+5+largest || stats.PeakPending >= stats.ItemsLabeled {
 		t.Fatalf("%d items were pending at once, of %d", stats.PeakPending, stats.ItemsLabeled)
+	}
+}
+
+func TestLabelsWriteContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parent, stop := context.WithCancel(context.Background())
+		defer stop()
+		ctx, cancel := labelsWriteContext(parent)
+		defer cancel()
+		// Virtual time: a live writer may wait longer than the stop grace.
+		timer := time.NewTimer(2 * labelsWriteGrace)
+		<-timer.C
+		if ctx.Err() != nil {
+			t.Fatalf("a running writer expired while waiting: %v", ctx.Err())
+		}
+		stoppedAt := time.Now()
+		stop()
+		synctest.Wait()
+		if ctx.Err() != nil {
+			t.Fatalf("stopping left no time to save finished work: %v", ctx.Err())
+		}
+		<-ctx.Done()
+		if elapsed := time.Since(stoppedAt); elapsed != labelsWriteGrace {
+			t.Fatalf("stop drain lasted %s, want %s", elapsed, labelsWriteGrace)
+		}
+		cancel() // Cleanup is safe even after the grace expires.
+	})
+}
+
+func TestLabelsWriterDrainsWhileStopping(t *testing.T) {
+	for _, releaseWriter := range []bool{true, false} {
+		t.Run(fmt.Sprintf("catalog_available=%v", releaseWriter), func(t *testing.T) {
+			if !releaseWriter {
+				override(t, &labelsWriteGrace, 100*time.Millisecond)
+			}
+			catalog := labeledCatalog(t)
+			if err := catalog.ensureLabelsSchema(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			execTx(t, catalog.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c-root','pending')
+				ON CONFLICT(conversation_id) DO UPDATE SET token=excluded.token`)
+			release, err := catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if release != nil {
+					release()
+				}
+			}()
+			ctx, stop := context.WithCancel(t.Context())
+			defer stop()
+			run := &labelsRun{c: catalog, identity: "test", stats: &LabelsRunStats{}, cancel: stop}
+			jobs := make(chan *labelsJob, 1)
+			jobs <- &labelsJob{conversation: "c-root", token: "pending", structure: "test", units: 1, complete: true,
+				messages: []*labelsMessage{{id: "m-h1", conversation: "c-root", segment: "H-typed", hash: "test", seqs: [][]int32{{1}}, probs: []float32{1}, mask: 1}}}
+			close(jobs)
+			done := make(chan error, 1)
+			go func() { done <- run.write(ctx, jobs) }()
+			waitUntil(t, 5*time.Second, "the label writer to queue", catalog.writersWaiting)
+			stop()
+			if releaseWriter {
+				release()
+				release = nil
+			}
+			select {
+			case err = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("stopping waited indefinitely for the catalog")
+			}
+			var built, dirty int
+			if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_conversations WHERE conversation_id='c-root'`).Scan(&built); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty WHERE conversation_id='c-root'`).Scan(&dirty); err != nil {
+				t.Fatal(err)
+			}
+			if releaseWriter {
+				if err != nil || labelCount(t, catalog, "") != 1 || run.stats.MessagesLabeled != 1 || built != 1 || dirty != 0 {
+					t.Fatalf("finished labels were not saved during stop: %+v built=%d dirty=%d err=%v", run.stats, built, dirty, err)
+				}
+			} else if !errors.Is(err, context.Canceled) || labelCount(t, catalog, "") != 0 || run.stats.MessagesLabeled != 0 || built != 0 || dirty != 1 {
+				t.Fatalf("blocked stop lost its pending work: %+v built=%d dirty=%d err=%v", run.stats, built, dirty, err)
+			}
+		})
 	}
 }
 
