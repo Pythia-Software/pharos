@@ -556,7 +556,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
-	case strings.HasPrefix(path, "/api/labels/conversations/"):
+	case strings.HasPrefix(path, "/api/labels/conversations/"), strings.HasPrefix(path, "/api/labels/workspaces/"):
 		s.getMessageLabelFingerprint(w, r)
 	case path == "/api/origins":
 		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")

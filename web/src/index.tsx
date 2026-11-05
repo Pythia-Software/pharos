@@ -1,4 +1,5 @@
 import {messageLabelLegacyURL} from "./message-label-legacy";
+import {withFingerprintColumn} from "./fingerprint-columns";
 import {MessageLabelDisplay,MessageLabelCards,messageLabelRenderers} from "./message-label-results";
 import {messageLabelHostQuery,messageLabelConversationQuery,labelResultsMode} from "./message-label-results-model";
 import {messageLabelsCatalog} from "./message-labels-catalog";
@@ -301,6 +302,7 @@ const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => quer
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
+  ...messageLabelRenderers,
   safety_state: ({ value }) => safetyStateLabels[String(value) as keyof typeof safetyStateLabels] ?? String(value ?? ""),
   machine_activity: ({ value }) => activityPresentation(String(value ?? "")).label,
   bool_check(context: CellContext<Row>) {
@@ -468,7 +470,10 @@ type SurfaceHost = { requiresV3?: boolean; query: HostQueryOptions; find: (state
 function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const attention = useMemo(() => createAttentionRegistry(), [dataset]);
   const visible = datasetIsVisible(dataset);
-  const schema = useMemo(() => usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, usageActions]);
+  const schema = useMemo(() => {
+    const base = withFingerprintColumn(schemas[dataset], dataset);
+    return usageActions ? usageQuerySchema(base, dataset as UsageDataset) : base;
+  }, [dataset, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset) } : renderers, [dataset]);
   const tableRenderers = useUsageTableRenderers(dataset==="message_labels"?{...usageRenderers,...messageLabelRenderers}:usageRenderers);

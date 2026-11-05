@@ -852,6 +852,73 @@ func TestLabelsBacklogWaitsForPower(t *testing.T) {
 	}
 }
 
+func TestWorkspaceLabelFingerprint(t *testing.T) {
+	c, config := testCatalog(t)
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('ribbon-work','test','test','ribbon-work','Ribbon work','2026-01-01'),('elsewhere','test','test','elsewhere','Other work','2026-01-01');
+ INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('first','ribbon-work','claude','test','first'),('second','ribbon-work','claude','test','second'),('outside','elsewhere','claude','test','outside');
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('first-a','first','a','assistant','message','Private report','a','2026-01-01T12:00:00Z'),('second-a','second','a','user','message','Private request','b','2026-01-01T13:00:00Z'),('outside-a','outside','a','user','message','Other workspace','c','2026-01-01T11:00:00Z');
+ INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,depth,provider,parent_id) VALUES('first-main','ribbon-work','first','main','root',0,'claude',NULL),('first-middle','ribbon-work','first','middle','subagent',1,'claude','first-main'),('first-child','ribbon-work','first','child','subagent',2,'claude','first-middle'),('first-unused','ribbon-work','first','unused','subagent',1,'claude','first-main');
+ INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('first-child','first-a',0)`)
+	srv := testServer(t, config, c)
+	read := func(id string, status int) map[string]any {
+		t.Helper()
+		w := apiCall(t, srv, config.APIToken, http.MethodGet, "/api/labels/workspaces/"+id, nil)
+		var body map[string]any
+		if w.Code != status || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatalf("workspace fingerprint: %d %s", w.Code, w.Body.String())
+		}
+		return body
+	}
+	read("missing", 404)
+	check := func(body map[string]any, count int) []any {
+		t.Helper()
+		conversation := body["conversation"].(map[string]any)
+		messages := conversation["messages"].([]any)
+		if conversation["work_id"] != "ribbon-work" || len(messages) != count {
+			t.Fatalf("wrong workspace evidence: %v", conversation)
+		}
+		for _, value := range messages {
+			m := value.(map[string]any)
+			if m["conversation_id"] == "outside" || m["text"] != "" || m["work_id"] != "ribbon-work" || firstString(m["session_id"]) == "" {
+				t.Fatalf("wrong or private ribbon evidence: %v", m)
+			}
+		}
+		return messages
+	}
+	body := read("ribbon-work", 200)
+	messages := check(body, 2)
+	if messages[0].(map[string]any)["id"] != "first-a" || messages[1].(map[string]any)["session_id"] != "second" {
+		t.Fatalf("lost message order or fallback session: %v", messages)
+	}
+	sessions := body["conversation"].(map[string]any)["sessions"].([]any)
+	if len(sessions) != 4 || messages[0].(map[string]any)["session_id"] != "first-child" {
+		t.Fatalf("lost recorded ancestors or included unused branches: %v", sessions)
+	}
+	var ledger int
+	if err := c.reader().QueryRow("SELECT count(*) FROM sqlite_master WHERE name='message_labels'").Scan(&ledger); err != nil || ledger != 0 {
+		t.Fatal("fingerprint initialized labeling", err)
+	}
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('ribbon-test','["P","C"]');
+ INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('first-a','first','AR',2,x'00000000',1,1,'a','ribbon-test','test','2026-01-01'),('second-a','second','HU',1,x'00000000',1,1,'b','ribbon-test','test','2026-01-01');
+ INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('first','test',1,'2026-01-01'),('second','test',1,'2026-01-01');
+ DELETE FROM message_labels_dirty;
+ INSERT INTO message_labels_dirty(conversation_id,token) VALUES('second','dirty')`)
+	body = read("ribbon-work", 200)
+	messages = check(body, 2)
+	if body["pending"] != true || len(messages[0].(map[string]any)["labels"].([]any)) != 1 || len(messages[1].(map[string]any)["labels"].([]any)) != 0 || messages[1].(map[string]any)["chunks"] != float64(0) {
+		t.Fatalf("mixed freshness hid valid labels or exposed stale labels: %v", body)
+	}
+	override(t, &messageLabelFingerprintLimit, 1)
+	body = read("ribbon-work", 200)
+	check(body, 1)
+	if body["truncated"] != true {
+		t.Fatalf("workspace sample was not bounded: %v", body)
+	}
+}
+
 func TestMessageLabelQueryProjection(t *testing.T) {
 	c, config := testCatalog(t)
 	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,location,title,indexed_at) VALUES('label-work','test','test','label-work','/test','Label work','2026-01-01');

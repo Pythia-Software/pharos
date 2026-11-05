@@ -480,7 +480,8 @@ next:
 `query` keeps the list items whose text contains it. Lists page with `limit`
 (50 by default) and `offset`, and an answer sheds items from the end to fit
 `max_output_tokens` (3,000 by default, as three bytes a token), giving
-`next_offset`.
+`next_offset`. Query help pages apply the same pagination and text search to
+their `columns` list, keeping the query default and type help on every page.
 
 A text field's frequent values never compute anything a page has not, so
 browsing never blocks on, starts or writes a derived build:

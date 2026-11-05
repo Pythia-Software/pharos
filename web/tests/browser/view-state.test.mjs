@@ -10,6 +10,19 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
+test('workspace fingerprint columns restore in search tables and conversation cards',{skip},async t=>{
+ const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5};
+ const app=await open(t,{url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint svg'}),{page}=app;
+ assert.ok(await page.getByRole('img',{name:/recorded branches workspace fingerprint/}).count());
+ await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
+ await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
+ await app.settled();
+ await page.reload();
+ await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
+ assert.ok(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed')==='true');
+ await app.shot('workspace-fingerprints');
+});
+
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
  const query={...EMPTY_QUERY,where:[{field:'kind',op:'=',value:'backup.local'}],orderBy:[{field:'seconds',dir:'asc'}]};
  const params=new URLSearchParams({q_sync_operations:encodeQuery(query),query_layout:JSON.stringify({sync_operations:true,sync_sources:false})});
