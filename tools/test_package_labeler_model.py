@@ -1,6 +1,8 @@
 """Tests of the labeler model packager on a tiny invented model directory."""
 
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import tarfile
@@ -86,7 +88,7 @@ class PackageTest(unittest.TestCase):
         packager.main([str(self.model), "--out", str(self.root / "out"), "--version", "2", "--descriptor", str(descriptor)])
         document = json.loads(descriptor.read_text())
         _, sha256, size, _ = packager.package(self.model, self.root / "again", "2", "int8")
-        self.assertEqual(document["model"], {"name": "invented-model", "version": "2", "url": "https://example.invalid/{name}-{version}.tar.gz", "sha256": sha256, "size": size})
+        self.assertEqual(document["model"], {"name": "invented-model", "version": "2", "url": "https://example.invalid/{name}-{version}.tar.gz", "sha256": sha256, "size": size, "default_variant": "int8"})
         self.assertEqual(document["onnxruntime"], runtime)
         # Another model is pinned under its own key, with the releases' URL pattern.
         packager.main([str(self.model), "--out", str(self.root / "out"), "--version", "3", "--descriptor", str(descriptor), "--key", "agent_events_model"])
@@ -94,6 +96,47 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(document["agent_events_model"]["version"], "3")
         self.assertEqual(document["agent_events_model"]["url"], document["model"]["url"])
         self.assertEqual(document["model"]["version"], "2")
+
+    def test_pinned_default_is_present_in_the_archive(self):
+        manifest_path = self.model / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        weights = b"stand-in FP32 weights"
+        (self.model / "model.fp32.onnx").write_bytes(weights)
+        manifest["sha256"]["model.fp32.onnx"] = hashlib.sha256(weights).hexdigest()
+        manifest_path.write_text(json.dumps(manifest))
+        descriptor = self.root / "assets.json"
+        for key in ("model", "agent_events_model"):
+            for previous in (None, "int8", "fp32"):
+                for variant, explicit in ((None, None), ("int8", None), ("fp32", None), ("all", None), ("all", "int8"), ("all", "fp32")):
+                    with self.subTest(key=key, previous=previous, variant=variant, explicit=explicit):
+                        entry = {"default_variant": previous} if previous else {}
+                        descriptor.write_text(json.dumps({key: entry}))
+                        args = [str(self.model), "--out", str(self.root / "out"),
+                                "--descriptor", str(descriptor), "--key", key]
+                        if variant:
+                            args.extend(["--variant", variant])
+                        if explicit:
+                            args.extend(["--default-variant", explicit])
+                        with redirect_stdout(io.StringIO()):
+                            packager.main(args)
+                        pinned = json.loads(descriptor.read_text())[key]
+                        default = pinned.get("default_variant", "int8")
+                        expected = (explicit or previous or "int8") if variant == "all" else (variant or "int8")
+                        self.assertEqual(default, expected)
+                        with tarfile.open(self.root / "out" / "invented-model-1.tar.gz") as archive:
+                            self.assertIn(manifest["files"][f"onnx_{default}"], archive.getnames())
+
+    def test_explicit_default_outside_archive_is_refused_before_writing(self):
+        descriptor = self.root / "assets.json"
+        descriptor.write_text('{"model": {"version": "old"}}')
+        original = descriptor.read_bytes()
+        for variant, default in (("int8", "fp32"), ("fp32", "int8")):
+            with self.subTest(variant=variant, default=default):
+                with self.assertRaises(SystemExit):
+                    packager.main([str(self.model), "--out", str(self.root / "out"), "--variant", variant,
+                                   "--default-variant", default, "--descriptor", str(descriptor)])
+                self.assertEqual(descriptor.read_bytes(), original)
+                self.assertFalse((self.root / "out").exists())
 
 
 if __name__ == "__main__":

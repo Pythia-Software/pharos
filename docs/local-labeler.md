@@ -607,7 +607,10 @@ model. To publish a new model version:
    It writes `build/labeler/<name>-N.tar.gz` with the manifest, the selected
    ONNX file and the tokenizer at its root (`--variant all` includes both ONNX
    variants and the MLX companion). It checks them against the
-   manifest, and pins the archive's SHA-256 and size. The archive is
+   manifest, and pins the archive's SHA-256 and size. A single-variant archive
+   also sets the managed download default to that variant. With `--variant all`,
+   the existing default is preserved (int8 when unset); use `--default-variant`
+   to select a different included variant. The archive is
    deterministic: packaging the same directory again gives the same bytes.
 2. On the deployment Mac, create the GitHub release `labeler-<name>-N` on
    `Pythia-Software/pharos` and attach that archive under its own name, for

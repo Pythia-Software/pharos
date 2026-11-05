@@ -109,16 +109,19 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--version", default="1")
     parser.add_argument("--variant", choices=["int8", "fp32", "all"], default="int8")
-    parser.add_argument("--default-variant", choices=["int8", "fp32"], help="default for app-managed downloads when pinning")
+    parser.add_argument("--default-variant", choices=["int8", "fp32"], help="managed download default; defaults to the selected variant, or preserves the existing default with --variant all")
     parser.add_argument("--descriptor", type=Path)
     parser.add_argument("--key", default="model", help="the descriptor's entry to pin (model, agent_events_model)")
     args = parser.parse_args(argv)
     if args.default_variant and args.variant != "all" and args.default_variant != args.variant:
         parser.error("--default-variant must be included in --variant")
+    default_variant = args.default_variant
+    if args.variant != "all":
+        default_variant = args.variant
     path, sha256, size, name = package(args.model_dir, args.out, args.version, args.variant)
     print(json.dumps({"path": str(path), "name": name, "version": args.version, "sha256": sha256, "size": size}, indent=2))
     if args.descriptor:
-        pin(args.descriptor, name, args.version, sha256, size, args.key, args.default_variant)
+        pin(args.descriptor, name, args.version, sha256, size, args.key, default_variant)
     return 0
 
 
