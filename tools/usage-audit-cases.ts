@@ -11,7 +11,7 @@ export function fieldsFor(document: any) {
   const names = document.fields.map((field: any) => field.name);
   const choose = (candidates: string[]) => candidates.find(field => names.includes(field));
   return {
-    time: choose(["occurred_at", "requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
+    time: choose(["occurred_at", "requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at", "usage_at"]),
     group: choose(["provider", "root_provider", "tool_name", "repository_name", "root_model_family", "skill_name", "model"]),
     text: choose(["command", "text", "title", "arguments_json", "tool_name", "skill_name", "model", "root_model_family"]),
     number: choose(["label_depth","total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
@@ -101,6 +101,7 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     if (topic === "mcp") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "output", "mean_output", "largest_output", "bytes", "truncated", "time", "mean_time"][i % 10], split: ["tool_name", "status", "query_source"][i % 3], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "agent_experience") view = { rollingPeriods: 0, metric: ["events", "conversations", "messages", "thinking_share", "explained_share"][i % 5], split: ["family_group", "family", "source", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "outcomes") view = { rollingPeriods: 0, metric: ["sessions", "cost", "rework_rate", "cost_per_kept_change", "kept_share"][i % 5], split: ["outcome_label", "evidence_tier", "project_name", "model_family", "branch"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
+    if (topic === "branches") view = { rollingPeriods: 0, metric: ["cost", "tokens", "sessions"][i % 3], split: ["branch", "coverage", "project_name", "model_family", "branch_source"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "habits") view = { rollingPeriods: 0, metric: ["wall_hours", "active_hours", "messages", "turns", "at_once"][i % 5], split: ["actor", "initiator", "automation", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "carbon") view = { metric: i % 2 ? "energy" : "co2", split: ["type", "provider", "repository_name", "tier"][i % 4], period: periods[i % 5], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3] };
     if (view) params.set("analyze_chart", JSON.stringify({ ...view, display: i % 4 >= 2 ? "cumulative" : "interval" }));

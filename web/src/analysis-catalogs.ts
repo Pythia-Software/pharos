@@ -10,6 +10,7 @@ import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
+import { branchAnalysisCatalog } from "./branch-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
 
 // The engine dashboards, by Analyze topic. Carbon and Parallelism build
@@ -18,7 +19,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
-  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, habits: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, outcomes: outcomesAnalysisCatalog,
+  human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, habits: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, outcomes: outcomesAnalysisCatalog, branches: branchAnalysisCatalog,
 };
 
 // The complete catalog a topic draws with, given the user's settings: Carbon

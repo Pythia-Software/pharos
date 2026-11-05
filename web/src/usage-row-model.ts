@@ -80,6 +80,7 @@ export const usageDetailFields: Record<UsageDataset, string[]> = {
   parallelism: ["channel", "machine_id", "execution_machine_id", "source_links", "unit_label", "started_at", "repository_name", "project_name", "counting", "gap_minutes", "level", "repo_level", "unit_hours", "elapsed_hours", "repo_elapsed_hours", "parallel_elapsed_hours", "location", "provider", "model", "unit_id"],
   agent_events: ["source_links", "family", "sentence", "subject", "response", "source", "occurred_at", "title", "project_name", "repository_name", "provider", "model", "probability", "event_model"],
   agent_event_messages: ["source_links", "occurred_at", "source", "events", "candidates", "title", "project_name", "repository_name", "provider", "event_model"],
+  branch_usage: ["source_links", "title", "usage_at", "project_name", "branch", "coverage", "branch_source", "model_family", "cost_usd", "tokens", "price_status"],
   outcomes: ["source_links", "title", "started_at", "outcome_label", "evidence_tier", "project_name", "branch", "model_family", "cost_usd", "files_changed", "lines_added", "lines_removed", "kept_lines", "rework_removed_lines", "linked_commits", "landed_commits"],
 };
 const extraProperties: Partial<Record<UsageDataset, [string, string, "code" | "json" | "boolean" | "number"][]>> = {

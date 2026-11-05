@@ -53,6 +53,9 @@ const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read
 const outcomes: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("cost_usd", "API equivalent"), sum("kept_change", "Kept changes"),
   ratio("idea_cost_per_kept", "SUM([cost_usd])/NULLIF(SUM([kept_change]),0)", "Cost per kept change"), ratio("idea_rework_rate", "SUM([rework_removed_lines])/NULLIF(SUM([kept_lines]),0)", "Rework rate", true)];
 
+// Spend by branch: rows are slices of a session's usage, so sessions are distinct.
+const branchSpend: SummaryColumn[] = [sum("cost_usd", "API equivalent"), sum("tokens", "Tokens"), distinct("workspace_id", "Sessions")];
+
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   message_labels:[],
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
@@ -128,6 +131,11 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
   agent_event_messages: [
     idea("agent_event_messages", "repos", "Compare", "Messages read by project", "Compare messages read, keyword hits and events across projects", ["project_name"], agentEventMessages),
     idea("agent_event_messages", "sources", "Compare", "Replies and thinking", "Compare events per message in visible replies and thinking", ["source"], agentEventMessages),
+  ],
+  branch_usage: [
+    idea("branch_usage", "branches", "Compare", "By branch", "Compare spend and sessions across branches", ["branch"], branchSpend),
+    idea("branch_usage", "coverage", "Compare", "Coverage", "How much spend has a recorded branch, an unknown one, or no branch data", ["coverage"], branchSpend),
+    idea("branch_usage", "repos", "Compare", "By project and branch", "Compare spend across each project's branches", ["project_name", "branch"], branchSpend),
   ],
   outcomes: [
     idea("outcomes", "labels", "Compare", "By outcome", "Compare sessions and cost by what became of their changes", ["outcome_label"], outcomes),
