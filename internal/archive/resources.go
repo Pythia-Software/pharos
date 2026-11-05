@@ -127,9 +127,11 @@ type resourceReading struct {
 // resourceSummary is a snapshot's resources: the totals of its processes,
 // and each of them.
 type resourceSummary struct {
-	CPUPercent         *float64 `json:"cpu_percent"`
-	MemoryBytes        uint64   `json:"memory_bytes"`
-	DiskBytesPerSecond *float64 `json:"disk_bytes_per_second"`
+	// GPU measures only this summary's Pharos process tree.
+	GPU                *gpuReading `json:"gpu,omitempty"`
+	CPUPercent         *float64    `json:"cpu_percent"`
+	MemoryBytes        uint64      `json:"memory_bytes"`
+	DiskBytesPerSecond *float64    `json:"disk_bytes_per_second"`
 	// A process without a second sample has no rate yet. Keep the measured part
 	// visible, and say explicitly when it is a lower bound.
 	CPUPartial  bool   `json:"cpu_partial"`
@@ -495,7 +497,7 @@ func compactBytes(value uint64) string {
 func (s *Server) serviceResources() *resourceSummary {
 	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
 	processes = append(processes, leaseProcesses(s.leases.probe(false), "", "")...)
-	return summarizeResources("Pharos", s.resources.sample(processes))
+	return withProcessGPU(summarizeResources("Pharos", s.resources.sample(processes)))
 }
 
 // leaseProcesses are the live leases' processes on this Mac.
