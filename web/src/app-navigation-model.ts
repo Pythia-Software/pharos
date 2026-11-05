@@ -28,7 +28,7 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
-  tokens: "Outcomes", carbon: "Outcomes", outcomes: "Outcomes",
+  tokens: "Outcomes", carbon: "Outcomes", outcomes: "Outcomes", branches: "Outcomes",
 };
 
 // Preview pages (agent-events-flag.ts) are listed only when turned on.
