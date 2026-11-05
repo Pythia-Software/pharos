@@ -39,7 +39,7 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents", agent_event_rates: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
-  tokens: "Outcomes", carbon: "Outcomes", scatter: "Outcomes", outcomes: "Outcomes",
+  tokens: "Outcomes", carbon: "Outcomes", scatter: "Outcomes", outcomes: "Outcomes", branches: "Outcomes",
 };
 
 // Query tables are grouped by the records they contain, not dashboard topic.
