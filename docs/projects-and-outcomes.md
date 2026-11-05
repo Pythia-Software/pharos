@@ -1133,8 +1133,10 @@ head in, and writes `main_merge_*`. Its properties:
 - **Mainline without a remote:** a repository with no `origin` uses its
   local `main` or `master`, so local-only work can still land.
 - **Squash merges:** a squash of several commits has no single patch-id
-  match, so those commits stay Committed. A one-commit squash or a rebase
-  is recognised.
+  match. It is recognised by the branch's tree, by the subjects it lists,
+  or by the pull request the session opened (see Tier 2's mainline rules);
+  one that matches none stays Committed. A one-commit squash or a rebase is
+  recognised by patch-id.
 - **Exports:** there is no Claude.ai export source; ChatGPT is the only chat
   export.
 - **`session_shape`:** neither `docs/session-shape.md` nor a `session_shape`
