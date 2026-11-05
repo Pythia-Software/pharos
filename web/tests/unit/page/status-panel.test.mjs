@@ -118,13 +118,13 @@ test("the load row is CPU, RAM and disk in one row, the server's line and each p
   assert.equal(model(view({ resources: {} })).load, null);
 });
 
-test("the broker load remains visible during a service timeout, and partial rates say they are lower bounds", () => {
+test("the broker load remains visible during a service timeout, and partial rates use plain values", () => {
   const unavailable = model({library: null, service: {name: "Euclid", error: "timeout", resources: {memory_bytes: 1e9}},
     resources: {cpu_percent: 12, cpu_partial: true, memory_bytes: 2e9, disk_bytes_per_second: 4e6, disk_partial: true, label: "Pharos is using resources"},
     lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
   assert.equal(unavailable.available, false);
-  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB", "last 64 MB"]);
-  assert.match(unavailable.load.tooltip, /lower bound/);
+  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["12%", "2.0 GB", "4.0 MB/s", "last 48 GB", "last 64 MB"]);
+  assert.match(unavailable.load.tooltip, /may temporarily undercount/);
   assert.match(unavailable.load.tooltip, /last reported/);
 });
 

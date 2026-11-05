@@ -347,15 +347,15 @@
     const known = Number.isFinite(resources.cpu_percent) || Number.isFinite(resources.memory_bytes) || resources.label;
     if (!known) return null;
     const metrics = [
-      {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${resources.cpu_partial ? '≥' : ''}${Math.round(resources.cpu_percent)}%` : '—'},
+      {id: 'cpu', label: 'CPU', value: Number.isFinite(resources.cpu_percent) ? `${Math.round(resources.cpu_percent)}%` : '—'},
       {id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'},
     ];
-    if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${resources.disk_partial ? '≥' : ''}${size(resources.disk_bytes_per_second)}/s` : '—'});
+    if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
     metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: Number.isFinite(wal) ? `${sizesStale ? 'last ' : ''}${size(wal)}` : '—'});
     const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
     const partial = [resources.cpu_partial ? 'CPU' : '', resources.disk_partial ? 'I/O' : ''].filter(Boolean);
-    return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate; ≥ marks a lower bound.` : '',
+    return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate and may temporarily undercount usage.` : '',
       sizesStale ? 'Storage and WAL were last reported before the service stopped answering.' : 'Storage is the last drive measurement; WAL is the current catalog log size.',
       ...processes].filter(Boolean).join('\n')};
   }
