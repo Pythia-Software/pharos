@@ -3,6 +3,8 @@ package archive
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -151,6 +153,11 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 		}
 		return nil
 	})
+	for _, secret := range conformanceCases[kind].secrets {
+		if len(conformanceHolding(t, scratch, secret)) == 0 {
+			t.Fatalf("the fixture never writes the secret %q, so its capture is not checked for it", secret)
+		}
+	}
 	live := conformanceRecords(t, discoverAll(t, source))
 
 	config := captureTestConfig(t, source)
@@ -158,14 +165,9 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 		t.Fatalf("capture: %+v", summary)
 	}
 	for _, secret := range conformanceCases[kind].secrets {
-		_ = filepath.WalkDir(config.CaptureRoot, func(path string, entry fs.DirEntry, err error) error {
-			if err == nil && !entry.IsDir() {
-				if data, err := os.ReadFile(path); err == nil && bytes.Contains(data, []byte(secret)) {
-					t.Errorf("the capture holds a credential, in %s", path)
-				}
-			}
-			return nil
-		})
+		for _, path := range conformanceHolding(t, config.CaptureRoot, secret) {
+			t.Errorf("the capture holds a credential, in %s", path)
+		}
 	}
 	// The capture alone must be enough: the source is gone, as on another
 	// Mac reading this one's captures.
@@ -192,6 +194,20 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 	}
 	records := conformanceRecords(t, discovered)
 	normalized := conformanceNormalize(records, scratch, captureViewOf(input.Adapter))
+	// Another read of the same capture gives the same records, hashes and
+	// all; only the folders differ between this read and the other one.
+	again, err := leaseCaptureForIndex(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	rediscovered := map[string]WorkspaceRecord{}
+	if err := again.Adapter.Discover(func(record WorkspaceRecord) error { rediscovered[record.SourceID] = record; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if reread := conformanceNormalize(conformanceRecords(t, rediscovered), scratch, captureViewOf(again.Adapter)); reread != normalized {
+		t.Errorf("two reads of one capture differ:\n%s", firstDifference(normalized, reread))
+	}
 	if want := conformanceNormalize(live, scratch, nil); normalized != want {
 		t.Errorf("the capture reads differently from the source:\n%s", firstDifference(want, normalized))
 	}
@@ -204,12 +220,51 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 		t.Fatalf("index the capture: %v", result.Error)
 	}
 	for _, record := range records {
-		if countRows(t, catalog, "SELECT COUNT(*) FROM workspaces WHERE source_id=?", record.SourceID) == 0 {
-			t.Errorf("workspace %s was read but not indexed", record.SourceID)
+		for _, conversation := range record.Conversations {
+			ids := map[string]bool{}
+			for _, message := range conversation.Messages {
+				ids[message.NativeID] = true
+			}
+			indexed := countRows(t, catalog, `SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id
+				WHERE w.source_id=? AND c.native_id=?`, record.SourceID, conversation.NativeID)
+			if indexed != len(ids) {
+				t.Errorf("conversation %s of %s was read with %d messages but indexed with %d", conversation.NativeID, record.SourceID, len(ids), indexed)
+			}
 		}
 	}
 	conformanceCapabilities(t, kind, records, catalog)
 	return version, normalized
+}
+
+// conformanceHolding are the files below root holding secret, as written or
+// hex- or base64-encoded (the Cursor CLI keeps its metadata as hex), in a
+// file or in its zstd-decoded content.
+func conformanceHolding(t *testing.T, root, secret string) []string {
+	t.Helper()
+	forms := [][]byte{[]byte(secret), []byte(hex.EncodeToString([]byte(secret))), []byte(strings.ToUpper(hex.EncodeToString([]byte(secret)))), []byte(base64.StdEncoding.EncodeToString([]byte(secret)))}
+	holding := []string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !entry.Type().IsRegular() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.HasPrefix(data, zstdMagic) {
+			if decoded, err := zedDecoder.DecodeAll(data, nil); err == nil {
+				data = append(data, decoded...)
+			}
+		}
+		if slices.ContainsFunc(forms, func(form []byte) bool { return bytes.Contains(data, form) }) {
+			holding = append(holding, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return holding
 }
 
 var conformanceHash = regexp.MustCompile(`[0-9a-f]{16,}`)
@@ -358,7 +413,7 @@ func conformanceObserved(records []WorkspaceRecord, catalog *Catalog) map[string
 			seen["cost"] = seen["cost"] || firstString(metric["name"]) == "reported_cost"
 		}
 		for _, conversation := range record.Conversations {
-			times, timed := map[string]bool{}, 0
+			times := map[string]bool{}
 			seen["model"] = seen["model"] || conversation.Model != ""
 			seen["effort"] = seen["effort"] || conversation.Effort != ""
 			seen["subagents"] = seen["subagents"] || conversation.ParentNativeID != ""
@@ -368,7 +423,6 @@ func conformanceObserved(records []WorkspaceRecord, catalog *Catalog) map[string
 				seen["effort"] = seen["effort"] || message.Effort != ""
 				if message.CreatedAt != "" && message.Kind != "metadata" {
 					times[message.CreatedAt] = true
-					timed++
 				}
 				switch message.Kind {
 				case "tool_call", "delegation":
@@ -379,13 +433,14 @@ func conformanceObserved(records []WorkspaceRecord, catalog *Catalog) map[string
 					seen["reasoning"] = true
 				}
 			}
-			// A time copied to every message is not each message's own.
-			seen["timestamps"] = seen["timestamps"] || timed > 0 && !(timed > 1 && len(times) == 1)
+			// Two messages sent at different times: a time copied to every
+			// message, or a conversation of one, shows none.
+			seen["timestamps"] = seen["timestamps"] || len(times) > 1
 		}
 	}
+	// Each request's own usage, not a session's total.
 	var tokens int
-	_ = catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM model_requests WHERE COALESCE(input_tokens,0)+COALESCE(output_tokens,0)>0)
-		+(SELECT COUNT(*) FROM metrics WHERE unit='tokens' AND value>0)`).Scan(&tokens)
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM model_requests WHERE COALESCE(input_tokens,0)+COALESCE(output_tokens,0)>0`).Scan(&tokens)
 	seen["message_tokens"] = tokens > 0
 	return seen
 }
@@ -507,7 +562,8 @@ func conformanceCodexLines() (main, agent []string) {
 
 // conformanceExport is a canonical export holding everything the format can:
 // a session in a folder on a branch, with a model, effort, thinking, a tool
-// call and its result, usage, a subagent, a tool version and a cost.
+// call and its result, each request's usage, a subagent, a tool version and
+// a cost.
 func conformanceExport(t *testing.T, kind string) SourceConfig {
 	t.Helper()
 	message := func(id, role, kind, text, at string, extra map[string]any) map[string]any {
@@ -525,7 +581,10 @@ func conformanceExport(t *testing.T, kind string) SourceConfig {
 		}
 		return row
 	}
-	usage := map[string]any{"usage": map[string]any{"input_tokens": 100, "output_tokens": 20}}
+	// Usage counts as a request's when it names the request.
+	usage := func(id string) map[string]any {
+		return map[string]any{"message": map[string]any{"id": id, "usage": map[string]any{"input_tokens": 100, "output_tokens": 20}}}
+	}
 	document := map[string]any{"workspaces": []any{map[string]any{
 		"id": "export-work", "title": "Count README words", "purpose": "Count the words", "outcome": "74 words", "activity_at": "2026-09-01T10:01:00Z",
 		"location": "/work/app", "metadata": map[string]any{"branch": "main"}, "metrics": []any{map[string]any{"name": "reported_cost", "value": 0.12, "unit": "USD"}},
@@ -535,8 +594,8 @@ func conformanceExport(t *testing.T, kind string) SourceConfig {
 				message("m2", "assistant", "reasoning", "Read the file first.", "2026-09-01T10:00:01Z", nil),
 				message("m3", "assistant", "tool_call", `{"tool":"Bash","input":{"command":"wc -w README.md"}}`, "2026-09-01T10:00:02Z", map[string]any{"call_id": "c1"}),
 				message("m4", "tool", "tool_result", "74 README.md", "2026-09-01T10:00:03Z", map[string]any{"call_id": "c1"}),
-				message("m5", "assistant", "message", "README.md has 74 words.", "2026-09-01T10:00:04Z", usage)),
-			conversation("export-agent", "export-main", message("a1", "assistant", "message", "74 words.", "2026-09-01T10:00:05Z", usage)),
+				message("m5", "assistant", "message", "README.md has 74 words.", "2026-09-01T10:00:04Z", usage("req-1"))),
+			conversation("export-agent", "export-main", message("a1", "assistant", "message", "74 words.", "2026-09-01T10:00:05Z", usage("req-2"))),
 		},
 	}}}
 	data, _ := json.Marshal(document)
@@ -587,14 +646,15 @@ func conformanceZed(t *testing.T) SourceConfig {
 }
 
 // conformanceConductor is Conductor's fixture with the session's effort and
-// a reply that thought.
+// a reply that thought and reports its request's usage.
 func conformanceConductor(t *testing.T) SourceConfig {
 	t.Helper()
 	root := t.TempDir()
 	conductorSemanticFixture(t, root)
 	db := openWritableSQLite(t, filepath.Join(root, "conductor.db"))
 	thought := jsonText(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg-think", "role": "assistant", "content": []any{
-		map[string]any{"type": "thinking", "thinking": "Check the formatter first.", "signature": "c2ln"}, map[string]any{"type": "text", "text": "Checking."}}}})
+		map[string]any{"type": "thinking", "thinking": "Check the formatter first.", "signature": "c2ln"}, map[string]any{"type": "text", "text": "Checking."}},
+		"usage": map[string]any{"input_tokens": 300, "output_tokens": 40}}})
 	execSQL(t, db, "ALTER TABLE sessions ADD COLUMN claude_effort_level TEXT", "UPDATE sessions SET claude_effort_level='high'")
 	if _, err := db.Exec("INSERT INTO session_messages VALUES ('m6','session-1','assistant',?,'2026-09-20T10:00:50Z',NULL,NULL,NULL)", thought); err != nil {
 		t.Fatal(err)

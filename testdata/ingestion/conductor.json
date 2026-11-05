@@ -157,7 +157,7 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:6",
-              "RawText": "{\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Check the formatter first.\",\"type\":\"thinking\"},{\"text\":\"Checking.\",\"type\":\"text\"}],\"id\":\"msg-think\",\"role\":\"assistant\"},\"type\":\"assistant\"}",
+              "RawText": "{\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Check the formatter first.\",\"type\":\"thinking\"},{\"text\":\"Checking.\",\"type\":\"text\"}],\"id\":\"msg-think\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":300,\"output_tokens\":40}},\"type\":\"assistant\"}",
               "SourceOrder": 0,
               "Selected": true,
               "ReasoningFormat": "text"
@@ -208,7 +208,7 @@
           "name": "input_tokens",
           "status": "reported-reconciled",
           "unit": "tokens",
-          "value": 6200
+          "value": 6500
         },
         {
           "definition": "Retained request usage plus unallocated aggregate remainder. Input includes cached input; cache and reasoning are subsets. Raw accounting evidence retained on messages.",
@@ -216,7 +216,7 @@
           "name": "output_tokens",
           "status": "reported-reconciled",
           "unit": "tokens",
-          "value": 350
+          "value": 390
         },
         {
           "definition": "Retained request usage plus unallocated aggregate remainder. Input includes cached input; cache and reasoning are subsets. Raw accounting evidence retained on messages.",
@@ -232,7 +232,7 @@
           "name": "total_tokens",
           "status": "reported-reconciled",
           "unit": "tokens",
-          "value": 6550
+          "value": 6890
         },
         {
           "definition": "Retained request usage plus unallocated aggregate remainder. Input includes cached input; cache and reasoning are subsets. Raw accounting evidence retained on messages.",
