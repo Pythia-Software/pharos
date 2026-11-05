@@ -113,6 +113,12 @@ type RowOutputs map[string][]float32
 // Run runs any number of rows: packed by length into batches under
 // tokenBudget padded tokens, Capacity at a time, results in row order.
 func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, tokenBudget int) ([]RowOutputs, error) {
+	return r.RunWithProgress(ctx, rows, outputs, tokenBudget, nil)
+}
+
+// RunWithProgress is Run with a callback for each successful batch's row count.
+// Callbacks may overlap; the caller must synchronize any shared progress state.
+func (r *Runner) RunWithProgress(ctx context.Context, rows []Framed, outputs []string, tokenBudget int, progress func(int)) ([]RowOutputs, error) {
 	lengths := make([]int, len(rows))
 	for i, row := range rows {
 		lengths[i] = len(row.IDs)
@@ -153,6 +159,9 @@ func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, token
 					row[tensor.Name] = tensor.Float32[k*width : (k+1)*width]
 				}
 				results[index] = row
+			}
+			if progress != nil {
+				progress(len(batch))
 			}
 		}()
 	}
