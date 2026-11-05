@@ -388,6 +388,10 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 	for index := range requests {
 		request := &requests[index]
 		request.Sequence = index
+		// An advisor's request has a context of its own.
+		if claudeAdvisorRequest(messages[request.FirstIndex]) {
+			continue
+		}
 		if prior := previous[request.Stream]; prior != nil {
 			request.CompactedBefore = compactedBetween(compactions[request.Stream], prior.FirstIndex, request.FirstIndex)
 			if !request.CompactedBefore {

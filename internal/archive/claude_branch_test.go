@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -448,4 +449,122 @@ func TestClaudeRepairAddsAdvisorUsageFromStoredReplies(t *testing.T) {
 		t.Fatalf("repair = %d, %v", repaired, err)
 	}
 	wantLibraryTokens(t, catalog, 165)
+}
+
+func TestClaudeSessionCountsAReplyOnceWhateverItsDepths(t *testing.T) {
+	reply := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10)
+	record := WorkspaceRecord{SourceKind: "claude", Conversations: []ConversationRecord{
+		{NativeID: "s1", Provider: "claude", Account: "local"},
+		{NativeID: "s1:subagent:agent-a", Provider: "claude", Account: "local", AgentDepth: 1, Messages: []MessageRecord{reply}},
+		{NativeID: "s1:subagent:agent-z", Provider: "claude", Account: "local", AgentDepth: 1, Messages: []MessageRecord{reply}},
+	}}
+	counted := func() int64 {
+		total := int64(0)
+		for _, conversation := range record.Conversations {
+			total += integer(conversationTokenCounts(conversation.Messages)["total_tokens"])
+		}
+		return total
+	}
+	dedupeClaudeGroupUsage(&record)
+	// The lineage found later puts agent-a under agent-z; deciding again
+	// from what the first decision left still counts the reply once.
+	record.Conversations[1].AgentDepth = 2
+	dedupeClaudeGroupUsage(&record)
+	if got := counted(); got != 110 {
+		t.Fatalf("counted %d, want 110", got)
+	}
+}
+
+func TestClaudeForkHoldingTheWholeReplyCountsIt(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	parent := []string{
+		claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+		claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 1)),
+	}
+	fork := withSidechain([]string{claudeReply("s1", "a1", "p1", "msg_1", "req_1b", text("Looking"), usage(100, 10))})
+	ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": parent, "s1/subagents/agent-f.jsonl": fork}))
+	wantLibraryTokens(t, catalog, 110)
+}
+
+func TestClaudeSubagentWhoseTranscriptIsGoneIsSettled(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	parent := []string{
+		claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+		claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
+	}
+	fork := withSidechain([]string{
+		claudeReply("s1", "a1", "p1", "msg_1", "req_1b", text("Looking"), usage(100, 10)),
+		claudeReply("s1", "f1", "a1", "msg_2", "req_2", text("Found it"), usage(200, 20)),
+	})
+	source := claudeSessionFiles(t, map[string][]string{"s1.jsonl": parent, "s1/subagents/agent-f.jsonl": fork})
+	ingestSource(t, catalog, source)
+	wantLibraryTokens(t, catalog, 110+220)
+	// A library indexed before copies were settled; Claude Code then removed
+	// the subagent's transcript, and the session's grew.
+	unsettle(t, catalog)
+	if err := os.Remove(filepath.Join(source.Path, "-p", "s1", "subagents", "agent-f.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	appendSourceFile(t, filepath.Join(source.Path, "-p", "s1.jsonl"), claudeTurn("s1", "p2", "a1", "user", "Thanks", nil)+"\n")
+	ingestSource(t, catalog, source)
+	if conversationMessages(t, catalog, "s1:subagent:agent-f") == 0 {
+		t.Fatal("the subagent's stored conversation is gone; the test needs it kept")
+	}
+	wantLibraryTokens(t, catalog, 110+220)
+}
+
+func TestClaudeAdvisorRequestLeavesTheContextAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	advised := map[string]any{"input_tokens": 1000, "output_tokens": 10, "iterations": []any{
+		map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 50, "output_tokens": 5},
+	}}
+	messages := parseJSONL(t, "claude", path,
+		claudeTurn("s", "p1", "", "user", "Plan it", nil),
+		claudeReply("s", "a1", "p1", "msg_1", "req_1", toolUse("t1"), advised),
+		claudeTurn("s", "r1", "a1", "user", toolResult("t1"), nil),
+		claudeReply("s", "a2", "r1", "msg_2", "req_2", text("Done"), usage(1020, 10)))
+	requests, _ := buildToolLedger(messages, "claude-test")
+	found := false
+	for _, request := range requests {
+		if request.NativeID == "msg_2" {
+			found = true
+			if request.ContextGrowth == nil || *request.ContextGrowth != 10 {
+				t.Fatalf("msg_2 context growth = %v, want 10", request.ContextGrowth)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no request for msg_2 in %+v", requests)
+	}
+}
+
+func TestClaudeShallowerSubagentCountsAReplyItsChildCopied(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	reply := withSidechain([]string{claudeReply("s1", "z2", "z1", "msg_9", "req_9", text("Half done"), usage(300, 30))})[0]
+	source := claudeSessionFiles(t, map[string][]string{
+		"s1.jsonl": {
+			claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+			claudeTurn("s1", "l1", "p1", "assistant", []any{map[string]any{"type": "tool_use", "id": "root-call", "name": "Agent", "input": map[string]any{"prompt": "Child assignment"}}}, nil),
+			claudeTurn("s1", "l2", "l1", "user", toolResult("root-call"), claudeEntry{"toolUseResult": map[string]any{"agentId": "z"}}),
+		},
+		// agent-z launches agent-a, whose name sorts first, with a copy of
+		// its conversation.
+		"s1/subagents/agent-z.jsonl": withSidechain([]string{
+			claudeTurn("s1", "z1", "", "user", "Child assignment", nil),
+			reply,
+			claudeTurn("s1", "z3", "z2", "assistant", []any{map[string]any{"type": "tool_use", "id": "child-call", "name": "Agent", "input": map[string]any{"prompt": "Grandchild assignment"}}}, nil),
+			claudeTurn("s1", "z4", "z3", "user", []any{map[string]any{"type": "tool_result", "tool_use_id": "child-call", "content": []any{map[string]any{"type": "text", "text": "Async agent launched successfully.\nagentId: a (internal ID - do not mention to user.)"}}}}, nil),
+		}),
+		"s1/subagents/agent-a.jsonl": withSidechain([]string{claudeTurn("s1", "a0", "", "user", "Grandchild assignment", nil), reply}),
+	})
+	ingestSource(t, catalog, source)
+	wantLibraryTokens(t, catalog, 330)
+	counted, err := queryMaps(catalog.DB, `SELECT c.native_id,c.agent_depth FROM messages m JOIN conversations c ON c.id=m.conversation_id
+		WHERE m.native_id LIKE '%:usage' AND m.raw_text NOT LIKE '{"copied":%'`)
+	if err != nil || len(counted) != 1 || counted[0]["native_id"] != "s1:subagent:agent-z" || integer(counted[0]["agent_depth"]) != 1 {
+		t.Fatalf("counted in %v, %v; want agent-z at depth 1", counted, err)
+	}
 }

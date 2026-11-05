@@ -712,8 +712,8 @@ func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []
 		}
 	}
 	if combined != nil && a.provider == "claude" {
-		dedupeClaudeGroupUsage(combined)
 		reconcileClaudeLineage(combined)
+		dedupeClaudeGroupUsage(combined)
 		combined.Metrics = reconciledTokenMetrics(*combined)
 	}
 	return combined, read, nil

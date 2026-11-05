@@ -401,6 +401,35 @@ func settleStoredUsage(tx *sql.Tx, conversationID string, copyOf map[string]stri
 	return len(updates) > 0, nil
 }
 
+// settleOmittedClaude settles a Claude Code workspace whole when it holds
+// conversations record did not have: a subagent whose transcript Claude Code
+// removed while its session's stayed is still stored, and its copies are
+// settled from what was stored.
+func settleOmittedClaude(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, workspaceID string, conversationIDs []string) error {
+	if record.SourceKind != "claude" || workspaceID == "" {
+		return nil
+	}
+	written := []any{workspaceID}
+	for _, id := range conversationIDs {
+		if id != "" {
+			written = append(written, id)
+		}
+	}
+	query := "SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace_id=? AND provider='claude'"
+	if len(written) > 1 {
+		query += " AND id NOT IN (" + placeholders(len(written)-1) + ")"
+	}
+	var omitted bool
+	if err := tx.QueryRow(query+")", written...).Scan(&omitted); err != nil || !omitted {
+		return err
+	}
+	conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	return repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids)
+}
+
 // claudeRecordHasUsage says whether record's token metrics are derived from
 // Claude usage records, so that a record whose records are all copies counts
 // none.

@@ -3,7 +3,6 @@ package archive
 import (
 	"encoding/json"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -226,22 +225,24 @@ func claudeUsageRecord(m MessageRecord) bool {
 	return m.Kind == "metadata" && (strings.HasSuffix(m.NativeID, ":usage") || strings.Contains(m.NativeID, ":usage:advisor:"))
 }
 
-// claudeUsageKeys is a usage record's identities: its reply's message ID
-// with the request ID, and for an Anthropic message ID (msg_), which names
-// one reply wherever it appears, the message ID alone. A sidechain (/btw)
-// replays its parent's replies under their message IDs but new request IDs.
-func claudeUsageKeys(m MessageRecord) []string {
+// claudeUsageKeys is a usage record's identities, with the tokens it
+// reports: its reply's message ID with the request ID, and for an Anthropic
+// message ID (msg_), which names one reply wherever it appears, the message
+// ID alone. A sidechain (/btw) replays its parent's replies under their
+// message IDs but new request IDs.
+func claudeUsageKeys(m MessageRecord) ([]string, int64) {
 	if !claudeUsageRecord(m) {
-		return nil
+		return nil, 0
 	}
 	raw, _ := unwrapUsageCopy(m.RawText)
 	event := map[string]any{}
 	if json.Unmarshal([]byte(raw), &event) != nil {
-		return nil
+		return nil, 0
 	}
-	id := firstString(mapValue(event["message"])["id"])
+	message := mapValue(event["message"])
+	id := firstString(message["id"])
 	if id == "" {
-		return nil
+		return nil, 0
 	}
 	keys := []string{}
 	if request := firstString(event["requestId"]); request != "" {
@@ -250,53 +251,98 @@ func claudeUsageKeys(m MessageRecord) []string {
 	if strings.HasPrefix(id, "msg_") {
 		keys = append(keys, id)
 	}
-	return keys
+	return keys, integer(normalizeTokenCounts(mapValue(message["usage"]))["total_tokens"])
 }
 
 // dedupeClaudeGroupUsage counts once a reply that several of a session's
 // transcripts hold: a forked subagent starts with a copy of its parent's
-// replies, and a sidechain replays them. The root's copy counts, else the
-// first subagent's by native ID; the others become copies of it. Within one
-// transcript a reply's lines are one request already (conversationTokenReports).
+// replies, and a sidechain replays them. Of the transcripts holding a reply,
+// the one with its fullest record counts it (a reply's usage grows as it
+// streams), then the shallowest, then the first by native ID; the others'
+// records become copies of it. The session's earlier decisions are undone
+// first, so a parse and a repair of what was stored decide alike. Within one
+// transcript a reply's lines are one request already
+// (conversationTokenReports).
 func dedupeClaudeGroupUsage(record *WorkspaceRecord) {
-	order := make([]int, len(record.Conversations))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := record.Conversations[order[i]], record.Conversations[order[j]]
-		if a.AgentDepth != b.AgentDepth {
-			return a.AgentDepth < b.AgentDepth
+	natives := recordNatives(*record)
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(key string) string {
+		if parent[key] == "" || parent[key] == key {
+			parent[key] = key
+			return key
 		}
-		return a.NativeID < b.NativeID
-	})
-	owners := map[string]string{}
-	for _, index := range order {
-		conversation := &record.Conversations[index]
-		claimed := map[string]bool{}
-		for m := range conversation.Messages {
-			message := &conversation.Messages[m]
-			keys := claudeUsageKeys(*message)
-			owner := ""
-			for _, key := range keys {
-				if found, ok := owners[key]; ok && found != conversation.NativeID {
-					owner = found
-					break
-				}
+		parent[key] = find(parent[key])
+		return parent[key]
+	}
+	type reply struct {
+		conversation, message int
+		keys                  []string
+		tokens                int64
+	}
+	replies := []reply{}
+	for c := range record.Conversations {
+		for m := range record.Conversations[c].Messages {
+			message := &record.Conversations[c].Messages[m]
+			if natives[usageCopyOf(*message)] {
+				message.RawText, _ = unwrapUsageCopy(message.RawText)
 			}
-			if owner != "" {
-				raw, _ := unwrapUsageCopy(message.RawText)
-				message.RawText = wrapUsageCopy(raw, owner)
+			keys, tokens := claudeUsageKeys(*message)
+			if len(keys) == 0 {
 				continue
 			}
-			for _, key := range keys {
-				claimed[key] = true
+			for _, key := range keys[1:] {
+				parent[find(key)] = find(keys[0])
 			}
-		}
-		for key := range claimed {
-			if _, ok := owners[key]; !ok {
-				owners[key] = conversation.NativeID
-			}
+			replies = append(replies, reply{c, m, keys, tokens})
 		}
 	}
+	// Records sharing a key are one reply; its holders are ranked by their
+	// fullest record of it.
+	holdings := map[string]map[int]int64{}
+	for _, r := range replies {
+		root := find(r.keys[0])
+		if holdings[root] == nil {
+			holdings[root] = map[int]int64{}
+		}
+		holdings[root][r.conversation] = max(holdings[root][r.conversation], r.tokens)
+	}
+	owners := map[string]int{}
+	for root, holders := range holdings {
+		best := -1
+		for c, tokens := range holders {
+			if best < 0 {
+				best = c
+				continue
+			}
+			a, b := record.Conversations[c], record.Conversations[best]
+			if tokens != holders[best] {
+				if tokens > holders[best] {
+					best = c
+				}
+			} else if a.AgentDepth != b.AgentDepth {
+				if a.AgentDepth < b.AgentDepth {
+					best = c
+				}
+			} else if a.NativeID < b.NativeID {
+				best = c
+			}
+		}
+		owners[root] = best
+	}
+	for _, r := range replies {
+		owner := owners[find(r.keys[0])]
+		message := &record.Conversations[r.conversation].Messages[r.message]
+		// A copy of another session's reply stays one.
+		if owner == r.conversation || usageCopyOf(*message) != "" {
+			continue
+		}
+		message.RawText = wrapUsageCopy(message.RawText, record.Conversations[owner].NativeID)
+	}
+}
+
+// claudeAdvisorRequest says whether m is an advisor iteration's usage, whose
+// request has a context of its own.
+func claudeAdvisorRequest(m MessageRecord) bool {
+	return m.Kind == "metadata" && strings.Contains(m.NativeID, ":usage:advisor:")
 }

@@ -165,6 +165,8 @@ function contextTokenReports(messages,reports){
   reports.forEach((report,index)=>{
     if(!report||report.superseded)return;
     const {value}=tokenEnvelope(messages[index]),stream=report.stream||'main';
+    // An advisor's request has a context of its own.
+    if(value.advisor_of)return;
     let usage=report.scope==='request'?report.usage:value.info?.last_token_usage;
     const b=tokenBreakdown(usage),separate=usage&&['cache_read_input_tokens','cache_creation_input_tokens','cacheReadInputTokens','cacheCreationInputTokens','cache_creation'].some(key=>key in usage);
     let size=typeof report.context==='number'?report.context:b?.input===undefined?null:b.input+(separate?(b.cacheRead||0)+(b.cacheWrite||0):0);
