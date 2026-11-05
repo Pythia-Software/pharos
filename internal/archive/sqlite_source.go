@@ -77,7 +77,7 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 			return db, nil
 		}
 	}
-	db, copyErr := openSQLiteCopy(ctx, resolved)
+	db, copyErr := openSQLiteCopy(ctx, resolved, locked)
 	if copyErr != nil {
 		via := sqliteReadFailed
 		if errors.Is(copyErr, errSQLiteWriteInProgress) {
@@ -197,10 +197,10 @@ func sqlitePendingState(path string) (sqlitePending, error) {
 // neither changed. The copy is opened read-write (query_only) so SQLite can
 // fold the WAL into it, which a read-only open of a copy without its
 // shared-memory file could not. Closing the database removes the copy.
-func openSQLiteCopy(ctx context.Context, path string) (*sql.DB, error) {
+func openSQLiteCopy(ctx context.Context, path string, locked bool) (*sql.DB, error) {
 	sweepSQLiteCopies()
 	for attempt := 0; attempt < sqliteCopyAttempts; attempt++ {
-		dir, err := copySQLiteSource(ctx, path)
+		dir, err := copySQLiteSource(ctx, path, locked)
 		if errors.Is(err, errSQLiteSourceMoved) {
 			continue
 		}
@@ -236,12 +236,14 @@ func sqliteCopyStateOf(path string) (sqliteCopyState, error) {
 	return sqliteCopyState{files: files, pending: pending}, err
 }
 
-func copySQLiteSource(ctx context.Context, path string) (string, error) {
+// copySQLiteSource refuses what openSourceSQLite waits for, again on each
+// attempt: a holder can change its journal mode between them.
+func copySQLiteSource(ctx context.Context, path string, locked bool) (string, error) {
 	before, err := sqliteCopyStateOf(path)
 	if err != nil {
 		return "", err
 	}
-	if before.pending.hot {
+	if before.pending.hot || locked && before.pending.rollback {
 		return "", fmt.Errorf("%s: %w", path, errSQLiteWriteInProgress)
 	}
 	if err := os.MkdirAll(sqliteCopyRoot, 0o700); err != nil {

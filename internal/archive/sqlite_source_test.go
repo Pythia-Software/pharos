@@ -244,7 +244,7 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			t.Fatalf("error %v via %s", err, sqliteReadVia(path))
 		}
 		// The copy checks again, for a journal gone hot since.
-		if db, err := openSQLiteCopy(context.Background(), path); err == nil {
+		if db, err := openSQLiteCopy(context.Background(), path, false); err == nil {
 			db.Close()
 			t.Fatal("a database with a hot journal was copied")
 		} else if !errors.Is(err, errSQLiteWriteInProgress) {
@@ -280,6 +280,27 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			t.Fatal("a copy of a changing database was read")
 		} else if !errors.Is(err, errSQLiteWriteInProgress) || copied != sqliteCopyAttempts {
 			t.Fatalf("error %v after %d copies", err, copied)
+		}
+		assertNoCopies(t, copies)
+	})
+	t.Run("a holder that leaves its WAL during a copy is waited for", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "switching.db")
+		sqliteNotes(t, path, "WAL")
+		holder, _ := sqliteHolder(t, path, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
+		switched := false
+		override(t, &sqliteCopyHook, func(string) {
+			if !switched {
+				switched = true
+				if _, err := holder.ExecContext(context.Background(), `PRAGMA journal_mode=MEMORY`); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+		if db, err := openSourceSQLite(context.Background(), path); err == nil {
+			db.Close()
+			t.Fatal("a locked rollback-journal database was copied on a retry")
+		} else if !errors.Is(err, errSQLiteWriteInProgress) || !switched {
+			t.Fatalf("error %v, switched %v", err, switched)
 		}
 		assertNoCopies(t, copies)
 	})
@@ -372,7 +393,7 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			}
 			changed++
 		})
-		if db, err := openSQLiteCopy(context.Background(), path); err == nil {
+		if db, err := openSQLiteCopy(context.Background(), path, false); err == nil {
 			db.Close()
 			t.Fatal("a copy of a changing database was read")
 		} else if !errors.Is(err, errSQLiteWriteInProgress) || changed != sqliteCopyAttempts {
