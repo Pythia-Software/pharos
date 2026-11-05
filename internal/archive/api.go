@@ -81,7 +81,8 @@ type Server struct {
 	forecasts forecastStore
 	auto      automaticSync
 	// background is the Hourly and Daily schedule's state (background.go).
-	background backgroundState
+	background   backgroundState
+	labelerProbe labelerProbeCache
 	// diagnostics holds Settings → Logs's page and request journals.
 	diagnostics serviceDiagnostics
 	// Leave catalog connections available for rows/previews while metadata scans run.

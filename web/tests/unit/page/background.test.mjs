@@ -60,6 +60,24 @@ test("label and agent event settings remain available when no labeling work is s
   }
 });
 
+test("labeling offers thread choices only for CPU execution, independently for each model", () => {
+  const saved = {threads: 4, thread_choices: [1, 2, 4], threads_can_change: true};
+  for (const device of ['cpu', 'gpu', 'unknown', 'unavailable']) {
+    const execution = {device, status: device, detail: 'From the worker'};
+    const controls = plain(background.labelingControls({...saved, execution}));
+    assert.deepEqual(controls.execution, execution);
+    assert.deepEqual(controls.threadChoices, device === 'cpu' ? saved.thread_choices : []);
+    assert.equal(controls.threadsCanChange, device === 'cpu');
+  }
+  assert.deepEqual(plain(background.labelingControls(saved)).threadChoices, []);
+  assert.equal(background.labelingControls({...saved, execution: {device:'cpu'}, threads_can_change: false}).threadsCanChange, false);
+  assert.equal(background.labelingControls({...saved, enabled:true, status:'Routine status', execution:{device:'gpu'}}).notice, '');
+  const notice = 'A model download needs attention';
+  assert.equal(background.labelingControls({...saved, notice, execution:{device:'unknown'}}).notice, notice);
+  assert.ok(background.labelingControls({...saved, enabled:true, execution:{device:'unavailable'}}).notice);
+  assert.equal(background.labelingControls({...saved, enabled:false, execution:{device:'unavailable'}}).notice, '');
+});
+
 test("an item carries its cost class, its choices and its state line", () => {
   const writing = plain(background.scheduleModel(document, at)).columns[1].items[0];
   assert.deepEqual(writing.cost, { class: "heavy", text: "Cost B" });

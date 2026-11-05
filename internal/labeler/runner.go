@@ -62,6 +62,13 @@ func NewRunner(ctx context.Context, model *Model, cfg RunnerConfig) (*Runner, er
 // Pool is the runner's pool (its restarts, worker PIDs and handshake).
 func (r *Runner) Pool() *Pool { return r.pool }
 
+// Legacy workers omit Device and retain the CPU thread contract. Auto sessions
+// that actually fell back to CPU must still retune, despite reserving GPU capacity.
+func (r *Runner) UsesCPUThreads() bool { return r.pool.Ready().Worker.Device != "gpu" }
+
+// Threads is the CPU thread target used to start (and restart) these workers.
+func (r *Runner) Threads() int { return r.cfg.Threads }
+
 // MaxBatch is the most rows a batch may hold: the configured limit, lowered
 // to what the worker announced.
 func (r *Runner) MaxBatch() int {
