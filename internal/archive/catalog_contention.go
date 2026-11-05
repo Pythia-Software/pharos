@@ -169,13 +169,18 @@ func (c *Catalog) trackWriter(label string) func() {
 // active list covers this process; an absent holder can be in another process
 // or on another Mac sharing the catalog.
 func (c *Catalog) beginTrackedWrite(ctx context.Context, label string) (*sql.Tx, func(), error) {
+	return c.beginTrackedWriteUsing(ctx, label, c.DB)
+}
+
+// A retained connection can prepare TEMP data before acquiring the writer.
+func (c *Catalog) beginTrackedWriteUsing(ctx context.Context, label string, db catalogTransactionStarter) (*sql.Tx, func(), error) {
 	started := time.Now()
 	release, err := c.acquireWriteGate(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
-	tx, err := c.beginWrite(ctx)
+	tx, err := beginCatalogWrite(ctx, db)
 	resume()
 	waited := time.Since(started)
 	if waited >= time.Second || err != nil {

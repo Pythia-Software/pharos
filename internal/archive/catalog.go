@@ -348,6 +348,7 @@ func (c *Catalog) Initialize() error {
 	}
 	for _, index := range []string{
 		messageLabelMessageIndexSQL,
+		messageLabelConversationIndexSQL,
 		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
 		// Request-gap aggregation reads only these small timing fields, not tool bodies.
 		"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
@@ -382,6 +383,9 @@ func (c *Catalog) Initialize() error {
 	// Index an existing optional ledger without creating or running it.
 	if c.hasLabelsLedger() {
 		if _, err := c.DB.Exec(messageLabelLedgerIndexSQL); err != nil {
+			return err
+		}
+		if _, err := c.DB.Exec(messageLabelMaskIndexSQL); err != nil {
 			return err
 		}
 	}
