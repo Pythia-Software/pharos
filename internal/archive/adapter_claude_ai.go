@@ -161,9 +161,14 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 			if start := iso(block["start_timestamp"]); start != "" {
 				item.CreatedAt = start
 			}
-			callID := firstString(block["id"], block["tool_use_id"])
+			// A result block has an ID of its own; tool_use_id names its call.
+			callID := firstString(block["id"])
+			if firstString(block["type"]) == "tool_result" {
+				callID = firstString(block["tool_use_id"], block["id"])
+			}
 			switch blockType := firstString(block["type"]); blockType {
-			case "text":
+			case "text", "voice_note":
+				// A voice note holds what the person said, transcribed.
 				if text := firstString(block["text"]); strings.TrimSpace(text) != "" {
 					// The first text is the message's own, by its ID alone,
 					// wherever an export puts it among the blocks.
@@ -263,13 +268,25 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 
 // claudeAISelected marks the messages on the conversation's active branch:
 // the path from its current leaf, or when the export names none from its
-// newest leaf, to the root. Edited and regenerated turns are siblings.
+// newest leaf, to the root. Edited and regenerated turns are siblings. An
+// export without parent links selects every message.
 func claudeAISelected(conversation claudeAIConversation) map[string]bool {
 	parents, children := map[string]string{}, map[string]int{}
+	linked := false
 	for _, message := range conversation.Messages {
 		id, parent := firstString(message["uuid"]), firstString(message["parent_message_uuid"])
 		parents[id] = parent
 		children[parent]++
+		linked = linked || parent != ""
+	}
+	// Exports from before Claude.ai kept a tree name no parents: the
+	// conversation is its messages, in order.
+	if !linked {
+		selected := map[string]bool{}
+		for id := range parents {
+			selected[id] = true
+		}
+		return selected
 	}
 	leaf := conversation.CurrentLeaf
 	if _, ok := parents[leaf]; !ok {

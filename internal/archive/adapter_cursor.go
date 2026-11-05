@@ -526,6 +526,9 @@ type cursorThread struct {
 	ids     []string
 	missing map[string]bool
 	short   bool
+	// known is how many of ids are where Cursor wrote them: all of them,
+	// unless a chunk of headers is lost, which moves those after it.
+	known int
 	// calls are the tool calls of its own messages, by call ID, and
 	// copiedCalls those of the messages a fork copied from its parent.
 	calls, copiedCalls map[string]bool
@@ -573,7 +576,7 @@ func (a *cursorAdapter) read(database, top string, members []cursorComposer) (*W
 		inCopy := map[string]bool{}
 		forked := firstString(info["forkedFromComposerId"])
 		inherited, _ := number(info["conversationLengthAtSpawn"])
-		if n := int(inherited); forked != "" && n > 0 && n <= len(thread.ids) {
+		if n := int(inherited); forked != "" && n > 0 && n <= thread.known {
 			parent, gone := byID[forked], false
 			if parent == nil {
 				var held int
@@ -745,29 +748,38 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 				thread.ids = append(thread.ids, firstString(bubble["bubbleId"]))
 			}
 		}
+		thread.known = len(thread.ids)
 		return thread, nil
 	}
 	headers, _ := thread.data["fullConversationHeadersOnly"].([]any)
+	gap := -1
 	if log := mapValue(thread.data["headerLog"]); len(headers) == 0 && log != nil {
 		chunks, _ := number(log["chunkCount"])
 		for chunk := 0; chunk < int(chunks); chunk++ {
 			var raw []byte
 			err := tx.QueryRowContext(a.context(), `SELECT value FROM cursorDiskKV WHERE key=?`, fmt.Sprintf("composerConvHeaders:%s:%06d", member.id, chunk)).Scan(&raw)
-			if errors.Is(err, sql.ErrNoRows) {
-				thread.short = true
-				continue
-			} else if err != nil {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
+			// A chunk lost or damaged loses its headers, as a missing message
+			// loses its own: the composer is partial, and the rest are read.
 			var list []any
-			if err := json.Unmarshal(raw, &list); err != nil {
-				return nil, fmt.Errorf("Cursor composer %s, headers %d: %w", member.id, chunk, err)
+			if err != nil || json.Unmarshal(raw, &list) != nil {
+				thread.short = true
+				if gap < 0 {
+					gap = len(headers)
+				}
+				continue
 			}
 			headers = append(headers, list...)
 		}
 		if count, ok := number(log["count"]); ok && int(count) > len(headers) {
 			thread.short = true
 		}
+	}
+	thread.known = len(headers)
+	if gap >= 0 {
+		thread.known = gap
 	}
 	if len(headers) == 0 {
 		return thread, nil
@@ -791,13 +803,17 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// Older composers hold their messages in conversationMap, by ID.
+	legacy := mapValueDefault(thread.data["conversationMap"])
 	for _, raw := range headers {
 		id, _ := mapValueDefault(raw)["bubbleId"].(string)
 		thread.ids = append(thread.ids, id)
 		var bubble map[string]any
 		if data := stored[id]; data == nil || json.Unmarshal(data, &bubble) != nil || bubble == nil {
-			thread.missing[id] = true
-			continue
+			if bubble = mapValue(legacy[id]); bubble == nil {
+				thread.missing[id] = true
+				continue
+			}
 		}
 		bubble["bubbleId"] = id
 		thread.bubbles = append(thread.bubbles, bubble)
@@ -960,6 +976,17 @@ func cursorTool(base MessageRecord, bubble, tool map[string]any, add func(Messag
 		if exit, ok := number(firstNonNil(output["exitCode"], output["exitCodeV2"])); ok {
 			details["exit_code"] = exit
 		}
+		// A command's result is what it printed; its exit code, and whether
+		// it was stopped or the person declined it, are details.
+		if text, ok := output["output"].(string); ok {
+			content = text
+			if output["notInterrupted"] == false {
+				details["interrupted"] = true
+			}
+			if output["rejected"] == true {
+				details["status"] = "declined"
+			}
+		}
 	}
 	extra := mapValueDefault(cursorJSON(tool["additionalData"]))
 	if started, ok := number(firstNonNil(bubble["startedAtMs"], extra["startedAtMs"])); ok {
@@ -970,8 +997,9 @@ func cursorTool(base MessageRecord, bubble, tool map[string]any, add func(Messag
 	if subagent := firstString(extra["subagentComposerId"]); subagent != "" {
 		details["subagent"] = subagent
 	}
+	// A call cancelled while it ran was interrupted.
 	if status == "cancelled" {
-		details["cancelled"] = true
+		details["cancelled"], details["interrupted"] = true, true
 	}
 	if status == "error" {
 		failure := mapValueDefault(cursorJSON(tool["error"]))
