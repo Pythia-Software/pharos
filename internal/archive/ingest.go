@@ -1127,7 +1127,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	if err := settleClaudeUsage(ctx, tx, record, conversationIDs, merges, "", nil); err != nil {
 		return 0, 0, err
 	}
-	if err := settleOmittedClaude(ctx, tx, record, workspaceID, conversationIDs); err != nil {
+	if err := settleStoredClaude(ctx, tx, record, workspaceID, conversationIDs, slices.Contains(merges, true)); err != nil {
 		return 0, 0, err
 	}
 	if err := refreshWorkspaceNames(tx, []string{workspaceID}); err != nil {

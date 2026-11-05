@@ -426,24 +426,28 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 }
 
 func TestClaudeCopiedToolCallBelongsToNoLaterRequest(t *testing.T) {
-	// A resumed session's copy of a reply that called a tool, then its own
-	// reply.
-	messages := parseJSONL(t, "claude", filepath.Join(t.TempDir(), "s2.jsonl"),
-		claudeTurn("s2", "p1", "", "user", "List the files", nil),
-		claudeReply("s2", "a1", "p1", "msg_1", "req_1", toolUse("t1"), usage(100, 10)),
-		claudeTurn("s2", "r1", "a1", "user", toolResult("t1"), nil),
-		claudeReply("s2", "a2", "r1", "msg_2", "req_2", text("Two files"), usage(200, 20)))
-	for index, message := range messages {
-		if message.NativeID == "a1:usage" {
-			messages[index].RawText = wrapUsageCopy(message.RawText, "s1")
+	// A resumed session's copy of a reply that called a tool, on the line
+	// with the reply's usage or on one before it, then its own reply.
+	for _, copied := range [][]string{
+		{claudeReply("s2", "a1", "p1", "msg_1", "req_1", toolUse("t1"), usage(100, 10))},
+		{claudeReply("s2", "a1", "p1", "msg_1", "req_1", toolUse("t1"), nil), claudeReply("s2", "a1b", "a1", "msg_1", "req_1", text("Listing"), usage(100, 10))},
+	} {
+		lines := append([]string{claudeTurn("s2", "p1", "", "user", "List the files", nil)}, copied...)
+		lines = append(lines, claudeTurn("s2", "r1", "a1", "user", toolResult("t1"), nil),
+			claudeReply("s2", "a2", "r1", "msg_2", "req_2", text("Two files"), usage(200, 20)))
+		messages := parseJSONL(t, "claude", filepath.Join(t.TempDir(), "s2.jsonl"), lines...)
+		for index, message := range messages {
+			if claudeUsageRecord(message) && !strings.HasPrefix(message.NativeID, "a2") {
+				messages[index].RawText = wrapUsageCopy(message.RawText, "s1")
+			}
 		}
-	}
-	requests, calls := buildToolLedger(messages, "claude-test")
-	if len(requests) != 1 || len(calls) != 1 {
-		t.Fatalf("%d requests and %d calls, want s2's own request and the copied call", len(requests), len(calls))
-	}
-	if calls[0].RequestKey != "" {
-		t.Fatalf("the copied call is given %s's request", calls[0].RequestKey)
+		requests, calls := buildToolLedger(messages, "claude-test")
+		if len(requests) != 1 || len(calls) != 1 {
+			t.Fatalf("%d requests and %d calls, want s2's own request and the copied call", len(requests), len(calls))
+		}
+		if calls[0].RequestKey != "" {
+			t.Fatalf("the copied call is given %s's request", calls[0].RequestKey)
+		}
 	}
 }
 
@@ -490,6 +494,21 @@ func TestClaudeCopyFromAnotherMacKeepsWhatIsStored(t *testing.T) {
 		t.Fatalf("the copy was not processed: %+v", result)
 	}
 	wantLibraryTokens(t, catalog, 110+220+440)
+	// Another Mac's copy of a session whose subagent replayed a reply holds
+	// a fuller record of it in the session's root, so its parse decided the
+	// other way; the root merges into what is stored, whose fullest record counts.
+	catalog, _ = testCatalog(t)
+	session := func(root int) WorkspaceRecord {
+		record := claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", claudeUsageMessage("a1", "msg_1", "req_1", 100, root))
+		record.Conversations = append(record.Conversations, ConversationRecord{NativeID: "s1:subagent:x", ParentNativeID: "s1", AgentDepth: 1, Provider: "claude",
+			Model: "claude-test", Account: "local", Origin: "/a/s1/subagents/agent-x.jsonl", StartedAt: "2026-09-20T10:01:00Z",
+			Messages: []MessageRecord{claudeUsageMessage("a1", "msg_1", "req_1b", 100, 10)}})
+		dedupeClaudeGroupUsage(&record)
+		return record
+	}
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, session(1)))
+	ingestAs(t, catalog, "host-b", newCopyFixture(t, session(20)))
+	wantLibraryTokens(t, catalog, 110)
 }
 
 func TestClaudeUnchangedSessionWhoseReplyMovedIsCountedAgain(t *testing.T) {

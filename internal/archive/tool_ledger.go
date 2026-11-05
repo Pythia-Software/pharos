@@ -164,16 +164,17 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 	}
 	// Map each usage-bearing event to its request so tool calls in the same
 	// provider event resolve to the request that produced them.
-	// A copy of another session's reply (wrapUsageCopy) is no request here,
-	// and its calls are not a later request's.
-	copied := map[string]bool{}
+	// A copy of another session's reply (wrapUsageCopy) is no request here;
+	// its usage follows its lines, so a call before it is that reply's, not a
+	// later request's.
+	copies := map[string][]int{}
 	for index, message := range messages {
 		if key, _ := requestKeyAt(messages, index, streams); key != "" && byKey[key] != nil {
 			if base := blockSuffixPattern.ReplaceAllString(message.NativeID, ""); base != "" && byBase[base] == "" {
 				byBase[base] = key
 			}
 		} else if _, copy := unwrapUsageCopy(message.RawText); copy && claudeUsageRecord(message) {
-			copied[blockSuffixPattern.ReplaceAllString(message.NativeID, "")] = true
+			copies[streams[index]] = append(copies[streams[index]], index)
 		}
 	}
 	compactions := map[string][]int{}
@@ -272,10 +273,12 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		// first usage reported at or after the call in its stream.
 		base := blockSuffixPattern.ReplaceAllString(message.NativeID, "")
 		call.RequestKey = byBase[base]
-		if call.RequestKey == "" && !copied[base] {
+		if call.RequestKey == "" {
 			for _, request := range perStream[call.Stream] {
 				if request.FirstIndex >= index {
-					call.RequestKey = request.Key
+					if !compactedBetween(copies[call.Stream], index-1, request.FirstIndex) {
+						call.RequestKey = request.Key
+					}
 					break
 				}
 			}
