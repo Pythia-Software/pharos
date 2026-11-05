@@ -775,7 +775,7 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 	if r.opts.OneAtATime {
 		cfg.Workers, cfg.InFlight, cfg.MaxBatch = 1, 1, 1
 	}
-	runner, release, err := r.c.labelerManager(r.settings).Runner(ctx, r.model, cfg)
+	runner, release, err := r.c.labelerRunner(ctx, r.settings, r.model, cfg)
 	r.stats.WorkerStart += time.Since(started)
 	if err != nil {
 		return err
@@ -913,12 +913,12 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 			if !r.opts.DryRun {
 				nextSettings = target.settings(nextSettings)
 			}
-			retuning := nextSettings.Threads != r.settings.Threads
+			retuning := r.runner != nil && r.runner.UsesCPUThreads() && nextSettings.Threads != r.runner.Threads()
 			if retuning && inflight == 0 {
 				// No request still holds the old runner. Free its budget before
 				// starting workers at the latest target, keeping queued work.
 				r.releasePool(true)
-				r.progress("labels: changing cores per worker to %d", nextSettings.Threads)
+				r.progress("labels: changing CPU threads per worker to %d", nextSettings.Threads)
 				retuning = false
 			}
 			if !retuning {

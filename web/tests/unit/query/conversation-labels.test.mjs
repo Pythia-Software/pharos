@@ -73,7 +73,8 @@ import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon} from '../../../src/conversation-fingerprint-model.ts';
 
-import {sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolTracks,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
 
@@ -133,7 +134,7 @@ const discoveryTaxonomy=['P','P.request','P.request.work','P.request.work.review
 test('session ribbons partition thinking before function roles and keep every coexisting label down to a single observation',()=>{
  const at=n=>new Date(n).toISOString(),normal=message('plain','C.report.product',{at:at(10)}),thinking=message('thought','C.report',{kind:'reasoning',at:at(20),labels:[['C.report.progress',.9],['P.request.work.review',.8]]}),unknown=message('unknown',null,{at:at(30)}),untimed=message('untimed','C.report');
  const tree=sessionRibbonTree([normal,thinking,unknown,untimed],[],[],discoveryTaxonomy,[0,40]);
- assert.deepEqual(ribbonCounts(tree.items),{messages:3,thinking:1,activity:0,inferred:0});
+ assert.deepEqual(ribbonCounts(tree.items),{events:0,messages:3,thinking:1,activity:0,inferred:0});
  assert.equal(ribbonEventCount(tree.items),3);
  const sharedTool={...tree.items[0],id:'shared-tool',message:undefined,mark:{message_id:'plain',count:1}};
  const distinctTool={...sharedTool,id:'new-tool',mark:{message_id:'tool-message',count:1}};
@@ -156,23 +157,24 @@ test('ribbon hit testing includes smaller covered symbols and activity observati
  assert.equal(sessionRibbonTree([],marks,[],[],[101,200]).items.length,0);
 });
 
-test('tool tracks separate overlapping calls, reuse ended tracks and preserve point observations',()=>{
+test('tool dots take free lanes for overlapping calls, hit-test by position and preserve point observations',()=>{
  const marks=[{start:0,end:10,end_known:true,name:'long',category:'run',count:1,error:false,tool_id:'long',preview:'npm test'},{start:1,end:4,end_known:true,name:'first',category:'read',count:1,error:false,tool_id:'first'},{start:2,end:3,end_known:true,name:'second',category:'read',count:1,error:false,tool_id:'second'},{start:4,end:7,end_known:true,name:'reuse',category:'read',count:1,error:false,tool_id:'reuse'},{start:11,end:12,end_known:true,name:'solo',category:'read',count:1,error:false,tool_id:'solo'}];
- const items=sessionRibbonTree([],marks,[],[],[0,20]).items,tracks=ribbonToolTracks(items),byName=name=>items.find(item=>item.title===name);
- for(const name of ['long','first','second'])assert.equal(tracks.get(byName(name).id).total,3);
- assert.equal(new Set(['long','first','second'].map(name=>tracks.get(byName(name).id).slot)).size,3);
- assert.equal(tracks.get(byName('first').id).slot,tracks.get(byName('reuse').id).slot);
- assert.equal(tracks.get(byName('solo').id).total,1);
- assert.deepEqual(ribbonToolTracks([...items].reverse()),tracks);
- const layers=ribbonLayers(items);
- for(const name of ['long','first','second']){
-  const layer=layers.find(layer=>layer.item.title===name),hits=ribbonPointerHits(items,2.5,.01,layer.y+layer.height/2,1);
-  assert.deepEqual(hits.map(item=>item.title),[name]);
+ const items=sessionRibbonTree([],marks,[],[],[0,20]).items,px=at=>at*50,placed=ribbonToolPlacement(items,px,32),byName=name=>placed.get(items.find(item=>item.title===name).id);
+ assert.equal(new Set(['long','first','second'].map(name=>byName(name).y)).size,3,'simultaneous calls sit in separate lanes');
+ assert.notEqual(byName('reuse').y,byName('long').y);
+ assert.equal(byName('solo').y,16,'a call with room stays on the axis');
+ assert.deepEqual(overlapping([...placed.values()]),[]);
+ assert.deepEqual(ribbonToolPlacement([...items].reverse(),px,32),placed);
+ const targets=[...placed.values()].map(m=>({...m,ids:[m.id]}));
+ for(const name of ['long','first','second','reuse','solo']){
+  const m=byName(name),{items:hits,target}=ribbonPointerHits(items,m.x/50,.01,{x:m.x+1,y:m.y+1},targets);
+  assert.deepEqual(hits.map(item=>item.title),[name]);assert.equal(target.id,m.id);
  }
- const long=layers.find(layer=>layer.item.title==='long');assert.equal(ribbonPointerHits(items,2.5,.01,long.y+long.height/2,1)[0].mark.preview,'npm test');
+ const long=byName('long');assert.equal(ribbonPointerHits(items,8,.01,{x:400,y:long.y},targets).items[0].mark.preview,'npm test','the duration is part of the dot');
+ assert.deepEqual(ribbonPointerHits(items,15,.01,{x:750,y:16},targets).items,[],'nothing under the pointer');
  const points=sessionRibbonTree([],['a','b','c'].map(tool_id=>({...marks[0],tool_id,start:5,end:99,end_known:false})),[],[],[0,10]).items;
  assert.ok(points.every(item=>item.end===item.start));
- assert.equal(new Set([...ribbonToolTracks(points).values()].map(track=>track.slot)).size,3);
+ assert.equal(new Set([...ribbonToolPlacement(points,at=>at*100,32).values()].map(m=>m.y)).size,3);
  assert.equal(ribbonHits(points,6,.01).length,0);
  assert.equal(sessionRibbonTree([],points.map(item=>item.mark),[],[],[6,10]).items.length,0);
 });
@@ -367,4 +369,42 @@ test('overlap envelopes remain symmetric, grow beyond three branches and stop at
  const shapes=parallelEnvelopes(segments([0,1,3,16,0,64]));assert.deepEqual(shapes.map(s=>s.peak),[16,64]);
  const heights=shapes[0].points.map(p=>p.lower-p.upper);assert.ok(heights[0]<heights[1]&&heights[1]<heights[2]);assert.ok(shapes[1].points[0].lower-shapes[1].points[0].upper>heights[2]);
  for(const envelope of shapes){assert.ok(envelope.path.endsWith('Z')&&!envelope.path.includes('NaN'));for(const point of envelope.points){assert.ok(point.upper>0&&point.lower<38);assert.ok(Math.abs((point.upper+point.lower)/2-19)<1e-12);}}
+});
+
+test('session ribbons decompose agent events by group and kind beside tool actions, counting them once',()=>{
+ const at=n=>new Date(n).toISOString(),reply=message('reply','C.report',{at:at(10)}),later=message('later','C.report',{at:at(30)});
+ const event=(id,kind,label,group,messageID)=>({id,message_id:messageID,kind,label,group,probability:.9,source:'reply',sentence:`${label} sentence`,target:null});
+ const events=[event('e1','obstacle','Obstacle','Friction','reply'),event('e2','obstacle','Obstacle','Friction','later'),event('e3','discovery','Discovery','Reactions and learning','reply'),event('gone','obstacle','Obstacle','Friction','elsewhere')];
+ const tree=sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events);
+ const node=tree.children.find(child=>child.id==='events');
+ assert.equal(node.title,'Agent events');
+ const ordered=sessionRibbonTree([reply,later],[{start:12,end:13,end_known:true,name:'Read',category:'read',count:1,error:false}],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events).children.map(child=>child.title);
+ assert.deepEqual(ordered,['Message modes','Agent events','Tool actions'],'Agent events come before Tool actions');
+ assert.deepEqual(node.children.map(child=>[child.title,ribbonEventCount(child.items)]),[['Friction',2],['Learning',1]]);
+ assert.deepEqual(node.children[0].children.map(child=>[child.title,child.children.length]),[['Obstacle',2]]);
+ // The whole session still counts its two messages, not the events said in them.
+ assert.equal(ribbonEventCount(tree.items),2);
+ assert.equal(ribbonCounts(node.items).events,3);
+ // Outside the window an event is not shown.
+ assert.equal(sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[20,40],true,false,undefined,undefined,events).children.find(child=>child.id==='events').items.length,1);
+});
+
+test('agent events sit at their sentence\'s share of the message span, as message-mode text parts do',()=>{
+ const at=n=>new Date(n).toISOString();
+ // Thinking takes the time before it ([0, 100]); a reply the time after it ([100, 300]).
+ const prompt=message('prompt','P.request',{role:'user',at:at(0)}),thinking=message('think','C.deliberation',{kind:'thinking',at:at(100)}),reply=message('reply','C.report',{at:at(100)}),next=message('next','P.request',{role:'user',at:at(300)});
+ const event=(id,messageID,position,target=null)=>({id,message_id:messageID,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'s',target,position});
+ const clock=agentEventClock([prompt,thinking,reply,next],[]);
+ assert.equal(clock.at(event('a','think',.25)),25,'a quarter into the thinking');
+ assert.equal(clock.at(event('b','think',1)),100);
+ assert.equal(clock.at(event('c','reply',.5)),200,'half way through the reply');
+ assert.equal(clock.at(event('d','think')),100,'no recorded share stays at the message time');
+ assert.equal(clock.at(event('e','next',.9)),300,'a message with no duration stays at its time');
+ assert.equal(clock.at(event('f','elsewhere',.5)),null);
+ assert.equal(clock.targetAt(event('g','reply',.5,{method:'quote',message_id:'think',position:.5})),50,'the arc target uses the quoted text\'s share too');
+ assert.equal(clock.targetAt(event('h','reply',.5,{method:'quote',message_id:'other-session',at:at(42)})),42,'a target in another session uses its own time');
+ assert.equal(textTime({start:0,end:100,at:100},2),100,'shares clamp to the span');
+ // The tree's event rows and the overlay share the clock.
+ const tree=sessionRibbonTree([prompt,thinking,reply,next],[],[],discoveryTaxonomy,[0,400],true,false,undefined,undefined,[event('a','think',.25),event('c','reply',.5)]);
+ assert.deepEqual(tree.children.find(child=>child.id==='events').items.map(item=>item.start).sort((x,y)=>x-y),[25,200]);
 });

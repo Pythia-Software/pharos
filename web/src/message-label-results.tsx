@@ -5,10 +5,12 @@ import {shortLabel,stateColor,type LabelConversation,type Taxonomy} from './conv
 import {conversationRowURL} from './usage-row-model';
 import {labelResultsMode,messageLabelFingerprintCache} from './message-label-results-model';
 import {onDatasetRefresh} from './dataset-refresh';
+import {eventLinkURL} from './event-link-url';
+import type {AgentEventLink} from './event-link-layout';
 import './message-label-results.css';
 type Row=Record<string,any>;
-const cache=messageLabelFingerprintCache<{conversation:LabelConversation;taxonomy:Taxonomy;truncated:boolean}>(async id=>{
- const response=await fetch('/api/labels/'+id);
+const cache=messageLabelFingerprintCache<{conversation:LabelConversation;taxonomy:Taxonomy;truncated:boolean;agent_events?:AgentEventLink[]}>(async id=>{
+  const response=await fetch('/api/labels/'+id);
  if(!response.ok)throw new Error('Fingerprint unavailable');return response.json();
 });
 let observing=false;
@@ -21,7 +23,7 @@ export function MessageLabelFingerprint({id,workspace=false}:{id:string;workspac
  const [value,setValue]=useState<Awaited<ReturnType<typeof load>>>(),[error,setError]=useState('');
  useEffect(()=>{let current=true;setValue(undefined);setError('');if(id)load((workspace?'workspaces/':'conversations/')+encodeURIComponent(id)).then(data=>{if(current)setValue(data);},err=>{if(current)setError(err.message);});return()=>{current=false;};},[id,workspace,revision]);
  if(!id)return <span className="muted">—</span>;
- return <div className="message-label-fingerprint" title={value?.truncated?'Fingerprint uses a bounded retained-message sample':error||undefined}>{value?.conversation.messages.length?<CompactFingerprint conversation={value.conversation} taxonomy={value.taxonomy} entity={workspace?'workspace':'conversation'} stretch/>:<span className="muted">{error||(value?'No retained messages':'Loading ribbon…')}</span>}{value?.truncated?<span className="fingerprint-sampled" aria-label="Fingerprint uses a bounded retained-message sample">Sample</span>:null}</div>;
+ return <div className="message-label-fingerprint" title={value?.truncated?'Fingerprint uses a bounded retained-message sample':error||undefined}>{value?.conversation.messages.length?<CompactFingerprint conversation={value.conversation} taxonomy={value.taxonomy} entity={workspace?'workspace':'conversation'} stretch events={workspace?undefined:value.agent_events} eventHref={workspace?undefined:e=>eventLinkURL(value.conversation,e)}/>:<span className="muted">{error||(value?'No retained messages':'Loading ribbon…')}</span>}{value?.truncated?<span className="fingerprint-sampled" aria-label="Fingerprint uses a bounded retained-message sample">Sample</span>:null}</div>;
 }
 export const messageLabelRenderers={label_fingerprint:(ctx:any)=><MessageLabelFingerprint id={String(ctx.value??'')}/>,workspace_fingerprint:(ctx:any)=><MessageLabelFingerprint id={String(ctx.value??'')} workspace/>,message_label:(ctx:any)=><span className="message-label-chip"><i style={{background:stateColor(String(ctx.value))}}/>{ctx.value==='?'?'Uncategorized':shortLabel(String(ctx.value))}</span>};
 export function MessageLabelDisplay({api}:{api:QueryTableApi<Row>}){

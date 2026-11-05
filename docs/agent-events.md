@@ -72,7 +72,7 @@ With the Settings switch on (preference `pharos-agent-events-v1`, read as a feat
 `agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
 Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
-`agent_events_threads` (Settings → Agent events → Cores; unset, `labels_threads`), and the same power rules: each chain
+`agent_events_threads` (Settings → Agent events → CPU threads, shown for CPU execution; unset, `labels_threads`), and the same power rules: each chain
 pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
 `backlog` run when plugged in and stops if this Mac goes onto battery.
 
@@ -83,8 +83,10 @@ writer saves earlier results, one atomic transaction per conversation. A shared 
 and message bookkeeping to three windows of about 512 rows, plus the conversation currently being built. A large
 conversation stays whole and occupies the budget until saved. Partial windows run as soon as preparation pauses,
 so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool. Active runs
-check the Cores target every two minutes and replace their workers after the current scoring chunk finishes,
-keeping its results. Changing cores needs no stop or app relaunch; the shared budget and battery cap still apply.
+check the CPU thread target every two minutes and replace CPU workers after the current scoring chunk finishes,
+keeping its results. Changing threads needs no stop or app relaunch; the shared budget and battery cap still apply.
+GPU workers keep running when the saved CPU target changes. Settings shows the expected or confirmed device
+for each model, with automatic GPU capacity; see [device status](local-labeler.md#device-status-and-gpu-capacity).
 
 - **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
   (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into

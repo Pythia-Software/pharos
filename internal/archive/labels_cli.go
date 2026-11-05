@@ -311,7 +311,7 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 		}
 	}
 	if infer {
-		runner, release, err := c.labelerManager(settings).Runner(ctx, model, labelrt.RunnerConfig{GPU: model.MayUseGPU(settings.Backend), Worker: settings.Worker, Args: runtimeArgs(settings),
+		runner, release, err := c.labelerRunner(ctx, settings, model, labelrt.RunnerConfig{GPU: model.MayUseGPU(settings.Backend), Worker: settings.Worker, Args: runtimeArgs(settings),
 			Workers: 1, Threads: settings.Threads, MaxBatch: max(1, settings.MaxBatch)})
 		if err != nil {
 			return nil, err

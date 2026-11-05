@@ -294,6 +294,13 @@ test('Timeline segments pin exact content before revealing their conversation so
  const link=pinned.getByRole('link'),url=new URL(await link.getAttribute('href'),'http://localhost');
  assert.equal(url.searchParams.get('conversation'),rootConversation);assert.equal(url.searchParams.get('message'),'m-1');assert.equal(url.searchParams.get('call'),'tool-read');
  await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
+ // Agent event marks share that hit test and pin: a click on the mark itself.
+ const mark=await root.locator('[data-agent-event="e-s-root"]').boundingBox();
+ await page.mouse.click(mark.x+mark.width/2,mark.y+mark.height/2);await pinned.waitFor();
+ assert.equal(path(page),before,'pinning an event does not navigate or toggle disclosures');
+ const eventLink=pinned.getByRole('link',{name:/Show both in conversation/});
+ assert.equal(new URL(await eventLink.getAttribute('href'),'http://localhost').searchParams.get('reader_event_link'),'e-s-root');
+ await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
  // Keyboard inspection pins the focused message and makes the source link reachable.
  const caller=page.locator('.lt-caller-row').getByRole('button',{name:/Inspect Events ribbon/});await caller.focus();await caller.press('Enter');await pinned.waitFor();
  assert.equal(await pinned.getByRole('link').first().evaluate(el=>el===document.activeElement),true);
@@ -537,6 +544,27 @@ test('dynamic message reveal materializes its target without taking keyboard foc
  await page.evaluate(()=>window.pharosView.refresh());await opened.settled();
  assert.equal(await page.evaluate(()=>window.linkedDisclosure.open),false);
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_collapsed')||'[]').length>0);
+});
+
+test('agent event links restore both ends from the URL, opening folded prose without taking focus', {skip},async t=>{
+ const filler='Some context about the async work that the person wants reviewed. '.repeat(14),prompt=`${filler}Please keep the \`drawer only\` removal flow working on phones.`;
+ // Both ends cross inline code: each must stay one highlight around it.
+ const reply='I read `drawer only` as the bottom sheet. Done.',quote='`drawer only` removal',start=prompt.indexOf(quote);
+ const messages=[
+  {id:'link-prompt',native_id:'link-prompt',role:'user',kind:'message',text:prompt,created_at:new Date(1760000000000).toISOString()},
+  {id:'link-reply',native_id:'link-reply',role:'assistant',kind:'message',text:reply,created_at:new Date(1760000001000).toISOString(),
+   agent_events:[{id:'e-link',kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:0.9,sentence:[0,reply.indexOf(' Done.')],subject:[],response:[],
+    target:{method:'quote',message_id:'link-prompt',role:'user',kind:'message',start,end:start+quote.length,text:quote,strong:true}}]},
+ ];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages,agent_events:{messages_read:2}})};
+ const opened=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_events=1&reader_event_link=e-link`,ready:'.conversation-panel.show-events mark.event-target.link-selected'}),{page}=opened;
+ await opened.settled();
+ // The target sits past the fold of a long prompt; restoring the link opens it.
+ assert.equal(await page.locator('mark.event-target.link-selected').first().evaluate(mark=>mark.closest('.message-prose').classList.contains('prose-truncated')),false);
+ assert.ok(await page.locator('mark.agent-event.link-selected').count());
+ for(const selector of ['mark.agent-event','mark.event-target'])assert.deepEqual(await page.locator(selector).evaluateAll(marks=>marks.map(mark=>mark.querySelectorAll('code').length)),[1],`${selector} is one element around the inline code`);
+ assert.equal(await page.evaluate(()=>document.activeElement===document.body||!document.activeElement),true);
+ assert.ok(await page.locator('.event-link-gutter path.is-selected').count(),'the gutter connects the two ends');
 });
 
 test('literal text reveal opens page Find on the reader and reveals a match without focusing its input', {skip},async t=>{

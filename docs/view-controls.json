@@ -261,6 +261,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_event_link"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_events"
     },
     {
@@ -326,6 +330,10 @@
     {
       "file": "web/src/timeline-columns.tsx",
       "field": "timeline_columns"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_idle"
     }
   ],
   "controls": [
@@ -3008,6 +3016,15 @@
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
     {
+      "key": "0f1d2d3f55722167:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "decorateEventLinks",
+      "tag": "button",
+      "control": "'button', `event-link-n ${side==='target'?'is-target':'is-observation'} ${eventGroupClass(link.group)}`, String(link.n)",
+      "contract": "reader",
+      "reason": "An agent event's inline number reveals the other end of its pair and selects it; the selection is the reader_event_link field (bindEventLinks writes and restores it through window.pharosView). Reveal scrolls and highlights without moving keyboard focus."
+    },
+    {
       "key": "02fdb8dab79aa534:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "disclosure",
@@ -5157,6 +5174,25 @@
       "reason": "Reset cancels any transient drag and restores the whole canonical timeline range through the existing parent change callback."
     },
     {
+      "key": "e55561cdcf8c53a5:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_idle\" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}",
+      "binding": "timeline_idle",
+      "contract": "view.timeline_idle",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "5be3bc0bf7116573:0",
+      "file": "web/src/event-link-overlay.tsx",
+      "owner": "EventLinkCard",
+      "tag": "PageLink",
+      "control": "onClick={event=>{event.stopPropagation();close?.();}}",
+      "contract": "navigation",
+      "reason": "PageLink opens the conversation reader at the event with reader_events and reader_event_link set, through the shared app router."
+    },
+    {
       "key": "244adf80af72c046:0",
       "file": "web/src/explore-search.tsx",
       "owner": "ExploreSearch",
@@ -6206,6 +6242,15 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "913a5acc7dd39995:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "CompactFingerprint",
+      "tag": "g",
+      "control": "aria-label={`${placed.length} agent events. Arrow keys browse events; Enter pins details.`} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown}",
+      "contract": "transient",
+      "reason": "One tab stop for the fingerprint's agent events, through the ribbons' shared useRibbonPointer: arrow keys browse events, Enter pins the card with its link focused. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
+    },
+    {
       "key": "3a87ee725d738e75:0",
       "file": "web/src/label-ribbon-inspector.tsx",
       "owner": "useRibbonInspector",
@@ -6235,23 +6280,14 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "8d7caea92cf9866c:0",
+      "key": "743453f66bfd77ad:0",
       "file": "web/src/label-session-ribbon.tsx",
       "owner": "RecursiveRibbonRow",
       "tag": "button",
-      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
+      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
       "binding": "delegation_event",
       "contract": "view.delegation_event",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "8a6e83114ee8f74f:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "SessionRibbon",
-      "tag": "svg",
-      "control": "aria-label={!disabled&&sourceHref&&node.children.length?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} onFocus={event=>{if(disabled)return;const item=candidates[cursor.current]??candidates[0];if(item)inspector.show(event.currentTarget,<ObservationCard items={[item]}/>);}} onBlur={inspector.leave} onKeyDown={event=>{if(disabled||!sourceHref||!['ArrowLeft','ArrowRight','Enter',' '].includes(event.key)||!candidates.length)return;event.preventDefault();event.stopPropagation();if(event.key==='ArrowLeft'||event.key==='ArrowRight'){cursor.current=(cursor.current+(event.key==='ArrowLeft'?-1:1)+candidates.length)%candidates.length;inspector.close();inspector.show(event.currentTarget,<ObservationCard items={[candidates[cursor.current]]}/>);}else pin(event.currentTarget,[candidates[cursor.current]??candidates[0]],undefined,true);}} onClick={event=>{if(disabled||!sourceHref)return;const hits=hitsAt(event);if(!hits.length)return;event.preventDefault();event.stopPropagation();pin(event.currentTarget,hits,event.clientX);}} onPointerMove={event=>{if(disabled)return;if(preview){inspector.close();return;}const hits=hitsAt(event);if(hits.length)inspector.show(event.currentTarget,<ObservationCard items={hits}/>,event.clientX);else inspector.leave();}}",
-      "contract": "transient",
-      "reason": "Pointer and keyboard segment inspection pins transient content in the full timeline; preview ribbons disable editing and inspection. Source links use the canonical message/call route."
     },
     {
       "key": "0af056f356d1207b:0",

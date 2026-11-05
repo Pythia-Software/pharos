@@ -90,8 +90,10 @@
 .bg-check input{margin-top:3px;accent-color:var(--accent)}
 .bg-card .optional-behavior{padding:14px 0 0;border-bottom:0}
 .bg-card .optional-behavior h4{margin:0;font-size:var(--fs-md)}
-.bg-card .optional-behavior p{margin:4px 0 0}
-.bg-threads{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--fs-sm);color:var(--muted)}
+.bg-card .optional-behavior p{margin:4px 0 0;overflow-wrap:anywhere}
+.bg-labeler-heading{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px}
+.bg-labeler-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;font-size:var(--fs-sm);color:var(--muted)}
+.bg-threads{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--muted)}
 .bg-threads select{font:inherit;font-size:var(--fs-sm);border:1px solid var(--line);border-radius:5px;padding:1px 4px;background:var(--panel);color:var(--ink)}
 @media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
 @container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
@@ -220,6 +222,13 @@
   function dropCadence(item, cadence) {
     if (!item?.id || !['frequent', 'hourly', 'daily', 'manual'].includes(cadence) || cadence === item.column) return null;
     return item.temporary && cadence === item.usual ? '' : cadence;
+  }
+
+  function labelingControls(settings) {
+    const execution = settings.execution || {device: 'unknown', status: 'Device not yet confirmed', detail: 'The device will be confirmed when labeling starts.'};
+    const notice = settings.notice || (settings.enabled && execution.device === 'unavailable' ? 'Processing is unavailable. Check the local model and runtime installation.' : '');
+    return {execution, notice, threadChoices: execution.device === 'cpu' ? settings.thread_choices || [] : [],
+      threadsCanChange: execution.device === 'cpu' && settings.threads_can_change === true};
   }
 
   // ---- rendering
@@ -569,33 +578,35 @@
   function renderLabels(labels, events) {
     const card = node('section', 'bg-card');
     card.append(node('h3', '', 'Labeling on this Mac'),
-      node('p', 'muted', 'Small models label your library in the background and the reader highlights what they find. These settings follow the library. Turning one off keeps what it found; a run in progress finishes. Active runs check the cores target every two minutes and finish their current batches before adjusting; on battery each uses at most 2.'));
+      node('p', 'muted', 'Runs in the background. Turning a model off keeps its results.'));
     card.append(labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
-      'Label each message by what it does: requests, replies, feedback and more.', labels,
+      'Classify requests, replies, feedback and more.', labels,
       enabled => call('/api/labels/settings', {enabled}),
-      threads => call('/api/labels/settings', {threads}), labels.can_change));
+      threads => call('/api/labels/settings', {threads})));
     if (events) card.append(labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
-      'Find sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more, and list Analyze → Agent Experience. Reads the last 90 days after a one-time 140 MB download; a backlog catches up only while plugged in.', events,
+      'Find obstacles, discoveries and workarounds in agent replies from the last 90 days.', events,
       async enabled => {
         window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
         await window.pharosPrefs.flush?.();
         if (enabled) await call('/api/background/run', {item: 'agent_events'}).catch(() => {});
         return call('/api/background');
       },
-      threads => call('/api/labels/settings', {agent_events_threads: threads}), events.threads_can_change));
+      threads => call('/api/labels/settings', {agent_events_threads: threads})));
     return card;
   }
 
   // One switch of the labeling card, the App preferences toggle, with its
-  // model's cores: each save returns the next document.
-  function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads, threadsCanChange) {
+  // model's effective CPU control: each save returns the next document.
+  function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads) {
+    const controls = labelingControls(settings);
     const row = node('div', 'optional-behavior');
     const copy = node('div');
     const title = node('h4', '', text);
     title.id = `${prefix}Title`;
     const description = node('p', 'muted', about);
     description.id = `${prefix}Description`;
-    const status = node('p', 'muted', settings.status);
+    const status = node('p', 'muted', controls.notice);
+    status.hidden = !controls.notice;
     status.id = `${prefix}Status`;
     status.setAttribute('role', 'status');
     const toggle = node('button', 'toggle');
@@ -621,6 +632,7 @@
       } catch (error) {
         show(settings.enabled);
         status.textContent = error.message;
+        status.hidden = false;
         toast(error.message);
       } finally {
         labelsSaving = false;
@@ -629,16 +641,22 @@
       if (saved) render();
       if (focused && (document.activeElement === toggle || document.activeElement === document.body)) host()?.querySelector(`#${id}`)?.focus({preventScroll: true});
     };
-    copy.append(title, description, status);
-    if (settings.thread_choices?.length) {
-      const cores = node('label', 'bg-threads', 'Cores ');
-      const choice = select(settings.thread_choices.map(threads => [threads, String(threads)]), settings.threads, async value => {
+    const heading = node('div', 'bg-labeler-heading');
+    const meta = node('div', 'bg-labeler-meta');
+    meta.append(node('span', '', controls.execution.status));
+    heading.append(title, meta);
+    copy.append(heading, description, status);
+    if (controls.threadChoices.length) {
+      const cores = node('label', 'bg-threads', 'Threads ');
+      const choice = select(controls.threadChoices.map(threads => [threads, String(threads)]), settings.threads, async value => {
         document_ = await saveThreads(Number(value));
         render();
-      }, `${text} cores`);
-      choice.disabled = !threadsCanChange;
+      }, `${text} CPU threads`);
+      choice.dataset.focusKey = `${prefix}:threads`;
+      choice.title = 'Changes apply within two minutes after current batches finish. Battery policy may lower this target.';
+      choice.disabled = !controls.threadsCanChange;
       cores.append(choice);
-      copy.append(cores);
+      meta.append(cores);
     }
     row.append(copy, toggle);
     return row;
@@ -674,6 +692,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, batteryModel, stateText, dropCadence, pauseLength, ago, until, duration};
+    scheduleModel, itemModel, batteryModel, labelingControls, stateText, dropCadence, pauseLength, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

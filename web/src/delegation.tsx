@@ -10,9 +10,14 @@ import { Icon } from "./icons";
 import { delegationRouteValues, delegationTabs, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
 import {RecursiveSessionRibbon} from "./label-session-ribbon";
+import {eventKindCounts} from "./event-merge";
 import {nativeTimelineLabels,type NativeTimelineMessage} from "./label-timeline-overlay";
+import {withEventLink} from "./event-link-url";
+import type {AgentEventLink} from "./event-link-layout";
+import type {LabelMessage} from "./conversation-labels";
 import type {Taxonomy} from "./conversation-labels";
 import {splitTimelineCallers} from "./timeline-caller-model";
+import {cutAxisLabels,fromVirtual,idleGaps,laneBusy,timeScale,toVirtual,type IdleGap,type TimeScale} from "./timeline-idle-model";
 import {useTimelineColumns} from "./timeline-columns";
 import {timelineSessionBranches} from "./timeline-label-model";
 import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
@@ -194,6 +199,9 @@ const localDate = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
 });
+const resumeTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+/** Idle length beside a cut: whole minutes, or hours and minutes. */
+const idleDuration = (ms: number) => { const minutes = Math.round(ms / 60000); return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`; };
 const localCutoffTime = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
@@ -204,7 +212,7 @@ export function localTime(value: number) {
   return localDateTime.format(new Date(value));
 }
 /** Date headings mark local-day boundaries, independently of UTC or DST. */
-export function timelineTickLabels(range: Range, count = 6) {
+export function timelineTickLabels(range: Range, count = 6, clock?: (fraction: number) => number) {
   const width=range[1]-range[0];
   const time=new Intl.DateTimeFormat(undefined,{
     hour:"numeric",minute:"2-digit",
@@ -213,7 +221,7 @@ export function timelineTickLabels(range: Range, count = 6) {
   });
   let previous="";
   return Array.from({length:count},(_,i)=>{
-    const at=range[0]+width*i/Math.max(1,count-1),value=new Date(at),day=`${value.getFullYear()}-${value.getMonth()}-${value.getDate()}`;
+    const fraction=i/Math.max(1,count-1),at=clock?clock(fraction):range[0]+width*fraction,value=new Date(at),day=`${value.getFullYear()}-${value.getMonth()}-${value.getDate()}`;
     const date=day!==previous?localDate.format(value):null;previous=day;
     return {at,date,time:time.format(value)};
   });
@@ -230,6 +238,10 @@ export function clampRange(range: Range, full: Range): Range {
 }
 export function timelinePointerTime(clientX:number,rect:{left:number;width:number},full:Range){
   return full[0]+(clientX-rect.left)/Math.max(1,rect.width)*(full[1]-full[0]);
+}
+/** The time under the pointer on a (possibly compressed) clock, clamped to its range. */
+export function scaledPointerTime(clientX:number,rect:{left:number;width:number},clock:TimeScale){
+  return clock.time(Math.max(0,Math.min(1,(clientX-rect.left)/Math.max(1,rect.width))));
 }
 /** Panning preserves duration; selection and resize clamp endpoints independently. */
 export function timelineDragRange(mode:string,initial:Range,full:Range,anchor:number,current:number):Range{
@@ -1410,7 +1422,11 @@ function TimelineOverview({
   change,
   pending = false,
   label = "Whole workspace",
+  scale = timeScale(full),
+  idle,
 }: {
+  scale?: TimeScale;
+  idle?: { skip: boolean; set: (skip: boolean) => void; gaps: number };
   full: Range;
   range: Range;
   density: number[];
@@ -1445,7 +1461,15 @@ function TimelineOverview({
   } | null>(null);
   const view = draft || preview || range,
     width = full[1] - full[0];
-  const percentage = (time: number) => ((time - full[0]) / width) * 100;
+  // The overview draws on the same clock as the lanes: skipped gaps are slivers,
+  // and pan/resize move by what it shows (virtual time), not by real time.
+  const percentage = (time: number) => scale.fraction(time) * 100;
+  const virtualFull: Range = [0, scale.span];
+  const pointer = (clientX: number, rect: { left: number; width: number }) => toVirtual(scale, scale.time(Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)))));
+  const drawn = (mode: string, initial: Range, anchor: number, current: number): Range => {
+    const next = timelineDragRange(mode, [toVirtual(scale, initial[0]), toVirtual(scale, initial[1])], virtualFull, anchor, current);
+    return [fromVirtual(scale, next[0]), fromVirtual(scale, next[1])];
+  };
   const whole = view[0]===full[0]&&view[1]===full[1];
   const cutoffLeft = Math.max(8,Math.min(sizes.host-sizes.cutoffs-8,percentage((view[0]+view[1])/2)/100*sizes.host-sizes.cutoffs/2));
   const differentDays = new Date(view[0]).toDateString()!==new Date(view[1]).toDateString();
@@ -1460,7 +1484,7 @@ function TimelineOverview({
     const rect=host.current!.getBoundingClientRect();
     drag.current = {
       mode,
-      at: timelinePointerTime(event.clientX,rect,full),
+      at: pointer(event.clientX,rect),
       initial: range,
       pointer: event.pointerId,
       draft: null,
@@ -1473,13 +1497,13 @@ function TimelineOverview({
     const d = drag.current;
     if (!d || d.pointer !== event.pointerId || !d.draft&&Math.abs(event.clientX-d.x)<4) return;
     event.preventDefault();
-    d.draft = timelineDragRange(d.mode,d.initial,full,d.at,timelinePointerTime(event.clientX,d.rect,full));
+    d.draft = drawn(d.mode,d.initial,d.at,pointer(event.clientX,d.rect));
     setDraft(d.draft);
   }
   function up(event: React.PointerEvent) {
     const d=drag.current;
     if (!d || d.pointer !== event.pointerId) return;
-    if(d.draft||Math.abs(event.clientX-d.x)>=4)change(timelineDragRange(d.mode,d.initial,full,d.at,timelinePointerTime(event.clientX,d.rect,full)));
+    if(d.draft||Math.abs(event.clientX-d.x)>=4)change(drawn(d.mode,d.initial,d.at,pointer(event.clientX,d.rect)));
     setDraft(null);
     drag.current = null;
     if (host.current?.hasPointerCapture(event.pointerId))
@@ -1511,7 +1535,7 @@ function TimelineOverview({
       event.preventDefault();
       const delta = event.key === "ArrowLeft" ? -step : step;
       const anchor=handle==='end'?range[1]:range[0];
-      change(timelineDragRange(handle,range,full,anchor,anchor+delta));
+      change(drawn(handle,range,toVirtual(scale,anchor),toVirtual(scale,anchor+delta)));
     }
   }
   return (
@@ -1521,6 +1545,10 @@ function TimelineOverview({
         <small>
           {pending?"Loading this window…":"drag to zoom and pan"}
         </small>
+        {idle?<label className="delegation-idle-toggle" title="Remove stretches of 15 minutes or more with nothing running in any session that end with the caller speaking. Each is marked with the time the session resumed.">
+          <input type="checkbox" data-view-field="timeline_idle" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}/>
+          Skip idle gaps{idle.skip&&idle.gaps?<small> · {idle.gaps}</small>:null}
+        </label>:null}
         <button type="button" className="delegation-overview-reset" onClick={()=>{cancelDrag();change(full);}}>Reset</button>
       </div>
       <div
@@ -1535,11 +1563,13 @@ function TimelineOverview({
         onKeyDown={event=>{if(event.key==='Escape'&&drag.current){event.preventDefault();cancelDrag();}}}
         onDoubleClick={() => change(full)}
       >
-        <div className="delegation-histogram">
-          {density.map((count, i) => (
-            <i key={i} style={{ height: `${(count / maxDensity) * 100}%` }} />
-          ))}
+        <div className={`delegation-histogram${scale.compressed?" is-compressed":""}`}>
+          {density.map((count, i) => {
+            const from = full[0] + (width * i) / density.length, to = full[0] + (width * (i + 1)) / density.length;
+            return <i key={i} style={{ height: `${(count / maxDensity) * 100}%`, ...(scale.compressed ? { left: `${percentage(from)}%`, width: `${Math.max(0, percentage(to) - percentage(from))}%` } : {}) }} />;
+          })}
         </div>
+        {scale.cuts.map(cut => <i key={cut.end} className="delegation-idle-cut" style={{ left: `${cut.fraction * 100}%` }} title={`Idle ${duration(cut.end - cut.start)}, skipped; resumed ${localTime(cut.end)}`} />)}
         <div
           className="delegation-dim"
           style={{ left: 0, width: `${percentage(view[0])}%` }}
@@ -1633,6 +1663,8 @@ export function ParallelActivity({
     [error, setError] = useState("");
   const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,range[0],range[1]]);
   const labelData=nativeLabels;
+  // Events per kind across every session (whole conversations, not the zoom window): a merged mark shows its rarest kind (event-merge.ts).
+  const eventCounts=useMemo(()=>eventKindCounts([...nativeLabels.events.values()].flat()),[nativeLabels]);
   const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
   const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
@@ -1650,6 +1682,7 @@ export function ParallelActivity({
     x: number;
     at: number;
     draft: Range | null;
+    clock: TimeScale;
   } | null>(null);
   const suppressClick = useRef(false);
   const [mark, setMark] = useState<{
@@ -1661,6 +1694,10 @@ export function ParallelActivity({
   const eventID=workEvent,setEventID=setWorkEvent;
   const closeMark = useCallback(() => {setMark(null);setEventID("");}, [setEventID]);
   const [pending, setPending] = useState(true);
+  // Idle gaps are found over the whole workspace, so the overview and every
+  // zoomed window share one clock; a zoomed window fetches the whole range once.
+  const [skipIdle, setSkipIdle] = useViewState<boolean>("timeline_idle", true, timeline && location.pathname.startsWith("/work/"));
+  const [wholeActivity, setWholeActivity] = useState<Activity | null>(null);
   const track = useRef<HTMLDivElement>(null);
   const clock = useRef<HTMLDivElement>(null);
   const [trackWidth, setTrackWidth] = useState(900);
@@ -1717,6 +1754,26 @@ export function ParallelActivity({
     activity?.start === range[0] && activity?.end === range[1]
       ? activity
       : null;
+  const wholeWindow = range[0] === full[0] && range[1] === full[1];
+  useEffect(() => {
+    if (!timeline || !skipIdle || wholeWindow) return;
+    if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && (wholeActivity as Activity & { sessions?: string }).sessions === ids) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1" });
+    readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal).then(value => setWholeActivity({ ...value, sessions: ids } as Activity), () => {});
+    return () => controller.abort();
+  }, [timeline, skipIdle, wholeWindow, endpoint, ids, data.snapshot, full[0], full[1]]);
+  const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
+  const gaps = useMemo<IdleGap[]>(() => {
+    if (!timeline || !idleSource) return [];
+    const byID = new Map(rows.map(row => [row.id, row]));
+    const busy = idleSource.lanes.flatMap(lane => laneBusy(lane, byID.get(lane.session)));
+    const callers = splitTimelineCallers(nativeTimelineLabels(idleSource).messages, rows).caller.flatMap(message => { const at = message.at ? Date.parse(message.at) : NaN; return Number.isFinite(at) ? [at] : []; });
+    return idleGaps({ busy, callers });
+  }, [timeline, idleSource, rows]);
+  const shownGaps = skipIdle ? gaps : [];
+  const fullScale = useMemo(() => timeScale(full, shownGaps), [full[0], full[1], shownGaps]);
+  const windowScale = useMemo(() => timeScale(range, shownGaps), [range[0], range[1], shownGaps]);
   const shownLaneRows=useMemo(()=>{
     const active=rows.filter(node=>node.start!=null&&node.end!=null&&node.start<=range[1]&&node.end>=range[0]);
     return laneRows.filter(node=>active.some(other=>other.id===node.id||other.outline.startsWith(`${node.outline}.`)));
@@ -1737,8 +1794,9 @@ export function ParallelActivity({
     suppressClick.current = false;
     const rect = event.currentTarget.getBoundingClientRect();
     const capture = event.target as HTMLElement;
-    const at =timelinePointerTime(event.clientX,rect,range);
+    const at =scaledPointerTime(event.clientX,rect,windowScale);
     gesture.current = {
+      clock: windowScale,
       pointer: event.pointerId,
       capture,
       rect,
@@ -1759,14 +1817,14 @@ export function ParallelActivity({
     )
       return;
     event.preventDefault();
-    const now =timelinePointerTime(event.clientX,g.rect,g.initial);
+    const now =scaledPointerTime(event.clientX,g.rect,g.clock);
     g.draft = timelineDragRange('select',g.initial,g.initial,g.at,now);
     setBrush(g.draft);
   }
   function finishBrush(event?: React.PointerEvent<HTMLDivElement>) {
     const g = gesture.current;
     if (!g || (event && g.pointer !== event.pointerId)) return;
-    if(event?.type==='pointerup'&&(g.draft||Math.abs(event.clientX-g.x)>=4))g.draft=timelineDragRange('select',g.initial,g.initial,g.at,timelinePointerTime(event.clientX,g.rect,g.initial));
+    if(event?.type==='pointerup'&&(g.draft||Math.abs(event.clientX-g.x)>=4))g.draft=timelineDragRange('select',g.initial,g.initial,g.at,scaledPointerTime(event.clientX,g.rect,g.clock));
     gesture.current = null;
     if (g.capture.hasPointerCapture(g.pointer))
       g.capture.releasePointerCapture(g.pointer);
@@ -1804,9 +1862,11 @@ export function ParallelActivity({
       width: `${(Math.max(0, right - left) / width) * 100}%`,
     };
   }
-  const ticks = timelineTickLabels(range,Math.max(2,Math.min(6,Math.floor((clockWidth||350)/100))));
+  const ticks = timelineTickLabels(range,Math.max(2,Math.min(6,Math.floor((clockWidth||350)/100))),windowScale.compressed?windowScale.time:undefined);
+  const cutLabels = cutAxisLabels(ticks.map((_,i)=>i/Math.max(1,ticks.length-1)),windowScale.cuts,clockWidth||350);
   const lanes = new Map(visibleActivity?.lanes.map((l) => [l.session, l]));
   const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
+  const eventHref=(node:Session,e:AgentEventLink)=>withEventLink(ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:{id:e.message_id} as LabelMessage},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href),e);
   return (
     <div className={`delegation-parallel ${previewOnly?"is-preview":""} ${recursive?"is-recursive":""} ${timeline?"is-timeline":""}`} ref={track} style={timeline?columns.style:undefined}>
       {previewOnly?<button type="button" className="lt-preview-activate" aria-label="Open full-width timeline" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}><span>Open timeline to explore <Icon name="arrow-right"/></span></button>:null}
@@ -1820,8 +1880,10 @@ export function ParallelActivity({
         preview={brush}
         change={change}
         pending={pending}
+        scale={fullScale}
+        idle={timeline&&!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
       />
-      {timeline?<TimelineLegend messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error}/>:<div className="delegation-legend">
+      {timeline?<TimelineLegend messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
         {!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred
@@ -1868,7 +1930,7 @@ export function ParallelActivity({
         {timeline?<div className="delegation-axis lt-resizable-axis">
           <span className="lt-column-heading">Session{columns.handle('execution')}</span>
           <span className="lt-column-heading">Events{columns.handle('events')}</span>
-          <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=><small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}</div>
+          <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=>cutLabels.hiddenTicks.has(i)?null:<small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}{windowScale.cuts.map((cut,i)=><span key={cut.end} className="lt-idle-cut" style={{left:`${cut.fraction*100}%`}} title={`Nothing ran for ${duration(cut.end-cut.start)}; resumed ${localTime(cut.end)}`}>{cutLabels.labelled.has(i)?<time dateTime={new Date(cut.end).toISOString()}><b>{resumeTime.format(new Date(cut.end))}</b>+{idleDuration(cut.end-cut.start)}</time>:null}</span>)}</div>
         </div>:<div className="delegation-axis">
           <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Session</span><span>Events</span></>:"Session"}</span>
           <div ref={clock} {...brushHandlers}>
@@ -1887,7 +1949,7 @@ export function ParallelActivity({
           </div>
         </div>}
         {timeline?<div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
-          <RecursiveSessionRibbon collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} detail brushHandlers={brushHandlers} preview={brush}
+          <RecursiveSessionRibbon collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
             sourceHref={item=>{const owner=rows.find(row=>row.id===item.message?.session_id);return owner?sourceHref(owner,item):null;}}
             foldControl={<Icon name="human"/>} restore={()=>{}}
             select={item=>{if(!item.message)return;const owner=rows.find(row=>row.id===item.message!.session_id);if(owner){setEventID('label:'+item.message.id);openNode(owner,item.message.id,item.message.conversation_id);}}}/>
@@ -1901,9 +1963,10 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
+              events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
               foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
               restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>

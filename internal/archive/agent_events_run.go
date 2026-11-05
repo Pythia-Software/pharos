@@ -382,10 +382,10 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		}
 		if len(framed) > 0 {
 			next := target.settings(labels)
-			if runner != nil && next.Threads != labels.Threads {
+			if runner != nil && runner.UsesCPUThreads() && next.Threads != runner.Threads() {
 				// The preceding chunk has finished, so no request is lost.
 				stopPool()
-				progress("agent events: changing cores per worker to %d", next.Threads)
+				progress("agent events: changing CPU threads per worker to %d", next.Threads)
 			}
 			labels = next
 			if runner == nil {
@@ -393,7 +393,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 					MaxBatch: max(1, labels.MaxBatch), Backoff: labelsWorkerBackoff,
 					OnRestart: func(slot int, cause error) { progress("agent events: restarting worker %d after: %v", slot, cause) }}
 				var err error
-				if runner, release, err = c.labelerManager(labels).Runner(ctx, verifier.model, cfg); err != nil {
+				if runner, release, err = c.labelerRunner(ctx, labels, verifier.model, cfg); err != nil {
 					runner, release = nil, func() {}
 					return err
 				}

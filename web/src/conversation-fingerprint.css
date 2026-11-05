@@ -6,3 +6,4 @@
 .lt-emblem g[tabindex]:focus{outline:none}
 .lt-emblem g[tabindex]:focus>.lt-emblem-hit{stroke:var(--ink);stroke-width:1.5}
 @media(max-width:700px){.lt-emblem{min-height:22px}}
+.lt-emblem.has-events{position:relative}

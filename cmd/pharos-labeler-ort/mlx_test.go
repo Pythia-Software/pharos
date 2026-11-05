@@ -22,6 +22,9 @@ func TestMLXNativeParity(t *testing.T) {
 	if dirs == "" || engine == "" || ort == "" {
 		t.Skip("set PHAROS_MLX_TEST_MODELS, PHAROS_MLX_LIBRARY and PHAROS_ORT_LIBRARY for native GPU parity")
 	}
+	if available, err := probeMLX(engine); err != nil || available == nil || !*available {
+		t.Fatalf("native GPU availability: %v %v", available, err)
+	}
 	for _, dir := range filepath.SplitList(dirs) {
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
