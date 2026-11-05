@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { hourOfDayColor } from "./chart-colors";
 import type { HumanStudyPreview } from "./human-study";
@@ -20,7 +21,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
     return () => observer.disconnect();
   }, [study.kind]);
   const points = study.points ?? [], valid = points.filter((n): n is number => n !== null), low = valid.length ? Math.min(...valid) : 0, high = valid.length ? Math.max(...valid) : 0;
-  const isPercent = study.format === "percent" || study.kind === "composition", format = isPercent ? percent : study.format === "USD" ? (value: number) => value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }) : number;
+  const isPercent = study.format === "percent" || study.kind === "composition", format = isPercent ? percent : study.format === "USD" ? formatUSD : number;
   const pad = (high - low || Math.max(.1, Math.abs(high) * .1)) * .025, min = Math.max(0, low - pad), max = Math.max(min + .001, Math.min(isPercent ? 1 : Infinity, high + pad));
   const left = 4, right = size.width - 4, top = 5, bottom = size.height - 5;
   const x = (index: number) => left + index / Math.max(1, points.length - 1) * (right - left), y = (value: number) => bottom - (value - min) / (max - min) * (bottom - top);

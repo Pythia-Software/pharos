@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { fitQueryToScreen } from "./query-fit";
 import { queryRow } from "./query-transport";
 import {messageLabelLegacyURL} from "./message-label-legacy";
@@ -139,13 +140,6 @@ function mainIntegrationLink(row: Row): React.ReactNode {
   if (!merge) return "";
   return merge.url ? <a className="qt-pr-link" href={merge.url} target="_blank" rel="noopener noreferrer" title={merge.commit} onClick={event => event.stopPropagation()}>{merge.label}</a>
     : <span title={merge.commit}>{merge.label}</span>;
-}
-
-function formatUSD(amount: number): string {
-  if (!Number.isFinite(amount)) return "";
-  if (Math.abs(amount) >= 1e6) return `$${compactNumber(amount)}`;
-  const digits = Math.abs(amount) >= 100 ? 0 : Math.abs(amount) >= 1 ? 2 : 4;
-  return amount.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: Math.min(digits, 2), maximumFractionDigits: digits });
 }
 
 function usdCost(value: unknown, row: Row): React.ReactNode {
@@ -969,7 +963,7 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
   return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
 }
 
-const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const costTick = formatUSD;
 // Tokens and Cost amounts; shares and ratios are formatted by the trend.
 const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
 const tokenTick: AmountFormat = (value, measure) => measure.unit === "USD" ? costTick(value) : compactNumber(value);

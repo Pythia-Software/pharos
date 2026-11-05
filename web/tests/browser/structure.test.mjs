@@ -1124,6 +1124,49 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
 });
 
 
+test("Card Library timeline ticks fit full dollar amounts", { skip }, async t => {
+  let suppliedLargeCosts = false;
+  const app = await open(t, {
+    url: "/cards?cards=library&card_search=cumulative-api-cost&card_window=30",
+    ready: ".query-timeline-ticks > span",
+    api: { "* /api/query/:dataset/:operation": call => {
+      const response = defaultApi["* /api/query/:dataset/:operation"](call);
+      if (call.params.dataset !== "usage" || !response?.metrics) return response;
+      const cost = call.body?.metrics?.find(metric => metric.field === "cost_usd" && metric.groupBy?.includes("day"));
+      if (!cost) return response;
+      suppliedLargeCosts = response.metrics.some(metric => metric.id === cost.id && metric.buckets.length);
+      return { ...response, metrics: response.metrics.map(metric => metric.id !== cost.id ? metric : {
+        ...metric, buckets: metric.buckets.map(bucket => ({ ...bucket, value: 1_250_000 / metric.buckets.length })),
+      }) };
+    } },
+  });
+  assert.ok(suppliedLargeCosts, "the fixture supplied six- and seven-figure cost ticks");
+  const chart = app.page.locator('[data-card-id="cumulative-api-cost"] .query-cover-timeline');
+  await chart.waitFor();
+  for (const width of [1440, 320]) {
+    await app.page.setViewportSize({ width, height: 900 });
+    await chart.scrollIntoViewIfNeeded();
+    const problems = await chart.evaluate(chart => {
+      const clip = chart.closest(".query-card-open").getBoundingClientRect();
+      const plot = chart.querySelector(".query-cover-columns").getBoundingClientRect();
+      const dates = chart.querySelector(".query-timeline-dates > span").getBoundingClientRect();
+      const ticks = [...chart.querySelectorAll(".query-timeline-ticks > span")].map(tick => tick.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+      const problems = [];
+      for (const tick of ticks) {
+        if (tick.left < clip.left || tick.right > clip.right) problems.push("a dollar tick is clipped by its card");
+        if (tick.right > plot.left) problems.push("a dollar tick overlaps the plot");
+      }
+      if (ticks.some((tick, index) => index && tick.top < ticks[index - 1].bottom)) problems.push("dollar ticks overlap each other");
+      if (Math.abs(dates.left - plot.left) > 1) problems.push("dates do not align with the plot");
+      if (plot.width <= 0) problems.push("the gutter leaves no room for the plot");
+      return problems;
+    });
+    assert.deepEqual(problems, [], `timeline at ${width}px`);
+    assert.deepEqual(await layoutProblems(app.page), []);
+    await app.shot(`full-dollar-timeline-${width}`);
+  }
+});
+
 // IndexedDB and painting saved charts during navigation require a real browser.
 test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
   let hold = false, release;

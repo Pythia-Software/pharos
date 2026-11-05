@@ -344,6 +344,7 @@ APP_HTML = r'''<!doctype html>
     @media(max-width:500px){.health{grid-template-columns:1fr}.header-icons{flex:0 1 auto;min-width:0;flex-wrap:wrap;row-gap:6px}.navigator.open{flex-wrap:wrap}.navigator-uri{order:-1;flex-basis:100%}.navigator .navigator-error{order:1;flex-basis:100%}}
   </style>
   <script src="/assets/page-errors.js"></script>
+  <script src="/assets/currency.js"></script>
   <script src="/assets/preferences.js"></script>
   <script src="/assets/managed-storage.js"></script>
   <script>window.pharosPrefs=(function(){
@@ -1613,7 +1614,7 @@ const PAUSE_INDEXING_FOR_QUERIES_KEY='pharos-pause-indexing-for-queries-v1';
 function setPauseIndexingForQueries(on,save=true){const toggle=$('#pauseIndexingForQueries');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(!save)return;pharosPrefs.set(PAUSE_INDEXING_FOR_QUERIES_KEY,on);pharosPrefs.flush?.()}
 setPauseIndexingForQueries(pharosPrefs.get(PAUSE_INDEXING_FOR_QUERIES_KEY,false)===true,false);
 $('#pauseIndexingForQueries').onclick=()=>setPauseIndexingForQueries(pharosPrefs.get(PAUSE_INDEXING_FOR_QUERIES_KEY,false)!==true);
-// Three significant figures with a unit: 22.3B, $128k, 5.
+// Three significant figures with a unit: 22.3B, 5.
 function sigFigs(value,prefix=''){if(value==null||!Number.isFinite(Number(value)))return'—';const units=['','k','M','B','T'];let amount=Number(Number(value).toPrecision(3)),power=0;while(Math.abs(amount)>=1000&&power<units.length-1){amount=Number((amount/1000).toPrecision(3));power++}return prefix+String(amount)+units[power]}
 function carbonSummaryValue(bucket){const factors=usageSummaryData?.carbon_factors;if(!factors)return null;const stored=pharosPrefs.get('pharos-carbon-v1',{}),saved=stored&&typeof stored==='object'?stored:{},scenario=['low','central','high'].includes(saved.scenario)?saved.scenario:'central',pueScenario=['low','central','high'].includes(saved.pueScenario)?saved.pueScenario:'central',inputScale=saved.inputSensitivity==='third'?5/3:1,grid=factors.grids.find(item=>item.key===saved.grid),gridValue=saved.grid==='custom'?Math.max(0,Number(saved.customGrid)||0):(grid||factors.grids.find(item=>item.key===factors.default_grid))?.g_co2e_per_kwh||0;let wh=0;for(const [tierKey,counts] of Object.entries(bucket.carbon_tokens||{})){const tier=factors.tiers.find(item=>item.key===tierKey);if(!tier)continue;for(const [category,count] of Object.entries(counts)){const ratio=category==='output'?1:(factors.ratios[category]?.[scenario]??1)*inputScale;wh+=Number(count||0)/1e6*(tier.output_wh_per_mtok?.[scenario]||0)*ratio}}const grams=wh*(factors.pue?.[pueScenario]||1)*gridValue/1000;const amount=grams>=1e6?`${sigFigs(grams/1e6)} t`:grams>=1e3?`${sigFigs(grams/1e3)} kg`:`${sigFigs(grams)} g`;return{amount,grams}}
 function buildUsageSummaryTable(layout,preview=false){
@@ -1632,7 +1633,7 @@ function buildUsageSummaryTable(layout,preview=false){
       if(timing)cell.title=timing.title;else if(threaded)cell.title=threaded.title;
       else if(field==='tool_time_ms')cell.title=`${bucket.timed_tool_calls||0} of ${bucket.tool_calls||0} calls have recorded durations. Durations can overlap and include approval waits.`;
       else if(format==='percent')cell.title=value==null?'No calls in this window':`${value}% of tool calls failed`;
-      else if(value!=null)cell.title=carbon?`${Number(value).toLocaleString(undefined,{maximumFractionDigits:3})} g CO₂e`:prefix?`$${Number(value).toLocaleString(undefined,{maximumFractionDigits:2})}`:Number(value).toLocaleString();
+      else if(value!=null)cell.title=carbon?`${Number(value).toLocaleString(undefined,{maximumFractionDigits:3})} g CO₂e`:prefix?pharosCurrency.formatUSD(Number(value)):Number(value).toLocaleString();
       const href=usageSummaryLinks&&usageSummaryData?window.pharosQueryTables?.summaryURL(field,bucket.key,bucket.until||usageSummaryData.generated_at||new Date().toISOString(),undefined,bucket.from):null;
       if(href){const target=node('a','',cell.textContent);target.href=href;target.dataset.summaryMetric=field;target.dataset.summaryWindow=bucket.key;target.setAttribute('aria-label',`${label}, ${USAGE_SUMMARY_COLUMNS[bucket.key]||bucket.key}: ${cell.textContent}`);target.onclick=event=>{if(event.defaultPrevented||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button)return;event.preventDefault();setUsageSummaryOpen(false);openHistoryEntry(href)};if(preview){target.removeAttribute('href');target.onclick=null;target.tabIndex=-1;target.draggable=false}cell.replaceChildren(target)}
       row.append(cell);
@@ -1705,7 +1706,7 @@ markTranscriptTarget(target)
 // Each health section loads on its own request, so fast cards render while slow ones (message counts, pricing) still show a placeholder.
 let healthLoad=0;
 function usageLink(card,view){card.classList.add('health-link');card.setAttribute('role','link');card.tabIndex=0;card.title=view==='writing'?'Open Human Words in Analyze':view==='carbon'?'Open Carbon Impact in Analyze':'Open Machine Tokens in Analyze';card.querySelector('.health-open')||card.append(node('div','meta health-open','Open in Analyze →'));card.onclick=()=>{history.pushState(null,'','/analyze?analyze_topic='+(view==='writing'?'human':view));routeFromLocation()};card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();card.onclick()}}}
-function formatCost(value){const n=Number(value)||0;if(Math.abs(n)>=1e6)return`$${compactCount(n)}`;return n.toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:Math.abs(n)>=100?0:2})}
+function formatCost(value){return pharosCurrency.formatUSD(Number(value)||0)}
 function carbonMass(value){const grams=Number(value)||0;if(grams>=1e6)return`${Number((grams/1e6).toPrecision(3)).toLocaleString()} t`;if(grams>=1e3)return`${Number((grams/1e3).toPrecision(3)).toLocaleString()} kg`;return`${Number(grams.toPrecision(3)).toLocaleString()} g`}
 function syncAge(value){const seconds=Math.max(0,Math.floor((Date.now()-Date.parse(value))/1000));if(!Number.isFinite(seconds))return'Time unavailable';if(seconds<60)return`${seconds}s ago`;const minutes=Math.floor(seconds/60);if(minutes<60)return`${minutes}m ago`;const hours=Math.floor(minutes/60);if(hours<24)return`${hours}h ago`;return`${Math.floor(hours/24)}d ago`}
 setInterval(()=>{if(!$('#settings').classList.contains('active'))return;for(const age of document.querySelectorAll('#healthCards [data-last-data-at]'))age.textContent=syncAge(age.dataset.lastDataAt)},1000);
