@@ -1110,12 +1110,8 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 		where = append(where, "w.id IN (SELECT mx.workspace_id FROM metrics mx WHERE "+strings.Join(clause, " AND ")+")")
 	}
 	if options.File != "" {
-		pattern := options.File
-		if !strings.Contains(pattern, "%") {
-			pattern = "%" + pattern + "%"
-		}
-		where = append(where, "w.id IN (SELECT cs.workspace_id FROM change_files cf JOIN change_sets cs ON cs.id=cf.change_set_id WHERE cf.path LIKE ?)")
-		args = append(args, pattern)
+		where = append(where, fileFilterSQL("w"))
+		args = append(args, fileFilterArgs(options.File)...)
 	}
 	if options.ChangedOnly {
 		where = append(where, "w.id IN (SELECT x.workspace_id FROM change_files xf JOIN change_sets x ON x.id=xf.change_set_id)")

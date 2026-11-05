@@ -730,7 +730,9 @@
   "work_id": [
    {"tool":"search_work","field":"items[].workspace_id"},
    {"tool":"search_conversations","field":"items[].workspace_id"},
-   {"tool":"search_text","field":"items[].workspace_id"}
+   {"tool":"search_text","field":"items[].workspace_id"},
+   {"tool":"list_outcomes","field":"items[].workspace_id"},
+   {"tool":"get_file_history","field":"files[].sessions[].workspace_id"}
   ],
   "conversation_id": [
    {"tool":"search_conversations","field":"items[].conversation_id"},

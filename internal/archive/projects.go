@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -281,13 +282,39 @@ func (c *Catalog) listProjects(args map[string]any) (map[string]any, error) {
 	kind := firstString(args["kind"])
 	limit := clamp(int(integer(valueOr(args["limit"], 20))), 1, 100)
 	budget := mcpBudget(args, 1500)
+	// A path (the agent's working directory) selects the project it is in,
+	// as the project rule places a session there: the nearest repository
+	// checked out at or above it, else the nearest folder project above it.
+	where, values, nearest := "", []any{}, false
+	if path := strings.TrimSpace(firstString(args["path"])); path != "" {
+		key := folderKey(path)
+		if key == "" {
+			return nil, fmt.Errorf("path must be absolute")
+		}
+		roots, err := projectRoots(context.Background(), c.DB)
+		if err != nil {
+			return nil, err
+		}
+		if repository := folderRepository(key, roots); repository != "" {
+			where, values = " AND pj.id=?", []any{repository}
+		} else {
+			// A folder is its project folder, so temporary folders are /tmp.
+			folder := projectFolder(path)
+			where, values, nearest = " AND pj.id IS NULL AND (w.project_folder=? OR substr(?,1,length(w.project_folder)+1)=w.project_folder||'/')", []any{folder, folder}, true
+		}
+	}
 	rows, err := queryMaps(c.DB, `SELECT `+projectNameSQL("w")+` project,`+projectKindSQL("w")+` kind,MAX(pj.canonical_remote) remote,
 		COUNT(c.id) conversations,MAX(COALESCE(c.ended_at,c.started_at,w.activity_at)) last_message_at,MAX(w.indexed_at) last_indexed_at
 		FROM workspaces w`+projectJoin("w")+` JOIN conversations c ON c.workspace_id=w.id
-		WHERE `+projectNameSQL("w")+` IS NOT NULL
-		GROUP BY `+projectIDSQL("w")+` ORDER BY last_message_at DESC,project`)
+		WHERE `+projectNameSQL("w")+` IS NOT NULL`+where+`
+		GROUP BY `+projectIDSQL("w")+` ORDER BY last_message_at DESC,project`, values...)
 	if err != nil {
 		return nil, err
+	}
+	if nearest && len(rows) > 1 {
+		// Folders nest: the deepest one holding the path is its project.
+		deepest := slices.MaxFunc(rows, func(a, b map[string]any) int { return len(firstString(a["project"])) - len(firstString(b["project"])) })
+		rows = []map[string]any{deepest}
 	}
 	items := []map[string]any{}
 	for _, row := range rows {

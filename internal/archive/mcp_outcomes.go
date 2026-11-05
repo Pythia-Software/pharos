@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The outcome and file-history MCP tools (docs/projects-and-outcomes.md).
@@ -30,9 +32,141 @@ var outcomeMCPTools = []map[string]any{
 			"project":           map[string]any{"type": "string", "description": "Only the file in this project, when several projects hold the path."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Sessions and commits per file; default 20."},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
+	{"name": "get_branch_spend", "description": "What agents spent on each branch of your repositories: cost (API-price equivalent, as the Library prices it), tokens and sessions per branch, most spent first, and the coverage split (on a branch per turn or per session, unknown branch, no branch data) that adds up to the repository sessions' whole spend. A session that switched branches is split turn by turn. Sessions in folders have no branches and are not counted; for them use query_statistics. Same numbers as Analyze → Spend by Branch.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"project":           map[string]any{"type": "string", "description": "A repository from list_projects."},
+			"branch":            map[string]any{"type": "string", "description": "Only branches whose name contains this text."},
+			"from":              map[string]any{"type": "string", "description": "Usage in UTC hours starting at or after this time: an RFC 3339 timestamp or a UTC date. Spend is placed in the hour it was used."},
+			"to":                map[string]any{"type": "string", "description": "Usage in UTC hours starting before this time; a date includes its whole day."},
+			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Branches listed; default 20."},
+			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 }
 
 func init() { mcpTools = append(mcpTools, outcomeMCPTools...) }
+
+// getBranchSpend is the get_branch_spend tool: the branch_usage dataset's
+// rows, summed per branch and per coverage.
+func (c *Catalog) getBranchSpend(ctx context.Context, args map[string]any) (map[string]any, error) {
+	limit := clamp(int(integer(valueOr(args["limit"], 20))), 1, 100)
+	budget := mcpBudget(args, 1500)
+	project, branchText := firstString(args["project"]), strings.ToLower(firstString(args["branch"]))
+	// Rows are hourly: the bounds select the hours starting in [from, to),
+	// compared as instants, so a bound's offset counts.
+	var from, to time.Time
+	for key, bound := range map[string]*time.Time{"from": &from, "to": &to} {
+		if value := strings.TrimSpace(firstString(args[key])); value != "" {
+			parsed, ok := parseTime(value)
+			if !ok {
+				return nil, fmt.Errorf("%s must be a valid timestamp or date", key)
+			}
+			if key == "to" && len(value) == len("2006-01-02") {
+				parsed = parsed.Add(24 * time.Hour)
+			}
+			*bound = parsed
+		}
+	}
+	var inProject map[string]bool
+	if project != "" {
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id FROM workspaces w`+projectJoin("w")+` WHERE `+projectPredicate("w"), projectArgs(project)...)
+		if err != nil {
+			return nil, err
+		}
+		inProject = map[string]bool{}
+		for _, row := range rows {
+			inProject[firstString(row["id"])] = true
+		}
+	}
+	rows, err := c.branchUsageRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type total struct {
+		cost     any
+		tokens   int64
+		sessions map[string]bool
+		recorded map[string]bool
+		status   string
+		projects map[string]bool
+	}
+	add := func(t *total, row map[string]any) {
+		if value, ok := row["cost_usd"].(float64); ok {
+			t.cost = addCost(t.cost, &value)
+		}
+		t.tokens += integer(row["tokens"])
+		t.sessions[firstString(row["workspace_id"])] = true
+		if source := firstString(row["branch_source"]); source != "" {
+			t.recorded[source] = true
+		}
+		t.status = worsePriceStatus(t.status, firstString(row["price_status"]))
+		if name := firstString(row["project_name"]); name != "" {
+			t.projects[name] = true
+		}
+	}
+	newTotal := func() *total {
+		return &total{sessions: map[string]bool{}, recorded: map[string]bool{}, projects: map[string]bool{}}
+	}
+	branches, coverage := map[string]*total{}, map[string]*total{}
+	for _, row := range rows {
+		at, _ := parseTime(firstString(row["usage_at"]))
+		if inProject != nil && !inProject[firstString(row["workspace_id"])] || !from.IsZero() && at.Before(from) || !to.IsZero() && !at.Before(to) {
+			continue
+		}
+		branch := firstString(row["branch"])
+		if branchText != "" && !strings.Contains(strings.ToLower(branch), branchText) {
+			continue
+		}
+		key := firstString(row["coverage"])
+		if coverage[key] == nil {
+			coverage[key] = newTotal()
+		}
+		add(coverage[key], row)
+		if branch != "" {
+			if branches[branch] == nil {
+				branches[branch] = newTotal()
+			}
+			add(branches[branch], row)
+		}
+	}
+	keys := func(set map[string]bool) []string { return slices.Sorted(maps.Keys(set)) }
+	describe := func(t *total) map[string]any {
+		item := map[string]any{"cost_usd": t.cost, "tokens": t.tokens, "sessions": len(t.sessions)}
+		if t.status != "" && t.status != "priced" {
+			item["price_status"] = t.status
+		}
+		return item
+	}
+	items := []map[string]any{}
+	for name, t := range branches {
+		item := describe(t)
+		item["branch"], item["recorded"], item["projects"] = name, keys(t.recorded), keys(t.projects)
+		items = append(items, item)
+	}
+	slices.SortFunc(items, func(a, b map[string]any) int {
+		if left, right := floatOr(a["cost_usd"]), floatOr(b["cost_usd"]); left != right {
+			if left > right {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(firstString(a["branch"]), firstString(b["branch"]))
+	})
+	split := map[string]any{}
+	for key, t := range coverage {
+		split[key] = describe(t)
+	}
+	result := map[string]any{"total": len(items), "coverage": split,
+		"note": "coverage adds up to the spend of every repository session in the filters: on_branch (per turn when Claude Code recorded the branch on each turn, per session when the source records one branch per session), unknown (before a session's first branch, on a detached HEAD, or not placed on a turn) and no_branch_data. recorded says how each branch was known. Cost is an API-price equivalent; price_status flags a partly priced total."}
+	if len(coverage) == 0 {
+		result["note"] = "No repository session has spend in these filters. Spend by branch covers Git repositories only; for spend in folders, or per project, use query_statistics with group_by project and a cost_usd sum."
+	}
+	if len(items) > limit {
+		items = items[:limit]
+		result["truncated"] = true
+	}
+	result["items"] = items
+	fitConversationItems(result, budget)
+	return result, nil
+}
 
 // listOutcomes is the list_outcomes tool.
 func (c *Catalog) listOutcomes(ctx context.Context, args map[string]any) (map[string]any, error) {

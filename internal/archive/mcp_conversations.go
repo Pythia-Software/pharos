@@ -108,8 +108,8 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 		values = append(values, filterArgs...)
 	}
 	if file := firstString(args["file"]); file != "" {
-		clauses = append(clauses, `EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)`)
-		values = append(values, "%"+file+"%")
+		clauses = append(clauses, fileFilterSQL("w"))
+		values = append(values, fileFilterArgs(file)...)
 	}
 	if args["pr"] != nil {
 		clauses = append(clauses, `EXISTS(SELECT 1 FROM work_pr_links l JOIN pull_requests p ON p.id=l.pr_id WHERE l.workspace_id=w.id AND p.number=?)`)
