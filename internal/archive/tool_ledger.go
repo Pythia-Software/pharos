@@ -93,14 +93,14 @@ var (
 	toolCategoryByName    = map[string]string{}
 	toolCategoryEntries   = map[string][]string{
 		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec", "run_commands", "run_in_terminal"},
-		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item", "copilot_readfile", "copilot_listdirectory"},
+		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item", "copilot_readfile", "copilot_listdirectory", "read_files"},
 		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name", "search_codebase", "copilot_findfiles", "copilot_findtextinfiles", "copilot_searchcodebase"},
 		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content", "editor", "copilot_createfile", "copilot_replacestring", "copilot_multireplacestring", "copilot_insertedit", "copilot_applypatch", "vscode_renamesymbol"},
-		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content", "copilot_fetchwebpage", "vscode_fetchwebpage_internal"},
+		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content", "copilot_fetchwebpage", "vscode_fetchwebpage_internal", "fetch_web_content"},
 		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents", "runsubagent"},
 		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree", "manage_task"},
 		"user":    {"askuserquestion", "request_user_input", "request_user_input_async", "ask_question"},
-		"meta":    {"toolsearch", "skill", "get_skill", "request_plugin_install", "slashcommand"},
+		"meta":    {"toolsearch", "skill", "skills", "get_skill", "request_plugin_install", "slashcommand"},
 	}
 )
 
@@ -661,10 +661,24 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 	}
 	lowerName := strings.ToLower(call.ToolName)
 	if len(lines) == 0 && shellToolNames[lowerName] {
-		// Cline runs a list of command lines in one call.
+		// Cline runs a list of command lines in one call; an entry may be
+		// a program and its arguments, run without a shell.
 		listed, _ := mapValueDefault(input)["commands"].([]any)
 		for _, command := range listed {
-			if text := firstString(command); text != "" {
+			text := ""
+			if entry := mapValue(command); entry != nil {
+				if program := firstString(entry["command"]); program != "" {
+					words := []string{shellQuote(program)}
+					arguments, _ := entry["args"].([]any)
+					for _, argument := range arguments {
+						words = append(words, shellQuote(asString(argument)))
+					}
+					text = strings.Join(words, " ")
+				}
+			} else {
+				text = firstString(command)
+			}
+			if text != "" {
 				lines = append(lines, struct {
 					text               string
 					exitCode, duration *int64
