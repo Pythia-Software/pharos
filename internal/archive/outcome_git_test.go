@@ -132,8 +132,19 @@ func (f *gitFixture) links() map[string][]string {
 func TestSessionGitLinksCommits(t *testing.T) {
 	f := newGitFixture(t)
 	repo := f.repo
-	for _, id := range []string{"direct", "inferred", "stale", "wide", "narrow", "branch", "picked", "squashed", "reverted", "undone", "late"} {
+	for _, id := range []string{"direct", "inferred", "stale", "wide", "narrow", "branch", "picked", "squashed", "reverted", "undone", "late",
+		"early", "printer", "printer-too", "detached"} {
 		f.session(id, "")
+	}
+	// A session that only committed, before every other session's edits.
+	early := repo.commit(40, "Early", map[string]string{"early.go": "package early\n"})
+	f.printed("early", early, 40)
+	// A repository's text converter is never run: one with a cache would
+	// write notes.
+	repo.git(time.Now(), "config", "diff.custom.textconv", "cat")
+	repo.git(time.Now(), "config", "diff.custom.cachetextconv", "true")
+	if err := os.WriteFile(filepath.Join(repo.dir, ".git", "info", "attributes"), []byte("*.txt diff=custom\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	// Its own git commit printed the hash: linked directly, and on mainline.
 	f.edit("direct", "main.go", 30)
@@ -169,7 +180,14 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	// author time: the same change landed under another hash.
 	repo.git(time.Now(), "checkout", "-q", "-b", "feature")
 	f.edit("branch", "branch.go", 8)
-	branch := repo.commit(7.99, "Branch", map[string]string{"branch.go": "package branch\n"})
+	branch := repo.commit(7.99, "Branch", map[string]string{"branch.go": "package branch\n", "notes.txt": "converted\n"})
+	// Two sessions printed one commit, which one of them also has as its
+	// copy on mainline: each keeps its link, and the copy keeps the
+	// printed hash's evidence.
+	f.edit("printer", "printed.go", 6.5)
+	printed := repo.commit(6.49, "Printed", map[string]string{"printed.go": "package printed\n"})
+	f.printed("printer", printed, 6.49)
+	f.printed("printer-too", printed, 6.49)
 	f.edit("picked", "picked.go", 6)
 	picked := repo.commit(5.99, "Picked", map[string]string{"picked.go": "package picked\n"})
 	f.edit("squashed", "squashed.go", 5)
@@ -177,16 +195,25 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	repo.git(time.Now(), "checkout", "-q", "main")
 	repo.git(time.Now().Add(-4*24*time.Hour), "cherry-pick", picked)
 	copied := repo.git(time.Now(), "rev-parse", "HEAD")
+	repo.git(time.Now().Add(-4*24*time.Hour), "cherry-pick", printed)
+	printedCopy := repo.git(time.Now(), "rev-parse", "HEAD")
 	repo.git(time.Now().Add(-3*24*time.Hour), "cherry-pick", squashed)
 	repo.git(time.Now().Add(-3*24*time.Hour), "commit", "-q", "--amend", "--no-edit", "--reset-author")
 	squash := repo.git(time.Now(), "rev-parse", "HEAD")
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
+	// A commit in a worktree on a detached HEAD, which no ref holds.
+	tree := filepath.Join(t.TempDir(), "tree")
+	repo.git(time.Now(), "worktree", "add", "-q", "--detach", tree)
+	f.edit("detached", "detached.go", 2)
+	detached := (&gitRepository{t, tree}).commit(1.99, "Detached", map[string]string{"detached.go": "package detached\n"})
+	f.printed("detached", detached, 1.99)
 	f.refresh()
 
 	links := f.links()
 	for id, want := range map[string]string{
 		"direct": direct[:7] + " transcript 1", "inferred": inferred[:7] + " inferred 0.7", "narrow": narrow[:7] + " inferred 0.5",
 		"reverted": reverted[:7] + " inferred 0.7", "undone": undone[:7] + " inferred 0.7", "branch": branch[:7] + " inferred 0.7", "picked": copied[:7] + " inferred 0.7", "squashed": squashed[:7] + " inferred 0.7",
+		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " transcript 1", "printer-too": printed[:7] + " transcript 1", "detached": detached[:7] + " transcript 1",
 	} {
 		if strings.Join(links[id], ", ") != want {
 			t.Errorf("%s links: %v, want %s", id, links[id], want)
@@ -196,6 +223,9 @@ func TestSessionGitLinksCommits(t *testing.T) {
 		if len(links[id]) != 0 {
 			t.Errorf("%s links: %v", id, links[id])
 		}
+	}
+	if notes := repo.git(time.Now(), "for-each-ref", "refs/notes"); notes != "" {
+		t.Fatalf("a scan wrote notes: %s", notes)
 	}
 	// A candidate link is kept but counts toward nothing.
 	if linked := countRows(t, f.catalog, `SELECT linked_commits FROM session_git WHERE workspace_id='narrow'`); linked != 0 {
@@ -342,6 +372,25 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 	if logs == 0 || len(f.links()["work"]) != 2 {
 		t.Fatalf("after new work: %d logs, %v", logs, f.links())
 	}
+	// Lines and edit times a session gained later scan again, and a
+	// fingerprint is read as the bytes it is, spaces included.
+	fingerprint := " \x00\x01\x02\x03\t"
+	execTx(t, f.catalog.DB, `UPDATE session_files SET kept_lines=X'`+fmt.Sprintf("%x", fingerprint)+`' WHERE workspace_id='work' AND path='util.go'`)
+	logs = 0
+	f.refresh()
+	if logs == 0 {
+		t.Fatal("changed lines did not scan again")
+	}
+	sessions, _, err := f.catalog.readGitSessions(context.Background())
+	if err != nil || !hasLine(sessions["work"].Kept["repo-app"]["util.go"], fingerprint) {
+		t.Fatalf("fingerprints read: %v %v", sessions["work"].Kept, err)
+	}
+	execTx(t, f.catalog.DB, `UPDATE session_files SET first_edit_at='`+daysAgo(4.5)+`' WHERE workspace_id='work' AND path='util.go'`)
+	logs = 0
+	f.refresh()
+	if logs == 0 {
+		t.Fatal("an earlier first edit did not scan again")
+	}
 }
 
 // A commit two sessions could have made goes to the session the checkout
@@ -396,6 +445,22 @@ func TestSessionGitContestedCommits(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("contested links:\n got %v\nwant %v", got, want)
+	}
+}
+
+// A rebase's own commits were made in the checkout; the commit it started
+// from, returned to or abandoned for was not.
+func TestReflogMadeCommit(t *testing.T) {
+	for action, want := range map[string]bool{
+		"commit: Add login": true, "commit (amend): Add login": true, "cherry-pick: Fix": true, "revert: Revert \"Fix\"": true,
+		"rebase (pick): Add login": true, "rebase -i (fixup): Add login": true, "rebase (continue): Add login": true,
+		"rebase (start): checkout main": false, "rebase -i (start): checkout origin/main": false, "rebase (finish): returning to refs/heads/feature": false,
+		"rebase (abort): returning to refs/heads/feature": false, "rebase: checkout main": false, "rebase finished: returning to refs/heads/x": false, "rebase: fast-forward": false,
+		"checkout: moving from main to feature": false, "reset: moving to HEAD~1": false, "pull: Fast-forward": false,
+	} {
+		if reflogMadeCommit(action) != want {
+			t.Errorf("%q: %v, want %v", action, !want, want)
+		}
 	}
 }
 
