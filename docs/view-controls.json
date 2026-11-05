@@ -65,6 +65,10 @@
     },
     {
       "file": "web/src/delegation.tsx",
+      "field": "delegation_scope"
+    },
+    {
+      "file": "web/src/delegation.tsx",
       "field": "delegation_tint"
     },
     {
@@ -4872,13 +4876,23 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "3fadb452ccf35c80:0",
+      "key": "32e691eb55fa82aa:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
       "tag": "button",
-      "control": "onClick={() => sortColumn(m.id, family)}",
+      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
       "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+      "reason": "Timeline navigation stores explorer, selected session, time range, page and one-level event disclosures in the URL."
+    },
+    {
+      "key": "4f3f7a77f415da74:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "select",
+      "control": "data-view-field=\"delegation_scope\" aria-label=\"Session metric scope\" value={scope} onChange={event => { setScope(event.target.value); resetPage(); }}",
+      "binding": "delegation_scope",
+      "contract": "view.delegation_scope",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "5e44639993755813:0",
@@ -4977,6 +4991,15 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "f3d7994222b73250:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => sortColumn(m.id, scope)}",
+      "contract": "delegation",
+      "reason": "Sorts by delegation_sort and delegation_direction using the visible delegation_scope in hierarchy and ranking."
+    },
+    {
       "key": "ff29b2efe4cabcbf:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5023,6 +5046,15 @@
       "control": "onClick={() => sortColumn(spec.id, family)} aria-label={`Sort ${spec.label}${ranked ? `, currently ${direction === \"desc\" ? \"descending\" : \"ascending\"}` : \"\"}`}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "91f945dc32916f3b:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "InboxSessions",
+      "tag": "button",
+      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
+      "contract": "delegation",
+      "reason": "Opens the full-width session timeline from the compact navigator, preserving the selected session range and one-level event disclosures in its URL."
     },
     {
       "key": "e068e146ae91f3e0:0",

@@ -105,6 +105,47 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  assert.ok(await copy.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 });
 
+for(const width of [1440,390])test(`hierarchy metric scope and session timeline navigation restore from copied links at ${width}px`, {skip}, async t => {
+ const base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ const child=base.rows.find(row=>row.id==='s-child');
+ const api={'GET /api/work/:id/delegation':({query})=>{
+  const data=defaultApi['GET /api/work/:id/delegation']({query});
+  return {...data,rows:data.rows.map(row=>row.id===child.id?{...row,start:base.start+10000,end:base.end-10000}:row)};
+ }};
+ const app=await open(t,{url:`/work/${workID}`,api,viewport:{width,height:900},ready:'.delegation-table tbody tr'}),{page}=app;
+ await app.settled();
+ const scope=page.getByRole('combobox',{name:'Session metric scope',exact:true});
+ await scope.selectOption('self');await app.settled();
+ await page.getByRole('button',{name:'Tool calls',exact:true}).click();await app.settled();
+ assert.equal(await scope.inputValue(),'self');
+ await scope.selectOption('all');await app.settled();
+ await page.getByRole('button',{name:'Session',exact:true}).click();await app.settled();
+ assert.equal(await scope.inputValue(),'all');
+ await scope.selectOption('self');await app.settled();
+ const tableLink=path(page);
+ await app.shot('hierarchy-usage-table');
+ await page.locator('.delegation-table [data-session-id="s-child"] .delegation-timeline-button').click();
+ await page.locator('[data-pharos-target="section:delegation-labels:s-child:session"][open]').waitFor();await app.settled();
+ await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ const row=page.locator('.delegation-table [data-session-id="s-child"]');
+ await row.locator('.delegation-name').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ assert.equal(await page.locator('.workspace-reader').isVisible(),true);
+ if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();
+ await page.getByRole('button',{name:`View timeline for ${child.label}`,exact:true}).click();
+ const expanded=page.locator('[data-pharos-target="section:delegation-labels:s-child:session"]');
+ await expanded.waitFor();await page.waitForFunction(()=>document.querySelector('[data-pharos-target="section:delegation-labels:s-child:session"]').open);await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),null);
+ assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
+ assert.equal(await page.locator('.delegation-parallel [inert]').count(),0);
+ assert.equal(await expanded.locator('details[open]').count(),0);
+ const timelineLink=path(page);
+ await app.shot('hierarchy-session-timeline');
+ const copy=await open(t,{url:timelineLink,api,ready:'[data-pharos-target="section:delegation-labels:s-child:session"][open]'});await copy.settled();
+ assert.equal(await copy.page.locator('[data-pharos-target="section:delegation-labels:s-child:session"] details[open]').count(),0);
+ await page.evaluate(url=>window.pharosNavigate(url),tableLink);await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
+ assert.equal(await scope.inputValue(),'self');
+});
+
 for(const width of [1280,390])test(`Timeline session navigation and event expansion remain independent at ${width}px`,{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,viewport:{width,height:900},ready:'.lt-session-root'}),{page}=app;
  const session=id=>page.locator(`[data-session-id="${id}"]`).getByRole('button',{name:/^Open session /});
