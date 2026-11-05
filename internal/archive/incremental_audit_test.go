@@ -14,6 +14,61 @@ import (
 	"time"
 )
 
+func TestAuditDefersChangesWaitingForIndex(t *testing.T) {
+	for _, change := range []string{"append", "subagent", "name"} {
+		t.Run(change, func(t *testing.T) {
+			useHost(t, "host-a")
+			root := t.TempDir()
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: root, Account: "local", Enabled: true}
+			path := filepath.Join(root, "session.jsonl")
+			writeSourceFile(t, path, claudeLine("session", "first", "original question", "", 1))
+			server := automaticTestServer(t, source)
+			if result := ingestSource(t, server.Catalog, source); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			initial := firstSyncUnit(t, server.Catalog, source)
+			if err := server.Catalog.recordVerification(initial, server.Catalog.auditUnit(t.Context(), initial, "initial", 0)); err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "append":
+				appendSourceFile(t, path, claudeLine("session", "second", "another question", "", 2))
+			case "subagent":
+				writeSourceFile(t, filepath.Join(root, "session", "subagents", "agent-child.jsonl"), claudeLine("session", "child", "agent assignment", "", 2))
+			case "name":
+				writeSourceFile(t, filepath.Join(root, "sessions-index.json"), `{"entries":[{"sessionId":"session","summary":"A new source title"}]}`)
+			}
+			unit := firstSyncUnit(t, server.Catalog, source)
+			// A queued large check rediscovers current evidence independently of
+			// indexing. Stable new evidence must wait for the index to catch up.
+			if err := server.Catalog.recordVerification(initial, auditResult{Outcome: "deferred", Reason: "evidence_size"}); err != nil {
+				t.Fatal(err)
+			}
+			if !server.runBackgroundPass(t.Context(), "requested", []string{"verification"}, nil) {
+				t.Fatal("queued verification did not run")
+			}
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues") != 0 {
+				t.Fatal("pending input changes were reported as corruption")
+			}
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verifications WHERE outcome='deferred'") != 1 {
+				t.Fatal("pending input was incorrectly certified")
+			}
+			if result := ingestSource(t, server.Catalog, source); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			if result := server.Catalog.auditUnit(t.Context(), unit, "indexed", 0); result.Outcome != "passed" {
+				t.Fatalf("indexed input did not pass verification: %+v", result)
+			}
+			if _, err := server.Catalog.DB.Exec("UPDATE messages SET text='corrupted text' WHERE native_id='first'"); err != nil {
+				t.Fatal(err)
+			}
+			if result := server.Catalog.auditUnit(t.Context(), unit, "corrupt", 0); result.Outcome != "mismatch" || !slices.Contains(result.Differences, "messages") {
+				t.Fatalf("current indexed input failed to expose corruption: %+v", result)
+			}
+		})
+	}
+}
+
 func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {
 	useHost(t, "host-a")
 	server, units := stableCodexDirectory(t, 2)
