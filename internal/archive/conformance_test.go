@@ -2,10 +2,12 @@ package archive
 
 import (
 	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // The conformance harness reads every provider the way production does: it
@@ -40,7 +44,7 @@ type conformanceCase struct {
 var conformanceCases = map[string]conformanceCase{
 	"claude":         {build: conformanceClaude},
 	"codex":          {build: conformanceCodex},
-	"copilot":        {build: func(t *testing.T) SourceConfig { return conformanceSource("copilot", copilotFixture(t)) }, secrets: []string{`"token":"secret"`}},
+	"copilot":        {build: func(t *testing.T) SourceConfig { return conformanceSource("copilot", copilotFixture(t)) }, secrets: []string{copilotSecret}},
 	"opencode":       {build: conformanceOpenCode, secrets: []string{opencodeSecret}},
 	"cline":          {build: func(t *testing.T) SourceConfig { return conformanceSource("cline", clineFixture(t)) }, secrets: []string{clineSecret}},
 	"vscode-copilot": {build: func(t *testing.T) SourceConfig { return conformanceSource("vscode-copilot", vscodeFixture(t)) }, secrets: []string{vscodeSecret}},
@@ -124,11 +128,18 @@ func conformance(t *testing.T, kind string) {
 	if t.Failed() {
 		return
 	}
-	records, ok := conformanceStable(reads[0], reads[1])
-	if !ok {
-		t.Fatalf("two reads of the same fixture differ:\n%s", firstDifference(reads[0], reads[1]))
+	records, problem := conformanceStable(reads[0], reads[1], conformancePathHashes[kind])
+	if problem != "" {
+		t.Fatalf("two reads of the same fixture, in two folders, differ: %s", problem)
 	}
 	conformanceGolden(t, kind, version, records)
+}
+
+// conformancePathHashes are the fields, by the start of their golden line,
+// whose hashes include a fixture's path, with the reason. Only these may
+// differ between reads in two folders.
+var conformancePathHashes = map[string]map[string]string{
+	"conductor": {`"id": "changes_`: "A change Conductor's tools recorded is named by its files' evidence locators, which name the database's path."},
 }
 
 // conformanceRead captures kind's fixture, removes the source and reads the
@@ -220,7 +231,13 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 		t.Fatalf("index the capture: %v", result.Error)
 	}
 	for _, record := range records {
+		if countRows(t, catalog, "SELECT COUNT(*) FROM workspaces WHERE source_id=?", record.SourceID) == 0 {
+			t.Errorf("workspace %s was read but not indexed", record.SourceID)
+		}
 		for _, conversation := range record.Conversations {
+			if countRows(t, catalog, "SELECT COUNT(*) FROM conversations c JOIN workspaces w ON w.id=c.workspace_id WHERE w.source_id=? AND c.native_id=?", record.SourceID, conversation.NativeID) != 1 {
+				t.Errorf("conversation %s of %s was read but not indexed once", conversation.NativeID, record.SourceID)
+			}
 			ids := map[string]bool{}
 			for _, message := range conversation.Messages {
 				ids[message.NativeID] = true
@@ -236,12 +253,64 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 	return version, normalized
 }
 
-// conformanceHolding are the files below root holding secret, as written or
-// hex- or base64-encoded (the Cursor CLI keeps its metadata as hex), in a
-// file or in its zstd-decoded content.
+// The credential scan finds a secret however a capture may hold it.
+func TestConformanceFindsEncodedSecrets(t *testing.T) {
+	const secret = "conformance-secret-do-not-capture"
+	dir := t.TempDir()
+	write := func(name string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapped := jsonText(map[string]any{"value": base64.StdEncoding.EncodeToString([]byte(jsonText(map[string]any{"meta": hex.EncodeToString([]byte(`{"key":"` + secret + `"}`))})))})
+	var gzipped bytes.Buffer
+	writer := gzip.NewWriter(&gzipped)
+	_, _ = writer.Write([]byte(wrapped))
+	_ = writer.Close()
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	// Bytes zstd cannot shrink, so the compressed cell overflows its page.
+	noise := []byte{}
+	for block := 0; len(noise) < 20000; block++ {
+		noise = append(noise, hashBytes([]byte(strconv.Itoa(block)))...)
+	}
+	write("plain.txt", []byte("token="+secret))
+	write("hex.json", []byte(`{"meta":"`+hex.EncodeToString([]byte(secret))+`"}`))
+	write("wrapped.json", []byte(wrapped))
+	write("record.gz", gzipped.Bytes())
+	write("stream.bin", append([]byte("header"), encoder.EncodeAll([]byte(secret), nil)...))
+	db := openWritableSQLite(t, filepath.Join(dir, "cells.db"))
+	execSQL(t, db, "CREATE TABLE cells (value BLOB)")
+	if _, err := db.Exec("INSERT INTO cells VALUES (?)", encoder.EncodeAll(append(noise, secret...), nil)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	write("clean.json", []byte(`{"meta":"`+hex.EncodeToString([]byte("nothing to see"))+`"}`))
+	got := []string{}
+	for _, path := range conformanceHolding(t, dir, secret) {
+		got = append(got, filepath.Base(path))
+	}
+	slices.Sort(got)
+	if want := []string{"cells.db", "hex.json", "plain.txt", "record.gz", "stream.bin", "wrapped.json"}; !slices.Equal(got, want) {
+		t.Fatalf("files holding the secret = %v, want %v", got, want)
+	}
+	// Read cell by cell, a value is whole even where its pages split it.
+	if found, err := conformanceDatabaseHolds(filepath.Join(dir, "cells.db"), []byte(secret)); err != nil || !found {
+		t.Fatalf("the cell's secret was not found: %v", err)
+	}
+	if found, err := conformanceDatabaseHolds(filepath.Join(dir, "cells.db"), []byte("absent-secret-value")); err != nil || found {
+		t.Fatalf("a secret the database lacks was found: %v", err)
+	}
+}
+
+// conformanceHolding are the files below root holding secret, wherever it
+// is (conformanceHolds).
 func conformanceHolding(t *testing.T, root, secret string) []string {
 	t.Helper()
-	forms := [][]byte{[]byte(secret), []byte(hex.EncodeToString([]byte(secret))), []byte(strings.ToUpper(hex.EncodeToString([]byte(secret)))), []byte(base64.StdEncoding.EncodeToString([]byte(secret)))}
 	holding := []string{}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !entry.Type().IsRegular() {
@@ -251,12 +320,13 @@ func conformanceHolding(t *testing.T, root, secret string) []string {
 		if err != nil {
 			return err
 		}
-		if bytes.HasPrefix(data, zstdMagic) {
-			if decoded, err := zedDecoder.DecodeAll(data, nil); err == nil {
-				data = append(data, decoded...)
+		found := conformanceHolds(data, []byte(secret), 3)
+		if !found && bytes.HasPrefix(data, []byte("SQLite format 3\x00")) {
+			if found, err = conformanceDatabaseHolds(path, []byte(secret)); err != nil {
+				return err
 			}
 		}
-		if slices.ContainsFunc(forms, func(form []byte) bool { return bytes.Contains(data, form) }) {
+		if found {
 			holding = append(holding, path)
 		}
 		return nil
@@ -267,26 +337,148 @@ func conformanceHolding(t *testing.T, root, secret string) []string {
 	return holding
 }
 
+var (
+	conformanceHex    = regexp.MustCompile(`[0-9a-fA-F]{16,}`)
+	conformanceBase64 = regexp.MustCompile(`[A-Za-z0-9+/_-]{16,}={0,2}`)
+	conformanceGzip   = []byte{0x1f, 0x8b, 0x08}
+)
+
+// conformanceHolds says whether data holds secret: as written, or within
+// hex or base64 text, or a zstd or gzip stream starting anywhere in it,
+// decoded up to depth times (base64 of a gzipped record of JSON with hex).
+func conformanceHolds(data, secret []byte, depth int) bool {
+	if bytes.Contains(data, secret) {
+		return true
+	}
+	if depth == 0 {
+		return false
+	}
+	decoded := [][]byte{}
+	for _, run := range conformanceHex.FindAll(data, -1) {
+		if value, err := hex.DecodeString(string(run[:len(run)/2*2])); err == nil {
+			decoded = append(decoded, value)
+		}
+	}
+	for _, run := range conformanceBase64.FindAll(data, -1) {
+		text := strings.TrimRight(string(run), "=")
+		for _, encoding := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+			if value, err := encoding.DecodeString(text); err == nil {
+				decoded = append(decoded, value)
+			}
+		}
+	}
+	for _, magic := range [][]byte{zstdMagic, conformanceGzip} {
+		for offset := bytes.Index(data, magic); offset >= 0; {
+			var reader io.Reader
+			if magic[0] == zstdMagic[0] {
+				if decoder, err := zstd.NewReader(bytes.NewReader(data[offset:]), zstd.WithDecoderConcurrency(1)); err == nil {
+					defer decoder.Close()
+					reader = decoder
+				}
+			} else if decoder, err := gzip.NewReader(bytes.NewReader(data[offset:])); err == nil {
+				reader = decoder
+			}
+			if reader != nil {
+				// What decodes before a stream breaks off still counts.
+				value, _ := io.ReadAll(io.LimitReader(reader, 64<<20))
+				decoded = append(decoded, value)
+			}
+			next := bytes.Index(data[offset+1:], magic)
+			if next < 0 {
+				break
+			}
+			offset += 1 + next
+		}
+	}
+	return slices.ContainsFunc(decoded, func(value []byte) bool { return len(value) > 0 && conformanceHolds(value, secret, depth-1) })
+}
+
+// conformanceDatabaseHolds looks in every value of every table of the SQLite
+// database at path. A value longer than a page is split across overflow
+// pages, which the scan of the file's bytes reads in pieces; read as a value,
+// it is whole.
+func conformanceDatabaseHolds(path string, secret []byte) (bool, error) {
+	db, err := openReadOnlySQLite(path)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	tables, err := queryMaps(db, "SELECT name FROM sqlite_master WHERE type='table'")
+	if err != nil {
+		return false, err
+	}
+	for _, table := range tables {
+		rows, err := db.Query(`SELECT * FROM "` + strings.ReplaceAll(firstString(table["name"]), `"`, `""`) + `"`)
+		if err != nil {
+			return false, err
+		}
+		columns, _ := rows.Columns()
+		for rows.Next() {
+			values := make([]any, len(columns))
+			pointers := make([]any, len(columns))
+			for index := range values {
+				pointers[index] = &values[index]
+			}
+			if err := rows.Scan(pointers...); err != nil {
+				rows.Close()
+				return false, err
+			}
+			for _, value := range values {
+				var data []byte
+				switch value := value.(type) {
+				case []byte:
+					data = value
+				case string:
+					data = []byte(value)
+				}
+				if conformanceHolds(data, secret, 3) {
+					rows.Close()
+					return true, nil
+				}
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
 var conformanceHash = regexp.MustCompile(`[0-9a-f]{16,}`)
 
-// conformanceStable is first with each hash that differs in second, line by
-// line, as $PATH_HASH; ok is false if anything else differs.
-func conformanceStable(first, second string) (string, bool) {
+// conformanceStable is first with each hash that differs in second as
+// $PATH_HASH, on lines starting (after indentation) with one of fields. It
+// returns a problem if anything else differs, or if a field never does.
+func conformanceStable(first, second string, fields map[string]string) (string, string) {
 	a, b := strings.Split(first, "\n"), strings.Split(second, "\n")
 	if len(a) != len(b) {
-		return first, false
+		return first, firstDifference(first, second)
 	}
+	masked := map[string]bool{}
 	for index := range a {
 		if a[index] == b[index] {
 			continue
 		}
-		masked := conformanceHash.ReplaceAllString(a[index], "$$PATH_HASH")
-		if masked != conformanceHash.ReplaceAllString(b[index], "$$PATH_HASH") {
-			return first, false
+		line := strings.TrimSpace(a[index])
+		field := ""
+		for prefix := range fields {
+			if strings.HasPrefix(line, prefix) {
+				field = prefix
+			}
 		}
-		a[index] = masked
+		hashed := conformanceHash.ReplaceAllString(a[index], "$$PATH_HASH")
+		if field == "" || hashed != conformanceHash.ReplaceAllString(b[index], "$$PATH_HASH") {
+			return first, "line " + strconv.Itoa(index+1) + ":\n  " + a[index] + "\n  " + b[index] + "\n(a hash of the fixture's path is declared in conformancePathHashes)"
+		}
+		masked[field] = true
+		a[index] = hashed
 	}
-	return strings.Join(a, "\n"), true
+	for field := range fields {
+		if !masked[field] {
+			return first, "conformancePathHashes declares " + field + ", which no longer depends on the fixture's path"
+		}
+	}
+	return strings.Join(a, "\n"), ""
 }
 
 // conformanceRecords orders records by source ID.

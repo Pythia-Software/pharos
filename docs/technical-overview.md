@@ -170,14 +170,14 @@ A conversation's `coverage` is a completeness word (`complete`, or `partial` whe
 
 It fails on any of these:
 - **A capture that reads differently from the live source:** after paths are normalized, the two reads must match.
-- **A credential the capture holds:** each case lists the secrets its fixture writes.
+- **A credential the capture holds:** each case lists the secrets its fixture writes. The scan finds a secret as written, as hex or base64, inside a zstd or gzip stream, or in a database value.
 - **Records that differ from the golden file**, `testdata/ingestion/<kind>.json`.
 - **A record the index does not write.**
 - **What the records hold against what the provider declares:**
   - something it records but declares unsupported or not applicable;
   - something it declares supported or varying that the fixture never shows.
 
-Each fixture is read twice, in two new folders. A hash that differs between the reads is of the folder's path, and the golden file shows it as `$PATH_HASH`; any other difference fails as a read that is not deterministic. A declared capability a fixture cannot show is listed with its reason in `conformanceGaps`, and an entry the fixture comes to show fails.
+A second read of the same capture must give identical records. Each fixture is also read in a second new folder. Between the two folders, only the fields `conformancePathHashes` names, each with the reason its hash includes the fixture's path, may differ; the golden file shows them as `$PATH_HASH`. Any other difference fails as a read that is not deterministic. A declared capability a fixture cannot show is listed with its reason in `conformanceGaps`, and an entry the fixture comes to show fails.
 
 `PHAROS_UPDATE_GOLDEN=1` rewrites the golden files. It refuses to change a provider's records while the provider's index version stays the same, because libraries would keep the records they already hold. `PHAROS_UPDATE_GOLDEN=same-version` writes them anyway, for a change stored records need not pick up.
 
