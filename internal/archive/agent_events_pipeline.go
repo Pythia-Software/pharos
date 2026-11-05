@@ -15,6 +15,7 @@ type agentEventsPipeline struct {
 	opts     AgentEventsRunOptions
 	stats    *AgentEventsRunStats
 	progress func(string, ...any)
+	status   *agentEventsProgress
 	build    func(*agentEventsConversation) (*agentEventsConversation, error)
 	infer    func([]*agentEventsConversation) error
 	store    func(*agentEventsConversation, *AgentEventsRunStats) error
@@ -28,8 +29,8 @@ type agentEventsPrepared struct {
 
 // weight bounds retained candidates and message bookkeeping, including
 // conversations with no candidates. Rows have the model's bounded sequence
-// length. One whole conversation may exceed the budget; it then occupies the
-// entire window until saved, rather than allowing more oversized jobs ahead.
+// length. The preparation budget ends after inference, so a slow save cannot
+// prevent the next oversized conversation from reaching the GPU.
 func (conversation *agentEventsConversation) weight() int {
 	weight := 1 + len(conversation.messages) + len(conversation.stale) + len(conversation.retimed)
 	for _, message := range conversation.messages {
@@ -50,6 +51,10 @@ func (p *agentEventsPipeline) save(conversation *agentEventsConversation, stats 
 }
 
 func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc, jobs []*agentEventsConversation) error {
+	if p.status == nil {
+		p.status = newAgentEventsProgress(ctx, p.opts.progressBase, time.Now(), len(jobs), p.opts.DryRun)
+	}
+	defer func() { p.stats.progress = p.status.snapshot() }()
 	window := max(1, agentEventsChunkRows)
 	slots := make(chan struct{}, 3*window)
 	release := func(job agentEventsPrepared) {
@@ -80,7 +85,9 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 			// fills its job in place; mutating the listed job would retain
 			// every completed conversation until the entire backlog ended.
 			work := *job
+			p.status.stage("preparing", true)
 			conversation, err := p.build(&work)
+			p.status.stage("preparing", false)
 			result.took += time.Since(started)
 			if ctx.Err() != nil {
 				return
@@ -88,7 +95,7 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 			ready := agentEventsPrepared{conversation: conversation, index: index + 1, err: err}
 			if err == nil {
 				messages += len(conversation.messages)
-				// The budget follows a job through every stage until it is saved.
+				// The budget follows a job until inference releases its token arrays.
 				// Partial acquisition is safe: there is only one producer, and
 				// inference flushes available work without waiting for a full window.
 				for range min(conversation.weight(), cap(slots)) {
@@ -122,14 +129,18 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 			for i, job := range chunk {
 				if result.err == nil && ctx.Err() == nil {
 					started := time.Now()
+					p.status.stage("saving", true)
 					result.err = p.save(job.conversation, &result.stats)
 					result.stats.Write += time.Since(started)
+					if result.err == nil {
+						p.status.saved(job.conversation)
+					}
+					p.status.stage("saving", false)
 					if result.err != nil {
 						cancel()
 					}
 				}
 				chunk[i] = agentEventsPrepared{}
-				release(job)
 			}
 		}
 		written <- result
@@ -165,7 +176,6 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 				}
 				chunk = append(chunk, job)
 				weight += conversation.weight()
-				reportWork(ctx, "finding agent events", "conversation", job.index, len(jobs))
 			}
 			accept(first)
 			// Flush as soon as the producer pauses, so slow input reads cannot
@@ -193,17 +203,28 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 					}
 					return err
 				}
+				// Persistence needs sentence spans and outputs, never token IDs.
+				// Release inference credits before waiting for the bounded writer.
+				for i, job := range chunk {
+					for _, message := range job.conversation.messages {
+						for k := range message.rows {
+							message.rows[k].IDs = nil
+						}
+					}
+					release(job)
+					chunk[i].slots = 0
+				}
 				select {
 				case writes <- chunk:
 					continue
 				case <-ctx.Done():
-					for _, job := range chunk {
-						release(job)
-					}
 					return ctx.Err()
 				}
 			}
 			for _, job := range chunk {
+				if p.opts.DryRun {
+					p.status.saved(job.conversation)
+				}
 				release(job)
 			}
 		}

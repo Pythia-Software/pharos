@@ -1240,6 +1240,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   whole `eject` document and the journal rows.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
+- Optional `step.detail` describes concurrent stages or secondary counts without
+  starting another step. The panel shows it beside the phase; the journal retains
+  it as `detail_json.step_detail`, including for another process's operation.
 - `time` reuses the forecast states of
   [Progress and time estimates](progress-estimates.md). A range is shown
   only for `estimating`, or `provisional` marked as early ("about 3–6 min,

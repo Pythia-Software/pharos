@@ -91,7 +91,7 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 		op.Step("Capture this Mac", "", -1)
 		summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
 			work := captureWork(result)
-			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown)
+			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown, work.Detail)
 		})
 		if err != nil {
 			return err
