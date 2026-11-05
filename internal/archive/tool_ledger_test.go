@@ -259,6 +259,29 @@ func TestCodexExecToolLedger(t *testing.T) {
 	}
 }
 
+// A call's file is read from every shape an edit records: a field, a patch,
+// a patch a code-mode script holds as a string literal, and a list of changes.
+func TestToolFilePath(t *testing.T) {
+	patch := "*** Begin Patch\n*** Update File: /repo/a.go\n@@\n-old\n+new \"quoted\"\n*** Add File: /repo/b.go\n+b\n*** End Patch"
+	for name, call := range map[string]struct {
+		tool  string
+		input any
+	}{
+		"field":       {"Edit", map[string]any{"file_path": "/repo/a.go", "old_string": "x", "new_string": "y"}},
+		"patch":       {"apply_patch", patch},
+		"patch field": {"apply_patch", map[string]any{"input": patch}},
+		"code mode":   {"apply_patch", "text(await tools.apply_patch(" + fmt.Sprintf("%q", patch) + "))"},
+		"changes":     {"apply_patch", map[string]any{"changes": []any{map[string]any{"kind": "update", "path": "/repo/a.go"}, map[string]any{"kind": "add", "path": "/repo/b.go"}}}},
+	} {
+		if got := toolFilePath(call.tool, call.input); got != "/repo/a.go" {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if got := toolFilePath("apply_patch", "text(await tools.exec_command({cmd: 'ls'}))"); got != "" {
+		t.Errorf("a script without a patch: %q", got)
+	}
+}
+
 func TestToolTablesQueryInSQL(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	root := t.TempDir()

@@ -212,8 +212,9 @@ type fileResolver func(path string) (repoPath, repositoryID, scope string)
 
 // deriveSessionFacts reads a session's facts from its calls, in call order.
 // Each file an edit call changed counts on its own, so a patch's work files
-// count when its first file is scratch, and a patch the tool ledger found no
-// file for (one inside a code-mode script) counts by the files it names. A
+// count when its first file is scratch, and a patch whose call has no file (a
+// ledger before tools-v11 found none in a code-mode script) counts by the
+// files it names. A
 // patch's other files than the call's own are placed by resolve.
 func deriveSessionFacts(calls []outcomeCall, resolve fileResolver) sessionFacts {
 	facts := sessionFacts{}
