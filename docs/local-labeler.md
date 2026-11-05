@@ -417,6 +417,22 @@ those ids), and the conversation's `labels` (`labeled`, `pending`, and the
 taxonomy rows its labels name). It only reads, and attaches nothing to a
 catalog without a ledger.
 
+## Fingerprints in result tables
+
+Library search and other workspace tables offer **Fingerprint** in the column
+chooser. Conversation and message tables offer their conversation's
+**Fingerprint** and, when the workspace is known, **Workspace fingerprint**.
+Selected fingerprints also appear in Library's conversation cards. Column
+selection, order and width travel with saved queries and copied URLs.
+
+These use the same compact message-label ribbon as label-search results:
+colors show accepted labels and hatching shows recorded branch overlap.
+A workspace combines its conversations in time order. Fingerprints load only
+when displayed, send no message bodies, and never start labeling. Each reads
+at most 2,400 retained events; **Sample** marks a truncated fingerprint.
+Pending conversations remain unlabeled without hiding accepted labels from
+other conversations in the workspace.
+
 ## Scheduling and power
 
 Labels follow the [background updates](background-work.md#11-background-updates)
