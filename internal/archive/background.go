@@ -490,6 +490,7 @@ type backgroundInputs struct {
 	// findingsBuilt whether any did.
 	findingsToday, findingsBuilt bool
 	writingPending               bool
+	writingBacklog               authorshipBacklog
 	writingRefinedAt             string
 	upgradePending               bool
 	otherSources                 []string
@@ -518,7 +519,9 @@ func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
 	in.verificationNext = c.queuedVerificationNext(ctx)
 	want, built, err := c.authorshipEstimateGenerations()
-	in.writingPending = err != nil || want != built || c.authorshipQuickPending()
+	var backlogErr error
+	in.writingBacklog, backlogErr = c.authorshipBacklog(ctx)
+	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0
 	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")

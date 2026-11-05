@@ -21,7 +21,7 @@ import agentEventMessages from "../../../../schemas/agent_event_messages.schema.
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
-import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
+import { authorshipStatusText, readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
@@ -764,4 +764,21 @@ test("dashboard Today uses its pinned timezone and reports an invalid zone", () 
   assert.equal(returned.get("analyze_timezone"), "Asia/Tokyo");
   params.set("analyze_timezone", "Invalid/Timezone");
   assert.match(read().error, /timezone/);
+});
+
+
+test("writing freshness distinguishes a partial turn from caught up", () => {
+  const status = {built_at: "2026-11-05T17:00:00Z", complete_at: "2026-11-05T10:00:00Z", running: false, stale: true, error: null,
+    pending_messages: 12, pending_recent_messages: 2, pending_historical_messages: 10,
+    oldest_pending_sent_at: "2026-07-01T12:00:00Z", oldest_pending_queued_at: "2026-11-05T13:00:00Z"};
+  const text = authorshipStatusText(status);
+  assert.match(text, /catching up/);
+  assert.match(text, /2 recent; 10 historical/);
+  assert.match(text, /Oldest pending work queued/);
+  assert.match(text, /Oldest pending message sent/);
+  assert.doesNotMatch(text, /current as of/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false}), /current as of/);
+  assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, complete_at: null}), /current as of/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /await overnight refinement/);
+  assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /current as of/);
 });

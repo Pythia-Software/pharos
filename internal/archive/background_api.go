@@ -208,7 +208,7 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 	case "backup":
 		value = in.lastBackup
 	}
-	if value == "" && !plan.LastDone.IsZero() {
+	if value == "" && !plan.LastDone.IsZero() && item.ID != "writing" {
 		value = formatTime(plan.LastDone)
 	}
 	return value
@@ -304,6 +304,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "queued"
 		case plan.Missed:
 			state = "missed"
+		case item.ID == "writing" && plan.Pending:
+			state = "queued"
 		case asOf == "" && plan.Pending:
 			state = "never"
 		}
@@ -333,6 +335,10 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		}
 		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
 			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
+		}
+		if item.ID == "writing" && in.writingBacklog.Pending > 0 {
+			entry["backlog"] = in.writingBacklog
+			entry["note"] = in.writingBacklog.note(at)
 		}
 		if item.ID == "backup" && in.backupDestination != "" {
 			entry["label"] = "Back up to " + in.backupDestination

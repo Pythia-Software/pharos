@@ -505,6 +505,9 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			if failure != "" {
 				return fmt.Errorf("writing estimates: %s", failure)
 			}
+			if s.Catalog.authorshipQuickPending() {
+				return errStageContinues
+			}
 			return nil
 		}},
 		{"findings", func(ctx context.Context) error {

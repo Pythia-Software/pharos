@@ -971,6 +971,14 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 			t.Fatalf("after the pass, the saved manual cadence resumes: %s", got)
 		}
 		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
+		// A successful bounded pass can leave messages waiting until its next
+		// interval. That backlog must not be presented as updated.
+		catalog.recordBackgroundRun(ctx, "writing", time.Now(), true, nil)
+		execSQL(t, catalog.DB, `INSERT INTO authorship_pending(message_id,revision) VALUES('waiting','revision')`)
+		if got := state(); got != "queued" {
+			t.Fatalf("remaining writing backlog after a successful pass: %s", got)
+		}
+		execSQL(t, catalog.DB, `DELETE FROM authorship_pending WHERE message_id='waiting'`)
 	})
 	post("/api/background/run", map[string]any{"item": "conversations"}, http.StatusAccepted)
 	if !server.indexRequested() {
