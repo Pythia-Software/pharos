@@ -274,6 +274,11 @@ const ROUTES = [
       // Every cadence row open, its items listed.
       const closed = page.locator('#pharosStatusPanel .pharos-status-cadences details:not([open]) summary');
       while (await closed.count()) await closed.first().click();
+      const oneLine = await page.locator('.pharos-status-load').evaluate(row => {
+        const cells = [...row.children].map(cell => cell.getBoundingClientRect());
+        return cells.every(cell => Math.abs(cell.top - cells[0].top) < 1) && row.scrollWidth <= row.clientWidth;
+      });
+      assert.ok(oneLine, 'the resource metrics fit on one line');
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',

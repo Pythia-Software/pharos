@@ -570,9 +570,9 @@ func (b *brokerOperations) libraryResources(entries []map[string]any, processes 
 			}
 		}
 		name, _ := entry["name"].(string)
-		entry["resources"] = summarizeResources(defaultString(name, "This library"), own)
+		entry["resources"] = withProcessGPU(summarizeResources(defaultString(name, "This library"), own))
 	}
-	return summarizeResources("Pharos", readings)
+	return withProcessGPU(summarizeResources("Pharos", readings))
 }
 
 // cleanDeadLeases deletes the unheld leases in dir: app-level commands (a

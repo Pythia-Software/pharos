@@ -1541,12 +1541,47 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   once-a-second `ps` forks. This changes no behaviour and drops one fork
   per second of a run.
 
+**GPU utilization** (`resources_gpu.go`) uses only the same Pharos processes
+and descendants as CPU and RAM. On macOS,
+`/usr/sbin/ioreg -a -l -r -d 2 -c IOAccelerator` reads the accelerator's
+immediate clients. `IOUserClientCreator` supplies the owner PID;
+`AppUsage[].accumulatedGPUTime` supplies cumulative GPU time in nanoseconds.
+These counters are also used by
+[MacUnburden](https://github.com/LMU-AI/MacUnburden/blob/main/Sources/PerfRelease/Sampler.swift).
+They are best-effort driver properties, not a stable Apple API. Client
+names may be truncated, so attribution uses PIDs and registry client IDs.
+The accelerator's device-wide counters are never used as a fallback.
+
+Each Pharos process shares one registry query among status readers and
+library summaries for five seconds. Sampling runs only when a status
+snapshot needs resources; there is no background sampler, privilege prompt,
+profiler, MLX instrumentation, or new native dependency. A query has a
+250 ms timeout. For each client, the rate is its GPU-time increase divided
+by elapsed wall time; only clients owned by the summary's process tree
+contribute. The service therefore reports its library's tree, and the
+broker reports all its Pharos trees, with separate scoped library totals.
+Repeated process IDs cannot count a client twice. Summed rates are capped
+at 100%; overlapping GPU contexts can overlap in time, so this is a sampled
+GPU-time share rather than a measure of hardware saturation or peak compute
+capacity. It does not change scheduling decisions.
+
+A GPU client needs two samples before it has a rate. Newly created clients,
+changed owners, decreasing counters (for example, closed contexts), query
+failures, and gaps over ten seconds require a fresh baseline. Any measured
+portion remains visible with `gpu.partial: true` while other clients warm
+up. A supported snapshot with no clients in the selected process tree is
+0%; unavailable process counters or no usable rate produce
+`gpu.utilization_percent: null`. Query failures clear old rates and are
+cached too. Unsupported platforms omit `gpu`. Clients that exit between
+samples can lose their final GPU time; it is not recovered through a
+parent's CPU counters.
+
 Shape, in `/api/status` (`resources`, `null` when nothing could be read)
 and in `/api/app/status` (the machine's total as `resources`, and each
 library entry's own as `libraries[].resources`):
 
 ```json
-{"cpu_percent": 45, "cpu_partial": false, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "disk_partial": false, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+{"cpu_percent": 45, "cpu_partial": false, "gpu": {"utilization_percent": 62, "partial": false, "sampled_at": "…", "basis": "IOAccelerator.AppUsage.accumulatedGPUTime"}, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "disk_partial": false, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
  "label": "Pharos is using ~45% of one core · 1.2 GB",
  "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
                 "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
@@ -1554,10 +1589,15 @@ library entry's own as `libraries[].resources`):
 
 `role` is `service`, `broker` or the lease's process (`cli:ingest`).
 `label` and `text` are the server's words. The panel's Load row shows CPU
-(% of one core), RAM and Disk (per second) in one row, each with its icon,
+(% of one core), GPU, RAM and Disk (per second) in one row, each with its icon,
 for the machine in the app and the library otherwise, with `label` and the
-processes' `text` in its tooltip. The panel's Load row has five cells,
-CPU | RAM | I/O | Storage | WAL: I/O is `disk_bytes_per_second`, and
+processes' `text` in its tooltip. The panel's Load row is
+CPU | GPU | RAM | I/O | Storage, with a WAL cell only when the known size
+exceeds 1,000,000,000 bytes (one decimal GB). GPU is a percentage from
+0–100 with a tooltip identifying its process scope and warming clients;
+an unavailable reading is a dash. Services without a GPU field omit that
+cell. All metrics remain on one line, including when WAL is shown.
+I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it
 keeps on its drive, from the last drive check, which Health refreshes;
 the snapshot never measures it, and leaves it out before a check). WAL
