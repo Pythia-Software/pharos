@@ -6107,6 +6107,15 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "8700ea3e9c1ad4d9:0",
+      "file": "web/src/index.tsx",
+      "owner": "<module>",
+      "tag": "a",
+      "control": "onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}",
+      "contract": "view.fixes_item",
+      "reason": "Opens the fix by its stable item ID while retaining the source Fixes table query and route."
+    },
+    {
       "key": "9a9feb71ff48ebab:0",
       "file": "web/src/index.tsx",
       "owner": "<module>",

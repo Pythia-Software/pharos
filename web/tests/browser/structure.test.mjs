@@ -421,6 +421,7 @@ const ROUTES = [
   { name: "Fixes prompt", url: "/findings?optimize_area=fixes", ready: ".fixes-card", open: async page => { await page.getByRole("button", { name: "Review prompt (1 fix)" }).click(); }, shown: ".findings-dialog input[name=fixesMode]" },
   { name: "Fix detail", url: "/findings?optimize_area=fixes&fixes_item=fix_sample", ready: ".fixes-detail .fixes-quotes", open: async page => { await page.locator(".fixes-members summary").click(); }, shown: ".fixes-members[open] .fixes-quotes" },
   { name: "Fixes settings", url: "/findings?optimize_area=fixes&view=settings", ready: ".fixes-bounds select" },
+  { name: "Fixes table", url: "/findings?optimize_area=fixes&view=table", ready: ".safety-table .findings-cart li", open: page => page.locator(".safety-table .qt-row input[type=checkbox]").first().check(), shown: ".safety-selection-toolbar" },
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },

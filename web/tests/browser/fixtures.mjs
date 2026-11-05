@@ -399,6 +399,9 @@ export const safetySettingsFixture = { rules: [
     "enabled": true
   }
 ], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v3" };
+datasets.fixes = fixesFixtures.items.map(item => ({ id: item.id, title: item.title, lead: item.title, state: item.state, shown: item.state === "open" && item.hidden ? item.hidden : "shown", category: item.category, status: item.status.state,
+  target: item.target, target_label: item.target_label, destination: item.destination, terms: item.terms.join(", "), check_name: null, work_items: item.work_items, events: item.events, conversations: item.conversations,
+  hours: item.hours, priority: item.priority, safeguards: item.safeguards, in_prompt: Boolean(item.cart), first_seen: item.status.first, last_seen: item.status.last, handed_at: item.handed_at, fix_count: 1 }));
 datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, danger_rank: card.danger === "high" ? 3 : 2, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.

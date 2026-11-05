@@ -99,6 +99,8 @@ func fixesPriority(item fixItem, bounds fixesBounds) float64 {
 // fixesHidden says why the bounds take an item off the menu, if they do.
 func fixesHidden(item fixItem, bounds fixesBounds) string {
 	switch {
+	case item.Intended:
+		return "intended"
 	case bounds.HideDays > 0 && item.Status.State != "unknown" && item.Status.DaysQuiet > bounds.HideDays:
 		return "stale"
 	case item.WorkItems < bounds.MinWorkItems:
@@ -159,6 +161,7 @@ var fixesRepositoryInfo = func(name string, locations []string, since string) *f
 			info.Guides = append(info.Guides, fixesGuide{Name: file, Lines: strings.Split(text, "\n")})
 		}
 	}
+	info.Guides = append(info.Guides, fixesMemoryGuides(clone)...)
 	for _, file := range fixesSetupFiles {
 		exists := false
 		if ref != "" {
@@ -239,8 +242,10 @@ func (c *Catalog) refreshFixes(ctx context.Context, force bool) error {
 		return nil
 	}
 	input := fixesInput{Reads: map[[2]string]int{}, Repositories: map[string]*fixesRepository{}}
-	rows, err := read.QueryContext(ctx, `SELECT COALESCE(w.repository_id,''),date(a.occurred_at,'localtime'),COUNT(*) FROM agent_event_messages a
- JOIN conversations c ON c.id=a.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id WHERE a.occurred_at IS NOT NULL GROUP BY 1,2`)
+	// Some imports (TL1's Codex transcripts) record no message times; their
+	// conversation's start stands in, so their events still have a day.
+	rows, err := read.QueryContext(ctx, `SELECT COALESCE(w.repository_id,''),date(COALESCE(a.occurred_at,c.started_at),'localtime'),COUNT(*) FROM agent_event_messages a
+ JOIN conversations c ON c.id=a.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id WHERE COALESCE(a.occurred_at,c.started_at) IS NOT NULL GROUP BY 1,2`)
 	if err != nil {
 		return err
 	}
@@ -265,10 +270,10 @@ func (c *Catalog) refreshFixes(ctx context.Context, force bool) error {
 		since = dayTime(input.End).AddDate(0, 0, -fixesWindowDays).UTC().Format(timeLayout)
 	}
 	rows, err = read.QueryContext(ctx, fmt.Sprintf(`SELECT e.id,e.message_id,e.conversation_id,c.workspace_id,COALESCE(w.repository_id,''),COALESCE(r.display_name,''),COALESCE(m.model,c.model,''),c.provider,
- e.family,e.source,e.sentence,e.subject,e.response,COALESCE(e.occurred_at,''),e.sentence_start,e.probability
+ e.family,e.source,e.sentence,e.subject,e.response,COALESCE(e.occurred_at,m.created_at,c.started_at,''),e.sentence_start,e.probability
  FROM agent_events e JOIN conversations c ON c.id=e.conversation_id LEFT JOIN messages m ON m.id=e.message_id
  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
- WHERE e.probability>=%g AND (e.occurred_at IS NULL OR e.occurred_at>=?) ORDER BY e.id`, agentEventThreshold), since)
+ WHERE e.probability>=%g AND (COALESCE(e.occurred_at,m.created_at,c.started_at) IS NULL OR COALESCE(e.occurred_at,m.created_at,c.started_at)>=?) ORDER BY e.id`, agentEventThreshold), since)
 	if err != nil {
 		return err
 	}
@@ -507,7 +512,7 @@ func fixesCompact(entry fixEntry) map[string]any {
 		"status": map[string]any{"state": entry.Status.State, "label": entry.Status.Label, "detail": entry.Status.Detail, "first": entry.Status.First, "last": entry.Status.Last, "days_quiet": entry.Status.DaysQuiet},
 		"hours":  entry.Cost.Hours, "episodes": entry.Cost.Episodes, "guidance_hit": hit, "groups": entry.Groups, "tentative": entry.Tentative, "safeguards": entry.Safeguards,
 		"state": entry.State, "recurred": entry.Recurred, "handed_at": nilIfEmpty(entry.HandedAt), "cart": entry.Cart, "priority": entry.Priority,
-		"hidden": entry.Hidden, "deprioritized": entry.Quiet}
+		"hidden": entry.Hidden, "deprioritized": entry.Quiet, "lead": entry.Lead, "check": nilIfEmpty(entry.Check), "intended": entry.Intended, "intended_reason": nilIfEmpty(entry.IntendedReason)}
 }
 
 // FixesOverview is the dashboard: every listed item, how many each list and
@@ -518,7 +523,7 @@ func (c *Catalog) FixesOverview(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	summary := map[string]int{"open": 0, "handed_off": 0, "dismissed": 0}
-	hidden := map[string]int{"stale": 0, "rare": 0}
+	hidden := map[string]int{"stale": 0, "rare": 0, "intended": 0}
 	targets := map[string]string{}
 	groups := map[string][]fixEntry{}
 	cards := []map[string]any{}
@@ -570,7 +575,7 @@ func (c *Catalog) FixesOverview(ctx context.Context) (map[string]any, error) {
 	}
 	safeguards := 0
 	_ = c.reader().QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM agent_events WHERE family='circumventing_constraint' AND probability>=%g", agentEventThreshold)).Scan(&safeguards)
-	hidden["total"] = hidden["stale"] + hidden["rare"]
+	hidden["total"] = hidden["stale"] + hidden["rare"] + hidden["intended"]
 	return map[string]any{"items": cards, "summary": summary, "hidden": hidden, "bounds": bounds, "default_bounds": fixesDefaultBounds,
 		"cart": carts, "targets": places, "built_at": nilIfEmpty(built), "end": nilIfEmpty(end), "in_scope_events": inScope,
 		"excluded_events": excludedTotal, "safeguard_events": safeguards, "prompt_limit": fixesPromptLimit, "version": fixesVersion,
@@ -613,7 +618,7 @@ func (c *Catalog) FixesSettings(ctx context.Context) (map[string]any, error) {
 	}
 	// What each bound takes off the menu now, so the person sees what a
 	// setting does before leaving the page.
-	open, stale, rare := 0, 0, 0
+	open, stale, rare, intended := 0, 0, 0, 0
 	for _, entry := range entries {
 		if entry.State != "open" {
 			continue
@@ -624,11 +629,13 @@ func (c *Catalog) FixesSettings(ctx context.Context) (map[string]any, error) {
 			stale++
 		case "rare":
 			rare++
+		case "intended":
+			intended++
 		}
 	}
 	built, _ := c.metaValue(ctx, "fixes_built_at")
 	end, _ := c.metaValue(ctx, "fixes_end")
-	return map[string]any{"bounds": bounds, "default_bounds": fixesDefaultBounds, "open": open, "hidden_stale": stale, "hidden_rare": rare,
+	return map[string]any{"bounds": bounds, "default_bounds": fixesDefaultBounds, "open": open, "hidden_stale": stale, "hidden_rare": rare, "hidden_intended": intended,
 		"built_at": nilIfEmpty(built), "end": nilIfEmpty(end), "window_days": fixesWindowDays, "version": fixesVersion}, nil
 }
 
@@ -1060,4 +1067,54 @@ func callFixesMCP(c *Catalog, name string, args map[string]any) (any, bool, erro
 			"note": "Copy a fix prompt in Optimize → Fixes to record a handoff. Getting around a safeguard is listed by list_safety_cases, not here. Reading changes nothing."}, true, nil
 	}
 	return nil, false, nil
+}
+
+// fixesMemoryGuides are the notes Claude Code keeps for a checkout
+// (~/.claude/projects/<path with dashes>/memory): agents read them as
+// guidance, so a rule written there counts as already in the guidance.
+func fixesMemoryGuides(clone string) []fixesGuide {
+	home, err := os.UserHomeDir()
+	if err != nil || clone == "" {
+		return nil
+	}
+	dir := filepath.Join(home, ".claude", "projects", strings.NewReplacer("/", "-", ".", "-").Replace(clone), "memory")
+	files, err := filepath.Glob(filepath.Join(dir, "*.md"))
+	if err != nil {
+		return nil
+	}
+	sort.Strings(files)
+	out := []fixesGuide{}
+	for i, file := range files {
+		if i >= 60 {
+			break
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		out = append(out, fixesGuide{Name: "memory/" + filepath.Base(file), Lines: strings.Split(string(data), "\n")})
+	}
+	return out
+}
+
+// fixesQueryRows are the Fixes table: every stored item in every state,
+// hidden ones included, so the bounds can be checked against the rows.
+func (c *Catalog) fixesQueryRows(ctx context.Context) ([]map[string]any, error) {
+	entries, _, err := loadFixes(ctx, c.reader())
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		shown := entry.Hidden
+		if shown == "" || entry.State != "open" {
+			shown = "shown"
+		}
+		rows = append(rows, map[string]any{"id": entry.ID, "title": entry.Title, "lead": nilIfEmpty(entry.Lead), "state": entry.State, "shown": shown, "category": entry.Category,
+			"status": entry.Status.State, "target": entry.Target, "target_label": entry.TargetLabel, "destination": nilIfEmpty(entry.DestWhere),
+			"terms": nilIfEmpty(strings.Join(entry.Terms, ", ")), "check_name": nilIfEmpty(entry.Check), "work_items": entry.WorkItems, "events": entry.Events,
+			"conversations": entry.Conversations, "hours": entry.Cost.Hours, "priority": entry.Priority, "safeguards": entry.Safeguards, "in_prompt": entry.Cart != nil,
+			"first_seen": nilIfEmpty(entry.Status.First), "last_seen": nilIfEmpty(entry.Status.Last), "handed_at": nilIfEmpty(entry.HandedAt), "fix_count": 1})
+	}
+	return rows, nil
 }

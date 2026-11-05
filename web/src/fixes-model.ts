@@ -29,7 +29,9 @@ export type FixCard = {
   terms: string[]; files: string[]; work_items: number; events: number; conversations: number; repositories: FixCount[];
   status: FixStatus; hours: number; episodes: number; guidance_hit: FixGuidanceHit | null; groups: number; tentative: boolean; safeguards: number;
   state: FixesState; recurred: boolean; handed_at?: string | null; cart?: { target: string; target_label: string; ticked: boolean } | null;
-  priority: number; hidden: "" | "stale" | "rare"; deprioritized: boolean;
+  priority: number; hidden: "" | "stale" | "rare" | "intended"; deprioritized: boolean;
+  // lead: the member that states the problem best, quoted under the title.
+  lead?: string; check?: string | null; intended?: boolean; intended_reason?: string | null;
 };
 export type FixesBounds = { quiet_days: number; hide_days: number; min_work_items: number };
 
@@ -54,14 +56,14 @@ export type FixesFilter = { list: FixesState; place: string; kind: string; rank:
 export function fixesDashboard(items: readonly FixCard[], filter: FixesFilter) {
   const inScope = items.filter(item => (!filter.place || item.target === filter.place) && (!filter.kind || item.category === filter.kind));
   const counts: Record<FixesState, number> = { open: 0, handed_off: 0, dismissed: 0 };
-  const hidden = { stale: 0, rare: 0, total: 0 };
+  const hidden = { stale: 0, rare: 0, intended: 0, total: 0 };
   for (const item of inScope) {
     if (item.state === "open" && item.hidden) { hidden[item.hidden]++; hidden.total++; continue; }
     counts[item.state]++;
   }
   const listed = fixesRanked(inScope.filter(item => item.state === filter.list && (filter.list !== "open" || !item.hidden || filter.showHidden)), filter.rank);
   return {
-    counts, hidden: filter.list === "open" ? hidden : { stale: 0, rare: 0, total: 0 },
+    counts, hidden: filter.list === "open" ? hidden : { stale: 0, rare: 0, intended: 0, total: 0 },
     main: listed.filter(item => !item.tentative), maybe: listed.filter(item => item.tentative),
   };
 }
@@ -104,30 +106,41 @@ export function fixesFacts(item: FixCard): string[] {
 
 // Why an item is off the menu, in the words of the settings.
 export function fixesHiddenReason(item: Pick<FixCard, "hidden" | "status" | "work_items">, bounds: FixesBounds): string {
+  if (item.hidden === "intended") return "Guidance already covers this: agents cite the rule they are following, so it is working as intended.";
   if (item.hidden === "stale") return `Not seen for ${plural(item.status.days_quiet, "day")}; your settings hide problems quiet longer than ${plural(bounds.hide_days, "day")}.`;
   if (item.hidden === "rare") return `Seen in ${plural(item.work_items, "work item")}; your settings hide problems seen in fewer than ${bounds.min_work_items}.`;
   return "";
 }
 
 // What the bounds hide from Open, or "" when they hide nothing.
-export function fixesHiddenNote(hidden: { stale: number; rare: number; total: number }, bounds: FixesBounds): string {
+export function fixesHiddenNote(hidden: { stale: number; rare: number; intended?: number; total: number }, bounds: FixesBounds): string {
   if (!hidden.total) return "";
   const parts = [
     hidden.stale ? `${plural(hidden.stale, "problem")} not seen in the last ${plural(bounds.hide_days, "day")}` : "",
     hidden.rare ? `${plural(hidden.rare, "problem")} seen in fewer than ${plural(bounds.min_work_items, "work item")}` : "",
   ].filter(Boolean);
-  return `Your settings hide ${parts.join(" and ")}.`;
+  const intended = hidden.intended ? `${plural(hidden.intended, "problem")} the guidance causes on purpose` : "";
+  if (!parts.length) return `Left out: ${intended}.`;
+  return `Your settings hide ${parts.join(" and ")}.${intended ? ` Also left out: ${intended}.` : ""}`;
 }
 
 // The settings page's preview: how many open items each bound would hide.
 // Mirrors fixesHidden in Go so the counts move as the selects change.
-export function fixesBoundsPreview(items: readonly Pick<FixCard, "state" | "status" | "work_items">[], bounds: FixesBounds) {
+export function fixesBoundsPreview(items: readonly Pick<FixCard, "state" | "status" | "work_items" | "intended">[], bounds: FixesBounds) {
   let stale = 0, rare = 0, shown = 0;
   for (const item of items) {
-    if (item.state !== "open") continue;
+    if (item.state !== "open" || item.intended) continue;
     if (bounds.hide_days > 0 && item.status.state !== "unknown" && item.status.days_quiet > bounds.hide_days) stale++;
     else if (item.work_items < bounds.min_work_items) rare++;
     else shown++;
   }
   return { stale, rare, shown };
+}
+
+// fixesLeadQuote is the sentence quoted under a title, unless the title is
+// that sentence already.
+export function fixesLeadQuote(item: { title: string; lead?: string }): string {
+  const plain = (text: string) => text.replace(/[\s.!?…]+$/, "").trim().toLowerCase();
+  // A title cut from the lead ("Test status: X" → "X") says the same thing.
+  return item.lead && !plain(item.lead).endsWith(plain(item.title)) ? item.lead : "";
 }

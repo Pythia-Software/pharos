@@ -58,18 +58,11 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   ]) assert.equal(appLocation(path, new URLSearchParams(query)).current, current);
 });
 
-test("Optimize resolves separate efficiency and safety pages", () => {
+test("Optimize resolves separate efficiency, safety and fixes pages", () => {
   const sections = appSections([], new URLSearchParams());
   const optimize = sections.find(section => section.id === "findings");
-  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety"]);
-  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety"]);
-  // Fixes come from agent events, a preview: listed only with it on.
-  const previews = optimizePages(true);
-  assert.deepEqual(previews.map(page => page.id), ["findings", "safety", "fixes"]);
-  for (const [query, trail] of [["optimize_area=fixes", ["fixes", "fixes:dashboard"]], ["optimize_area=fixes&fixes_item=x&fixes_list=dismissed", ["fixes", "fixes:dashboard"]], ["optimize_area=fixes&view=settings", ["fixes", "fixes:settings"]]]) {
-    const selected = appLocation("/findings", new URLSearchParams(query));
-    assert.deepEqual(nestedPageTrail(previews, selected.current).map(page => page.id), trail);
-  }
+  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety", "fixes"]);
+  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety", "fixes"]);
   for (const [path, query, trail] of [
     ["/findings", "", ["findings", "findings:dashboard"]],
     ["/findings", "list=watching&repo=example", ["findings", "findings:dashboard"]],
@@ -80,6 +73,10 @@ test("Optimize resolves separate efficiency and safety pages", () => {
     ["/findings", "optimize_area=safety&view=table", ["safety", "safety:table"]],
     ["/findings", "optimize_area=safety&view=settings", ["safety", "safety:settings"]],
     ["/findings", "optimize_area=safety&safety_list=handed_off&safety_case=example", ["safety", "safety:dashboard"]],
+    ["/findings", "optimize_area=fixes", ["fixes", "fixes:dashboard"]],
+    ["/findings", "optimize_area=fixes&fixes_item=x&fixes_list=dismissed", ["fixes", "fixes:dashboard"]],
+    ["/findings", "optimize_area=fixes&view=table&q_fixes=saved", ["fixes", "fixes:table"]],
+    ["/findings", "optimize_area=fixes&view=settings", ["fixes", "fixes:settings"]],
   ]) {
     const params = new URLSearchParams(query), before = params.toString();
     const selected = appLocation(path, params);

@@ -43,3 +43,6 @@
   .fixes-page .findings-rank { flex-wrap: wrap; margin-left: 0; min-width: 0; }
   .fixes-page .findings-segmented { flex-wrap: wrap; }
 }
+.fixes-lead { margin: 0; padding: 0 0 0 10px; border-left: 3px solid var(--line); color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.fixes-detail .fixes-lead { -webkit-line-clamp: unset; font-size: var(--fs-md); margin: 4px 0 10px; }
+.fixes-intended { padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--sea) 45%, var(--line)); border-radius: 7px; }

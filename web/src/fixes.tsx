@@ -8,12 +8,14 @@ import { Icon } from "./icons";
 import { eventReaderURL } from "./agent-event-examples";
 import { onFixesChange } from "./dataset-refresh";
 import { safetyURL } from "./safety-route";
-import { type FixesView, fixesURL, fixDetailURL, fixesStateLabels } from "./fixes-route";
+import { type FixesView, fixesURL, fixDetailURL, fixesHiddenTableURL, fixesStateLabels } from "./fixes-route";
 import {
-  fixesBoundsPreview, fixesDashboard, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesPlaces, fixesRange,
+  fixesBoundsPreview, fixesDashboard, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesLeadQuote, fixesPlaces, fixesRange,
   fixesRankExplanations, fixesRankLabels, type FixCard, type FixCount, type FixesBounds, type FixesRank, type FixesState, type FixGuidanceHit, type FixStatus,
 } from "./fixes-model";
 import { useSelection, type SelectionApi } from "@pythia-software/query-table-react";
+import type { QueryState } from "@pythia-software/query-table-core";
+import { fixesTableFocus } from "./fixes-route";
 import "./fixes.css";
 
 // Optimize → Fixes. The grouping runs in the background (fixes.go); this page
@@ -25,7 +27,7 @@ const noun = { one: "fix", many: "fixes" };
 const place = { one: "place", many: "places" };
 
 type Overview = {
-  items: FixCard[]; summary: Record<FixesState, number>; hidden: { stale: number; rare: number; total: number };
+  items: FixCard[]; summary: Record<FixesState, number>; hidden: { stale: number; rare: number; intended?: number; total: number };
   bounds: FixesBounds; default_bounds: FixesBounds; cart: CartGroup[]; targets: Target[];
   built_at: string | null; end: string | null; in_scope_events: string; excluded_events: number; safeguard_events: number; prompt_limit: number; coverage: string;
 };
@@ -44,7 +46,8 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   return value as T;
 }
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
-const date = (value?: string | null) => value ? new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+// A plain day (2026-11-01) is that day where you are, not UTC midnight.
+const date = (value?: string | null) => value ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
 const notify = () => window.dispatchEvent(new Event(changed));
 
 function useFixesOverview(active: unknown) {
@@ -64,14 +67,14 @@ function useFixesOverview(active: unknown) {
   return { overview, error, setError };
 }
 
-export function FixesPage({ copy, view = "", refreshDiscovery }: { copy: (text: string) => Promise<void>; view?: FixesView; refreshDiscovery: () => Promise<unknown> }) {
+export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: (text: string) => Promise<void>; view?: FixesView; table?: React.ReactNode; refreshDiscovery: () => Promise<unknown> }) {
   const dashboard = view === "";
   const [list, setList] = useViewState<FixesState>("fixes_list", "open", dashboard);
   const [where, setWhere] = useViewState<string>("fixes_place", "", dashboard);
   const [kind, setKind] = useViewState<string>("fixes_kind", "", dashboard);
   const [rank, setRank] = useViewState<FixesRank>("fixes_rank", "priority", dashboard);
   const [showHidden, setShowHidden] = useViewState<boolean>("fixes_hidden", false, dashboard);
-  const [selected, select] = useViewState<string>("fixes_item", "", dashboard);
+  const [selected, select] = useViewState<string>("fixes_item", "", view !== "settings");
   const { overview, error, setError } = useFixesOverview(view);
   const [review, setReview] = useState("");
   const [notice, setNotice] = useState("");
@@ -87,16 +90,17 @@ export function FixesPage({ copy, view = "", refreshDiscovery }: { copy: (text: 
   }, [setError]);
 
   const lede = view === "settings" ? "Choose which recurring problems stay on the menu. Your choices follow the library between Macs."
+    : view === "table" && !selected ? "Every fix in every state, including those your settings hide from Open, with its kind, place, recurrence and priority. Tick rows to act on several at once; filter, group and chart them like any table."
     : selected ? "One recurring problem, the agents' own words about it, and where the fix probably belongs."
       : "Problems agents keep running into that a change to guidance, the environment, a tool, setup or docs could prevent. Each card is one problem seen across separate work items, with where the fix probably belongs. Tick cards to copy a prompt asking your agent to investigate or make the change, or close what you don't want to fix. Copying the prompt records a handoff; a problem that recurs afterwards opens again.";
   return <div className="findings-page fixes-page">
-    <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Fixes settings" : "Fixes"}</h1><p className="muted">{lede}</p></div></div>
+    <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Fixes settings" : view === "table" && !selected ? "Fixes table" : "Fixes"}</h1><p className="muted">{lede}</p></div></div>
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {notice ? <p className="safety-notice" role="status">{notice}</p> : null}
     {view === "settings" ? <FixesSettings overview={overview} refreshDiscovery={refreshDiscovery} />
       : !overview ? <p className="findings-muted">Loading fixes…</p>
-        : selected ? <FixDetailView id={selected} overview={overview} back={() => select("")} act={act} onReview={setReview} />
-          : <>
+        : selected ? <FixDetailView id={selected} overview={overview} back={() => select("")} backLabel={view === "table" ? "← Fixes table" : "← Fixes"} act={act} onReview={setReview} />
+          : view === "table" ? null : <>
             {!overview.built_at ? <div className="findings-empty"><strong>No fixes yet.</strong><p>Fixes are grouped from agent events in the background, after the agent events pass has read your conversations. Turn it on in Settings → Background Processing; grouping follows on its own.</p></div> : null}
             <div className="findings-toolbar">
               <div className="findings-tabs" role="tablist" aria-label="Fixes by state">
@@ -110,7 +114,7 @@ export function FixesPage({ copy, view = "", refreshDiscovery }: { copy: (text: 
             {shown.hidden.total ? <p className="fixes-hidden-note" data-pharos-target="control:fixes_hidden">
               {fixesHiddenNote(shown.hidden, overview.bounds)}{" "}
               <button type="button" className="fixes-link-button" data-view-field="fixes_hidden" aria-pressed={showHidden} onClick={() => setShowHidden(!showHidden)}>{showHidden ? "Hide them" : `Show ${shown.hidden.total === 1 ? "it" : `all ${shown.hidden.total.toLocaleString()}`}`}</button>
-              {" · "}<a href={fixesURL("settings")}>Change these bounds</a>
+              {" · "}<a href={fixesHiddenTableURL()}>List them in the table</a>{" · "}<a href={fixesURL("settings")}>Change these bounds</a>
             </p> : null}
             {list === "handed_off" ? <p className="findings-muted">You handed these to an agent. A problem that recurs after its handoff moves back to Open.</p> : null}
             <div className="findings-layout with-cart">
@@ -133,6 +137,10 @@ export function FixesPage({ copy, view = "", refreshDiscovery }: { copy: (text: 
               <a href={fixesURL("settings")}>Fixes settings and refresh</a>
             </ViewDisclosure>
           </>}
+    {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>
+      <div className="safety-table-main">{table}</div>
+      {view === "table" && overview ? <FixesCart cart={overview.cart} items={items} onReview={next => setReview(next.target)} /> : null}
+    </div> : null}
     {group ? <ReviewDialog key={group.target} area="fixes" group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); notify(); setNotice("Copied. These fixes moved to Handed off."); }} /> : null}
   </div>;
 }
@@ -164,13 +172,15 @@ function FixCardView({ item, selection, bounds }: { item: FixCard; selection: Se
   return <OptimizeCard ids={[item.id]} selection={selection} className={`fixes-card${hidden ? " hidden-by-bounds" : ""}${item.deprioritized ? " quiet" : ""}`} target={`fix:${item.id}`}
     count={item.work_items} countLabel={plural(item.work_items, "work item")} label={`Select: ${item.title}`}>
     <a className="fixes-card-title" href={fixDetailURL(item.id)}>{item.title}</a>
+    {fixesLeadQuote(item) ? <blockquote className="fixes-lead">{fixesLeadQuote(item)}</blockquote> : null}
     <div className="fixes-chips">
       <span className="findings-chip">{item.category_label}</span>
       <span className="findings-chip" title={item.scope_reason}>{scopeLabel(item)}</span>
       <StatusChip item={item} />
       {item.groups > 1 ? <span className="findings-chip" title="Recurring groups with the same key term, kind of fix and destination, shown as one card">{item.groups} groups</span> : null}
       {item.cart ? <span className="findings-chip watching">In a prompt</span> : null}
-      {hidden ? <span className="findings-chip" title={hidden}>Hidden by your settings</span> : null}
+      {item.intended ? <span className="findings-chip good" title={item.intended_reason ?? ""}>Guidance already covers this (intended)</span>
+        : hidden ? <span className="findings-chip" title={hidden}>Hidden by your settings</span> : null}
     </div>
     <div className="fixes-where"><strong>{item.destination_kind}</strong> {item.destination}</div>
     {item.terms.length ? <div className="fixes-what">{item.terms.map(term => <code key={term}>{term}</code>)}{named.length ? <span className="findings-muted"> named: {named.map(file => <code key={file}>{file}</code>)}</span> : null}</div> : null}
@@ -191,7 +201,7 @@ function FixesCart({ cart, items, onReview }: { cart: CartGroup[]; items: readon
     note="Fixes, risky actions and efficiency use separate prompts. After copying, these fixes leave Open and remain in Handed off; one that recurs opens again." />;
 }
 
-function FixDetailView({ id, overview, back, act, onReview }: { id: string; overview: Overview; back: () => void; act: (id: string, body: Record<string, unknown>, done: string) => Promise<void>; onReview: (target: string) => void }) {
+function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: string; overview: Overview; back: () => void; backLabel: string; act: (id: string, body: Record<string, unknown>, done: string) => Promise<void>; onReview: (target: string) => void }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -204,12 +214,14 @@ function FixDetailView({ id, overview, back, act, onReview }: { id: string; over
   const status = detail?.status;
   const hidden = card ? fixesHiddenReason(card, overview.bounds) : "";
   return <>
-    <button type="button" className="findings-button" data-view-field="fixes_item" onClick={back}>← Fixes</button>
+    <button type="button" className="findings-button" data-view-field="fixes_item" onClick={back}>{backLabel}</button>
     {error ? <p className="findings-error" role="alert">{error === "Request failed (404)" || /not found/i.test(error) ? "This problem is no longer in the latest grouping." : error}</p> : null}
     {!detail ? (!error ? <p className="findings-muted">Loading…</p> : null) : <article className="findings-panel fixes-detail" data-pharos-target={`fix:${detail.id}`}>
       <div className="fixes-chips"><span className="findings-chip">{detail.category_label}</span><span className="findings-chip" title={detail.scope_reason}>{scopeLabel(detail)}</span>{card ? <StatusChip item={card} /> : null}<span className="findings-chip">{fixesStateLabels[card?.state ?? "open"]}</span></div>
       <h2>{detail.title}</h2>
-      {hidden ? <p className="findings-muted">{hidden} It stays here and in its prompt until you change that.</p> : null}
+      {fixesLeadQuote(detail) ? <blockquote className="fixes-lead">{fixesLeadQuote(detail)}</blockquote> : null}
+      {detail.intended ? <p className="fixes-intended"><strong>Guidance already covers this (intended).</strong> {detail.intended_reason}</p> : null}
+      {hidden && !detail.intended ? <p className="findings-muted">{hidden} It stays here and in its prompt until you change that.</p> : null}
       {card?.handed_at ? <p className="findings-muted">Handed off {date(card.handed_at)}.{card.recurred ? " It happened again since, so it is open again." : ""}</p> : null}
       {card ? <div className="findings-actions">{card.state === "open" ? <>
         {card.cart ? <><button type="button" className="findings-button primary" onClick={() => onReview(card.cart!.target)}>Review prompt for {card.cart.target_label}</button><button type="button" className="findings-button" onClick={() => void act(card.id, { action: "cart_remove" }, "Removed from the prompt.")}>Remove from prompt</button></>
@@ -266,7 +278,7 @@ function FixQuote({ quote }: { quote: Quote }) {
 const quietOptions = [3, 7, 14, 30];
 const hideOptions = [14, 30, 60, 90, 0];
 const minimumOptions = [2, 3, 4, 5, 10];
-type Settings = { bounds: FixesBounds; default_bounds: FixesBounds; open: number; hidden_stale: number; hidden_rare: number; built_at: string | null; end: string | null; window_days: number };
+type Settings = { bounds: FixesBounds; default_bounds: FixesBounds; open: number; hidden_stale: number; hidden_rare: number; hidden_intended?: number; built_at: string | null; end: string | null; window_days: number };
 function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | null; refreshDiscovery: () => Promise<unknown> }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState("");
@@ -303,7 +315,7 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
       <section className="findings-panel" data-pharos-target="section:fixes-bounds">
         <h2>What stays on the menu</h2>
         <p>A problem agents stopped running into, or one only a few work items hit, is rarely worth a change. These bounds rank such problems lower or take them off Open. Hidden problems are counted on the dashboard, and you can show them there at any time; what you handed off or closed stays listed.</p>
-        <p className="findings-muted">{settings.open ? `${plural(settings.open, "open problem")}: ${(settings.open - settings.hidden_stale - settings.hidden_rare).toLocaleString()} shown, ${settings.hidden_stale.toLocaleString()} hidden as quiet, ${settings.hidden_rare.toLocaleString()} hidden as rare.` : "No open problems yet."}{settings.end ? ` "Quiet" counts days before ${date(settings.end)}, the latest day the agent events pass read.` : ""}</p>
+        <p className="findings-muted">{settings.open ? `${plural(settings.open, "open problem")}: ${(settings.open - settings.hidden_stale - settings.hidden_rare - (settings.hidden_intended ?? 0)).toLocaleString()} shown, ${settings.hidden_stale.toLocaleString()} hidden as quiet, ${settings.hidden_rare.toLocaleString()} hidden as rare${settings.hidden_intended ? `, ${settings.hidden_intended.toLocaleString()} left out as intended` : ""}.` : "No open problems yet."}{settings.end ? ` "Quiet" counts days before ${date(settings.end)}, the latest day the agent events pass read.` : ""}</p>
         <div className="fixes-bounds">
           <label htmlFor={ids.quiet}><strong>Rank lower once quiet for</strong><small>Its priority drops to 60% past this, and to 30% past three times it.</small></label>
           <select id={ids.quiet} disabled={busy} value={bounds.quiet_days} onChange={event => void save({ quiet_days: Number(event.target.value) }, "Saved. Priorities use the new bound.")}>
@@ -335,4 +347,22 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
       </section>
     </>}
   </div>;
+}
+
+// Actions on the table's selected fixes (optimize-shared.tsx).
+export function FixesSelectionBar({ selection, copy }: { selection: SelectionApi; copy: (text: string) => Promise<void> }) {
+  const { overview } = useFixesOverview("table");
+  return <OptimizeSelectionBar selection={selection} copy={copy} items={overview?.items ?? null} api={api} area="fixes" changed={changed} noun={noun} place={place} promptLimit={overview?.prompt_limit ?? 12} />;
+}
+
+// What a table limited to hidden fixes, or one state, holds.
+export function FixesTableContext({ query, total }: { query: QueryState; total: number | null | undefined }) {
+  const focus = fixesTableFocus(query);
+  if (focus.shown !== "hidden") return null;
+  return <section className="findings-panel safety-check-context" data-pharos-target="section:fixes-hidden">
+    <p className="findings-muted">Fixes · Open · hidden by your settings</p>
+    <h2>Fixes your settings hide from Open</h2>
+    <p>{typeof total === "number" ? `${plural(total, "fix", "fixes")}. ` : ""}Each is quiet longer than your bound, seen in fewer work items than your minimum, or guidance working as intended. The dashboard leaves them out until they recur or you change the bounds; you can still hand them off or close them here.</p>
+    <a href={fixesURL("settings")}>Fixes settings</a>
+  </section>;
 }

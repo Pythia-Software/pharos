@@ -18,16 +18,15 @@ export const safetyPages: readonly NestedPage[] = [
 
 export const fixesPages: readonly NestedPage[] = [
   { id: "fixes:dashboard", label: "Dashboard", href: fixesURL() },
+  { id: "fixes:table", label: "Table", href: fixesURL("table") },
   { id: "fixes:settings", label: "Settings", href: fixesURL("settings") },
 ];
 
-// Fixes are grouped from agent events, a preview (agent-events-flag.ts), so
-// they are listed only when it is on. Direct links work either way.
-export function optimizePages(previews = agentEventsEnabled()): NestedPage[] {
+export function optimizePages(): NestedPage[] {
   return [
     { id: "findings", label: "Efficiency", children: findingsPages },
     { id: "safety", label: "Risky actions", children: safetyPages },
-    ...previews ? [{ id: "fixes", label: "Fixes", children: fixesPages }] : [],
+    { id: "fixes", label: "Fixes", children: fixesPages },
   ];
 }
 

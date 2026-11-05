@@ -126,6 +126,13 @@ func TestFixesGroupingAndDestination(t *testing.T) {
 	if mesh == nil {
 		t.Fatalf("the trimesh problem is one fix: %v", fixesTitles(items))
 	}
+	// Titles name the problem; the lead quotes the clearest member.
+	if mesh.Title != "`trimesh` missing from corpus's environment" || !strings.Contains(mesh.Lead, "trimesh") || mesh.Quotes[0].Sentence != mesh.Lead {
+		t.Fatalf("title %q, lead %q", mesh.Title, mesh.Lead)
+	}
+	if mesh.ScopeReason != "4 of its 4 events are in corpus, so the fix probably lives there." {
+		t.Fatalf("the place's reason counts every event: %s", mesh.ScopeReason)
+	}
 	if mesh.WorkItems != 4 || mesh.Category != "env" || mesh.Target != "repo:corpus" || mesh.Scope != "repo" {
 		t.Fatalf("trimesh: %d work items, %s, %s", mesh.WorkItems, mesh.Category, mesh.Target)
 	}
@@ -139,7 +146,7 @@ func TestFixesGroupingAndDestination(t *testing.T) {
 		t.Fatalf("a safeguard workaround in its conversations links to Risky actions: %d", mesh.Safeguards)
 	}
 	gh := fixesFind(items, "gh pr edit")
-	if gh == nil || gh.Scope != "global" || gh.Target != "global" || gh.Category != "tool" {
+	if gh == nil || gh.Scope != "global" || gh.Target != "global" || gh.Category != "tool" || gh.Title != "`gh pr edit` keeps failing for agents" {
 		t.Fatalf("a problem spread over repositories is the global setup's: %+v", gh)
 	}
 	if fixesFind(items, "flamegraph") != nil {
@@ -248,21 +255,30 @@ func seedFixes(t *testing.T, c *Catalog, day string, workItems int) {
 	}
 	topics := []string{"the dashboard legend overlaps the axis labels", "a websocket reconnect loop in the sync client", "the invoice totals round half away from zero",
 		"pagination cursors expire after an hour", "the importer skips empty spreadsheet rows", "thumbnail generation drops transparent pixels"}
+	// TL1's Codex transcripts record no message times: the last work item's
+	// event has none, only its conversation's start.
+	untimed := false
 	add := func(workspace, family, sentence, at string, n int) {
+		var when any = at
+		if untimed {
+			when = nil
+		}
 		exec(`INSERT OR IGNORE INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,indexed_at) VALUES(?,'claude','local',?,'repo-corpus','Work',?)`, workspace, workspace, at)
 		exec(`INSERT OR IGNORE INTO conversations(id,workspace_id,provider,account,native_id,started_at) VALUES(?,?,'claude','local',?,?)`, "c-"+workspace, workspace, "c-"+workspace, at)
 		message := fmt.Sprintf("m-%s-%d", workspace, n)
-		exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES(?,?,?,'assistant','message',?,'h',?)`, message, "c-"+workspace, message, sentence, at)
-		exec(`INSERT INTO agent_event_messages(message_id,conversation_id,source,occurred_at,day,candidates,events,model,lexicon,imported_at) VALUES(?,?,'reply',?,?,1,1,'m','l',?)`, message, "c-"+workspace, at, at[:10], at)
+		exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES(?,?,?,'assistant','message',?,'h',?)`, message, "c-"+workspace, message, sentence, when)
+		exec(`INSERT INTO agent_event_messages(message_id,conversation_id,source,occurred_at,day,candidates,events,model,lexicon,imported_at) VALUES(?,?,'reply',?,?,1,1,'m','l',?)`, message, "c-"+workspace, when, at[:10], at)
 		exec(`INSERT INTO agent_events(message_id,conversation_id,source,occurred_at,day,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model)
- VALUES(?,?,'reply',?,?,?,0.9,0,?,?,?,'','[]','[]','m')`, message, "c-"+workspace, at, at[:10], family, len(sentence), sentence, sentence)
+ VALUES(?,?,'reply',?,?,?,0.9,0,?,?,?,'','[]','[]','m')`, message, "c-"+workspace, when, at[:10], family, len(sentence), sentence, sentence)
 	}
 	for i := 0; i < 30; i++ {
 		add(fmt.Sprintf("noise-%s-%d", day, i), "obstacle", fmt.Sprintf("Noticed that %s (case %d).", topics[i%len(topics)], i), day+"T08:00:00Z", 0)
 	}
 	for i := 0; i < workItems; i++ {
+		untimed = i == workItems-1
 		add(fmt.Sprintf("corpus-%s-%d", day, i), "env_friction", sentences[i%len(sentences)], day+"T12:00:00Z", i)
 	}
+	untimed = false
 	add("corpus-asks-"+day, "ambiguous_request", "The user's request about trimesh conflicts with the brief.", day+"T13:00:00Z", 0)
 	commitSeed(t, tx)
 }
@@ -290,6 +306,9 @@ func TestFixesProjectionTriageAndHandoff(t *testing.T) {
 	}
 	if mesh == nil || mesh["target"] != "repo:repo-corpus" || mesh["state"] != "open" || mesh["hidden"] != "" {
 		t.Fatalf("the projection lists the problem for its repository: %v", items)
+	}
+	if status := mesh["status"].(map[string]any); status["last"] != "2026-10-20" || status["state"] == "unknown" || mesh["work_items"] != 4 {
+		t.Fatalf("an event without a message time takes its conversation's: %v", mesh)
 	}
 	if overview["excluded_events"] != 1 {
 		t.Fatalf("the request event is counted as left out: %v", overview["excluded_events"])
@@ -381,6 +400,20 @@ func TestFixesProjectionTriageAndHandoff(t *testing.T) {
 	if hidden := overview["hidden"].(map[string]int); hidden["rare"] == 0 || state()["hidden"] != "rare" {
 		t.Fatalf("bounds hide rare fixes and count them: %v", hidden)
 	}
+	// The table lists every fix, hidden ones included, and says why.
+	rows, err := c.fixesQueryRows(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, row := range rows {
+		if row["id"] == id {
+			listed = row["shown"] == "rare" && row["state"] == "open" && row["work_items"] == state()["work_items"]
+		}
+	}
+	if len(rows) != len(overview["items"].([]map[string]any)) || !listed {
+		t.Fatalf("the table holds hidden fixes with their reason: %v", rows)
+	}
 	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/findings/fixes/settings", map[string]any{"hide_days": -1}); response.Code != http.StatusBadRequest {
 		t.Fatalf("out-of-range bounds are refused: %d", response.Code)
 	}
@@ -437,5 +470,116 @@ func TestSafetySafeguardNotices(t *testing.T) {
 	items, _ = loadSafetyCases(t.Context(), c.reader())
 	if len(items) != 1 || items[0].Rule != "safeguard-restriction" {
 		t.Fatalf("a disabled safeguard check raises nothing: %+v", items)
+	}
+}
+
+func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
+	// The lead stands alone: no "The same…", names the key term.
+	events := []fixesEvent{
+		{ID: 1, Source: "reply", Sentence: "The same restriction prevented creating the requested report."},
+		{ID: 2, Source: "thinking", Sentence: "Odd, so I'll try `uv sync` again."},
+		{ID: 3, Source: "reply", Sentence: "The read-only sandbox prevented creating the local HTML report with `uv sync`."},
+	}
+	if lead := fixesRepresentative(events, nil, []string{"uv sync"}); lead.ID != 3 {
+		t.Fatalf("lead: %+v", lead)
+	}
+	for text, want := range map[string]string{
+		"The same restriction prevented creating the requested local HTML report.":       "Restriction prevented creating the requested local HTML report",
+		"It seems Conductor already renamed the branch, so I'll use the new name.":       "Conductor already renamed the branch",
+		"**Test status:** `npm --prefix web test -- dashboards` could not run.":          "`npm --prefix web test -- dashboards` could not run",
+		"Odd, git status shows staged changes I didn't cause — so I'll check the index.": "Git status shows staged changes I didn't cause",
+	} {
+		if got := fixesLeadTitle(text); got != want {
+			t.Errorf("%q: got %q, want %q", text, got, want)
+		}
+	}
+
+	// A key term only a few members name doesn't title the item.
+	mixed := &fixItem{Category: "env", Terms: []string{"parallel-hours"}, Target: "repo:app", TargetLabel: "app", Lead: "The shell has Node 20 and the runner requires Node 24."}
+	mixed.events = append(mixed.events, fixesEvent{Sentence: "One unrelated `parallel-hours` test failed once."})
+	for i := 0; i < 6; i++ {
+		mixed.events = append(mixed.events, fixesEvent{Sentence: "The shell has Node 20 and the runner requires Node 24."})
+	}
+	if title := fixesProblemTitle(mixed); strings.Contains(title, "parallel-hours") {
+		t.Fatalf("a rare term titled the item: %s", title)
+	}
+
+	f := &fixesFixture{}
+	f.noise(40)
+	for i, sentence := range []string{
+		"One failure, and it looks unrelated: floating-point rounding in a parallelism dashboard parity test.",
+		"A floating-point rounding failure in the parallel-hours dashboard test, which my changes don't touch.",
+		"Only one failure remains, a floating-point rounding issue in the parallel-hours parity test that's probably unrelated to my change.",
+	} {
+		f.add("preexisting_failure", "app", fmt.Sprintf("round-a-%d", i), "2026-10-2"+fmt.Sprint(i), sentence)
+	}
+	for i, sentence := range []string{
+		"The bespoke dashboard parity assertion is off at the eleventh decimal place; pre-existing on master.",
+		"Pre-existing: the dashboard parity values differ at the eleventh decimal place.",
+		"The dashboard parity check differs in the eleventh decimal place, as on master.",
+	} {
+		f.add("preexisting_failure", "app", fmt.Sprintf("round-b-%d", i), "2026-10-2"+fmt.Sprint(i), sentence)
+	}
+	for i := 0; i < 3; i++ {
+		f.add("preexisting_failure", "app", fmt.Sprintf("menu-%d", i), "2026-10-25", fmt.Sprintf("The browser test \"Mac menu editing preserves focus\" fails on clean master too (run %d).", i))
+	}
+	// Agents following a rule on purpose: guidance working as intended.
+	for i, sentence := range []string{
+		"Per my notes I must not hold a read transaction on the live catalog, so I'll read a backup copy.",
+		"I can't measure the live catalog without holding a read on it.",
+		"The rules say never to hold a read on the live catalog, so a backup copy it is.",
+	} {
+		f.add("missing_capability", "app", fmt.Sprintf("live-%d", i), "2026-10-26", sentence)
+	}
+	// A rule naming a requirement the setup misses is the fix, not intended.
+	for i := 0; i < 3; i++ {
+		f.add("missing_capability", "app", fmt.Sprintf("node-%d", i), "2026-10-26", fmt.Sprintf("The guidance says the runner requires Node 24, but the shell defaults to Node 20 version, so `npm test` did not run (%d).", i))
+	}
+	input := fixesInput{Events: f.events, End: "2026-10-28"}
+	items, _, err := fixesBuild(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounding := []*fixItem{}
+	for i := range items {
+		for _, e := range items[i].events {
+			if strings.Contains(e.Sentence, "parity") {
+				rounding = append(rounding, &items[i])
+				break
+			}
+		}
+	}
+	if len(rounding) != 1 || rounding[0].WorkItems != 6 || rounding[0].Category != "flaky" || !strings.HasPrefix(rounding[0].Title, "Known failing check: ") || !strings.Contains(rounding[0].Title, "parity") {
+		t.Fatalf("one known failure, however it is described: %v", fixesTitles(items))
+	}
+	if !strings.HasPrefix(rounding[0].DestWhere, "The failing test itself") {
+		t.Fatalf("a known failure is fixed in the test: %s", rounding[0].DestWhere)
+	}
+	menu := fixesFind(items, "Mac menu")
+	if menu == nil || menu == rounding[0] || menu.Title != "Known failing check: “Mac menu editing preserves focus”" {
+		t.Fatalf("a quoted test name names its check: %v", fixesTitles(items))
+	}
+	live := fixesFind(items, "live catalog")
+	if live == nil || !live.Intended || fixesHidden(*live, fixesDefaultBounds) != "intended" {
+		t.Fatalf("a rule followed on purpose is not a fix: %+v", live)
+	}
+	if node := fixesFind(items, "Node 24"); node == nil || node.Intended {
+		t.Fatalf("a missing requirement the guidance names is a fix: %+v", node)
+	}
+}
+
+func TestFixesTimeLostInReplies(t *testing.T) {
+	// A reply reports a problem after the fact: its time runs from the turn's
+	// first failed call to the report.
+	timelines := map[string][]fixesMoment{"c": {
+		{At: "2026-10-20T10:00:00Z", Message: "p", Prompt: true},
+		{At: "2026-10-20T10:01:00Z", Call: true},
+		{At: "2026-10-20T10:02:00Z", Call: true, Failed: true},
+		{At: "2026-10-20T10:04:00Z", Call: true},
+		{At: "2026-10-20T10:05:00Z", Message: "r"},
+	}}
+	episodes := fixesEpisodes([]fixesEvent{{ID: 1, ConversationID: "c", MessageID: "r", Family: "obstacle", Source: "reply"}}, timelines)
+	if episode := episodes[1]; episode.seconds != 180 || episode.calls != 2 || episode.outcome != "reported" {
+		t.Fatalf("retrospective episode: %+v", episode)
 	}
 }

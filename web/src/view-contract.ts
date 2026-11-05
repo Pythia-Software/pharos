@@ -21,19 +21,19 @@ export const viewFields: Record<string, ViewField> = {
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety","fixes"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
   guide_entity: field("guide_entity", ["*"], "enum", "Selected Data Guide entity.", ["workspaces","conversations","agents","messages","tool_calls"]),
   guide_example: field("guide_example", ["*"], "enum", "Selected example conversation.", ["implementation","review"]),
   overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage","drive"]),
-  window_mode: field("window_mode", ["library","analyze/query/*","findings/table","findings/safety/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
-  window_days: field("window_days", ["library","analyze/query/*","findings/table","findings/safety/table"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
-  window_field: field("window_field", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Lower-bound timestamp field; preserve with the query."),
-  window_until_field: field("window_until_field", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Upper-bound timestamp field for interval overlap."),
-  window_dataset: field("window_dataset", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Dataset owning the time intent."),
-  window_timezone: field("window_timezone", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Pinned IANA timezone for Today. Omit to follow the viewer."),
+  window_mode: field("window_mode", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
+  window_days: field("window_days", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
+  window_field: field("window_field", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Lower-bound timestamp field; preserve with the query."),
+  window_until_field: field("window_until_field", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Upper-bound timestamp field for interval overlap."),
+  window_dataset: field("window_dataset", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Dataset owning the time intent."),
+  window_timezone: field("window_timezone", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Pinned IANA timezone for Today. Omit to follow the viewer."),
   query_dashboard_chart: field("analyze_chart", ["analyze/query/*"], "json", "Retained dashboard chart used when returning from its source query."),
   query_dashboard_filters: field("analyze_filters", ["analyze/query/*"], "text", "Retained dashboard population as a native query token."),
   query_dashboard_window: field("analyze_window", ["analyze/query/*"], "enum", "Retained moving dashboard time intent.", ["today"]),
@@ -42,7 +42,7 @@ export const viewFields: Record<string, ViewField> = {
   query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["1","7","30","90","180","365"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
-  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table"], "json", "Query builder collapsed state by dataset ID."),
+  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "json", "Query builder collapsed state by dataset ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
   search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
@@ -57,7 +57,7 @@ export const viewFields: Record<string, ViewField> = {
   fixes_kind: field("fixes_kind", ["findings/fixes"], "enum", "Filter fixes by kind of fix; empty shows every kind.", ["", ...fixesKinds], ""),
   fixes_rank: field("fixes_rank", ["findings/fixes"], "enum", "Order fix cards by priority (work items weighted down once quiet past the settings' bound, plus agent time lost), work items, latest occurrence, time lost, or repositories spanned.", fixesRanks, "priority"),
   fixes_hidden: field("fixes_hidden", ["findings/fixes"], "boolean", "Also list open fixes the settings' bounds hide (quiet too long, or too few work items), marked as hidden. Default off.", undefined, false),
-  fixes_item: field("fixes_item", ["findings/fixes"], "text", "Open one fix by stable ID: its quotes with reader links, where the fix belongs, guidance matches and status.", undefined, ""),
+  fixes_item: field("fixes_item", ["findings/fixes", "findings/fixes/table"], "text", "Open one fix by stable ID: its quotes with reader links, where the fix belongs, guidance matches and status.", undefined, ""),
   safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action notice lifecycle. Copying a prompt moves selected notices to handed_off; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
   safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
   safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
@@ -128,7 +128,7 @@ viewFields.carbon.details={
   grid:"Key from the shared carbon factors grids, or custom with nonnegative customGrid in g CO2e/kWh.",
 };
 export const attentionTargets = [
-  { pattern: "fix:<id>", pages: ["findings/fixes"], description: "A fix's card on the dashboard, or its open detail, by stable ID. Reveal scrolls and highlights without focusing." },
+  { pattern: "fix:<id>", pages: ["findings/fixes", "findings/fixes/table"], description: "A fix's card on the dashboard, or its open detail, by stable ID. Reveal scrolls and highlights without focusing." },
   { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action notice's open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
   { pattern: "page", pages: ["*"], description: "Main page content." },
   { pattern: "control:<field>", pages: ["*"], description: "A registered view field or control wrapper." },
@@ -138,8 +138,8 @@ export const attentionTargets = [
   { pattern: "message:<id>", pages: ["work"], description: "Message ID; materializes the message and opens its ancestors." },
   { pattern: "call:<id>", pages: ["work"], description: "Tool-call ID; reveals its owning message." },
   { pattern: "session:<id>", pages: ["work"], description: "Conversation/session ID in the delegation explorer." },
-  { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
-  { pattern: "detail:<json>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table"], revealOnly: true, description: 'Reveal an exact record/property/JSONPath via Query Table: detail:{"rowId":"id","field":"arguments_json","path":"$[\\"events\\"][21]"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only.' },
+  { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table","findings/fixes/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
+  { pattern: "detail:<json>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table","findings/fixes/table"], revealOnly: true, description: 'Reveal an exact record/property/JSONPath via Query Table: detail:{"rowId":"id","field":"arguments_json","path":"$[\\"events\\"][21]"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only.' },
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search; an alias for view.find. Opens page Find, highlights matches and reveals the first. Several text targets become one escaped OR regex. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
@@ -223,7 +223,7 @@ export function retainPageView(params: URLSearchParams, page: string, nativePara
 export function viewPageForURL(url: URL): string {
   if(url.pathname.startsWith("/work/"))return "work";
   if(url.pathname==="/analyze")return url.searchParams.get("analyze_mode")==="query"?`analyze/query/${url.searchParams.get("analyze_data")||"usage"}`:`analyze/${url.searchParams.get("analyze_topic")||"tokens"}`;
-  if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="fixes")return url.searchParams.get("view")==="settings" ? "findings/fixes/settings" : "findings/fixes";
+  if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="fixes")return ["table","settings"].includes(url.searchParams.get("view")||"") ? `findings/fixes/${url.searchParams.get("view")}` : "findings/fixes";
   if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="safety")return ["table","settings"].includes(url.searchParams.get("view")||"") ? `findings/safety/${url.searchParams.get("view")}` : "findings/safety";
   if(url.pathname==="/findings"&&["table","settings"].includes(url.searchParams.get("view")||""))return `findings/${url.searchParams.get("view")}`;
   return url.pathname.replace(/^\//,"")||"home";

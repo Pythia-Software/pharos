@@ -172,8 +172,8 @@ function nodeCases(map: SiteMap) {
   add("library", searchURL({ ...filtered, text: { ...text, root: { ...text.root, id: "group-1", children: [rule(1, "deploy", "words")] } }, window, query: { ...filtered.query, where: [where("repository_name", "contains", "pharos"), where(window.field, ">=", "-30d"), where(window.field, "<", "+0s")] } }), { kind: "text", window: 30 });
   // Query tables, with and without a window.
   let turn = 0;
-  for (const dataset of [...Object.keys(usageDatasets), "findings", "safety"] as QueryDataset[]) {
-    const path = dataset === "findings" ? "findings/table" : dataset === "safety" ? "findings/safety/table" : `analyze/query/${dataset}`;
+  for (const dataset of [...Object.keys(usageDatasets), "findings", "safety", "fixes"] as QueryDataset[]) {
+    const path = dataset === "findings" ? "findings/table" : dataset === "safety" ? "findings/safety/table" : dataset === "fixes" ? "findings/fixes/table" : `analyze/query/${dataset}`;
     for (const filters of filterSets(dataset).slice(1, 4)) {
       const days = map.datasets[dataset].window_field ? rollingWindowDays[turn++ % rollingWindowDays.length] : null;
       add(path, datasetURL(dataset, filters, days), { filters, days });

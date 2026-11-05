@@ -89,6 +89,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosTl1AttemptsSchema(), nil
 	case "safety":
 		return PharosSafetySchema(), nil
+	case "fixes":
+		return PharosFixesSchema(), nil
 	case "findings":
 		return PharosFindingsSchema(), nil
 	case "parallelism":

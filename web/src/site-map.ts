@@ -726,11 +726,11 @@ export function buildSiteMap(inputs: SiteInputs) {
           ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
         safety.children!.push(node.path);
       }
-      // Listed in navigation only with the agent events preview on; links work either way.
       const fixes = child({ path: "findings/fixes", title: "Fixes", description: "Recurring problems agents run into that a change to guidance, environment, tools, setup or docs could prevent, grouped from agent events, with where each fix belongs, prompt baskets per place and handoff history.", route: "/findings", fixed: { optimize_area: "fixes" }, children: [] });
       for (const page of fixesPages.slice(1)) {
         const view = new URL(page.href!, origin).searchParams.get("view")!;
-        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view } }).path);
+        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view },
+          ...view === "table" ? { dataset: "fixes", builder: "queryURL", options: [whereOption("q_fixes", "fixes")] } : {} }).path);
       }
     }
     if (section.path === "work") {

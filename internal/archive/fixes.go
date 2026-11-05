@@ -22,11 +22,12 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
-const fixesVersion = "fixes-v1"
+const fixesVersion = "fixes-v2"
 
 // fixesWindowDays bounds the events the projection reads.
 const fixesWindowDays = 90
@@ -96,7 +97,8 @@ var fixesCategoryTerms = map[string]*regexp.Regexp{
 		`\bnode\b|\bnvm\b|\bpython\d?\b|\bpip\b|\bnpm\b|\bbrew\b|\bpath\b|dependency|load average|heavily loaded|congest|` +
 		`\b\d+[- ]?(minute|second)|time limit|timeout|timed out|disk|memory|cores|amd64|arm64|toolchain`),
 	"flaky": regexp.MustCompile(`(?i)flaky|pre-?existing|unrelated (to|test|failure)|passed on rerun|passes on rerun|same \d+ failures|` +
-		`already fail|base commit|untouched checkout|not something i introduced|on master too`),
+		`already fail|base commit|untouched checkout|not something i introduced|on master too|also fails on|fails (the same way )?on (a )?(clean )?(origin/)?(master|main)|` +
+		`outside (the|my) (change|changes|ui|code|work)\b|(isn.t|is not|wasn.t|not) (related|caused) (to|by) (my|this)`),
 }
 
 var (
@@ -283,6 +285,15 @@ type fixItem struct {
 	Cost          fixCost          `json:"cost"`
 	Status        fixStatus        `json:"status"`
 	Tentative     bool             `json:"tentative"`
+	// Lead is the member that best states the problem on its own; the
+	// title is written from the group, the lead quotes it.
+	Lead string `json:"lead"`
+	// Check names the failing test or check a known-failing item is about.
+	Check string `json:"check,omitempty"`
+	// Intended marks a problem the guidance causes on purpose: its agents
+	// cite the rule they are following, so there is nothing to fix.
+	Intended       bool   `json:"intended"`
+	IntendedReason string `json:"intended_reason,omitempty"`
 	// Safeguards counts events in these conversations where an agent got
 	// around a safeguard; they are Risky actions' to show.
 	Safeguards int `json:"safeguards"`
@@ -529,13 +540,24 @@ func fixesScope(events []fixesEvent) (scope, repository, reason string) {
 			}
 			parts = append(parts, fmt.Sprintf("%s %d", entry.Label, entry.Count))
 		}
-		return "global", "", fmt.Sprintf("Hit in %d repositories (%s), so the cause is probably shared: the machine, the harness or a common tool.", len(ranked), strings.Join(parts, ", "))
+		outside := ""
+		if n := len(events) - total; n > 0 {
+			outside = fmt.Sprintf(", and %d outside any repository", n)
+		}
+		return "global", "", fmt.Sprintf("Hit in %d repositories (%s%s), so the cause is probably shared: the machine, the harness or a common tool.", len(ranked), strings.Join(parts, ", "), outside)
+	}
+	parts := []string{}
+	if total > top.Count {
+		parts = append(parts, fmt.Sprintf("%d in other repositories", total-top.Count))
+	}
+	if outside := len(events) - total; outside > 0 {
+		parts = append(parts, fmt.Sprintf("%d outside any repository", outside))
 	}
 	rest := ""
-	if total > top.Count {
-		rest = fmt.Sprintf("; %d elsewhere", total-top.Count)
+	if len(parts) > 0 {
+		rest = " (" + strings.Join(parts, ", ") + ")"
 	}
-	return "repo", top.Key, fmt.Sprintf("%d of %d events in repositories are in %s%s, so the fix probably lives there.", top.Count, total, top.Label, rest)
+	return "repo", top.Key, fmt.Sprintf("%d of its %d events are in %s%s, so the fix probably lives there.", top.Count, len(events), top.Label, rest)
 }
 
 // fixesRank orders counts, most first, then by label.
@@ -1085,8 +1107,20 @@ func fixesEpisodes(events []fixesEvent, timelines map[string][]fixesMoment) map[
 				}
 			}
 			episode := fixesEpisode{outcome: outcome}
+			from := start.pos
+			// A reply reports a problem after the fact: the time it cost runs
+			// from the turn's first failed call up to the report.
+			if start.event.Source == "reply" && !found {
+				turnStart, _ := strconv.Atoi(key[1])
+				for pos := turnStart; pos < start.pos && pos < len(moments); pos++ {
+					if moments[pos].Call && moments[pos].Failed {
+						from, endPos, episode.outcome = pos, start.pos, "reported"
+						break
+					}
+				}
+			}
 			var previous time.Time
-			for pos := start.pos; pos <= endPos && pos < len(moments); pos++ {
+			for pos := from; pos <= endPos && pos < len(moments); pos++ {
 				moment := moments[pos]
 				if moment.Call {
 					episode.calls++
@@ -1236,6 +1270,7 @@ func fixesBuild(input fixesInput) ([]fixItem, map[string]int, error) {
 		// Codebase facts that few work items share are often the task's own
 		// findings rather than guidance.
 		item.Tentative = item.Category == "knowledge" && item.WorkItems < 5
+		fixesMarkIntended(item)
 		for _, list := range []*[]string{&item.Terms, &item.Files} {
 			if *list == nil {
 				*list = []string{}
@@ -1281,6 +1316,9 @@ func fixesFill(input fixesInput, item *fixItem) {
 	}
 	item.Kinds = fixesRank(kinds, labels)
 	item.Status = fixesStatus(input, events, item.Terms)
+	// A merge adds events, so the reason counts what the item holds now; the
+	// place stays where the item was put.
+	_, _, item.ScopeReason = fixesScope(events)
 }
 
 func fixesItemFromGroup(input fixesInput, group fixesGroup, use fixesCodeUse) *fixItem {
@@ -1288,19 +1326,19 @@ func fixesItemFromGroup(input fixesInput, group fixesGroup, use fixesCodeUse) *f
 	scope, repository, reason := fixesScope(group.events)
 	files := fixesFilesNamed(group.events)
 	terms := fixesKeyTermsOf(group, use)
-	lead := group.events[0]
-	title := lead.Sentence
-	if lead.hasSubject() {
-		title = lead.Subject
-	}
-	title = fixesTitle(title)
-	item := &fixItem{Source: group.source, Category: category, Title: title, Terms: terms, Files: files, Scope: scope, ScopeReason: reason, Groups: 1,
-		anchor: group.anchor, anchorShare: group.anchorShare, events: group.events}
+	lead := fixesRepresentative(group.events, group.similarity, terms)
+	item := &fixItem{Source: group.source, Category: category, Terms: terms, Files: files, Scope: scope, ScopeReason: reason, Groups: 1,
+		anchor: group.anchor, anchorShare: group.anchorShare, events: group.events, Lead: fixesTitle(lead.Sentence)}
 	item.CategoryLabel, _ = fixesCategory(category)
+	if category == "flaky" {
+		item.Check = fixesCheckName(group.events)
+	}
 	fixesPlace(input, item, repository)
-	item.Suggestion = fixesSuggestion(category, first(terms), fixesClip(title, 240))
-	for i, e := range group.events {
-		if i < 8 {
+	item.Title = fixesProblemTitle(item)
+	item.Suggestion = fixesSuggestion(category, defaultString(nilIfEmpty(item.Check), first(terms)), fixesClip(item.Lead, 240))
+	item.Quotes = append(item.Quotes, fixesQuote(lead, group.similarity[lead.ID]))
+	for _, e := range group.events {
+		if len(item.Quotes) < 8 && e.ID != lead.ID {
 			item.Quotes = append(item.Quotes, fixesQuote(e, group.similarity[e.ID]))
 		}
 	}
@@ -1356,7 +1394,7 @@ func fixesPlace(input fixesInput, item *fixItem, repository string) {
 	if len(repositories) == 0 && repository != "" {
 		repositories = []string{repository}
 	}
-	item.GuidanceHits = fixesMentions(input, repositories, item.Terms)
+	item.GuidanceHits = fixesMentions(input, repositories, fixesCommonTerms(item.events, item.Terms))
 }
 
 // fixesMergeSame joins items that one issue split across passes or
@@ -1371,6 +1409,15 @@ func fixesMergeSame(input fixesInput, items []*fixItem) []*fixItem {
 			key = item.anchor + "\x00" + item.Category + "\x00" + item.Target
 		}
 		host := hosts[key]
+		// Known failures of one test are one item however agents describe it.
+		if item.Category == "flaky" {
+			for _, other := range out {
+				if other.Category == "flaky" && other.Target == item.Target && fixesSameCheck(other.events, item.events) {
+					host, key = other, "check"
+					break
+				}
+			}
+		}
 		if key == "" || host == nil {
 			if key != "" {
 				hosts[key] = item
@@ -1412,6 +1459,10 @@ func fixesMergeSame(input fixesInput, items []*fixItem) []*fixItem {
 	for _, item := range out {
 		if item.Groups > 1 {
 			fixesFill(input, item)
+			if item.Category == "flaky" {
+				item.Check = fixesCheckName(item.events)
+			}
+			item.Title = fixesProblemTitle(item)
 		}
 	}
 	return out
@@ -1461,6 +1512,7 @@ func fixesStaleFileItems(input fixesInput, events []fixesEvent, taken map[int64]
 		}
 		item := &fixItem{Source: "stale-file", Category: "stale", Title: title, Terms: []string{k.name}, Files: []string{k.name}, Scope: scope, ScopeReason: reason, Groups: 1, events: es}
 		item.CategoryLabel, _ = fixesCategory("stale")
+		item.Lead = fixesTitle(fixesRepresentative(es, nil, item.Terms).Sentence)
 		fixesPlace(input, item, repository)
 		item.GuidanceHits = nil
 		item.Suggestion = fmt.Sprintf("Read %s against the code and correct what agents found wrong; each quote says what.", k.name)
@@ -1478,4 +1530,262 @@ func fixesStaleFileItems(input fixesInput, events []fixesEvent, taken map[int64]
 		out = append(out, item)
 	}
 	return out
+}
+
+// A sentence that leans on an earlier one ("The same restriction…", "It
+// seems…") doesn't stand alone as a card's quote.
+var (
+	fixesAntecedent  = regexp.MustCompile(`(?i)^\W*(?:the same|same|that|this|these|those|it|they|also|again|still|odd|hmm+|ok(?:ay)?|so|but|and|then|now|here|there|i notice|i see|it seems|seems|it looks|looks like)\b`)
+	fixesFirstPerson = regexp.MustCompile(`(?i)\b(?:i|i'm|i've|i'll|i’m|i’ve|i’ll|me|my|we|our)\b`)
+	fixesPlan        = regexp.MustCompile(`(?i)\s*[,;:—–]\s*(?:so|and|but|then|which)\s+(?:i|i'm|i've|i'll|i’m|i’ve|i’ll|we|let me)\b.*$`)
+	fixesMissing     = regexp.MustCompile(`(?i)not installed|isn.t installed|missing|lacks?\b|no module|command not found|not found|unavailable|not available`)
+	fixesSlow        = regexp.MustCompile(`(?i)timed? ?out|timeout|too slow|slow\b|\b\d+[- ]?(?:minute|second)|load average|heavily loaded`)
+	fixesVersionWord = regexp.MustCompile(`(?i)\bversion\b|\bnode \d+|\bpython ?3\.\d+|requires node`)
+	fixesQuotedName  = regexp.MustCompile("[\"“]([^\"”]{6,80})[\"”]")
+	fixesCheckSplit  = regexp.MustCompile(`[^\pL\pN]+`)
+	fixesCheckFiller = fixesWordSet(`unrelated failure failures failing fails failed fail test tests one only remaining remains pre preexisting existing
+		master main origin clean change changes changed branch looks look likely probably unit web browser suite full check checks run runs rerun reruns
+		same way issue issues error errors my mine me i i'm i've i'll it its that this which so likely just seems seem flaky flake still also again
+		there here pass passes passed passing all now left out tier fast go npm prefix assertion assert something introduced caused cause related
+		without with clean dashboard's itself note noted opening open pr current currently today verify verified against confirm confirmed
+		broader summary lines line known output truncated lost list probably maybe might`)
+	fixesReportLabel = regexp.MustCompile(`(?i)^\W*(?:test status|status|verification|tests?|testing|result|results|note|blocker|caveat)[\s*_]*:[\s*_]*`)
+	fixesProhibits   = regexp.MustCompile(`(?i)\b(?:never|must not|mustn.t|not to|don.t|do not|forbids?|forbidden|avoid|without)\b`)
+	fixesFollowsRule = regexp.MustCompile(`(?i)\bper (?:my|the|our|your) (?:notes|rules?|instructions|guidance|memory|memories|preferences?)\b|` +
+		`\b(?:my|the) (?:notes|rules?|memory|memories|instructions|guidance) (?:say|says|advise|advises|tell|tells|require|requires|forbid|forbids)\b|` +
+		`\bas (?:my|the) (?:notes|rules?|instructions|guidance) (?:say|advise|require)|\bi (?:recall|remember) (?:never|not to|to avoid)\b|` +
+		`\baccording to (?:my|the) (?:notes|rules?|instructions|guidance|memory)\b|\b(?:claude|agents)\.md (?:says|requires|forbids)\b`)
+)
+
+// fixesRepresentative is the member that best states the problem by itself:
+// close to the group, naming a key term, from a reply, of a readable length,
+// and not leaning on an earlier sentence.
+func fixesRepresentative(events []fixesEvent, similarity map[int64]float64, terms []string) fixesEvent {
+	terms = fixesCommonTerms(events, terms)
+	best, bestScore := events[0], math.Inf(-1)
+	for _, e := range events {
+		text := strings.TrimSpace(fixesListMarker.ReplaceAllString(e.Sentence, ""))
+		score := 0.5
+		if similarity != nil {
+			if value, ok := similarity[e.ID]; ok {
+				score = value
+			}
+		}
+		for _, term := range terms {
+			if fixesTermIndex(text, term) {
+				score += 0.6
+				break
+			}
+		}
+		if e.Source == "reply" {
+			score += 0.2
+		}
+		if fixesAntecedent.MatchString(text) {
+			score -= 1
+		}
+		if fixesFirstPerson.MatchString(text) {
+			score -= 0.3
+		}
+		if fixesPlan.MatchString(text) {
+			score -= 0.2
+		}
+		if n := len([]rune(text)); n < 35 || n > 220 {
+			score -= 0.4
+		}
+		if score > bestScore {
+			best, bestScore = e, score
+		}
+	}
+	return best
+}
+
+// fixesCommonTerms are the key terms at least 30% of the events name. A term
+// two members of a large group mention names their problem, not the group's.
+func fixesCommonTerms(events []fixesEvent, terms []string) []string {
+	out := []string{}
+	for _, term := range terms {
+		n := 0
+		for _, e := range events {
+			if fixesTermIndex(e.Sentence, term) {
+				n++
+			}
+		}
+		if float64(n) >= 0.3*float64(len(events)) {
+			out = append(out, term)
+		}
+	}
+	return out
+}
+
+// fixesCheckWords are what a known-failure sentence says about which check
+// fails, without the words every such sentence shares.
+func fixesCheckWords(e fixesEvent) map[string]bool {
+	words := map[string]bool{}
+	for _, word := range fixesCheckSplit.Split(strings.ToLower(e.Sentence), -1) {
+		if len(word) >= 3 && !fixesStop[word] && !fixesDiscourse[word] && !fixesCheckFiller[word] && !fixesNumeric.MatchString(word) {
+			words[word] = true
+		}
+	}
+	return words
+}
+
+// fixesCheckTop are a group's most shared check words, at most limit, each
+// in two or more members.
+func fixesCheckTop(events []fixesEvent, limit int) []string {
+	counts := map[string]int{}
+	for _, e := range events {
+		for word := range fixesCheckWords(e) {
+			counts[word]++
+		}
+	}
+	ranked := fixesRank(counts, map[string]string{})
+	out := []string{}
+	for _, entry := range ranked {
+		if entry.Count >= 2 && len(out) < limit {
+			out = append(out, entry.Key)
+		}
+	}
+	return out
+}
+
+// fixesSameCheck says whether two known-failure groups are about one check:
+// they quote the same test name, or share two of their eight most shared check
+// words ("dashboard parity", "floating rounding").
+func fixesSameCheck(a, b []fixesEvent) bool {
+	if name := fixesCheckQuoted(a); name != "" && name == fixesCheckQuoted(b) {
+		return true
+	}
+	top := map[string]bool{}
+	for _, word := range fixesCheckTop(a, 8) {
+		top[word] = true
+	}
+	shared := 0
+	for _, word := range fixesCheckTop(b, 8) {
+		if top[word] {
+			shared++
+		}
+	}
+	return shared >= 2
+}
+
+// fixesCheckQuoted is the test name members quote most, when two do.
+func fixesCheckQuoted(events []fixesEvent) string {
+	counts := map[string]int{}
+	for _, e := range events {
+		seen := map[string]bool{}
+		for _, match := range fixesQuotedName.FindAllStringSubmatch(e.Sentence, -1) {
+			name := strings.TrimSpace(match[1])
+			if !seen[name] {
+				seen[name] = true
+				counts[name]++
+			}
+		}
+	}
+	ranked := fixesRank(counts, map[string]string{})
+	if len(ranked) > 0 && ranked[0].Count >= 2 {
+		return ranked[0].Key
+	}
+	return ""
+}
+
+// fixesCheckName names the failing check: a quoted test name, or its most
+// shared words in the order agents write them.
+func fixesCheckName(events []fixesEvent) string {
+	if name := fixesCheckQuoted(events); name != "" {
+		return "“" + name + "”"
+	}
+	top := fixesCheckTop(events, 3)
+	if len(top) == 0 {
+		return ""
+	}
+	if len(top) > 3 {
+		top = top[:3]
+	}
+	// Order the words as the first member using most of them does.
+	for _, e := range events {
+		lower := strings.ToLower(e.Sentence)
+		positions := map[string]int{}
+		for _, word := range top {
+			if i := strings.Index(lower, word); i >= 0 {
+				positions[word] = i
+			}
+		}
+		if len(positions) == len(top) {
+			sort.SliceStable(top, func(i, j int) bool { return positions[top[i]] < positions[top[j]] })
+			break
+		}
+	}
+	return strings.Join(top, " ")
+}
+
+// fixesProblemTitle names the problem from the group: its key term, kind of
+// fix and place. Without a key term, the lead's own words, cut to the
+// problem.
+func fixesProblemTitle(item *fixItem) string {
+	place := item.TargetLabel
+	if item.Target == "global" {
+		place = "this Mac"
+	}
+	share := func(pattern *regexp.Regexp) float64 { return fixesShare(item.events, pattern) }
+	term := first(fixesCommonTerms(item.events, item.Terms))
+	code := "`" + term + "`"
+	switch {
+	case item.Category == "flaky" && item.Check != "":
+		return "Known failing check: " + item.Check
+	case item.Category == "env" && term != "":
+		switch {
+		case share(fixesMissing) >= 0.3:
+			return code + " missing from " + place + "'s environment"
+		case share(fixesVersionWord) >= 0.3:
+			return "Wrong " + code + " version in " + place + "'s environment"
+		case share(fixesSlow) >= 0.3:
+			return code + " too slow or timing out in " + place
+		}
+		return code + " keeps failing in " + place + "'s environment"
+	case item.Category == "tool" && term != "":
+		return code + " keeps failing for agents"
+	case item.Category == "harness" && term != "":
+		return "The agent's shell or sandbox trips on " + code
+	case item.Category == "flaky" && term != "":
+		return "Known failing check involving " + code
+	}
+	return fixesLeadTitle(item.Lead)
+}
+
+// fixesLeadTitle cuts a sentence to the problem it states: no leaning start,
+// no trailing plan ("…, so I'll …"), and short.
+func fixesLeadTitle(text string) string {
+	text = fixesPlan.ReplaceAllString(text, "")
+	if loc := fixesReportLabel.FindStringIndex(text); loc != nil && len(text)-loc[1] > 20 {
+		text = text[loc[1]:]
+	}
+	for i := 0; i < 2; i++ {
+		if loc := fixesAntecedent.FindStringIndex(text); loc != nil && loc[1] < len(text) {
+			rest := strings.TrimLeft(text[loc[1]:], " ,:—–-")
+			if len(rest) > 20 {
+				text = rest
+			}
+		}
+	}
+	text = strings.TrimRight(strings.TrimSpace(text), ".")
+	return fixesTitle(fixesClip(text, 120))
+}
+
+// fixesMarkIntended marks a problem the guidance causes on purpose: its
+// agents cite the rule they are following. Nothing is wrong with the setup.
+func fixesMarkIntended(item *fixItem) {
+	// Guidance that names a requirement the setup misses ("the guidance says
+	// Node 24") points at the fix; only a rule against something is intended.
+	following := 0
+	for _, e := range item.events {
+		if text := e.Sentence + " " + e.Subject; fixesFollowsRule.MatchString(text) && fixesProhibits.MatchString(text) {
+			following++
+		}
+	}
+	if following < 2 || float64(following) < 0.2*float64(len(item.events)) {
+		return
+	}
+	item.Intended = true
+	item.IntendedReason = fmt.Sprintf("%d of its %d events cite a rule the agent was following (its notes, instructions or guidance), so this is the guidance working as intended rather than something to fix.", following, len(item.events))
+	item.Suggestion = "Nothing to fix: agents are following a rule on purpose. If they lose time getting around it, add the approved way to do the task beside the rule."
 }

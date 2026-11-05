@@ -12,9 +12,15 @@ about the code that agents keep working out again. It sits in Optimize beside
 - copying a prompt records a handoff;
 - a problem that recurs after its handoff opens again.
 
-Fixes is built from [agent events](agent-events.md), which are still a preview.
-Navigation lists it only while the agent events preview is on. Direct links work
-either way.
+Like Risky actions, Fixes has three pages in the Optimize menu:
+
+- **Dashboard**: the cards, by state, place and kind;
+- **Table**: every item in a Query Table (`fixes` dataset), hidden ones included,
+  with an **On the menu** column saying whether Open lists it and, if not, why;
+- **Settings**: the bounds below.
+
+Fixes is built from [agent events](agent-events.md), which are still a preview, but
+the menu lists it either way: with no events it says so.
 
 ## Grouping (background)
 
@@ -49,13 +55,30 @@ lab's "v3" grouping:
    and none holds 85% of its events; otherwise it belongs to its repository.
    Repository sharing decides where the prompt goes and is never an input to
    grouping.
-7. **Assign a status.**
+7. **Title it.** An item's title names the problem from its key term, kind and
+   place, for example "`trimesh` missing from corpus's environment", "`gh pr edit`
+   keeps failing for agents" or "Known failing check: …". The item's best
+   self-contained member sentence (first person, plans and back-references ranked
+   down) is kept as its **lead** and quoted under the title.
+8. **Merge known failing checks.** A check that fails regardless of the change
+   (fails on master, unrelated to this change) is a known failing check, not an
+   environment problem. Items in the same place that name the same check (a quoted
+   name, or two shared distinctive words such as "dashboard parity") merge into one.
+9. **Mark intended constraints.** When at least two events, and a fifth of the
+   item's, cite a rule they are following ("per CLAUDE.md", "the guidance says
+   never…"), the item is marked **Guidance already covers this (intended)** and left
+   off Open whatever the bounds. Guides read include the repository's CLAUDE.md and
+   AGENTS.md and the Claude memory files for its clone.
+10. **Assign a status.**
    - *Still recurring* means it was seen in the last three days the pass read.
    - *Quiet* means its expected count since then is at least three, but none
      appeared.
    - *Quiet since a guidance commit* means a commit since then names one of its key
      terms.
    - Anything else is *unclear*.
+
+An event with no time of its own (some imported Codex replies) takes its message's
+time, or else its conversation's start.
 
 Item IDs are stable, made from the kind of fix, the target and the anchor term. This
 keeps triage, baskets and handoffs across rebuilds. Items are stored in `fix_items`.
@@ -75,12 +98,15 @@ Three library settings, stored in `finding_settings`, keep the menu useful:
 library that has not been read for a while therefore does not hide everything.
 
 Priority is work items × the quiet weight, plus 2 × the hours of friction episodes
-the problem started (at most 20 hours). It is computed when the page is read, so a
+the problem started or reported (at most 20 hours). An episode reported in a reply
+after the fact runs from the turn's first failed call to the report. Harnesses that
+record no call times (TL1 Codex) have no measurable time lost. It is computed when the page is read, so a
 change to a bound applies at once.
 
 The bounds apply only to Open. Handed-off and closed items always stay listed. The
-dashboard says how many items the bounds hide, and `fixes_hidden=1` shows them,
-marked. The settings page shows how many items each option would hide.
+dashboard says how many items the bounds hide, `fixes_hidden=1` shows them,
+marked, and a link opens the Table filtered to them. The settings page shows how
+many items each option would hide.
 
 ## Boundary with Risky actions
 
@@ -152,5 +178,6 @@ The actions are `dismiss`, `restore`, `cart_add`, `cart_remove` and `cart_tick`.
 `view-contract.ts`) are:
 - `fixes_list`, `fixes_place`, `fixes_kind`, `fixes_rank`, `fixes_hidden` and
   `fixes_item`;
-- `view=settings` for the settings page;
+- `view=table` for the table, whose query is `q_fixes`, and `view=settings` for the
+  settings page;
 - `fix:<id>` as a reveal target.

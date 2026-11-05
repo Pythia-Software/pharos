@@ -26,6 +26,7 @@ export const pageDescriptions: Record<string, string> = {
   "analyze/query": "Query tables over each Analyze dataset, filtered by where terms.",
   "findings/safety/table": "Every risky action notice, filterable and groupable by resource, check, danger, location, handoff state, or recorded activity.",
   "findings/safety/settings": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
+  "findings/fixes/table": "Every fix in every state, hidden ones included, filterable and groupable by kind, place, recurrence, whether the settings hide it, work items or priority.",
   "findings/fixes/settings": "Bounds that rank quiet fixes lower and hide stale or rare ones, how Fixes and Risky actions divide agent events, and refresh.",
   "findings/table": "Every finding as a filterable table.",
   "findings/settings": "Which detectors run and how findings are ranked.",

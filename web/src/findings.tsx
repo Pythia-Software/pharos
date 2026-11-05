@@ -1088,7 +1088,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
 
 // ---------------------------------------------------------------- page
 
-export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?: React.ReactNode; safetyTable?: React.ReactNode }) {
+export function FindingsPage({ copy, table, safetyTable, fixesTable }: { copy: Copy; table?: React.ReactNode; safetyTable?: React.ReactNode; fixesTable?: React.ReactNode }) {
   const [area] = useViewState<string>("optimize_area", "efficiency", location.pathname === "/findings");
   // Risky actions and Fixes are review areas with their own pages and prompts.
   const reviewArea = area === "safety" || area === "fixes";
@@ -1170,7 +1170,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
 
   let body: React.ReactNode;
   if (area === "safety") body = <SafetyPage copy={copy} view={route.view} table={safetyTable} refreshDiscovery={reload} />;
-  else if (area === "fixes") body = <FixesPage copy={copy} view={route.view === "settings" ? "settings" : ""} refreshDiscovery={reload} />;
+  else if (area === "fixes") body = <FixesPage copy={copy} view={route.view === "settings" || route.view === "table" ? route.view : ""} table={fixesTable} refreshDiscovery={reload} />;
   else if (route.view === "settings") body = <>{error ? <p className="findings-error" role="alert">{error}</p> : null}<FindingsSettings overview={overview} reload={reload} /></>;
   else if (route.view === "table") body = null;
   else if (route.finding) body = <FindingDetail id={route.finding} tab={route.tab} overview={overview} act={act} rank={rank} onReview={next => setReview(next.target)} newIds={newIds} />;

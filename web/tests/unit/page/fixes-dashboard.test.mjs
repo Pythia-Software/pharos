@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fixesBoundsPreview, fixesDashboard, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesPlaces, fixesRanked } from "../../../src/fixes-model";
+import { fixesBoundsPreview, fixesDashboard, fixesFacts, fixesHiddenNote, fixesHiddenReason, fixesKindsPresent, fixesLeadQuote, fixesPlaces, fixesRanked } from "../../../src/fixes-model";
 import { optimizeSelectionPlan } from "../../../src/optimize-model";
+import { decodeQueryStrict } from "@pythia-software/query-table-core";
+import { fixDetailURL, fixesHiddenTableURL, fixesTableFocus } from "../../../src/fixes-route";
 import { safetySelectionPlan } from "../../../src/safety-dashboard-model";
 
 const status = (patch = {}) => ({ state: "recurring", label: "Still recurring", detail: "", first: "2026-10-20", last: "2026-11-01", days_quiet: 1, ...patch });
@@ -25,7 +27,12 @@ test("Open leaves out what the bounds hide, counts it, and shows it on request",
   const open = fixesDashboard(items, { list: "open", place: "", kind: "", rank: "priority", showHidden: false });
   assert.deepEqual(open.main.map(entry => entry.id), ["busy", "costly"]);
   assert.deepEqual(open.maybe.map(entry => entry.id), ["fact"]);
-  assert.deepEqual(open.hidden, { stale: 1, rare: 1, total: 2 });
+  assert.deepEqual(open.hidden, { stale: 1, rare: 1, intended: 0, total: 2 });
+  // Guidance an agent cites on purpose is left out whatever the bounds.
+  const ruled = fixesDashboard([...items, item("rule", { hidden: "intended", intended: true, work_items: 9, priority: 9 })], { list: "open", place: "", kind: "", rank: "priority", showHidden: false });
+  assert.deepEqual(ruled.main.map(entry => entry.id), ["busy", "costly"]);
+  assert.deepEqual(ruled.hidden, { stale: 1, rare: 1, intended: 1, total: 3 });
+  assert.match(fixesHiddenNote(ruled.hidden, { quiet_days: 7, hide_days: 30, min_work_items: 3 }), /Also left out: 1 problem the guidance causes on purpose\.$/);
   assert.deepEqual(open.counts, { open: 3, handed_off: 1, dismissed: 0 });
   const all = fixesDashboard(items, { list: "open", place: "", kind: "", rank: "priority", showHidden: true });
   assert.deepEqual(all.main.map(entry => entry.id), ["busy", "costly", "stale", "rare"]);
@@ -73,4 +80,23 @@ test("Risky actions and Fixes share one selection plan", () => {
   assert.deepEqual(plan.groups.map(group => [group.target, group.ids]), [["repo:a", ["busy", "handed"]], ["global", ["costly"]]]);
   assert.match(plan.blocked, /^1 of the selected fixes is not open/);
   assert.deepEqual(safetySelectionPlan(items, ["busy", "costly"]).groups, optimizeSelectionPlan(items, ["busy", "costly"]).groups);
+});
+
+test("the table lists what the bounds hide, and a fix opens from it with the query kept", () => {
+  const url = new URL(fixesHiddenTableURL(), "https://pharos.test");
+  assert.equal(url.searchParams.get("optimize_area"), "fixes");
+  assert.equal(url.searchParams.get("view"), "table");
+  const query = decodeQueryStrict(url.searchParams.get("q_fixes"));
+  assert.deepEqual(fixesTableFocus(query), { shown: "hidden", state: "open" });
+  assert.deepEqual(fixesTableFocus({ ...query, where: [] }), { shown: undefined, state: undefined });
+  const detail = new URL(fixDetailURL("fix_a", url), "https://pharos.test");
+  assert.equal(detail.searchParams.get("fixes_item"), "fix_a");
+  assert.equal(detail.searchParams.get("q_fixes"), url.searchParams.get("q_fixes"));
+});
+
+test("a lead is quoted only when it says more than the title", () => {
+  assert.equal(fixesLeadQuote({ title: "I can't measure the live catalog", lead: "I can't measure the live catalog." }), "");
+  assert.equal(fixesLeadQuote({ title: "`uv` missing from app's environment", lead: "`uv` is not installed here." }), "`uv` is not installed here.");
+  assert.equal(fixesLeadQuote({ title: "Something" }), "");
+  assert.equal(fixesLeadQuote({ title: "`npm test` could not run", lead: "Test status: `npm test` could not run." }), "");
 });

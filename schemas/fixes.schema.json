@@ -1,0 +1,609 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_fixes",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "priority",
+      "dir": "desc"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "state",
+      "width": 110
+    },
+    {
+      "field": "shown",
+      "width": 150
+    },
+    {
+      "field": "title",
+      "width": 360
+    },
+    {
+      "field": "category",
+      "width": 170
+    },
+    {
+      "field": "target_label",
+      "width": 150
+    },
+    {
+      "field": "work_items",
+      "width": 100
+    },
+    {
+      "field": "priority",
+      "width": 90
+    },
+    {
+      "field": "last_seen",
+      "width": 110
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Fix ID",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
+      "name": "title",
+      "label": "Problem",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "lead",
+      "label": "What an agent said",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "lead",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"lead\""
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "state",
+      "label": "State",
+      "type": "enum",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "state",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"state\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "open",
+              "label": "Open"
+            },
+            {
+              "value": "handed_off",
+              "label": "Handed off"
+            },
+            {
+              "value": "dismissed",
+              "label": "Closed"
+            }
+          ]
+        }
+      },
+      "render": "safety_state"
+    },
+    {
+      "name": "shown",
+      "label": "On the menu",
+      "type": "enum",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "shown",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"shown\""
+        }
+      },
+      "description": "Whether Open lists it under your Fixes settings: shown, or hidden as quiet too long, seen in too few work items, or guidance working as intended. Handed-off and closed fixes are always listed.",
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "shown",
+              "label": "Shown"
+            },
+            {
+              "value": "stale",
+              "label": "Hidden: quiet too long"
+            },
+            {
+              "value": "rare",
+              "label": "Hidden: too few work items"
+            },
+            {
+              "value": "intended",
+              "label": "Hidden: guidance covers it"
+            }
+          ]
+        }
+      },
+      "render": "option_label"
+    },
+    {
+      "name": "category",
+      "label": "Kind of fix",
+      "type": "enum",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "category",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"category\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "env",
+              "label": "Environment or setup"
+            },
+            {
+              "value": "harness",
+              "label": "Harness and shell behaviour"
+            },
+            {
+              "value": "tool",
+              "label": "Tool or integration"
+            },
+            {
+              "value": "flaky",
+              "label": "Known failing check"
+            },
+            {
+              "value": "knowledge",
+              "label": "Codebase knowledge"
+            },
+            {
+              "value": "stale",
+              "label": "Out-of-date docs"
+            },
+            {
+              "value": "obstacle",
+              "label": "Recurring obstacle"
+            }
+          ]
+        }
+      },
+      "render": "option_label"
+    },
+    {
+      "name": "status",
+      "label": "Recurrence",
+      "type": "enum",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "status",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"status\""
+        }
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "recurring",
+              "label": "Still recurring"
+            },
+            {
+              "value": "quiet",
+              "label": "Gone quiet"
+            },
+            {
+              "value": "quiet-fixed",
+              "label": "Quiet since a guidance change"
+            },
+            {
+              "value": "unclear",
+              "label": "Too little activity since to tell"
+            },
+            {
+              "value": "unknown",
+              "label": "No dates recorded"
+            }
+          ]
+        }
+      },
+      "render": "option_label"
+    },
+    {
+      "name": "target",
+      "label": "Place ID",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "target",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"target\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
+      "name": "target_label",
+      "label": "Place",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "target_label",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"target_label\""
+        }
+      },
+      "description": "Where the prompt goes: the shared setup on this Mac (Global setup) or one repository.",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      }
+    },
+    {
+      "name": "destination",
+      "label": "Where the fix belongs",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "destination",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"destination\""
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "terms",
+      "label": "Key terms",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "terms",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"terms\""
+        }
+      },
+      "select": {
+        "default": false
+      },
+      "render": "truncate"
+    },
+    {
+      "name": "check_name",
+      "label": "Failing check",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "check_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"check_name\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
+      "name": "work_items",
+      "label": "Work items",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "work_items",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"work_items\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "events",
+      "label": "Events",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "events",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"events\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "conversations",
+      "label": "Conversations",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "conversations",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversations\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "hours",
+      "label": "Agent hours lost",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "hours",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"hours\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "select": {
+        "default": false
+      },
+      "description": "Agent time in friction episodes its events started or reported.",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "priority",
+      "label": "Priority",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "priority",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"priority\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "description": "Work items, weighted down once quiet past your setting, plus two per hour of agent time lost.",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "safeguards",
+      "label": "Safeguard workarounds",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "safeguards",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"safeguards\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "select": {
+        "default": false
+      },
+      "description": "Events in its conversations where an agent got around a safeguard; each is a Risky actions notice.",
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "in_prompt",
+      "label": "In a prompt",
+      "type": "bool",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "in_prompt",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"in_prompt\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
+      "name": "first_seen",
+      "label": "First seen",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "first_seen",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"first_seen\""
+        }
+      },
+      "select": {
+        "default": false
+      }
+    },
+    {
+      "name": "last_seen",
+      "label": "Last seen",
+      "type": "text",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "last_seen",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"last_seen\""
+        }
+      }
+    },
+    {
+      "name": "handed_at",
+      "label": "Handed off",
+      "type": "datetime",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "handed_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"handed_at\"",
+          "datetimeFormat": "rfc3339"
+        }
+      },
+      "render": "datetime_rel",
+      "select": {
+        "default": false
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "fix_count",
+      "label": "Fixes",
+      "type": "number",
+      "group": "Fix",
+      "bindings": {
+        "postgres": {
+          "expr": "fix_count",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"fix_count\"",
+          "expressionNumeric": true
+        }
+      },
+      "render": "number",
+      "select": {
+        "default": false
+      },
+      "description": "One per fix. Sum to count fixes when grouping.",
+      "aggregate": {
+        "groupable": true
+      }
+    }
+  ]
+}

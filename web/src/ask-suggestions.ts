@@ -32,7 +32,7 @@ export const askAreas: AskArea[] = [
   { id: "repositories", label: "Repositories and activity", pages: ["home", "library", "analyze/activity"], signals: ["activity.repos"] },
   { id: "writing", label: "My writing and steering", pages: ["analyze/human", "analyze/query/writing", "analyze/query/writing_messages"], signals: ["writing.volume", "writing.back_and_forth"] },
   { id: "supplied-context", label: "Context I supply", pages: ["analyze/human", "analyze/query/writing_messages"], signals: ["writing.supplied"] },
-  { id: "agent-experience", label: "What agents run into", pages: ["analyze/agent_experience", "analyze/query/agent_events", "analyze/query/agent_event_messages", "findings/fixes", "findings/fixes/settings"], signals: ["agent.friction", "agent.reactions"] },
+  { id: "agent-experience", label: "What agents run into", pages: ["analyze/agent_experience", "analyze/query/agent_events", "analyze/query/agent_event_messages", "findings/fixes", "findings/fixes/table", "findings/fixes/settings"], signals: ["agent.friction", "agent.reactions"] },
   { id: "web", label: "Sites agents visit", pages: ["analyze/tools", "analyze/query/tool_calls"], signals: ["web.hosts", "web.new_hosts"] },
   { id: "risk", label: "Risky actions", pages: ["findings/safety", "findings/safety/table", "findings/safety/settings"], signals: ["risk.safety"] },
   { id: "findings", label: "Recommended changes", pages: ["findings", "findings/table", "findings/settings"], signals: ["improve.findings", "improve.watching"] },
