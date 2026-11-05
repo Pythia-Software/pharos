@@ -463,6 +463,7 @@ schedule rather than one of their own:
 | A batch keeps crashing workers, or the worker rejects it (`bad_request`, `run_failed`) | The batch is split and sent one item at a time, so one bad item fails only its message, which stays pending for the next run. |
 | Workers keep crashing (8 restarts in a row with no batch succeeding) | The run ends **interrupted**, keeping what it stored. |
 | A conversation cannot be built (a damaged row; a panic is caught) | It keeps its dirty mark for the next run; the others go on. A stored classification that no longer fits its message counts as none until authorship catches up. |
+| Another operation holds the catalog writer | Finished labels wait in the bounded pipeline, slowing inference until the writer is available. Waiting during a running backfill has no separate save deadline. On stop, all finished work shares one 30-second drain budget; work that cannot be saved stays pending for the next run. |
 | The labels cannot be stored | The run stops at once with the write's error. |
 
 The worker holds no file on the library's drive, so it never delays an eject.
