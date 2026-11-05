@@ -59,6 +59,25 @@ func TestDeriveSessionFacts(t *testing.T) {
 		t.Fatalf("push and pull requests: %v %v", facts.Pushed, facts.PullRequests)
 	}
 
+	// A patch counts each file it names on its own: past a scratch first
+	// file, and in a code-mode script the tool ledger found no file for.
+	patch := "*** Begin Patch\n*** Add File: /tmp/scratch.txt\n+a scratch line\n*** Update File: /src/app/util.go\n@@\n+func helper() {}\n*** End Patch"
+	script, _ := json.Marshal(map[string]any{"input": "text(await tools.apply_patch(" + fmt.Sprintf("%q", patch) + "))"})
+	scoped := func(path string) (string, string, string) {
+		if strings.HasPrefix(path, "/tmp/") {
+			return "", "", "temp"
+		}
+		return strings.TrimPrefix(path, "/src/app/"), "repo", "repo"
+	}
+	for _, call := range []outcomeCall{
+		{Category: "edit", Status: "ok", Path: "/tmp/scratch.txt", Scope: "temp", Input: string(script)},
+		{Category: "edit", Status: "ok", Input: string(script)},
+	} {
+		if facts := deriveSessionFacts([]outcomeCall{call}, scoped); len(facts.Files) != 1 || facts.Files[0].Key != "repository:repo:util.go" || *facts.Files[0].Added != 1 {
+			t.Fatalf("patch files of %q: %+v", call.Path, facts.Files)
+		}
+	}
+
 	if facts := deriveSessionFacts([]outcomeCall{edit("/a.go", "", "", "2026-09-01T00:00:00Z", lines(1), lines(0))}, nil); facts.Verification != "not_run" {
 		t.Fatalf("no test after the last edit: %q", facts.Verification)
 	}
@@ -91,9 +110,13 @@ func (f *outcomeFixture) session(id, source string) {
 }
 
 // edit records a successful edit of path (in repository at repoPath when
-// repository is set) by session at a time days ago, replacing old with new.
+// repository is set) by session at a time days ago, replacing old with new:
+// whole lines, as the newlines around them show (wholeLines).
 func (f *outcomeFixture) edit(session, path, repository, repoPath string, days float64, old, new string) {
 	f.t.Helper()
+	if old != "" {
+		old, new = "\n"+old+"\n", "\n"+new+strings.Repeat("\n", min(len(new), 1))
+	}
 	f.call(session, path, repository, repoPath, days, "Edit", map[string]any{"file_path": path, "old_string": old, "new_string": new}, countLines(new), countLines(old))
 }
 
@@ -170,7 +193,7 @@ func (f *outcomeFixture) labels() map[string][3]string {
 func TestSessionOutcomeLabels(t *testing.T) {
 	f := newOutcomeFixture(t)
 	for _, id := range []string{"research", "kept", "recent", "reworked", "reworker", "light", "light-later", "continued", "continuer", "slow", "slow-later",
-		"mirrored", "mirror", "tree-a", "tree-b", "rewritten", "rewriter", "opaque", "patched", "deleted", "deleter"} {
+		"mirrored", "mirror", "tree-a", "tree-b", "rewritten", "rewriter", "opaque", "inline", "patched", "deleted", "deleter"} {
 		f.session(id, "claude")
 	}
 	f.session("chat", "chatgpt-export")
@@ -211,8 +234,10 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	// Deleting a file removes every line it had.
 	f.edit("deleted", "/notes/gone.md", "", "", 60, "", code("gone", 0, 10))
 	f.call("deleter", "/notes/gone.md", "", "", 59, "apply_patch", map[string]any{"patch": "*** Begin Patch\n*** Delete File: /notes/gone.md\n*** End Patch"}, 0, 0)
-	// An edit whose input was not recorded cannot be judged.
+	// An edit whose input was not recorded cannot be judged, nor one that
+	// changed only parts of lines.
 	f.call("opaque", "/notes/opaque.md", "", "", 60, "Edit", nil, 3, 0)
+	f.call("inline", "/notes/inline.md", "", "", 60, "Edit", map[string]any{"file_path": "/notes/inline.md", "old_string": "originalValue", "new_string": "replacementValue"}, 1, 1)
 	f.refresh()
 	labels := f.labels()
 	for id, want := range map[string]string{
@@ -232,6 +257,7 @@ func TestSessionOutcomeLabels(t *testing.T) {
 		"continued": "1 file changed; no later session removed its lines within 14 days (transcript).",
 		"rewritten": "Later sessions removed 8 of the 10 lines it added within 14 days (transcript).",
 		"opaque":    "1 file changed; its edits could not be read line by line, so rework was not judged (transcript).",
+		"inline":    "1 file changed; its edits could not be read line by line, so rework was not judged (transcript).",
 		"recent":    "1 file changed; rework can be judged after " + time.Now().UTC().Add(13*24*time.Hour).Format("2006-01-02") + " (transcript).",
 	} {
 		if labels[id][1] != want {
@@ -325,17 +351,33 @@ func TestReadEditChanges(t *testing.T) {
 		}
 	}
 	// Short lines say nothing; a line both removed and added only moved.
-	change := one(map[string]any{"file_path": "/a.go", "old_string": "\tif done {\n\t\treturn total\n\t}", "new_string": "\tif done {\n\t\treturn total + 1\n\t}\n// counted twice"}, "/a.go")
-	if change.Rewrite {
+	change := one(map[string]any{"file_path": "/a.go", "old_string": "\tif done {\n\t\treturn total\n\t}", "new_string": "\tif done {\n\t\treturn total + 1\n\t\t// counted twice\n\t}"}, "/a.go")
+	if change.Rewrite || change.Partial {
 		t.Fatalf("edit: %+v", change)
 	}
 	same("edit added", change.Added, "return total + 1\n// counted twice")
 	same("edit removed", change.Removed, "return total")
+	// A replacement may start or end inside a line: a changed line there is
+	// left out, unless a newline shows where it starts or ends.
+	change = one(map[string]any{"file_path": "/a.go", "old_string": "total := originalValue", "new_string": "total := replacementValue"}, "/a.go")
+	if !change.Partial || len(change.Added) != 0 || len(change.Removed) != 0 {
+		t.Fatalf("an edit inside a line: %+v", change)
+	}
+	change = one(map[string]any{"file_path": "/a.go", "old_string": "first := originalValue\n\tmiddle := originalValue\n\tlast := originalValue",
+		"new_string": "first := replacementValue\n\tmiddle := replacementValue\n\tlast := replacementValue"}, "/a.go")
+	same("between edges added", change.Added, "middle := replacementValue")
+	same("between edges removed", change.Removed, "middle := originalValue")
+	change = one(map[string]any{"file_path": "/a.go", "old_string": "}\n\tfirst := originalValue\n", "new_string": "}\n\tfirst := replacementValue\n"}, "/a.go")
+	same("whole line added", change.Added, "first := replacementValue")
 
 	change = one(map[string]any{"file_path": "/a.go", "edits": []any{map[string]any{"old_string": "first line here", "new_string": "first line there"}, map[string]any{"old_string": "", "new_string": "another line"}}}, "/a.go")
-	same("multi-edit added", change.Added, "first line there\nanother line")
-	change = one(map[string]any{"TargetFile": "/a.go", "TargetContent": "the old content", "ReplacementContent": "the new content"}, "/a.go")
+	same("multi-edit added", change.Added, "another line")
+	change = one(map[string]any{"TargetFile": "/a.go", "TargetContent": "\nthe old content\n", "ReplacementContent": "\nthe new content\n"}, "/a.go")
 	same("antigravity removed", change.Removed, "the old content")
+	change = one(map[string]any{"TargetFile": "/a.go", "ReplacementChunks": []any{map[string]any{"TargetContent": "\nthe old content\n", "ReplacementContent": "\n"},
+		map[string]any{"TargetContent": "\nother old content\n", "ReplacementContent": "\nother new content\n"}}}, "/a.go")
+	same("antigravity batch removed", change.Removed, "the old content\nother old content")
+	same("antigravity batch added", change.Added, "other new content")
 	change = one(map[string]any{"file_path": "/a.go", "content": "package main\nfunc main() {}"}, "/a.go")
 	if !change.Rewrite {
 		t.Fatalf("write: %+v", change)
@@ -367,7 +409,9 @@ func TestReadEditChanges(t *testing.T) {
 	if edits := read(patch, "/elsewhere/x.go"); len(edits) != 1 || edits[0].Path != "/repo/src/b.go" {
 		t.Fatalf("a patch not naming the call's file: %+v", edits)
 	}
-	if edits := read(map[string]any{"changes": []any{map[string]any{"kind": "update", "path": "/a.go"}}}, "/a.go"); len(edits) != 0 {
+	// A list of changed files names its files, without their lines.
+	if edits := read(map[string]any{"changes": []any{map[string]any{"kind": "update", "path": "/a.go"}, map[string]any{"kind": "add", "path": "/b.go"}}}, ""); len(edits) != 2 ||
+		edits[0].Path != "/a.go" || edits[1].Path != "/b.go" || edits[0].Change.Added != nil {
 		t.Fatalf("a change without its lines: %+v", edits)
 	}
 }

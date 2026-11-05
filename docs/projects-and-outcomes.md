@@ -147,9 +147,13 @@ a Conductor workspace. Its delegated agents' calls are its own.
 - **Files changed.** Each file a successful edit call changed, read from
   `tool_calls` (Claude Code's Edit, Write and MultiEdit, Codex's
   `apply_patch`, Antigravity's edits). The ledger keeps one path per call,
-  so a patch's other files are read from the patch itself and placed the
-  way the ledger places paths. Files in temporary directories and
-  the agent's own home (plans, memory) are left out. A file in a repository
+  so a patch's files are read from the patch itself and placed the way the
+  ledger places paths, each on its own: a patch whose first file is scratch
+  still changes its other files, and a patch in a Codex code-mode script,
+  which the ledger finds no path for, changes the files it names. An older
+  Codex patch that lists its files without their lines changes those files.
+  Files in temporary directories and the agent's own home (plans, memory)
+  are left out. A file in a repository
   is identified by repository and repository-relative path, so every
   checkout and worktree of a repository shares it; any other file by its
   absolute path. Lines added and removed come from the ledger; Antigravity
@@ -169,6 +173,13 @@ a Conductor workspace. Its delegated agents' calls are its own.
     old and new text, a Write's whole file, a patch's `-` and `+` lines. A
     patch that deletes a file removes all its lines, and a later Write
     removes whatever of the session's lines the new file no longer has.
+  - An Edit's text (and Antigravity's, batches included) can start or end
+    inside a line, and part of a line never matches the whole line another
+    session adds or removes. So a changed first or last line of a
+    replacement is left out, unless a newline in the text shows where it
+    starts or ends; the lines between are whole. On the real library 2% of
+    Claude Code's edits are a single line and 18% change their first or
+    last line. A file only such edits changed is not judged.
   - A line removed and added again (moved or reindented) is unchanged, and
     only lines of 8 or more characters, trimmed, count, so a brace or a
     blank line says nothing.
@@ -177,7 +188,8 @@ a Conductor workspace. Its delegated agents' calls are its own.
     workspace's edits and is never rework. When a workspace becomes or stops
     being a mirror, the sessions sharing its files are judged again.
   - A session whose edits cannot be read line by line (an input the
-    transcript did not keep) is not judged, and its "why" says so.
+    transcript did not keep, or only parts of lines) is not judged, and its
+    "why" says so.
 
   Editing the same files again is not rework: continued work on a file
   usually adds to it. The calibration is under
