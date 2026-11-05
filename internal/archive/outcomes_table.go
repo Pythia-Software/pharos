@@ -27,7 +27,7 @@ func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.id workspace_id,w.title,w.source_kind,w.activity_at,
 			`+projectNameSQL("w")+` project_name,`+projectKindSQL("w")+` project_kind,
 			CASE WHEN `+projectKindSQL("w")+`='repository' THEN NULLIF(TRIM(COALESCE(w.branch,'')),'') END branch,
-			label outcome_label,`+outcomeEvidenceTierSQL("w")+` evidence_tier,`+gitCheckSQL("w")+` git_check,
+			label outcome_label,`+outcomeEvidenceTierSQL("w")+` evidence_tier,`+gitCheckSQL("w")+` git_check,`+gitCheckReasonSQL("w")+` git_check_reason,
 			CASE WHEN label IN `+outcomeKeptLabels+` THEN 1 ELSE 0 END kept_change,
 			so.files_changed,so.lines_added,so.lines_removed,so.kept_lines,so.rework_removed_lines,so.first_edit_at,
 			(SELECT sg.linked_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') linked_commits,

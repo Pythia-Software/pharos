@@ -1390,10 +1390,12 @@ function OutcomesSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("outcomes", where, outcomeSummaryMetrics);
   const value = (id: string) => Number(metricBuckets(result, id)[0]?.value) || 0;
   const sessions = value("sessions"), kept = value("kept"), keptLines = value("kept_lines");
+  // A sum of no priced usage is unknown, not $0.
+  const cost = metricBuckets(result, "cost")[0]?.value;
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}</span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Outcomes summary" aria-busy={result.loading}>
     {card("Sessions", sessions.toLocaleString(), "counted at their start")}
-    {card("API cost", formatUSD(value("cost")), "list-price equivalent; unpriced usage excluded")}
+    {card("API cost", cost == null && sessions ? "Unpriced" : formatUSD(Number(cost) || 0), "list-price equivalent; unpriced usage excluded")}
     {card("Kept changes", sessions ? outcomePercent(kept / sessions) : "—", `${kept.toLocaleString()} sessions landed, committed, or changed and kept`)}
     {card("Rework rate", keptLines ? outcomePercent(value("rework") / keptLines) : "—", keptLines ? `of ${compactNumber(keptLines)} kept lines, removed by later sessions` : "no kept lines recorded")}
   </div>;
@@ -1431,7 +1433,10 @@ function OutcomesDashboard() {
         format={row => [outcomePercent(row.ratio), row.denominator ? `of ${compactNumber(row.denominator)} kept lines` : "no kept lines"]} />
       <OutcomeRatioPanel title="Cost per kept change by model" where={where} clauses={outcomeKeptCostMetrics} breakdown="model_family" empty="No session recorded usage."
         note="Each main model's sessions' whole cost, over those whose changes were kept."
-        format={row => [row.ratio == null ? "—" : formatUSD(row.ratio), row.denominator ? `${row.denominator.toLocaleString()} kept · ${formatUSD(row.numerator)} total` : `no kept change · ${formatUSD(row.numerator)} total`]} />
+        format={row => {
+          const total = row.numerator == null ? "unpriced" : `${formatUSD(row.numerator)} total`;
+          return [row.ratio != null ? formatUSD(row.ratio) : row.numerator == null && row.denominator ? "Unpriced" : "—", row.denominator ? `${row.denominator.toLocaleString()} kept · ${total}` : `no kept change · ${total}`];
+        }} />
       <OutcomeCoveragePanel where={where} />
     </div>} />;
 }
