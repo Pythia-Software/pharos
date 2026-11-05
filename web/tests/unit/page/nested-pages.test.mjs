@@ -124,17 +124,17 @@ test("navigation groups preserve each section's choices independently of their d
   assert.equal(isNavigationSectionExpanded(reopened.findings, "findings"), false);
   assert.deepEqual(initial, {}, "toggles do not mutate earlier state");
   assert.equal(isNavigationSectionExpanded(closed.analyze, "query"), false);
-  const nested = toggleNavigationSection(reopened, 'analyze', 'dashboards:people');
+  const nested = toggleNavigationSection(reopened, 'analyze', 'dashboard-group:people');
   const parentClosed = toggleNavigationSection(nested, 'analyze', 'dashboards');
   const parentReopened = toggleNavigationSection(parentClosed, 'analyze', 'dashboards');
-  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboards:people'), false);
-  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboards:agents'), true);
+  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboard-group:people'), false);
+  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboard-group:agents'), true);
   assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboards'), true);
-  assert.equal(isNavigationSectionExpanded({}, 'dashboards:people', false), false);
-  assert.equal(isNavigationSectionExpanded({}, 'dashboards:outcomes', true), true);
-  const opened = toggleNavigationSection({}, 'analyze', 'dashboards:people', false);
-  assert.equal(isNavigationSectionExpanded(opened.analyze, 'dashboards:people', false), true);
-  assert.equal(isNavigationSectionExpanded(nested.analyze, 'dashboards:people', true), false, 'explicit choices override the current-page default');
+  assert.equal(isNavigationSectionExpanded({}, 'dashboard-group:people', false), false);
+  assert.equal(isNavigationSectionExpanded({}, 'dashboard-group:outcomes', true), true);
+  const opened = toggleNavigationSection({}, 'analyze', 'dashboard-group:people', false);
+  assert.equal(isNavigationSectionExpanded(opened.analyze, 'dashboard-group:people', false), true);
+  assert.equal(isNavigationSectionExpanded(nested.analyze, 'dashboard-group:people', true), false, 'explicit choices override the current-page default');
 });
 
 test("local page navigation preserves the complete destination and browser link semantics", () => {
@@ -156,7 +156,7 @@ test("local page navigation preserves the complete destination and browser link 
 test('sidebar presentation updates keep the picker open while page and query changes close it', () => {
   const base = 'https://pharos.test/analyze?analyze_topic=tokens';
   const presentation = new URL(base);
-  presentation.searchParams.set('nav_expanded', JSON.stringify({analyze:{'dashboards:outcomes':false}}));
+  presentation.searchParams.set('nav_expanded', JSON.stringify({analyze:{'dashboard-group:outcomes':false}}));
   presentation.searchParams.set('nav_collapsed', 'false');
   assert.equal(navigationPageURL(presentation.href), navigationPageURL(base));
   for (const destination of ['/settings', '/analyze?analyze_topic=human', '/analyze?analyze_topic=tokens&analyze_days=7', '/analyze?analyze_topic=tokens#chart']) {

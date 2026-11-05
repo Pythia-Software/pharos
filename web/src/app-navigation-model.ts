@@ -28,14 +28,16 @@ const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
-  tokens: "Outcomes", carbon: "Outcomes",
+  tokens: "Outcomes", carbon: "Outcomes", outcomes: "Outcomes",
 };
 
 // Preview pages (agent-events-flag.ts) are listed only when turned on.
 export function analyzePages(params: URLSearchParams, previews = agentEventsEnabled()): NestedPage[] {
   return [
     { id: "dashboards", label: "Dashboards", children: (["People", "Agents", "Outcomes"] as const).map(label => ({
-      id: `dashboards:${label.toLowerCase()}`, label,
+      // A group's id differs from its dashboards' (dashboards:<topic>): the
+      // Outcomes group holds the Outcomes dashboard.
+      id: `dashboard-group:${label.toLowerCase()}`, label,
       children: Object.entries(usageTopics).filter(([topic]) => dashboardGroups[topic as UsageTopic] === label && (previews || !agentEventTopics.has(topic)))
         .map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode: "dashboards", topic: topic as UsageTopic, report: "" }, params) })),
     })) },
