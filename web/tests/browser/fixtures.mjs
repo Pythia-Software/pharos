@@ -680,7 +680,7 @@ export const defaultApi = {
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
-  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
+  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),

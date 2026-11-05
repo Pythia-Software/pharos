@@ -16,6 +16,10 @@ import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
+const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
+  unpriced_models: [{ model: 'unpriced-preview-model-with-a-long-reported-name', tokens: 5000 }],
+  prompt: 'Research unpriced-preview-model-with-a-long-reported-name.\nEdit pricing/cost_changes.json with sourced prices.' };
+
 const markdownLinkText = `## Implementation links
 
 [GitHub pull request](https://github.com/gbdubs/pharos/pull/42) · [Project documentation](https://example.com/docs)
@@ -374,6 +378,7 @@ const ROUTES = [
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
   { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}`,
+    api: { 'GET /api/pricing': missingPrices },
     ready: '.usage-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") },
   { name: "Analyze workspace custom intervals", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "hours", hours: 6, rollingPeriods: 37 }))}`, ready: ".usage-dashboard .usage-period-custom input" },
@@ -1212,6 +1217,39 @@ test("Older card dashboard restores durable sources before rendering", { skip },
   await page.getByRole('combobox', { name: 'View', exact: true }).waitFor();
   assert.equal(await page.getByRole('combobox', { name: 'View', exact: true }).inputValue(), 'scatter');
   await app.settled();
+});
+
+test('Tokens and Cost keeps missing pricing actionable across refresh, chart views and reload', { skip }, async t => {
+  let pricing = defaultApi['GET /api/pricing'];
+  const app = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-query-destinations a',
+    api: { 'GET /api/pricing': () => pricing } });
+  const { page, settled } = app;
+  const notice = page.getByRole('region', { name: 'Missing model prices' });
+  await settled();
+  assert.equal(await notice.count(), 0);
+  pricing = missingPrices;
+  const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
+  await refresh.focus();
+  await refresh.press('Enter');
+  await notice.waitFor();
+  assert.ok(await refresh.evaluate(element => document.activeElement === element), 'loading pricing moved focus');
+  await page.evaluate(() => { window.pharosCopyText = async text => { window.copiedPricingPrompt = text; }; });
+  await notice.getByRole('button', { name: 'Copy refresh prices prompt' }).click();
+  await notice.getByRole('status').waitFor();
+  assert.equal(await page.evaluate(() => window.copiedPricingPrompt), missingPrices.prompt);
+  await notice.locator('summary').click();
+  const prompt = page.getByRole('textbox', { name: 'Pricing refresh prompt' });
+  assert.equal(await prompt.inputValue(), missingPrices.prompt);
+  await page.reload();
+  await prompt.waitFor();
+  assert.equal(await prompt.inputValue(), missingPrices.prompt, 'the expanded prompt restores after reload');
+  await page.getByRole('combobox', { name: 'View', exact: true }).selectOption('compare');
+  await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();
+  assert.ok(await notice.isVisible(), 'comparison views keep the pricing notice');
+  pricing = defaultApi['GET /api/pricing'];
+  await refresh.click();
+  await notice.waitFor({ state: 'hidden' });
+  await settled();
 });
 
 test('Older card dashboard restoration cannot overwrite a later route', { skip }, async t => {

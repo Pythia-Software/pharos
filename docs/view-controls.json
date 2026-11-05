@@ -6410,6 +6410,35 @@
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
     },
     {
+      "key": "26f74b7cb0ed5e94:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"tokens.pricing-prompt\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "352f14ea9b260a3e:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "button",
+      "control": "onClick={() => void copyPrompt()}",
+      "contract": "action",
+      "reason": "Copies the generated pricing research prompt to the clipboard; does not change the content view or dismiss missing prices."
+    },
+    {
+      "key": "5613c684de087e62:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "textarea",
+      "control": "aria-label=\"Pricing refresh prompt\" value={pricing?.prompt ?? \"\"}",
+      "contract": "action",
+      "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
+    },
+    {
       "key": "502369976da84683:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
