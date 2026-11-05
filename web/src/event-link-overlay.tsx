@@ -38,8 +38,9 @@ export function EventLinkCard({events,href,close}:{events:AgentEventLink[];href?
 
 /** An event on a ribbon: x and its target's x in [0, 1] of the ribbon's width. */
 export type PlacedEvent={event:AgentEventLink;x:number;targetX:number|null;offRibbon:boolean};
-export function placeEvents(events:AgentEventLink[],position:(id:string)=>number|null,targetPosition=position):PlacedEvent[]{
- return events.flatMap(e=>{const x=position(e.message_id);if(x===null)return [];const t=linkedTarget(e),tx=t?targetPosition(t.message_id!):null;return [{event:e,x,targetX:t?Math.max(0,tx??0):null,offRibbon:!!t&&tx===null}];});
+/** position gives an event's x and targetPosition its target's, in [0, 1] (null when off the ribbon). */
+export function placeEvents(events:AgentEventLink[],position:(e:AgentEventLink)=>number|null,targetPosition:(e:AgentEventLink)=>number|null=e=>{const t=linkedTarget(e);return t?position({...e,message_id:t.message_id!}):null;}):PlacedEvent[]{
+ return events.flatMap(e=>{const x=position(e);if(x===null)return [];const t=linkedTarget(e),tx=t?targetPosition(e):null;return [{event:e,x,targetX:t?Math.max(0,tx??0):null,offRibbon:!!t&&tx===null}];});
 }
 /** Arcs and markers in the ribbon's pixels (event-link-layout.ts). */
 export function eventLayout(placed:PlacedEvent[],width:number,height:number,marker=3.2):EventLayout|null{

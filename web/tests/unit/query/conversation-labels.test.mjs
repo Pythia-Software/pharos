@@ -38,7 +38,7 @@ import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon} from '../../../src/conversation-fingerprint-model.ts';
 
-import {sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
 import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
@@ -343,6 +343,8 @@ test('session ribbons decompose agent events by group and kind beside tool actio
  const tree=sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events);
  const node=tree.children.find(child=>child.id==='events');
  assert.equal(node.title,'Agent events');
+ const ordered=sessionRibbonTree([reply,later],[{start:12,end:13,end_known:true,name:'Read',category:'read',count:1,error:false}],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events).children.map(child=>child.title);
+ assert.deepEqual(ordered,['Message modes','Agent events','Tool actions'],'Agent events come before Tool actions');
  assert.deepEqual(node.children.map(child=>[child.title,ribbonEventCount(child.items)]),[['Friction',2],['Learning',1]]);
  assert.deepEqual(node.children[0].children.map(child=>[child.title,child.children.length]),[['Obstacle',2]]);
  // The whole session still counts its two messages, not the events said in them.
@@ -350,4 +352,24 @@ test('session ribbons decompose agent events by group and kind beside tool actio
  assert.equal(ribbonCounts(node.items).events,3);
  // Outside the window an event is not shown.
  assert.equal(sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[20,40],true,false,undefined,undefined,events).children.find(child=>child.id==='events').items.length,1);
+});
+
+test('agent events sit at their sentence\'s share of the message span, as message-mode text parts do',()=>{
+ const at=n=>new Date(n).toISOString();
+ // Thinking takes the time before it ([0, 100]); a reply the time after it ([100, 300]).
+ const prompt=message('prompt','P.request',{role:'user',at:at(0)}),thinking=message('think','C.deliberation',{kind:'thinking',at:at(100)}),reply=message('reply','C.report',{at:at(100)}),next=message('next','P.request',{role:'user',at:at(300)});
+ const event=(id,messageID,position,target=null)=>({id,message_id:messageID,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'s',target,position});
+ const clock=agentEventClock([prompt,thinking,reply,next],[]);
+ assert.equal(clock.at(event('a','think',.25)),25,'a quarter into the thinking');
+ assert.equal(clock.at(event('b','think',1)),100);
+ assert.equal(clock.at(event('c','reply',.5)),200,'half way through the reply');
+ assert.equal(clock.at(event('d','think')),100,'no recorded share stays at the message time');
+ assert.equal(clock.at(event('e','next',.9)),300,'a message with no duration stays at its time');
+ assert.equal(clock.at(event('f','elsewhere',.5)),null);
+ assert.equal(clock.targetAt(event('g','reply',.5,{method:'quote',message_id:'think',position:.5})),50,'the arc target uses the quoted text\'s share too');
+ assert.equal(clock.targetAt(event('h','reply',.5,{method:'quote',message_id:'other-session',at:at(42)})),42,'a target in another session uses its own time');
+ assert.equal(textTime({start:0,end:100,at:100},2),100,'shares clamp to the span');
+ // The tree's event rows and the overlay share the clock.
+ const tree=sessionRibbonTree([prompt,thinking,reply,next],[],[],discoveryTaxonomy,[0,400],true,false,undefined,undefined,[event('a','think',.25),event('c','reply',.5)]);
+ assert.deepEqual(tree.children.find(child=>child.id==='events').items.map(item=>item.start).sort((x,y)=>x-y),[25,200]);
 });

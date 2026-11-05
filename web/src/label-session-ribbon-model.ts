@@ -30,6 +30,27 @@ export function labelIntervals(messages:LabelMessage[],marks:ActivityMark[],maxG
  return messages.flatMap(message=>{const at=eventTime(message);if(at===null)return [];const i=positions.get(at)!,neighbor=isThinking(message)?boundaries[i-1]:boundaries[i+1],spanning=neighbor!==undefined&&Math.abs(neighbor-at)<=maxGap;return [{message,start:spanning?Math.min(at,neighbor):at,end:spanning?Math.max(at,neighbor):at,attribution:spanning?(isThinking(message)?'preceding':'following'):'instant'} as const];});
 }
 
+/** Where a share of a message's text falls in time: the message's span on
+ * the ribbon (labelIntervals), start + share × duration, the mapping its
+ * text-origin parts use. A message with no duration, or a share that was not
+ * recorded, stays at the message's own time. */
+export function textTime(span:{start:number;end:number;at:number},share?:number|null){
+ return share==null||!Number.isFinite(share)||span.end<=span.start?span.at:span.start+(span.end-span.start)*Math.max(0,Math.min(1,share));
+}
+/** Times for agent events on a session's clock: each event at its sentence's
+ * share of its message (AgentEventLink.position), and each target at its
+ * quoted text's share of the target message, so events spread through the
+ * message the way its message modes do instead of piling at one end. A
+ * target outside these messages (another session's) uses its own time. */
+export function agentEventClock(messages:LabelMessage[],marks:ActivityMark[],neighbors=messages){
+ const spans=new Map(labelIntervals(messages,marks,30*60*1000,neighbors).map(({message,start,end})=>[message.id,{start,end,at:eventTime(message)!}]));
+ for(const m of neighbors)if(!spans.has(m.id)){const at=eventTime(m);if(at!==null)spans.set(m.id,{start:at,end:at,at});}
+ return {
+  at:(e:AgentEventLink)=>{const span=spans.get(e.message_id);return span?textTime(span,e.position):null;},
+  targetAt:(e:AgentEventLink)=>{const t=e.target;if(!t?.message_id)return null;const span=spans.get(t.message_id);if(span)return textTime(span,t.position);const at=t.at?Date.parse(t.at):NaN;return Number.isFinite(at)?at:null;},
+ };
+}
+
 /** The same origin run owns its texture, hover excerpt and drill-down span. */
 export function ribbonOriginParts(item:RibbonObservation):RibbonObservation[]{
  if(!item.message)return [];
@@ -68,10 +89,11 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
  const authorship=group('authorship','Text origin',originMessages);
  // Agent events decompose like Tool actions: group, then kind, then each event.
  // They draw through the event overlay (shapes and arcs), not as ribbon glyphs.
- const times=new Map<string,number>();for(const m of [...neighbors,...messages]){const at=m.at?Date.parse(m.at):NaN;if(Number.isFinite(at))times.set(m.id,at);}
- const eventItems:RibbonObservation[]=events.flatMap(e=>{const at=times.get(e.message_id);return at===undefined||at<range[0]||at>range[1]?[]:[{id:JSON.stringify(['event',e.id]),start:at,end:at,title:e.label,color:eventColor(e.group),thinking:e.source==='thinking',event:e}];});
+ const clock=agentEventClock(messages,boundaryMarks,neighbors);
+ const eventItems:RibbonObservation[]=events.flatMap(e=>{const at=clock.at(e);return at===null||at<range[0]||at>range[1]?[]:[{id:JSON.stringify(['event',e.id]),start:at,end:at,title:e.label,color:eventColor(e.group),thinking:e.source==='thinking',event:e}];});
  const eventNode=group('events','Agent events',EVENT_GROUPS.flatMap(g=>{const items=eventItems.filter(item=>eventGroup(item.event!.group).key===g.key);if(!items.length)return [];const kinds=[...new Set(items.map(item=>item.title))];return [{id:'events:'+g.key,title:g.short,items,children:kinds.map(kind=>{const found=items.filter(item=>item.title===kind),id='events:'+g.key+':'+kind;return group(id,kind,found.map(item=>({id:id+':'+item.event!.id,title:item.event!.sentence,items:[item],children:[]})));})}];}));
- return group('session','Session',[labelNode,authorship,activityNode,eventNode].filter(node=>node.items.length));
+ // Agent events come before Tool actions: they read with the message modes they sit in.
+ return group('session','Session',[labelNode,authorship,eventNode,activityNode].filter(node=>node.items.length));
 }
 /** Count a retained event once even if it has labels, origin runs and a tool glyph. */
 export function ribbonEventCount(items:RibbonObservation[]){

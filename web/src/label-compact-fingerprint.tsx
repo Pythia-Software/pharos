@@ -23,7 +23,7 @@ export function CompactFingerprint({conversation,taxonomy=emptyTaxonomy,stretch=
  const tokens=useMemo(()=>conversationRibbon(conversation),[conversation]),breakdowns=useMemo(()=>tokens.map(token=>ribbonSegment(token.messages,taxonomy)),[tokens,taxonomy]),weights=ribbonWeights(tokens),positions=useMemo(()=>fingerprintMessagePositions(tokens),[tokens]),total=weights.reduce((a,b)=>a+b,0)||1,inspector=useRibbonInspector({interactive:true}),clip='ribbon'+useId().replace(/:/g,''),hatch=clip+'hatch';let cursor=0,seen=0;
  const box=useRef<HTMLDivElement>(null),size=useBoxSize(box);
  const segments=tokens.map((token,i)=>{const width=weights[i]/total*320,x=cursor,first=seen+1;cursor+=width;seen+=token.count;return {token,i,width,x,first,last:seen};}),envelopes=parallelEnvelopes(segments);
- const placed=useMemo(()=>placeEvents(events,id=>positions.get(id)??null),[events,positions]),layout=useMemo(()=>eventLayout(placed,size.width,size.height,3),[placed,size.width,size.height]);
+ const placed=useMemo(()=>placeEvents(events,e=>positions.get(e.message_id)??null),[events,positions]),layout=useMemo(()=>eventLayout(placed,size.width,size.height,3),[placed,size.width,size.height]);
  const targets=useMemo(()=>eventHitTargets(layout),[layout]),byID=useMemo(()=>new Map(placed.map(p=>[p.event.id,p.event])),[placed]);
  const segmentCard=(i:number)=>{const s=segments[i];return <SegmentCard token={s.token} breakdown={breakdowns[i]} taxonomy={taxonomy} first={s.first} last={s.last} total={conversation.messages.length}/>;};
  const eventHit=(list:AgentEventLink[],focus:EventLinkFocus):RibbonHit=>({card:pinned=>pinned?<EventLinkCard events={list} href={eventHref} close={inspector.close}/>:<EventLinkCard events={list}/>,hover:()=>setEventLinkFocus(focus)});

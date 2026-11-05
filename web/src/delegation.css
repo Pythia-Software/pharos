@@ -1097,11 +1097,11 @@
 .delegation-parallel.is-recursive .delegation-axis>.lt-axis-names{padding:0;display:grid;grid-template-columns:var(--lt-execution,175px) var(--lt-events,165px);align-items:center}.lt-axis-names>span{padding-left:8px;font-weight:400}
 
 /* Labels are filled fields; tools are dots on rails in secondary and tertiary
-   hues (orange, purple, cyan, pink, magenta for errors, muted olive and slate),
+   hues (orange, purple, cyan, pink, magenta for errors, muted teal and mauve),
    leaving the primaries to agent events (ui.py --event-*). Error is magenta, not
    red, so it never reads as friction. web/tests/unit/delegation/timeline-palette.test.mjs
    checks the separations in both themes. */
-.lt-session-tree,.delegation-parallel.is-recursive,.lt-ribbon-inspector{--activity-read:#ff9a3c;--activity-write:#a43ff0;--activity-run:#17b3c4;--activity-git:#7a7a52;--activity-network:#5f6f9a;--activity-delegate:#f27fc0;--activity-wait:#8d818f;--activity-poll:#7b858a;--activity-other:#857b6e;--activity-model:#968ba0;--activity-error:#e0198f}
+.lt-session-tree,.delegation-parallel.is-recursive,.lt-ribbon-inspector{--activity-read:#ff9a3c;--activity-write:#a43ff0;--activity-run:#17b3c4;--activity-git:#4f7f86;--activity-network:#9a6f8c;--activity-delegate:#f27fc0;--activity-wait:#8d818f;--activity-poll:#7b858a;--activity-other:#857b6e;--activity-model:#968ba0;--activity-error:#e0198f}
 .lt-session-row-label .app-icon{width:11px;height:11px;flex:none;color:var(--muted)}
 .lt-session-row-label>i{height:6px;width:6px;flex:none}
 

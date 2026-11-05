@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -156,5 +157,12 @@ func TestAgentEventTargetsServedToViews(t *testing.T) {
 	events, _ := body["agent_events"].([]any)
 	if len(events) != 1 || events[0].(map[string]any)["target"].(map[string]any)["message_id"] != "m1" {
 		t.Fatalf("fingerprint events = %#v", body["agent_events"])
+	}
+	// Positions are byte shares of each message, so the timeline can place
+	// an event, and its arc's target, inside the message's span.
+	served := events[0].(map[string]any)
+	quote := float64(strings.Index(prompt, "drawer only")) / float64(len(prompt))
+	if served["position"] != 0.0 || math.Abs(served["target"].(map[string]any)["position"].(float64)-quote) > 1e-4 {
+		t.Fatalf("positions = %v, target %v; want 0 and %.4f", served["position"], served["target"].(map[string]any)["position"], quote)
 	}
 }

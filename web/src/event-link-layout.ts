@@ -32,8 +32,10 @@
 //     pointing at the caller's prompt) ends its arc at the target's x with an
 //     off-row anchor, and hovering bands both ends across every row.
 import {laneCandidates,laneMark,placeMarks,type MarkInput,type PlacedMark} from './ribbon-marks';
-export type EventTarget={method:'quote'|'overlap'|'file';message_id?:string;role?:string;kind?:string;start?:number;end?:number;text?:string;strong?:boolean;shared?:string[];score?:number;files?:string[];at?:string|null};
-export type AgentEventLink={id:string;message_id:string;kind:string;label:string;group:string;probability:number;source:string;sentence:string;target:EventTarget|null};
+/** position: how far into its message (a byte share in [0, 1]) the quoted text starts. */
+export type EventTarget={method:'quote'|'overlap'|'file';message_id?:string;role?:string;kind?:string;start?:number;end?:number;text?:string;strong?:boolean;shared?:string[];score?:number;files?:string[];at?:string|null;position?:number};
+/** position: how far into its message (a byte share in [0, 1]) the event's sentence starts. */
+export type AgentEventLink={id:string;message_id:string;kind:string;label:string;group:string;probability:number;source:string;sentence:string;target:EventTarget|null;position?:number};
 export type EventShape='up'|'down'|'diamond'|'square';
 // Event groups in the reader's fixed order (reader-model.js EVENT_GROUPS),
 // each with a shape so group never rests on colour alone.

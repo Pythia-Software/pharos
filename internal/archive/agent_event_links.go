@@ -53,6 +53,7 @@ const agentEventOverlapScore = 4.0
 type eventLinkMessage struct {
 	ID, Role, Kind, Text string
 	At                   any // created_at, for the timeline
+	Bytes                int // the whole text's length, for position
 }
 
 type eventLinkEvent struct {
@@ -435,7 +436,8 @@ func (c *Catalog) agentEventLinks(ctx context.Context, conversationID string) ([
 	if err := c.reader().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='agent_events'").Scan(&tables); err != nil || tables == 0 {
 		return nil, err
 	}
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT 'e'||e.id id,e.message_id,e.family,e.probability,e.source,e.sentence,e.subject,e.response,e.sentence_start
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT 'e'||e.id id,e.message_id,e.family,e.probability,e.source,e.sentence,e.subject,e.response,e.sentence_start,
+		(SELECT length(CAST(m.text AS BLOB)) FROM messages m WHERE m.id=e.message_id) message_bytes
 		FROM agent_events e WHERE e.conversation_id=? AND e.probability>=? ORDER BY e.message_id,e.sentence_start,e.probability DESC`, conversationID, agentEventThreshold)
 	if err != nil || len(rows) == 0 {
 		return nil, err
@@ -450,25 +452,35 @@ func (c *Catalog) agentEventLinks(ctx context.Context, conversationID string) ([
 	}
 	messages := []eventLinkMessage{}
 	if twoSided {
-		list, err := queryMapsContext(ctx, c.reader(), `SELECT id,role,kind,created_at,substr(text,1,?) text FROM messages
+		list, err := queryMapsContext(ctx, c.reader(), `SELECT id,role,kind,created_at,substr(text,1,?) text,length(CAST(text AS BLOB)) bytes FROM messages
 			WHERE conversation_id=? AND kind IN ('message','reasoning','thinking')
 			ORDER BY source_order IS NULL,source_order,created_at IS NULL,created_at,id`, agentEventLinkTextLimit, conversationID)
 		if err != nil {
 			return nil, err
 		}
 		for _, m := range list {
-			messages = append(messages, eventLinkMessage{ID: firstString(m["id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]), Text: firstString(m["text"]), At: m["created_at"]})
+			messages = append(messages, eventLinkMessage{ID: firstString(m["id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]), Text: firstString(m["text"]), At: m["created_at"], Bytes: int(integer(m["bytes"]))})
 		}
 	}
 	return agentEventLinkRows(rows, messages, events), nil
 }
 
+// agentEventPosition is how far into its message a byte offset sits, in
+// [0, 1]: the timeline places an event (and an arc's target) at that share
+// of the message's span, the way it places a message's text-origin parts.
+func agentEventPosition(offset, size int) (float64, bool) {
+	if size <= 0 || offset < 0 {
+		return 0, false
+	}
+	return math.Round(math.Min(1, float64(offset)/float64(size))*10000) / 10000, true
+}
+
 // agentEventLinkRows joins events with their targets for the views.
 func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, events []eventLinkEvent) []map[string]any {
 	targets := findAgentEventTargets(messages, events)
-	texts, times := make(map[string]string, len(messages)), make(map[string]any, len(messages))
+	texts, times, sizes := make(map[string]string, len(messages)), make(map[string]any, len(messages)), make(map[string]int, len(messages))
 	for _, m := range messages {
-		texts[m.ID], times[m.ID] = m.Text, m.At
+		texts[m.ID], times[m.ID], sizes[m.ID] = m.Text, m.At, m.Bytes
 	}
 	out := make([]map[string]any, 0, len(rows))
 	for i, row := range rows {
@@ -483,11 +495,21 @@ func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, even
 		}
 		target := agentEventTargetJSON(targets[events[i].ID], texts)
 		if target != nil && target["message_id"] != nil {
-			target["at"] = times[firstString(target["message_id"])]
+			id := firstString(target["message_id"])
+			target["at"] = times[id]
+			if t := targets[events[i].ID]; t != nil {
+				if position, ok := agentEventPosition(t.Start, sizes[id]); ok {
+					target["position"] = position
+				}
+			}
 		}
-		out = append(out, map[string]any{"id": events[i].ID, "message_id": events[i].MessageID, "kind": family.Key, "label": family.Label, "group": family.Group,
+		item := map[string]any{"id": events[i].ID, "message_id": events[i].MessageID, "kind": family.Key, "label": family.Label, "group": family.Group,
 			"probability": math.Round(probability*1000) / 1000, "source": firstString(row["source"]), "sentence": sentence,
-			"target": target})
+			"target": target}
+		if position, ok := agentEventPosition(int(integer(row["sentence_start"])), int(integer(row["message_bytes"]))); ok {
+			item["position"] = position
+		}
+		out = append(out, item)
 	}
 	return out
 }

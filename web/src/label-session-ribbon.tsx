@@ -5,7 +5,7 @@ import {useViewEntry} from './view-state';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
 import {timelinePreviewText} from './timeline-preview';
-import {ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
@@ -19,7 +19,7 @@ import {timeScale,type TimeScale} from './timeline-idle-model';
 // (an arrow at the left edge when the target is before the window), and
 // hovering an event bands its message and its target in every row, so a
 // subagent's event lines up with the caller's prompt it is about.
-type EventLayer={events:AgentEventLink[];position:(id:string)=>number|null;targetPosition:(id:string)=>number|null;href?:(e:AgentEventLink)=>string|null};
+type EventLayer={events:AgentEventLink[];position:(e:AgentEventLink)=>number|null;targetPosition:(e:AgentEventLink)=>number|null;href?:(e:AgentEventLink)=>string|null};
 
 type Props={scale?:TimeScale;events?:AgentEventLink[];eventHref?:(e:AgentEventLink)=>string|null;eventLayer?:EventLayer;outline?:string;branch?:TimelineSessionBranch;openSession?:()=>void;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
 const branchX=(depth:number)=>12+Math.min(depth,8)*12;
@@ -171,7 +171,7 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
  const ownEvents=node.id==='events'||node.id.startsWith('events:')?new Set(node.items.flatMap(item=>item.event?[item.event.id]:[])):null;
  const eventLayer=root?props.eventLayer:ownEvents&&props.eventLayer?{...props.eventLayer,events:props.eventLayer.events.filter(e=>ownEvents.has(e.id))}:undefined;
  const eventGlyph=ownEvents&&node.id!=='events'?node.items[0]?.event:undefined;
- const icon=node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
+ const icon=node.id==='events'?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
  const count=ribbonEventCount(node.items);
  const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}><span className="lt-session-caret">{node.children.length?'›':'·'}</span>{root?<strong className="lt-event-count">{count}</strong>:<>{eventGlyph?<EventGlyph group={eventGlyph.group}/>:icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{ownEvents?counts.events:counts.messages||counts.activity||counts.inferred}</small></>}</span>;
  const content=<>{identity}{label}<SessionRibbon node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;
@@ -185,11 +185,11 @@ export function RecursiveSessionRibbon(props:Props){
  const untimed=props.messages.filter(m=>!m.at||!Number.isFinite(Date.parse(m.at))).length;
  const eventLayer=useMemo(()=>{
   if(!props.events?.length)return undefined;
-  const times=new Map<string,number>();for(const m of [...(props.boundaryMessages??[]),...props.messages]){const at=m.at?Date.parse(m.at):NaN;if(Number.isFinite(at))times.set(m.id,at);}
-  for(const e of props.events){const at=e.target?.at?Date.parse(e.target.at):NaN;if(e.target?.message_id&&Number.isFinite(at)&&!times.has(e.target.message_id))times.set(e.target.message_id,at);}
-  const clock=props.scale??timeScale(props.range),fraction=(id:string)=>{const at=times.get(id);return at===undefined?null:at<props.range[0]?-1:at>props.range[1]?2:clock.fraction(at);};
-  return {events:props.events,position:(id:string)=>{const f=fraction(id);return f===null||f<0||f>1?null:f;},targetPosition:(id:string)=>{const f=fraction(id);return f===null||f<0?null:Math.min(1,f);},href:props.eventHref};
- },[props.events,props.messages,props.boundaryMessages,props.range[0],props.range[1],props.scale,props.eventHref]);
+  // The same clock the tree's event rows use: each event at its sentence's share of its message.
+  const times=agentEventClock(props.messages,props.boundaryMarks??props.marks,props.boundaryMessages??props.messages);
+  const clock=props.scale??timeScale(props.range),fraction=(at:number|null)=>at===null?null:at<props.range[0]?-1:at>props.range[1]?2:clock.fraction(at);
+  return {events:props.events,position:(e:AgentEventLink)=>{const f=fraction(times.at(e));return f===null||f<0||f>1?null:f;},targetPosition:(e:AgentEventLink)=>{const f=fraction(times.targetAt(e));return f===null||f<0?null:Math.min(1,f);},href:props.eventHref};
+ },[props.events,props.messages,props.boundaryMessages,props.boundaryMarks,props.marks,props.range[0],props.range[1],props.scale,props.eventHref]);
  props={...props,eventLayer};
  return <div className="lt-session-tree">{props.foldControl?<div className="lt-session-fold-anchor"><div className="lt-session-fold" style={{left:branchX(props.depth)-10}}>{props.foldControl}</div></div>:null}<RecursiveRibbonRow node={tree} props={props}/>{untimed?<small className="lt-session-untimed">{untimed} messages without timestamps cannot be placed on this clock.</small>:null}</div>;
 }

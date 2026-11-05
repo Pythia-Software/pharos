@@ -493,7 +493,38 @@ function messageEventView(message,text=eventText(message)){
   const view=events.filter(event=>fits(event.sentence)).map(event=>({id:event.id??null,target:event.target?.message_id?event.target:null,kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
     probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
     sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
-  return view.length?view:null;
+  return view.length?mergeEventSentences(view,text):null;
+}
+// Two events on near-identical sentences show as one mark: their sentences
+// merge into the span covering both, and the mark's popover lists every
+// label with the text once (eventTipView). Near-identical means one span
+// contains the other, or they share at least EVENT_MERGE_OVERLAP of the text
+// the two cover together. Grouping is transitive. Each event keeps its id
+// (and its own range as ownSentence), so a link to either still selects the
+// merged mark.
+const EVENT_MERGE_OVERLAP=.8;
+function nearSameSpan(a,b){
+  const lo=Math.max(a[0],b[0]),hi=Math.min(a[1],b[1]);if(hi<=lo)return false;
+  if(a[0]<=b[0]&&a[1]>=b[1]||b[0]<=a[0]&&b[1]>=a[1])return true;
+  return (hi-lo)/(Math.max(a[1],b[1])-Math.min(a[0],b[0]))>=EVENT_MERGE_OVERLAP;
+}
+function mergeEventSentences(view,text){
+  const parent=view.map((_,index)=>index),find=index=>parent[index]===index?index:(parent[index]=find(parent[index]));
+  for(let i=0;i<view.length;i++)for(let j=i+1;j<view.length;j++)if(nearSameSpan(view[i].sentence,view[j].sentence))parent[find(j)]=find(i);
+  const spans=new Map();view.forEach((event,index)=>{const root=find(index),span=spans.get(root);spans.set(root,span?[Math.min(span[0],event.sentence[0]),Math.max(span[1],event.sentence[1])]:[...event.sentence])});
+  return view.map((event,index)=>{const span=spans.get(find(index));if(span[0]===event.sentence[0]&&span[1]===event.sentence[1])return event;return {...event,ownSentence:event.sentence,sentence:span,sentenceText:text.slice(span[0],span[1]).trim()}});
+}
+// What one mark's popover shows: each label once (the likelier, if a kind
+// repeats), then each distinct text once: what was said, what it was about,
+// what it did next (followUp picks the clause worth showing) and the earlier
+// text it points back at. Text already said is not repeated under another
+// heading.
+function eventTipView(events,followUp=event=>event.responseText){
+  const labels=new Map();for(const event of events){const key=event.group+'|'+event.kind,seen=labels.get(key);if(!seen||(event.probability??0)>(seen.probability??0))labels.set(key,{label:event.label,group:event.group,kind:event.kind,probability:event.probability})}
+  const once=values=>[...new Set(values.map(value=>String(value||'').trim()).filter(Boolean))];
+  const said=once(events.map(event=>event.sentenceText)),fresh=values=>once(values).filter(value=>!said.includes(value));
+  const fields=[['Said',said],['About',fresh(events.map(event=>event.subjectText))],['What it did next',fresh(events.map(followUp))],['Points back at',once(events.map(event=>event.target?.text?'“'+event.target.text+'”':''))]];
+  return {labels:[...labels.values()],fields:fields.filter(([,values])=>values.length)};
 }
 // The distinct sentences a message's events mark, in text order: the events'
 // own sentences, and their subject and response sentences (context).
@@ -541,14 +572,23 @@ function markClass(flag){
 // order. eventLinks lists the pairs whose target is in this conversation.
 function eventLinks(messages){
   const present=new Set(messages.map(message=>message.id).filter(Boolean)),links=[],seen=new Set();
+  // Events on one (merged) sentence that point at the same text are one
+  // pair: one number, one arc, every label. ids lists them all; id is the
+  // first, the one the reader writes to reader_event_link.
+  const sameTarget=(a,b)=>a.message_id===b.message_id&&(Number.isInteger(a.start)&&Number.isInteger(b.start)&&Number.isInteger(a.end)&&Number.isInteger(b.end)?nearSameSpan([a.start,a.end],[b.start,b.end]):String(a.text??'')===String(b.text??''));
   for(const message of messages){
     const view=messageEventView(message);if(!view)continue;
     for(const event of view)if(event.id&&event.target&&present.has(event.target.message_id)&&!seen.has(event.id)){seen.add(event.id);
-      links.push({id:event.id,n:0,message:message.id,target:event.target,group:event.group,label:event.label,kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak:event.target.method==='overlap'||!event.target.strong})}
+      const weak=event.target.method==='overlap'||!event.target.strong;
+      const pair=links.find(link=>link.message===message.id&&link.sentence[0]===event.sentence[0]&&link.sentence[1]===event.sentence[1]&&sameTarget(link.target,event.target));
+      if(pair){pair.ids.push(event.id);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
+      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
   }
   links.forEach((link,index)=>{link.n=index+1});
   return links;
 }
+// The pair an event id belongs to (any of its merged events' ids).
+function eventLinkFor(links,id){return links.find(link=>link.id===id||link.ids?.includes(id))||null}
 // The spans a message's targets cover in the text the reader shows, each
 // with the links pointing at it. Offsets apply when the shown text is the
 // stored text there; otherwise (a prompt shown without its harness wrapper)
@@ -576,7 +616,7 @@ function eventTargetMask(text,spans,mask=''){
 }
 // The other end of a link: from an observation to its target, and back.
 function eventLinkEnd(links,id,from){
-  const link=links.find(item=>item.id===id);if(!link)return null;
+  const link=eventLinkFor(links,id);if(!link)return null;
   return from==='target'?{side:'observation',message:link.message,link}:{side:'target',message:link.target.message_id,link};
 }
 // Highlights: the kinds of marks the reader can show, each switched on or
@@ -691,6 +731,25 @@ function markdownInline(text,parent,depth=0,mask=''){
     }else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1,flags.slice(size,-size))}
     parent.children.push(element);offset=match.index+token.length;
   }parent.children.push(...markdownText(text.slice(offset),mask.slice(offset)));
+  parent.children=markdownMarkRuns(parent.children);
+}
+// A highlight that crosses inline code, emphasis or a link is one mark: an
+// inline element whose text one mark covers entirely moves inside the mark
+// (mark[code[...]] rather than code[mark[...]]), and neighbours with the same
+// mark join it, so "hello `code` world" highlighted whole is one <mark>, not
+// three pieces with the code's padding between them. Only an element the
+// highlight starts or ends inside keeps its own mark.
+function markdownMarkRuns(children){
+  const covered=item=>{if(!item||typeof item==='string'||item.icon)return null;if(item.tag==='mark')return item.className;const only=item.children.length===1?item.children[0]:null;return only&&typeof only==='object'&&only.tag==='mark'?only.className:null};
+  const result=[];
+  for(const item of children){
+    const className=covered(item);if(className===null){result.push(item);continue}
+    const inner=item.tag==='mark'?item.children:[{...item,children:item.children[0].children}],last=result[result.length-1];
+    // Marks in result are this function's own copies, so extending one is safe.
+    if(last&&typeof last==='object'&&last.tag==='mark'&&last.className===className)last.children.push(...inner);
+    else result.push({...markdownElement('mark',className),children:[...inner]});
+  }
+  return result;
 }
 function markdownTree(text,depth=0,mask=''){
   let source=String(text);

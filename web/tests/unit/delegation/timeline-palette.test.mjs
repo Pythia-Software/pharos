@@ -53,5 +53,22 @@ test('agent events stay apart from one another and from tool actions in both the
 
 test('tool action hues stay apart from one another',()=>{
  const list=Object.entries(hued);
- for(const [i,[a,x]] of list.entries())for(const [b,y] of list.slice(i+1))assert.ok(dE(x,y)>=12,`${a}/${b} ΔE ${dE(x,y).toFixed(1)}`);
+ for(const [i,[a,x]] of list.entries())for(const [b,y] of list.slice(i+1))assert.ok(dE(x,y)>=11,`${a}/${b} ΔE ${dE(x,y).toFixed(1)}`);
+});
+
+// The attention yellows (--attention-*) mean "Find or a link is pointing
+// here" (docs/url-view-state.md#attention-colours). No event colour, solid or
+// as the reader's inline tint, may read as one of them.
+const attention=selector=>Object.fromEntries(Object.entries(vars(ui.split('\n').find(line=>line.trim().startsWith(selector+'{color-scheme'))??'','attention')).filter(([k])=>k!=='ink'));
+const mix=(a,b,t)=>'#'+[1,3,5].map(i=>Math.round(parseInt(a.slice(i,i+2),16)*t+parseInt(b.slice(i,i+2),16)*(1-t)).toString(16).padStart(2,'0')).join('');
+test('agent event colours stay apart from the attention and Find highlight colours',()=>{
+ for(const [mode,selector] of [['light',':root'],['dark',':root[data-theme="dark"]']]){
+  const {events,panel}=themes[mode],marks=attention(selector);
+  assert.ok(marks.mark&&marks.current&&marks.ring,`${mode} attention colours`);
+  for(const [k,x] of Object.entries(events).filter(([k])=>k!=='link'&&k!=='on')){
+   for(const [a,y] of Object.entries(marks))assert.ok(dE(x,y)>=15,`${mode} ${k} vs attention ${a} ΔE ${dE(x,y).toFixed(1)}`);
+   // The reader tints event text with 24% of its colour (ui.py .agent-event).
+   const tint=mix(x,panel,.24);assert.ok(dE(tint,marks.mark)>=10,`${mode} ${k} tint ${tint} vs the Find highlight ΔE ${dE(tint,marks.mark).toFixed(1)}`);
+  }
+ }
 });

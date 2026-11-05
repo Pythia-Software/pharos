@@ -42,3 +42,48 @@ test("a target mark keeps the person's writing marked under it", () => {
   assert.deepEqual(classes, ["human-written", "event-target event-target-at-0 human-written"]);
   assert.equal(reader.markClass(reader.eventTargetMask("abc", [{ range: [0, 3], links: ["x"] }], "")[0]), "event-target event-target-at-0");
 });
+
+// One sentence, two events (and one shared target): the conversation shows
+// one mark and one pair, with both labels and the text once.
+const doubled = 'I read "drawer only" as the bottom sheet, so I skipped the side panel. Done.';
+const sentence = 'I read "drawer only" as the bottom sheet, so I skipped the side panel.';
+const target = { method: "quote", message_id: "p", start: 9, end: 20, text: "drawer only", strong: true };
+const twice = [
+  { id: "p", role: "user", kind: "message", text: prompt },
+  { id: "r", role: "assistant", kind: "message", text: doubled, agent_events: [
+    { id: "a1", kind: "assumption", label: "Assumption", group: "Choices you may not see", probability: 0.9, sentence: range(doubled, sentence), subject: [], response: [], target },
+    // Near-identical: the same sentence without its last clause, inside the first.
+    { id: "a2", kind: "workaround", label: "Workaround", group: "Choices you may not see", probability: 0.7, sentence: range(doubled, 'I read "drawer only" as the bottom sheet'), subject: [], response: [range(doubled, "so I skipped the side panel.")], target: { ...target, end: 19, text: "drawer onl" } },
+    { id: "a3", kind: "obstacle", label: "Obstacle", group: "Friction", probability: 0.8, sentence: range(doubled, "Done."), subject: [], response: [], target: null },
+  ] },
+];
+
+test("near-identical sentences merge: one contains the other, or they share 80% of what they cover", () => {
+  assert.equal(reader.nearSameSpan([0, 10], [2, 8]), true, "containment");
+  assert.equal(reader.nearSameSpan([0, 10], [1, 10]), true, "90% shared");
+  assert.equal(reader.nearSameSpan([0, 10], [3, 13]), false, "54% shared");
+  assert.equal(reader.nearSameSpan([0, 10], [10, 20]), false, "touching");
+  const view = reader.messageEventView(twice[1]);
+  assert.deepEqual(plain(view.map(event => [event.id, event.sentence])), [["a1", range(doubled, sentence)], ["a2", range(doubled, sentence)], ["a3", range(doubled, "Done.")]]);
+  assert.deepEqual(plain(view[1].ownSentence), range(doubled, 'I read "drawer only" as the bottom sheet'), "each event keeps its own range");
+  assert.deepEqual(plain(reader.eventSpans(view).sentences), [range(doubled, sentence), range(doubled, "Done.")], "one mark for the pair");
+});
+
+test("a merged mark's popover lists every label with the text once", () => {
+  const view = reader.messageEventView(twice[1]), tip = reader.eventTipView(view.slice(0, 2));
+  assert.deepEqual(plain(tip.labels.map(label => label.label)), ["Assumption", "Workaround"]);
+  assert.deepEqual(plain(tip.fields), [["Said", [sentence]], ["What it did next", ["so I skipped the side panel."]], ["Points back at", ["“drawer only”", "“drawer onl”"]]]);
+  // The same kind twice is one label, the likelier.
+  assert.deepEqual(plain(reader.eventTipView([view[0], { ...view[0], id: "x", probability: 0.95 }]).labels.map(label => label.probability)), [0.95]);
+});
+
+test("events on one sentence pointing at the same text are one pair, found by either id", () => {
+  const links = reader.eventLinks(twice);
+  assert.deepEqual(plain(links.map(link => [link.id, link.ids, link.labels, link.n])), [["a1", ["a1", "a2"], ["Assumption", "Workaround"], 1]]);
+  assert.equal(reader.eventLinkFor(links, "a2").id, "a1", "an old link to the second event selects the merged pair");
+  assert.equal(reader.eventLinkEnd(links, "a2", "observation").message, "p");
+  assert.deepEqual(plain(reader.eventTargetSpans(prompt, links)), [{ range: [9, 20], links: ["a1"] }], "the target is marked once");
+  // A different target on the same sentence stays its own pair.
+  const other = structuredClone(twice); other[1].agent_events[1].target = { method: "quote", message_id: "p", start: 30, end: 35, text: "works", strong: true };
+  assert.deepEqual(plain(reader.eventLinks(other).map(link => link.ids)), [["a1"], ["a2"]]);
+});

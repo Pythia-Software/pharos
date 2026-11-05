@@ -40,8 +40,9 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,events=[]}
       <span className="lt-mode-parent">{family.direct?<i className="lt-label-swatch" style={{background:stateColor(family.id)}}/>:null}{family.name}</span>
       {family.labels.map(id=><span className="lt-mode-label" key={id}><i className="lt-label-swatch" style={{background:stateColor(id)}}/>{shortLabel(id,taxonomy)}</span>)}
     </span>)}</div></div>:null;})}{uncategorized?<span className="lt-ontology-role lt-mode-label" role="group" aria-label="Coverage"><strong>Coverage</strong><i className="lt-label-swatch" style={{background:stateColor('?')}}/>Uncategorized</span>:null}</div></div>:null}
+    {/* The rows' order: message modes, agent events, tool actions. */}
+    <EventLinkLegend events={events}/>
     {Object.keys(tools).length||error?<div className="lt-legend-line"><strong>Tool actions</strong>{Object.entries(tools).map(([id,name])=><span key={id}><i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>{name}</span>)}{error?<span><i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>Error</span>:null}</div>:null}
     {sources.length?<div className="lt-legend-line"><strong>Caller text</strong>{sources.map(source=><span key={source.id} title={source.hint}><i className={`lt-source-swatch is-${source.pattern}`}/>{source.id==='typed'?'Human typed':source.name}</span>)}</div>:null}
-    <EventLinkLegend events={events}/>
   </div>;
 }
