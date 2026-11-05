@@ -20,7 +20,8 @@ var workDetailSections = map[string]string{
 	"session_outcome": `SELECT ` + outcomeLabelSQL("w") + ` outcome_label,` + outcomeWhySQL("w") + ` outcome_why,` + outcomeEvidenceTierSQL("w") + ` evidence_tier,
 		` + gitCheckSQL("w") + ` git_check,` + gitCheckReasonSQL("w") + ` git_check_reason,` + projectNameSQL("w") + ` project,` + projectKindSQL("w") + ` project_kind,
 		so.tool_calls_recorded,so.files_changed,so.lines_added,so.lines_removed,so.kept_lines,so.rework_removed_lines,so.verification,so.first_edit_at,so.last_edit_at,
-		` + gitFactSQL("w", "sg.linked_commits") + ` linked_commits,` + gitFactSQL("w", "sg.landed_commits") + ` landed_commits,` + gitFactSQL("w", "sg.reverted_commits") + ` reverted_commits
+		` + gitFactSQL("w", "sg.linked_commits") + ` linked_commits,` + gitFactSQL("w", "sg.landed_commits") + ` landed_commits,` + gitFactSQL("w", "sg.reverted_commits") + ` reverted_commits,
+		` + gitFactSQL("w", "sg.lines_added") + ` committed_lines,` + gitFactSQL("w", "sg.lines_landed") + ` landed_lines
 		FROM workspaces w` + projectJoin("w") + ` LEFT JOIN session_outcomes so ON so.workspace_id=w.id WHERE w.id=?`,
 	"edited_files": `SELECT path,repository_id,file_key,edits,lines_added,lines_removed,rewrote,first_edit_at,last_edit_at FROM session_files WHERE workspace_id=? ORDER BY last_edit_at DESC,file_key`,
 	"commit_links": `SELECT l.hash,l.repository_id,l.method,l.confidence,l.confidence>=` + fmt.Sprint(outcomeGitCounted) + ` counted,l.evidence_json,g.author_at,g.on_mainline,g.reverted_by

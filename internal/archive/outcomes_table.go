@@ -8,8 +8,9 @@ import (
 // The outcomes dataset is the Analyze → Outcomes dashboard's records: one row
 // per session the Library lists (mirrors folded the same way), with its
 // outcome label and the evidence tier that decided it, its project and
-// branch, the model that took most of its cost, its priced usage, and its
-// Tier 1 facts (files, lines, rework). See docs/projects-and-outcomes.md.
+// branch, the model that took most of its cost, its priced usage, its Tier 1
+// facts (files, lines, rework) and its Tier 2 commits and the lines they
+// added. See docs/projects-and-outcomes.md.
 
 // outcomeEvidenceTier is the highest evidence tier a session reached: local
 // Git checked it, its transcript recorded tool calls, or neither.
@@ -45,7 +46,9 @@ func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
 			CASE WHEN `+outcomeReworkOpenSQL+` THEN NULL ELSE so.kept_lines END kept_lines,
 			CASE WHEN `+outcomeReworkOpenSQL+` THEN NULL ELSE so.rework_removed_lines END rework_removed_lines,
 			(SELECT sg.linked_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') linked_commits,
-			(SELECT sg.landed_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_commits
+			(SELECT sg.landed_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_commits,
+			(SELECT sg.lines_added FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') committed_lines,
+			(SELECT sg.lines_landed FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_lines
 			FROM (SELECT w.*,`+outcomeLabelSQL("w")+` label FROM workspaces w) w`+projectJoin("w")+`
 			LEFT JOIN session_outcomes so ON so.workspace_id=w.id`)
 		if err != nil {

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,7 +46,12 @@ func (r *gitRepository) git(at time.Time, args ...string) string {
 // commit writes files and commits them days ago, returning the hash.
 func (r *gitRepository) commit(days float64, message string, files map[string]string) string {
 	r.t.Helper()
-	at := time.Now().Add(-time.Duration(days * float64(24*time.Hour)))
+	return r.commitAt(time.Now().Add(-time.Duration(days*float64(24*time.Hour))), message, files)
+}
+
+// commitAt writes files and commits them at a time, returning the hash.
+func (r *gitRepository) commitAt(at time.Time, message string, files map[string]string) string {
+	r.t.Helper()
 	for name, content := range files {
 		path := filepath.Join(r.dir, name)
 		if content == "" {
@@ -122,6 +128,21 @@ func (f *gitFixture) printed(session, hash string, days float64) {
 		fmt.Sprintf(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('%s','%s-c','%s','tool','tool_result','{"content":"[main %s] Work\n 1 file changed","is_error":false}','x','h')`, id, session, id, hash[:7]),
 		fmt.Sprintf(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,command,command_category,status,started_at,result_message_id)
 			VALUES('%s','%s','%s-c',%d,'claude','tool','Bash','command','git commit -am Work','vcs','ok','%s','%s')`, id, session, session, f.calls, daysAgo(days), id))
+}
+
+// command records a shell call of the session's that ran a command from at,
+// for took, and printed result.
+func (f *gitFixture) command(session, command, result string, at time.Time, took time.Duration) {
+	f.t.Helper()
+	f.calls++
+	id := fmt.Sprintf("command-%d", f.calls)
+	text, _ := json.Marshal(map[string]any{"content": result, "is_error": false})
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+	execTx(f.t, f.catalog.DB,
+		fmt.Sprintf(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('%s','%s-c','%s','tool','tool_result',%s,'x','h')`, id, session, id, quote(string(text))),
+		fmt.Sprintf(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,command,command_category,status,started_at,ended_at,result_message_id)
+			VALUES('%s','%s','%s-c',%d,'claude','tool','Bash','command',%s,'vcs','ok','%s','%s','%s')`, id, session, session, f.calls, quote(command),
+			at.UTC().Format(time.RFC3339Nano), at.Add(took).UTC().Format(time.RFC3339Nano), id))
 }
 
 func (f *gitFixture) refresh() {
@@ -215,9 +236,8 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	repo.git(time.Now().Add(-7*24*time.Hour), "commit", "-q", "--allow-empty", "-m", "Empty")
 	empty := repo.git(time.Now(), "rev-parse", "HEAD")
 	f.printed("empty", empty, 7)
-	// Two sessions printed one commit, which one of them also has as its
-	// copy on mainline: each keeps its link, and the copy keeps the
-	// printed hash's evidence.
+	// Two sessions printed one commit, cherry-picked to mainline: each is
+	// linked once, to the copy, as a rewrite of the commit it printed.
 	f.edit("printer", "printed.go", 6.5)
 	printed := repo.commit(6.49, "Printed", map[string]string{"printed.go": "package printed\n"})
 	f.printed("printer", printed, 6.49)
@@ -261,7 +281,7 @@ func TestSessionGitLinksCommits(t *testing.T) {
 	for id, want := range map[string]string{
 		"direct": direct[:7] + " transcript 1", "inferred": inferred[:7] + " inferred 0.7", "narrow": narrow[:7] + " inferred 0.5",
 		"reverted": reverted[:7] + " inferred 0.7", "undone": undone[:7] + " inferred 0.7", "branch": branch[:7] + " inferred 0.7", "picked": copied[:7] + " inferred 0.7", "squashed": squashed[:7] + " inferred 0.7",
-		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " transcript 1", "printer-too": printed[:7] + " transcript 1", "detached": detached[:7] + " transcript 1",
+		"early": early[:7] + " transcript 1", "printer": printedCopy[:7] + " rewrite 1", "printer-too": printedCopy[:7] + " rewrite 1", "detached": detached[:7] + " transcript 1",
 		"editor": pr[:7] + " inferred 0.7", "publisher": pr[:7] + " transcript 1", "empty": empty[:7] + " transcript 1", "cloned": cloned[:7] + " inferred 0.7",
 	} {
 		if strings.Join(links[id], ", ") != want {
@@ -354,6 +374,16 @@ func TestSessionGitNotChecked(t *testing.T) {
 	if got := state("gone"); got != "not_checked|The checkouts recorded on this Mac are gone.|<nil>" {
 		t.Fatalf("a deleted checkout: %s", got)
 	}
+	// So is one whose directory keeps a .git that holds no repository.
+	husk := filepath.Join(t.TempDir(), "husk")
+	if err := os.MkdirAll(filepath.Join(husk, ".git", "info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, f.catalog.DB, `UPDATE workspace_sightings SET location='`+husk+`' WHERE workspace_id='gone'`)
+	f.refresh()
+	if got := state("gone"); got != "not_checked|The checkouts recorded on this Mac are gone.|<nil>" {
+		t.Fatalf("a deleted worktree's leftover directory: %s", got)
+	}
 	// No git, and a repository too slow to read.
 	execTx(t, f.catalog.DB, `UPDATE workspace_sightings SET location='`+f.repo.dir+`' WHERE workspace_id='gone'`)
 	path := os.Getenv("PATH")
@@ -396,6 +426,20 @@ func TestSessionGitNotChecked(t *testing.T) {
 	}
 	if got := since(); checkedSince == "" || got != checkedSince || countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE repository_id='repo-app'`) == 0 {
 		t.Fatalf("a failed scan's history_since %q, want %q", got, checkedSince)
+	}
+	// The reflogs are extra: when they cannot be read in time, the scan goes
+	// on without them.
+	run := outcomeGitCommand
+	override(t, &outcomeGitCommand, func(ctx context.Context, dir string, timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
+		if slices.Contains(args, "--reflog") {
+			return nil, errGitTimeout
+		}
+		return run(ctx, dir, timeout, stdin, args...)
+	})
+	f.repo.commit(4.4, "Later still", map[string]string{"later.go": "package later // still\n"})
+	f.refresh()
+	if got := state("gone"); !strings.HasPrefix(got, "checked|<nil>|") {
+		t.Fatalf("without the reflogs: %s", got)
 	}
 	// A repository session that changed nothing has no commits to look for.
 	f.session("idle", "")
@@ -486,7 +530,10 @@ func TestSessionGitAcrossMacs(t *testing.T) {
 	if got := state(); got != want {
 		t.Fatalf("back on the first Mac: %s", got)
 	}
+	// Gone means no ref or reflog holds it: a reflog's commit is read as
+	// replaced, and still linked.
 	f.repo.git(time.Now(), "branch", "-q", "-D", "local")
+	f.repo.git(time.Now(), "reflog", "expire", "--expire=now", "--all")
 	f.refresh()
 	if got := state(); got != "checked||0||changed_recent" {
 		t.Fatalf("after the branch was deleted: %s", got)
@@ -623,6 +670,28 @@ func TestSessionGitContestedCommits(t *testing.T) {
 	}
 }
 
+// A session linked to a change and its copy on mainline is linked once, to
+// the copy, with the stronger evidence: a squash that kept the patch but not
+// the subject is no rewrite, so only inference linked the copy itself.
+func TestLinkOnceKeepsTheStrongerEvidence(t *testing.T) {
+	landed := true
+	commits := map[string]*gitCommit{
+		"original": {Hash: "original", Subject: "Work", OnMainline: &landed, SameAs: "squash"},
+		"squash":   {Hash: "squash", Subject: "Work (#7)", OnMainline: &landed},
+	}
+	links := linkOnce([]gitLink{
+		{Session: "s", Hash: "original", Method: "transcript", Confidence: 1},
+		{Session: "s", Hash: "squash", Method: "inferred", Confidence: 0.7},
+		{Session: "other", Hash: "squash", Method: "inferred", Confidence: 0.5},
+	}, commits)
+	if got := fmt.Sprint(links); got != fmt.Sprint([]gitLink{
+		{Session: "s", Hash: "squash", Method: "transcript", Confidence: 1},
+		{Session: "other", Hash: "squash", Method: "inferred", Confidence: 0.5},
+	}) {
+		t.Fatalf("links: %s", got)
+	}
+}
+
 // A rebase's own commits were made in the checkout; the commit it started
 // from, returned to or abandoned for was not.
 func TestReflogMadeCommit(t *testing.T) {
@@ -636,6 +705,164 @@ func TestReflogMadeCommit(t *testing.T) {
 		if reflogMadeCommit(action) != want {
 			t.Errorf("%q: %v, want %v", action, !want, want)
 		}
+	}
+}
+
+// A session's own git commands link the commits they made, whatever tool
+// wrote the files and whether or not the commit printed its hash. Edit
+// windows link only what no command explains, as commits made by hand.
+func TestSessionGitCommandLinks(t *testing.T) {
+	f := newGitFixture(t)
+	repo := f.repo
+	// The checkout is the repository's by its remote (gitIdentity.holds).
+	execTx(t, f.catalog.DB, `UPDATE repositories SET normalized_remote='github.com/acme/app' WHERE id='repo-app'`)
+	repo.git(time.Now(), "remote", "add", "origin", "git@github.com:acme/app.git")
+	for _, id := range []string{"quiet", "heredoc", "scripted", "wrong", "hand", "nested", "rebased", "long", "short", "treed", "listed", "twin", "pulled"} {
+		f.session(id, "")
+	}
+	base := time.Now().Add(-20 * 24 * time.Hour).Truncate(time.Second)
+	at := func(hours float64, seconds int) time.Time {
+		return base.Add(time.Duration(hours*float64(time.Hour)) + time.Duration(seconds)*time.Second)
+	}
+	// A quiet commit prints no hash: the message its command wrote names it,
+	// and so does one from a here document, its subject over two lines.
+	f.command("quiet", `git add -A && git commit -q -m "Quiet commit with a message"`, "", at(0, 0), 3*time.Second)
+	quiet := repo.commitAt(at(0, 1), "Quiet commit with a message", map[string]string{"quiet.go": "package quiet\n"})
+	f.command("heredoc", "git commit -q -F - <<'EOF'\nWrite the subject\nacross two lines\n\nThe body.\nEOF", "", at(2, 0), 3*time.Second)
+	heredoc := repo.commitAt(at(2, 1), "Write the subject\nacross two lines\n\nThe body.", map[string]string{"heredoc.go": "package heredoc\n"})
+	// A message from a file is unknown: the one command running links it. The
+	// stash it made first is not the session's commit.
+	f.command("scripted", "git stash -q && git stash apply -q && git commit -q -a -F .git/MESSAGE", "", at(4, 0), 4*time.Second)
+	if err := os.WriteFile(filepath.Join(repo.dir, "quiet.go"), []byte("package quiet // changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo.git(at(4, 1), "stash", "-q")
+	repo.git(at(4, 1), "stash", "apply", "-q")
+	scripted := repo.commitAt(at(4, 2), "From a file", nil)
+	// A command that wrote another subject did not make the commit: it was
+	// made by hand, and the session editing its file is linked.
+	f.edit("hand", "hand.go", time.Since(at(6, -600)).Hours()/24)
+	f.command("wrong", `git commit -m "A subject nobody used"`, "", at(6, 0), 2*time.Second)
+	hand := repo.commitAt(at(6, 1), "Hand made at that moment", map[string]string{"hand.go": "package hand\n"})
+	// A command run in another repository's checkout links there, and not
+	// the commit made in its own at that moment.
+	lib := newGitRepository(t)
+	execTx(t, f.catalog.DB, `INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES('repo-lib','lib','["`+lib.dir+`"]','x','x')`)
+	f.outcomeFixture.session("lib-home", "claude")
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET repository_id='repo-lib' WHERE id='lib-home'`,
+		fmt.Sprintf(`INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('lib-home','%s','claude','%s','x','x')`, currentHost().ID, lib.dir))
+	f.command("nested", `cd "`+lib.dir+`" && git commit -qm "Library change from afar"`, "", at(8, 0), 3*time.Second)
+	nested := lib.commitAt(at(8, 1), "Library change from afar", map[string]string{"lib.go": "package lib\n"})
+	repo.commitAt(at(8, 1), "Library change from afar", map[string]string{"app.go": "package app\n"})
+	// A rebase keeps the author, author time and subject: its copy is the
+	// commit the session printed, linked once.
+	repo.git(at(10, 0), "checkout", "-q", "-b", "topic")
+	original := repo.commitAt(at(10, 1), "Rebased work", map[string]string{"topic.go": "package topic\n"})
+	f.command("rebased", `git commit -qam "$MESSAGE"`, "[topic "+original[:7]+"] Rebased work\n 1 file changed\n", at(10, 0), 3*time.Second)
+	repo.git(at(10, 0), "checkout", "-q", "main")
+	repo.commitAt(at(10.5, 0), "Main moves on", map[string]string{"main-1.go": "package main1\n"})
+	repo.git(at(11, 0), "rebase", "-q", "main", "topic")
+	rebased := repo.git(at(11, 0), "rev-parse", "topic")
+	repo.git(at(11, 0), "checkout", "-q", "main")
+	// Two sessions' commands were running: the shorter, as a candidate.
+	f.command("long", "git commit -q -F .git/MESSAGE", "", at(12, 0), time.Minute)
+	f.command("short", "git commit -q -F .git/MESSAGE", "", at(12, 20), 5*time.Second)
+	concurrent := repo.commitAt(at(12, 22), "Concurrent work", map[string]string{"concurrent.go": "package concurrent\n"})
+	// Squashed onto mainline, more than one commit at a time (patch-id finds
+	// one): recognized by the branch's tree, by a subject the squash lists
+	// that no other commit has, or by the one pull request the session opened.
+	squash := func(branch string, hours float64, message string) string {
+		repo.git(at(hours, 0), "merge", "-q", "--squash", branch)
+		repo.git(at(hours, 0), "commit", "-q", "-m", message)
+		return repo.git(at(hours, 0), "rev-parse", "HEAD")
+	}
+	repo.git(at(14, 0), "checkout", "-q", "-b", "tree-branch")
+	f.command("treed", `git commit -qam "Tree branch work"`, "", at(14, 0), 3*time.Second)
+	treed := repo.commitAt(at(14, 1), "Tree branch work", map[string]string{"treed.go": "package treed\n"})
+	f.command("treed", `git commit -qam "Tree branch more work"`, "", at(14, 10), 3*time.Second)
+	treedMore := repo.commitAt(at(14, 11), "Tree branch more work", map[string]string{"treed.go": "package treed\n\nvar more = 1\n"})
+	repo.git(at(14, 0), "checkout", "-q", "main")
+	treeSquash := squash("tree-branch", 15, "Tree squash (#11)")
+	repo.git(at(16, 0), "checkout", "-q", "-b", "list-branch")
+	f.command("listed", `git commit -qm "Listed subject that is long enough"`, "", at(16, 0), 3*time.Second)
+	listed := repo.commitAt(at(16, 1), "Listed subject that is long enough", map[string]string{"listed.go": "package listed\n"})
+	f.command("listed", `git commit -qm "Common subject seen on two branches"`, "", at(16, 10), 3*time.Second)
+	common := repo.commitAt(at(16, 11), "Common subject seen on two branches", map[string]string{"common.go": "package common\n"})
+	repo.git(at(17, 0), "checkout", "-q", "-b", "twin-branch", "main")
+	f.command("twin", `git commit -qm "Common subject seen on two branches"`, "", at(17, 0), 3*time.Second)
+	twin := repo.commitAt(at(17, 1), "Common subject seen on two branches", map[string]string{"twin.go": "package twin\n"})
+	repo.git(at(17, 0), "checkout", "-q", "main")
+	repo.commitAt(at(18, 0), "Main moves again", map[string]string{"main-2.go": "package main2\n"})
+	listSquash := squash("list-branch", 19, "List squash (#12)\n\n* Listed subject that is long enough\n\n* Common subject seen on two branches")
+	repo.git(at(20, 0), "checkout", "-q", "-b", "pr-branch")
+	f.command("pulled", `git commit -qm "Short one"`, "", at(20, 0), 3*time.Second)
+	pulled := repo.commitAt(at(20, 1), "Short one", map[string]string{"pulled.go": "package pulled\n"})
+	f.command("pulled", `git commit -qm "Short two"`, "", at(20, 10), 3*time.Second)
+	pulledMore := repo.commitAt(at(20, 11), "Short two", map[string]string{"pulled-2.go": "package pulled\n"})
+	f.command("pulled", "gh pr create --fill", "https://github.com/acme/app/pull/13\n", at(20, 30), 5*time.Second)
+	repo.git(at(20, 0), "checkout", "-q", "main")
+	repo.commitAt(at(21, 0), "Main moves once more", map[string]string{"main-3.go": "package main3\n"})
+	prSquash := squash("pr-branch", 22, "PR squash (#13)")
+	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
+	f.refresh()
+
+	links := f.links()
+	messages := func(hashes ...string) string {
+		links := []string{}
+		for _, hash := range hashes {
+			links = append(links, hash[:7]+" message 0.95")
+		}
+		slices.Sort(links)
+		return strings.Join(links, ", ")
+	}
+	for id, want := range map[string]string{
+		"quiet": messages(quiet), "heredoc": messages(heredoc), "scripted": scripted[:7] + " window 0.9",
+		"hand": hand[:7] + " inferred 0.7", "nested": messages(nested), "rebased": rebased[:7] + " rewrite 1",
+		"short": concurrent[:7] + " window 0.5", "treed": messages(treed, treedMore), "listed": messages(listed, common),
+		"twin": messages(twin), "pulled": messages(pulled, pulledMore),
+	} {
+		if strings.Join(links[id], ", ") != want {
+			t.Errorf("%s links: %v, want %s", id, links[id], want)
+		}
+	}
+	for _, id := range []string{"wrong", "long", "lib-home"} {
+		if len(links[id]) != 0 {
+			t.Errorf("%s links: %v", id, links[id])
+		}
+	}
+	rows, err := queryMaps(f.catalog.DB, `SELECT hash,COALESCE(on_mainline,-1) on_mainline,COALESCE(mainline_evidence,'') evidence FROM git_commits WHERE hash IN (?,?,?,?,?,?,?,?)`,
+		treed, treedMore, listed, common, twin, pulled, pulledMore, rebased)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainline := map[string]string{}
+	for _, row := range rows {
+		mainline[firstString(row["hash"])] = fmt.Sprint(row["on_mainline"], " ", row["evidence"])
+	}
+	for hash, want := range map[string]string{
+		treed: "1 squashed into " + treeSquash[:12] + " on remotes/origin/main", treedMore: "1 squashed into " + treeSquash[:12] + " on remotes/origin/main",
+		listed: "1 listed in " + listSquash[:12] + " on remotes/origin/main", common: "0 ", twin: "0 ", rebased: "0 ",
+		pulled: "1 pull request #13, " + prSquash[:12] + " on remotes/origin/main", pulledMore: "1 pull request #13, " + prSquash[:12] + " on remotes/origin/main",
+	} {
+		if mainline[hash] != want {
+			t.Errorf("%s on mainline: %q, want %q", hash[:7], mainline[hash], want)
+		}
+	}
+	labels := f.labels()
+	for id, want := range map[string]string{"quiet": "landed", "treed": "landed", "listed": "landed", "pulled": "landed", "twin": "committed", "rebased": "committed", "wrong": "no_changes"} {
+		if labels[id][0] != want {
+			t.Errorf("%s: %s, want %s (%s)", id, labels[id][0], want, labels[id][1])
+		}
+	}
+	for id, want := range map[string]string{"listed": "2 2 1", "twin": "1 1 0", "quiet": "1 1 1"} {
+		var got string
+		if err := f.catalog.DB.QueryRow(`SELECT linked_commits||' '||lines_added||' '||lines_landed FROM session_git WHERE workspace_id=?`, id).Scan(&got); err != nil || got != want {
+			t.Errorf("%s commits and lines: %q, want %q (%v)", id, got, want, err)
+		}
+	}
+	// What a session committed has a file history, though it edited nothing.
+	if count := countRows(t, f.catalog, `SELECT COUNT(*) FROM git_commit_files WHERE path='quiet.go'`); count != 2 {
+		t.Errorf("quiet.go has %d commits in its history", count)
 	}
 }
 

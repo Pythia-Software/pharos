@@ -93,7 +93,7 @@ export const usageDetailFields: Record<UsageDataset, string[]> = {
   agent_event_messages: ["source_links", "occurred_at", "source", "events", "candidates", "title", "project_name", "repository_name", "provider", "event_model"],
   session_shape: ["channel", "machine_id", "execution_machine_id", "source_links", "title", "started_at", "archetype", "length_band", "active_band", "tool_band", "autonomy_band", "messages", "typed_human_messages", "tool_calls", "active_seconds", "wall_seconds", "autonomy", "turn_cycle_p50_seconds", "forensic_events", "repository_name", "provider", "model_family", "agent_kind"],
   branch_usage: ["source_links", "title", "usage_at", "project_name", "branch", "coverage", "branch_source", "model_family", "cost_usd", "tokens", "price_status"],
-  outcomes: ["source_links", "title", "started_at", "outcome_label", "evidence_tier", "project_name", "branch", "model_family", "cost_usd", "files_changed", "lines_added", "lines_removed", "kept_lines", "rework_removed_lines", "linked_commits", "landed_commits"],
+  outcomes: ["source_links", "title", "started_at", "outcome_label", "evidence_tier", "project_name", "branch", "model_family", "cost_usd", "files_changed", "lines_added", "lines_removed", "kept_lines", "rework_removed_lines", "linked_commits", "landed_commits", "committed_lines", "landed_lines"],
 };
 const extraProperties: Partial<Record<UsageDataset, [string, string, "code" | "json" | "boolean" | "number"][]>> = {
   messages: [["text_truncated", "Retained preview truncated", "boolean"], ["segments", "Classified spans and sources", "json"]],

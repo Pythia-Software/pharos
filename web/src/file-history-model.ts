@@ -72,9 +72,17 @@ export function commitState(commit: FileHistoryCommit): string {
   return "";
 }
 
+const linkMethods: Record<string, string> = {
+  transcript: "printed in its transcript",
+  message: "its git command wrote the message",
+  window: "its git command ran then",
+  rewrite: "a rebase or amend of its commit",
+  inferred: "inferred from its edits",
+};
+
 // linkText is how a workspace is linked to a commit: counted links are the
 // workspace's own; below the counting threshold a link is a candidate.
 export function linkText(link: FileHistoryLink): string {
-  const method = link.method === "transcript" ? "printed in its transcript" : link.method === "inferred" ? "inferred from its edits" : link.method;
+  const method = linkMethods[link.method] ?? link.method;
   return link.counted ? method : `candidate, ${method}`;
 }
