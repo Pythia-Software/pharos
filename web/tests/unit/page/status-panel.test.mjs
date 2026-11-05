@@ -314,6 +314,19 @@ test("a background pass leads with the current task and its planned position", (
   assert.equal(pass({step: {index: 2, count: null, name: "Repositories & merges"}}).position, null);
   assert.equal(pass({step: {index: 5, count: 4, name: "Repositories & merges"}}).position, null);
   assert.equal(pass({step: null}).label, "Frequent update", "before the first task starts, retain the operation name");
+  const classified = operation("rebuild", {kind: "analysis.authorship", label: "Classify your writing",
+    step: {name: "classifying authorship", unit: "message", done: 601, total: 42918, fraction: 601 / 42918}});
+  const nested = {step: {index: 2, count: 3, name: "Your writing"}, children: [
+    operation("upgrade", {kind: "library.upgrade", state: "succeeded"}),
+    operation("chain", {kind: "analysis.chain", children: [operation("authorship", {kind: "analysis.authorship", children: [classified]})]}),
+  ]};
+  const working = pass(nested);
+  assert.equal(working.label, classified.label, "the deepest live stage names the work in progress");
+  assert.deepEqual(working.primary, ["601 of 42,918 messages"]);
+  assert.equal(working.fraction, 601 / 42918);
+  assert.deepEqual(working.position, {index: 2, count: 3}, "task position remains the parent's plan");
+  nested.children[1].children[0].children = [];
+  assert.equal(pass(nested).fraction, null, "a stage without measured progress does not inherit an old task's amount");
 });
 
 test("the panel is titled for what it shows, under the library and its drive", () => {

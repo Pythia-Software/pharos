@@ -526,6 +526,42 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 	if backlog.State() != opCancelled {
 		t.Fatalf("a stopped backlog ended %q", backlog.State())
 	}
+	// A pass can be several levels into its analysis chain. Keep the
+	// current rebuild and its measured progress in the public snapshot.
+	_, pass := server.begin(context.Background(), OperationSpec{Kind: "background.update", Trigger: triggerUser})
+	defer pass.Finish(nil)
+	_, upgrade := pass.Child(OperationSpec{Kind: "library.upgrade", Trigger: triggerChained})
+	upgrade.Finish(nil)
+	_, chain := pass.Child(OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
+	defer chain.Finish(nil)
+	_, authorship := chain.Child(OperationSpec{Kind: "analysis.authorship", Trigger: triggerChained})
+	defer authorship.Finish(nil)
+	_, rebuild := authorship.Child(OperationSpec{Kind: "analysis.authorship", Trigger: triggerChained})
+	defer rebuild.Finish(nil)
+	rebuild.Step("classifying authorship", "message", 100)
+	rebuild.SetDone(42)
+	if err := json.Unmarshal(serveTest(server, http.MethodGet, "/api/operations").Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	var nested map[string]any
+	for _, entry := range document.Operations {
+		if entry["id"] == string(pass.ID()) {
+			nested = entry
+		}
+	}
+	for _, id := range []OpID{chain.ID(), authorship.ID(), rebuild.ID()} {
+		children, _ := nested["children"].([]any)
+		if len(children) != 1 {
+			t.Fatalf("live child %s missing from snapshot: %#v", id, nested)
+		}
+		nested = children[0].(map[string]any)
+		if nested["id"] != string(id) || nested["stoppable"] != false {
+			t.Fatalf("nested stage: %#v", nested)
+		}
+	}
+	if step := nested["step"].(map[string]any); step["done"] != 42.0 || step["total"] != 100.0 {
+		t.Fatalf("nested rebuild progress: %#v", step)
+	}
 }
 
 // A polled snapshot takes no lock: it knows of another process's capture

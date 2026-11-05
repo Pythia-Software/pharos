@@ -139,9 +139,15 @@ const compactableBreakdown = { ...storageBreakdown, catalog_free_bytes: 31e9, co
   parts: storageBreakdown.parts.flatMap(part => part.key === "catalog_database" ? [{ ...part, bytes: 63e9 }, { key: "catalog_free", label: "Free space in the catalog", bytes: 31e9 }] : [part]) };
 const backgroundTaskStatus = { ...busyStatus,
   operations: [{ ...busyStatus.operations[0], kind: 'background.update', variant: 'frequent', label: 'Frequent update', priority: 'background',
-    step: { index: 2, count: 2, name: 'Repositories & merges', unit: null, done: 0, total: null } }],
+    step: { index: 2, count: 3, name: 'Your writing', unit: null, done: 0, total: null },
+    children: [{id: 'chain', kind: 'analysis.chain', label: 'Update analyses', state: 'running', children: [
+      {id: 'authorship', kind: 'analysis.authorship', label: 'Classify your writing', state: 'running', children: [
+        {id: 'rebuild', kind: 'analysis.authorship', label: 'Classify your writing', state: 'running',
+          step: {name: 'classifying authorship', unit: 'message', done: 601, total: 42918, fraction: 601 / 42918}, children: []},
+      ]},
+    ]}] }],
   background: { ...idleStatus.background,
-    items: idleStatus.background.items.map(item => item.id === 'repositories' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
+    items: idleStatus.background.items.map(item => item.id === 'writing' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
     cadences: idleStatus.background.cadences.map(cadence => cadence.id === 'frequent' ? { ...cadence, state: 'running', state_label: 'Updating now' } : cadence),
   },
   attention: [],

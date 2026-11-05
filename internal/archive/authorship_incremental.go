@@ -406,7 +406,7 @@ func (c *Catalog) loadAuthorshipQuestionsBefore(ctx context.Context, ids []strin
 	if len(ids) == 0 {
 		return loaded, nil
 	}
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT conversation_id,questions_json FROM authorship_questions WHERE conversation_id IN (SELECT value FROM json_each(?))`, jsonText(ids))
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT conversation_id,questions_json FROM authorship_questions WHERE conversation_id IN (SELECT value FROM json_each(?))`, jsonText(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -426,12 +426,15 @@ func (c *Catalog) loadAuthorshipQuestionsBefore(ctx context.Context, ids []strin
 
 func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorInput, watermark time.Time) (*classifier, error) {
 	classifier := newClassifier(inputs)
+	// Historical lookups run inside classification as well as before it.
+	// Keep them off the writer pool, just like the paged agent replies.
+	reader := c.reader()
 	keys := make([]string, 0, len(classifier.templates))
 	for key := range classifier.templates {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT key,sessions_json,days_json FROM authorship_templates WHERE key IN (SELECT value FROM json_each(?))`, jsonText(keys))
+	rows, err := queryMapsContext(ctx, reader, `SELECT key,sessions_json,days_json FROM authorship_templates WHERE key IN (SELECT value FROM json_each(?))`, jsonText(keys))
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +464,7 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 		conversations[input.ConversationID] = true
 	}
 	ids := sortedNameIDs(conversations)
-	rows, err = queryMapsContext(ctx, c.DB, `SELECT conversation_id,sent_at FROM authorship_last_user WHERE conversation_id IN (SELECT value FROM json_each(?))`, jsonText(ids))
+	rows, err = queryMapsContext(ctx, reader, `SELECT conversation_id,sent_at FROM authorship_last_user WHERE conversation_id IN (SELECT value FROM json_each(?))`, jsonText(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +497,7 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 		if len(wanted) == 0 {
 			return nil
 		}
-		rows, err := queryMapsContext(ctx, c.DB, `SELECT candidate,offset,message_id FROM authorship_candidates WHERE candidate IN (SELECT value FROM json_each(?))`, jsonText(wanted))
+		rows, err := queryMapsContext(ctx, reader, `SELECT candidate,offset,message_id FROM authorship_candidates WHERE candidate IN (SELECT value FROM json_each(?))`, jsonText(wanted))
 		if err != nil {
 			return err
 		}
@@ -506,7 +509,7 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 			}
 		}
 		if len(needed) > 0 {
-			sources, err := queryMapsContext(ctx, c.DB, `SELECT message_id,conversation_id,sent_at,hashes_json FROM authorship_user_text WHERE message_id IN (SELECT value FROM json_each(?))`, jsonText(sortedNameIDs(needed)))
+			sources, err := queryMapsContext(ctx, reader, `SELECT message_id,conversation_id,sent_at,hashes_json FROM authorship_user_text WHERE message_id IN (SELECT value FROM json_each(?))`, jsonText(sortedNameIDs(needed)))
 			if err != nil {
 				return err
 			}
@@ -550,7 +553,7 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 		if len(wanted) == 0 {
 			return nil
 		}
-		rows, err := queryMapsContext(ctx, c.DB, `SELECT * FROM authorship_lines WHERE key IN (SELECT value FROM json_each(?))`, jsonText(wanted))
+		rows, err := queryMapsContext(ctx, reader, `SELECT * FROM authorship_lines WHERE key IN (SELECT value FROM json_each(?))`, jsonText(wanted))
 		if err != nil {
 			return err
 		}
