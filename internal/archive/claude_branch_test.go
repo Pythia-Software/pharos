@@ -178,9 +178,14 @@ func wantLibraryTokens(t *testing.T, catalog *Catalog, want int64) {
 func TestClaudeForkedSubagentCountsItsParentsRepliesOnce(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, _ := testCatalog(t)
+	original := []string{
+		claudeTurn("s0", "p1", "", "user", "Investigate", nil),
+		claudeReply("s0", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
+	}
+	// s1 resumes s0, then forks a subagent.
 	parent := []string{
-		claudeTurn("s1", "p1", "", "user", "Investigate", nil),
-		claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
+		strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s0"`, `"sessionId":"s1"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+		strings.ReplaceAll(original[1], `"sessionId":"s0"`, `"sessionId":"s1"`),
 	}
 	// A forked subagent starts with a copy of its parent's conversation; a
 	// sidechain replays it under new request IDs.
@@ -188,9 +193,61 @@ func TestClaudeForkedSubagentCountsItsParentsRepliesOnce(t *testing.T) {
 		claudeReply("s1", "a1", "p1", "msg_1", "req_1b", text("Looking"), usage(100, 10)),
 		claudeReply("s1", "f1", "a1", "msg_2", "req_2", text("Found it"), usage(200, 20)),
 	}
-	source := claudeSessionFiles(t, map[string][]string{"s1.jsonl": parent, "s1/subagents/agent-f.jsonl": withSidechain(fork)})
+	source := claudeSessionFiles(t, map[string][]string{"s0.jsonl": original, "s1.jsonl": parent, "s1/subagents/agent-f.jsonl": withSidechain(fork)})
 	ingestSource(t, catalog, source)
 	wantLibraryTokens(t, catalog, 110+220)
+	unsettle(t, catalog)
+	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 2 {
+		t.Fatalf("repair = %d, %v", repaired, err)
+	}
+	wantLibraryTokens(t, catalog, 110+220)
+}
+
+// unsettle makes catalog a library indexed before copies were settled, whose
+// transcripts Claude Code has since removed.
+func unsettle(t *testing.T, catalog *Catalog) {
+	t.Helper()
+	for _, statement := range []string{
+		`UPDATE messages SET raw_text=json_extract(raw_text,'$.copied') WHERE json_valid(raw_text) AND json_extract(raw_text,'$.type')='usage_copy'`,
+		"DELETE FROM claude_usage_copies", "DELETE FROM usage_attribution_state",
+	} {
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestClaudeRepairRestoresAReplyWhoseLinesDisagree(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	// One reply streamed over two lines; the second carries its final usage.
+	original := []string{
+		claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+		claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 1)),
+		claudeReply("s1", "a2", "a1", "msg_1", "req_1", text("Found"), usage(100, 10)),
+	}
+	resumed := []string{
+		strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s2"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+		strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
+		strings.ReplaceAll(original[2], `"sessionId":"s1"`, `"sessionId":"s2"`),
+	}
+	ingestSource(t, catalog, claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed}))
+	wantLibraryTokens(t, catalog, 110)
+	// A record of the reply's second line in s1 was left a copy.
+	var raw string
+	if err := catalog.DB.QueryRow(`SELECT m.raw_text FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id='s1' AND m.native_id='a2:usage'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.DB.Exec(`UPDATE messages SET raw_text=? WHERE native_id='a2:usage' AND conversation_id=(SELECT id FROM conversations WHERE native_id='s1')`, wrapUsageCopy(raw, "s2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.DB.Exec("DELETE FROM usage_attribution_state"); err != nil {
+		t.Fatal(err)
+	}
+	if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 2 {
+		t.Fatalf("repair = %d, %v", repaired, err)
+	}
+	wantLibraryTokens(t, catalog, 110)
 }
 
 func withSidechain(lines []string) []string {
@@ -249,17 +306,9 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 				t.Fatalf("msg_1 counted by %v, %v; want s1 alone", owners, err)
 			}
 
-			// A library indexed before copies were settled, whose transcripts
-			// Claude Code has since removed, is settled from what it stored.
-			if _, err := catalog.DB.Exec(`UPDATE messages SET raw_text=json_extract(raw_text,'$.copied') WHERE json_valid(raw_text) AND json_extract(raw_text,'$.type')='usage_copy'`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := catalog.DB.Exec("DELETE FROM claude_usage_copies"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := catalog.DB.Exec("DELETE FROM usage_attribution_state"); err != nil {
-				t.Fatal(err)
-			}
+			// A library indexed before copies were settled is settled from
+			// what it stored.
+			unsettle(t, catalog)
 			if repaired, err := catalog.RepairUsageAttribution(context.Background(), nil); err != nil || repaired != 5 {
 				t.Fatalf("repair = %d, %v", repaired, err)
 			}
@@ -270,14 +319,17 @@ func TestClaudeResumedSessionCountsCopiedRepliesOnce(t *testing.T) {
 
 func TestClaudeGatewayReplySharingAnIDStaysOnItsBranch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	// A gateway names every reply alike and records no request ID.
+	// A gateway names every reply alike and leaves the request ID empty.
+	gatewayReply := func(uuid, parent, reply string) string {
+		return claudeTurn("s", uuid, parent, "assistant", text(reply), claudeEntry{"requestId": "", "message": map[string]any{"id": "reply", "model": "claude-test", "usage": usage(1, 1)}})
+	}
 	messages := parseJSONL(t, "claude", path,
 		claudeTurn("s", "p1", "", "user", "Hi", nil),
-		claudeReply("s", "g1", "p1", "reply", "", text("Hello"), usage(1, 1)),
+		gatewayReply("g1", "p1", "Hello"),
 		claudeTurn("s", "u2", "g1", "user", "Tell me a joke", nil),
-		claudeReply("s", "g2", "u2", "reply", "", text("A joke"), usage(1, 1)),
+		gatewayReply("g2", "u2", "A joke"),
 		claudeTurn("s", "u3", "g1", "user", "Tell me a fact", nil),
-		claudeReply("s", "g3", "u3", "reply", "", text("A fact"), usage(1, 1)))
+		gatewayReply("g3", "u3", "A fact"))
 	selected := entrySelected(t, messages)
 	if !selected["g1"] || !selected["g3"] || selected["u2"] || selected["g2"] {
 		t.Fatalf("selected = %v, want p1, g1, u3 and g3 alone", selected)

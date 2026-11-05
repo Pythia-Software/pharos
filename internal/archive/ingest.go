@@ -1116,7 +1116,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	for index := range merges {
 		merges[index] = !authority.conversations[index].writer
 	}
-	if _, err := settleClaudeUsage(ctx, tx, record, conversationIDs, merges); err != nil {
+	if err := settleClaudeUsage(ctx, tx, record, conversationIDs, merges, "", nil); err != nil {
 		return 0, 0, err
 	}
 	if err := refreshWorkspaceNames(tx, []string{workspaceID}); err != nil {

@@ -158,24 +158,22 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			return index, err
 		}
 		workspaceID := firstString(row["id"])
-		conversations, ids, err := storedWorkspaceConversations(ctx, c.DB, workspaceID)
-		if err != nil {
-			return index, err
-		}
-		err = c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
-			ledger := map[string]bool{}
+		// Read under the writer: what an ingest adds meanwhile must not be
+		// lost to an earlier snapshot.
+		err := c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
+			conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
+			if err != nil {
+				return err
+			}
 			if firstString(row["source_kind"]) == "claude" {
-				var err error
-				if ledger, err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
-					return err
-				}
+				err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids)
+			} else {
+				err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, nil)
 			}
-			if ledger != nil {
-				if err := rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, ledger); err != nil {
-					return err
-				}
+			if err != nil {
+				return err
 			}
-			_, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
+			_, err = tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
 				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion)
 			return err
 		})

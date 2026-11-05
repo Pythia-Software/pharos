@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -95,12 +96,20 @@ func claudeConversationKeys(conversation ConversationRecord, natives map[string]
 		if natives[copyOf] {
 			continue
 		}
-		if _, seen := keys[key]; !seen {
+		if prior, seen := keys[key]; !seen {
 			keys[key] = copyOf
+		} else if prior != copyOf {
+			// A reply's records that disagree agree with no owner, so the
+			// settlement rewrites them.
+			keys[key] = claudeMixedCopies
 		}
 	}
 	return keys
 }
+
+// claudeMixedCopies is the copy_of of a conversation whose records of one
+// reply say different things; it names no conversation.
+const claudeMixedCopies = "\x00mixed"
 
 func recordNatives(record WorkspaceRecord) map[string]bool {
 	natives := map[string]bool{}
@@ -209,9 +218,9 @@ func claimClaudeUsage(tx *sql.Tx, record *WorkspaceRecord) error {
 // owner, rebuilding the usage of each workspace whose stored records changed.
 // A conversation the record merged into rather than wrote (fromStore) holds
 // what is stored, which can be more than the record has.
-func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, conversationIDs []string, fromStore []bool) (map[string]bool, error) {
+func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, conversationIDs []string, fromStore []bool, own string, ownLedger map[string]bool) error {
 	if record.SourceKind != "claude" {
-		return nil, nil
+		return nil
 	}
 	natives := recordNatives(record)
 	touched := map[string]bool{}
@@ -222,32 +231,32 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 		id := conversationIDs[index]
 		rows, err := tx.Query("SELECT usage_key FROM claude_usage_copies WHERE conversation_id=?", id)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for rows.Next() {
 			var key string
 			if err := rows.Scan(&key); err != nil {
 				rows.Close()
-				return nil, err
+				return err
 			}
 			touched[key] = true
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := tx.Exec("DELETE FROM claude_usage_copies WHERE conversation_id=?", id); err != nil {
-			return nil, err
+			return err
 		}
 		if index < len(fromStore) && fromStore[index] {
 			if conversation.Messages, err = storedMessages(ctx, tx, id); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		for key, copyOf := range claudeConversationKeys(conversation, natives) {
 			if _, err := tx.Exec("INSERT INTO claude_usage_copies(usage_key,conversation_id,copy_of) VALUES(?,?,?)", key, id, copyOf); err != nil {
-				return nil, err
+				return err
 			}
 			touched[key] = true
 		}
@@ -259,7 +268,7 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 	sort.Strings(keys)
 	holders, err := claudeUsageHolders(tx, keys)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// Only a holder whose records say otherwise than its key's owner is read.
 	decisions, workspaceOf := map[string]map[string]string{}, map[string]string{}
@@ -292,7 +301,7 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 	for _, conversation := range conversations {
 		updated, err := settleStoredUsage(tx, conversation, decisions[conversation])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if updated {
 			if changed[workspaceOf[conversation]] == nil {
@@ -302,27 +311,31 @@ func settleClaudeUsage(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, 
 		}
 		for key, copyOf := range decisions[conversation] {
 			if _, err := tx.Exec("UPDATE claude_usage_copies SET copy_of=? WHERE usage_key=? AND conversation_id=?", copyOf, key, conversation); err != nil {
-				return nil, err
+				return err
 			}
 		}
+	}
+	if own != "" {
+		if changed[own] == nil {
+			changed[own] = map[string]bool{}
+		}
+		maps.Copy(changed[own], ownLedger)
 	}
 	workspaces := make([]string, 0, len(changed))
 	for workspace := range changed {
 		workspaces = append(workspaces, workspace)
 	}
 	sort.Strings(workspaces)
-	rebuilt := map[string]bool{}
 	for _, workspace := range workspaces {
 		conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspace)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := rebuildWorkspaceUsage(tx, workspace, conversations, ids, changed[workspace]); err != nil {
-			return nil, err
+			return err
 		}
-		rebuilt[workspace] = true
 	}
-	return rebuilt, nil
+	return nil
 }
 
 // settleStoredUsage makes a stored conversation's usage records of each key
@@ -382,10 +395,9 @@ func claudeRecordHasUsage(record WorkspaceRecord) bool {
 // repairClaudeUsageCopies settles the copies of a workspace's stored Claude
 // Code conversations, as their parse would now: within each session, then
 // across sessions. Claude Code removes old transcripts, so a conversation's
-// stored messages may be all that is left of it. It returns the
-// conversations whose records changed, or nil when it rebuilt the
-// workspace's usage itself.
-func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string) (map[string]bool, error) {
+// stored messages may be all that is left of it. It rebuilds the
+// workspace's usage, and that of any other whose records changed.
+func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string) error {
 	changed := map[string]bool{}
 	for rootIndex, root := range conversations {
 		if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -411,18 +423,14 @@ func repairClaudeUsageCopies(ctx context.Context, tx *sql.Tx, workspaceID string
 					continue
 				}
 				if _, err := tx.Exec("UPDATE messages SET raw_text=? WHERE conversation_id=? AND native_id=?", message.RawText, ids[index], message.NativeID); err != nil {
-					return nil, err
+					return err
 				}
 				changed[ids[index]] = true
 			}
 			conversations[index].Messages = record.Conversations[g].Messages
 		}
 	}
-	rebuilt, err := settleClaudeUsage(ctx, tx, WorkspaceRecord{SourceKind: "claude", Conversations: conversations}, ids, nil)
-	if err != nil || rebuilt[workspaceID] {
-		return nil, err
-	}
-	return changed, nil
+	return settleClaudeUsage(ctx, tx, WorkspaceRecord{SourceKind: "claude", Conversations: conversations}, ids, nil, workspaceID, changed)
 }
 
 // rebuildWorkspaceUsage derives a workspace's sessions, hourly usage and token

@@ -43,8 +43,8 @@ func claudeActiveBranch(events []map[string]any) map[string]bool {
 		if e.kind == "assistant" {
 			// A gateway can give every reply one message ID; a reply's lines
 			// share their request ID too.
-			if id := firstString(message["id"]); event["requestId"] != nil {
-				e.reply = id + "\x00" + firstString(event["requestId"])
+			if id, request := firstString(message["id"]), firstString(event["requestId"]); request != "" {
+				e.reply = id + "\x00" + request
 			} else if strings.HasPrefix(id, "msg_") {
 				e.reply = id
 			}
