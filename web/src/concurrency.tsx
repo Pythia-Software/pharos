@@ -212,14 +212,14 @@ export function ConcurrencyPanel({ routeParameter, onSelection }: { routeParamet
     window.addEventListener("pharos:usage-refresh", refresh);
     return () => { active = false; window.removeEventListener("pharos:usage-refresh", refresh); };
   }, []);
-  const repositories = useMemo(() => Array.from(new Set(data?.threads.map(thread => thread.repository))).sort(), [data]);
+  const repositories = useMemo(() => Array.from(new Set(data?.threads.map(thread => thread.project))).sort(), [data]);
   const repository = repositories.includes(settings.repository) ? settings.repository : "";
   const range = useMemo(() => data ? resolveConcurrencyRange(data, settings) : { startDay: "", endDay: "", bounds: [0, 1] as Interval },
     [data, settings.range, settings.day, settings.startDay, settings.endDay]);
   const rangeBounds = range.bounds;
   const singleDay = range.startDay === range.endDay;
   const { mode, gap, counting } = settings;
-  const threads = useMemo(() => (data?.threads ?? []).filter(thread => (!repository || thread.repository === repository)), [data, repository]);
+  const threads = useMemo(() => (data?.threads ?? []).filter(thread => (!repository || thread.project === repository)), [data, repository]);
   const sessions = useMemo(() => workSessions(threads), [threads]);
   const rangeThreads = useMemo(() => threads.map(thread => ({ ...thread, turns: clipIntervals(thread.turns, rangeBounds), model_spans: clipIntervals(thread.model_spans, rangeBounds), continuous_spans: clipIntervals(mergeIntervals(thread.turns, gap * minute), rangeBounds) })).filter(thread => thread.turns.length || thread.model_spans.length || thread.continuous_spans.length), [threads, rangeBounds, gap]);
   const rangeSessions = useMemo(() => clipIntervals(sessions, rangeBounds), [sessions, rangeBounds]);
@@ -237,7 +237,7 @@ export function ConcurrencyPanel({ routeParameter, onSelection }: { routeParamet
     if (data) selectionCallback.current?.({ settings: { ...settings, repository }, bounds, selected: selected ? unitInfo.get(selected) ?? null : null });
   }, [data, bounds[0], bounds[1], repository, counting, mode, gap, selected]);
   const navigation = useDrilldownHistory({ zoom, workspace: settings.workspace, agent: settings.agent }, JSON.stringify([rangeBounds, repository, counting, routeRevision]));
-  const colors = useMemo(() => new Map(Array.from(unitInfo, ([id, thread]) => [id, concurrencyPalette[Math.max(0, repositories.indexOf(thread.repository)) % concurrencyPalette.length]])), [unitInfo, repositories]);
+  const colors = useMemo(() => new Map(Array.from(unitInfo, ([id, thread]) => [id, concurrencyPalette[Math.max(0, repositories.indexOf(thread.project)) % concurrencyPalette.length]])), [unitInfo, repositories]);
   const highlighted = selected ?? hover?.unit ?? null;
   const focusedThreads = rangeThreads.filter(thread => concurrencyUnit(thread, counting) === highlighted && thread.agent_depth === 0).sort((a, b) => Number(b.id === hover?.conversation) - Number(a.id === hover?.conversation));
   const scopedRows = rangeThreads.filter(thread => thread.agent_depth === 0 && (!selected || concurrencyUnit(thread, counting) === selected)).sort((a, b) => sumSpans(b.turns) - sumSpans(a.turns));
@@ -275,7 +275,7 @@ export function ConcurrencyPanel({ routeParameter, onSelection }: { routeParamet
         </div> : null}
       </div>
       <label>Turn gap<DashboardSelect aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</DashboardSelect></label>
-      <label>Repository<DashboardSelect aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</DashboardSelect></label>
+      <label>Project<DashboardSelect aria-label="Project" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All projects</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</DashboardSelect></label>
       <SmoothingControl value={settings.smoothingMinutes} unit="minutes" onChange={smoothingMinutes => update({ smoothingMinutes })} note="Average occupancy line" />
     </div>
     <ZoomNavigation canBack={navigation.canBack} zoomed={Boolean(zoom || selected)} onBack={() => navigation.back(snapshot => update(snapshot))} onReset={() => update({ zoom: null, workspace: "", agent: "" })}>
@@ -285,11 +285,11 @@ export function ConcurrencyPanel({ routeParameter, onSelection }: { routeParamet
     <ConcurrencyChart key={counting} mode={mode} counting={counting} threads={rangeThreads} historyThreads={threads} historyStart={zonedDayBounds(data.period_start, data.timezone)[0]} gap={gap} order={order} bounds={bounds} ceiling={Math.max(2, visibleMetrics[mode].peak)} colors={colors} selected={highlighted} hover={hover} onHover={setHover} onSelect={chooseUnit} onZoom={value => update({ zoom: value })} timezone={data.timezone} smoothingMinutes={settings.smoothingMinutes}/>
     <div className="concurrency-plot-summary" role="group" aria-label="Parallelism summary">{incompleteToday ? <span>— · Incomplete timing coverage</span> : <Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} today={settings.range === "today" && !zoom} counting={counting} />}<div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span></div></div>
     <div className="concurrency-hover-detail" aria-live="polite">{hover ? <><strong>{clock.format(hover.time)}</strong> · {activeAt(hover.time)} concurrent {counting === "agent" ? "conversations" : "workspaces"}{focusedThreads[0] ? <span> · {focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads[0].title}</span> : null}</> : selected && focusedThreads[0] ? <>{focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads.length} conversation{focusedThreads.length === 1 ? "" : "s"}</> : "Select a ribbon to follow its conversations. Drag across the chart to zoom."}</div>
-    <div className="concurrency-chart-footer"><div className="concurrency-repositories">{repositories.filter(repo => rangeThreads.some(thread => thread.repository === repo)).map(repo => <span key={repo}><i style={{ background: concurrencyPalette[repositories.indexOf(repo) % concurrencyPalette.length] }}/>{repo}</span>)}</div></div>
+    <div className="concurrency-chart-footer"><div className="concurrency-repositories">{repositories.filter(repo => rangeThreads.some(thread => thread.project === repo)).map(repo => <span key={repo}><i style={{ background: concurrencyPalette[repositories.indexOf(repo) % concurrencyPalette.length] }}/>{repo}</span>)}</div></div>
     <details className="concurrency-conversations" open={settings.showConversations} onToggle={event => { if (event.currentTarget.open !== settings.showConversations) update({ showConversations: event.currentTarget.open }); }}><summary>{scopedRows.length} conversations{selected ? (counting === "agent" ? " for selected conversation" : ` in ${unitInfo.get(selected)?.workspace_name}`) : " in this range"}</summary>
       {selected ? <button type="button" className="concurrency-clear-selection" onClick={() => update({ workspace: "", agent: "" })}>Show all conversations</button> : null}
-      {settings.showConversations ? scopedRows.length ? <table><thead><tr><th scope="col">Repository</th><th scope="col">Conversation</th><th scope="col">Model time</th><th scope="col">Conversation time</th><th scope="col" className="concurrency-open-cell" aria-label="Open conversation"><span className="concurrency-open-text">Open conversation</span><span className="concurrency-open-icon" aria-hidden="true">↗</span></th></tr></thead><tbody>{scopedRows.map(thread => <tr key={thread.id} className={selected === concurrencyUnit(thread, counting) ? "selected" : ""}>
-        <td><span className="concurrency-conversation-repo"><i style={{ background: colors.get(concurrencyUnit(thread, counting)) }} /><span data-overflow-title="">{thread.repository}</span></span></td>
+      {settings.showConversations ? scopedRows.length ? <table><thead><tr><th scope="col">Project</th><th scope="col">Conversation</th><th scope="col">Model time</th><th scope="col">Conversation time</th><th scope="col" className="concurrency-open-cell" aria-label="Open conversation"><span className="concurrency-open-text">Open conversation</span><span className="concurrency-open-icon" aria-hidden="true">↗</span></th></tr></thead><tbody>{scopedRows.map(thread => <tr key={thread.id} className={selected === concurrencyUnit(thread, counting) ? "selected" : ""}>
+        <td><span className="concurrency-conversation-repo"><i style={{ background: colors.get(concurrencyUnit(thread, counting)) }} /><span data-overflow-title="">{thread.project}</span></span></td>
         <td><button type="button" className="concurrency-thread-button" onClick={() => chooseUnit(concurrencyUnit(thread, counting))}><span data-overflow-title="">{thread.title}</span></button></td>
         <td>{duration(rowTimings.get(thread.id)!.model)}</td><td>{duration(rowTimings.get(thread.id)!.threaded)}</td>
         <td className="concurrency-open-cell"><a href={`/work/${encodeURIComponent(thread.work_id)}?conversation=${encodeURIComponent(thread.conversation_id)}`} target="_blank" rel="noreferrer" aria-label={`Open conversation: ${thread.title}`} title="Open conversation"><span className="concurrency-open-text">Open conversation </span>↗</a></td>

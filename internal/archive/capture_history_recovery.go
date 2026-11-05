@@ -399,6 +399,10 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 			outcome = "unresolved-original-host"
 			return nil
 		}
+		checkouts, err := repositoryCheckouts(ctx, tx)
+		if err != nil {
+			return err
+		}
 		for _, o := range e.Observations {
 			if o.Kind == "hosts" || o.Kind == "repositories" {
 				if err = restoreHistoryObservation(ctx, tx, o, false); err != nil {
@@ -428,6 +432,20 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 			}
 			if _, err = tx.ExecContext(ctx, "UPDATE workspaces SET repository_id=?,location_history_json=? WHERE id=?",
 				nilIfEmpty(firstString(workspace["repository_id"])), defaultString(workspace["location_history_json"], "[]"), id); err != nil {
+				return err
+			}
+		}
+		if err = resolveProjects(ctx, tx, "w.id=?", id); err != nil {
+			return err
+		}
+		// Restored repositories bypass the writer that reports new checkouts,
+		// so folder sessions recovered earlier may now be inside one.
+		restored, err := repositoryCheckouts(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if restored != checkouts {
+			if err = resolveFolderProjects(ctx, tx, []string{restored}); err != nil {
 				return err
 			}
 		}

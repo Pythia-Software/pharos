@@ -276,6 +276,10 @@ func (c *Catalog) Initialize() error {
 	if err := c.dropRetiredWorkRevisionTriggers(); err != nil {
 		return err
 	}
+	// The analysis triggers read the project columns.
+	if err := c.migrateProjects(); err != nil {
+		return fmt.Errorf("initialize projects: %w", err)
+	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
 	}
@@ -362,6 +366,7 @@ func (c *Catalog) Initialize() error {
 		{"agent_sessions", "cache_creation_1h_input_tokens", "ALTER TABLE agent_sessions ADD COLUMN cache_creation_1h_input_tokens INTEGER NOT NULL DEFAULT 0"},
 		{"agent_sessions", "child_conversation_id", "ALTER TABLE agent_sessions ADD COLUMN child_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL"},
 		{"tool_usage_daily", "command_name", "ALTER TABLE tool_usage_daily ADD COLUMN command_name TEXT"},
+		{"tool_usage_daily", "project_name", "ALTER TABLE tool_usage_daily ADD COLUMN project_name TEXT"},
 		{"tool_calls", "url", "ALTER TABLE tool_calls ADD COLUMN url TEXT"},
 		{"tool_calls", "host", "ALTER TABLE tool_calls ADD COLUMN host TEXT"},
 		{"tool_calls", "hosts", "ALTER TABLE tool_calls ADD COLUMN hosts TEXT"},
@@ -470,8 +475,19 @@ func (c *Catalog) Initialize() error {
 	// building them reads this, not the workspace rows, whose purpose and
 	// outcome text spills onto overflow pages ahead of the later columns.
 	// Created here, once the migrations above have added those columns.
+	// It also covers the project columns (projects.go), so an index from
+	// before them is rebuilt.
+	var libraryIndex string
+	if err := c.DB.QueryRow(`SELECT COALESCE(MAX(sql),'') FROM sqlite_master WHERE type='index' AND name='workspaces_library_idx'`).Scan(&libraryIndex); err != nil {
+		return err
+	}
+	if libraryIndex != "" && !strings.Contains(libraryIndex, "folder_repository_id") {
+		if _, err := c.DB.Exec(`DROP INDEX workspaces_library_idx`); err != nil {
+			return err
+		}
+	}
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS workspaces_library_idx ON workspaces(id,title,source_kind,activity_at,
-		branch,owner,flavor,version,lifecycle,preservation_completeness,main_merge_title,location,repository_id)`); err != nil {
+		branch,owner,flavor,version,lifecycle,preservation_completeness,main_merge_title,location,repository_id,project_folder,folder_repository_id)`); err != nil {
 		return err
 	}
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_signature_idx ON tool_calls(error_signature,started_at) WHERE error_signature IS NOT NULL`); err != nil {
@@ -1042,11 +1058,11 @@ func integer(value any) int64 {
 }
 
 type SearchOptions struct {
-	Query, Repository, Source, File, Owner, Provider, Model, Effort, From, To, Flavor, Version, Outcome, Error, Metric string
-	Channel, MachineID, ExecutionMachineID                                                                             string
-	PR                                                                                                                 *int
-	Minimum, Maximum                                                                                                   *float64
-	ChangedOnly                                                                                                        bool
+	Query, Repository, Project, Source, File, Owner, Provider, Model, Effort, From, To, Flavor, Version, Outcome, Error, Metric string
+	Channel, MachineID, ExecutionMachineID                                                                                      string
+	PR                                                                                                                          *int
+	Minimum, Maximum                                                                                                            *float64
+	ChangedOnly                                                                                                                 bool
 	// Substring adds matches inside words, from the substring index.
 	Substring     bool
 	Limit, Offset int
@@ -1136,6 +1152,10 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 	if options.Repository != "" {
 		where = append(where, repositoryNamePredicate("r"))
 		args = append(args, options.Repository, options.Repository)
+	}
+	if options.Project != "" {
+		where = append(where, projectPredicate("w"))
+		args = append(args, projectArgs(options.Project)...)
 	}
 	if options.Source != "" {
 		where = append(where, "w.source_kind=?")

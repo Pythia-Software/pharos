@@ -11,7 +11,7 @@
     {"field": "started_at", "width": 150},
     {"field": "actor", "width": 150},
     {"field": "unit_label", "width": 230},
-    {"field": "repository_name", "width": 145},
+    {"field": "project_name", "width": 145},
     {"field": "elapsed_hours", "width": 110},
     {"field": "messages", "width": 110},
     {"field": "turns", "width": 100}
@@ -29,6 +29,7 @@
     {"name": "unit_id", "label": "Conversation", "type": "text", "group": "Unit", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_id", "synthetic": true}, "sqlite": {"expr": "r.\"unit_id\""}}, "description": "The top-level conversation the time belongs to: the one an agent turn ran in, or the one your message was sent to."},
     {"name": "unit_label", "label": "Title", "type": "text", "group": "Unit", "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_label", "synthetic": true}, "sqlite": {"expr": "r.\"unit_label\""}}, "description": "The top-level conversation's workspace title.", "render": "usage_conversation"},
     {"name": "repository_name", "label": "Repository", "type": "text", "group": "Unit", "aliases": ["repo"], "filter": {"values": {"source": "distinct"}}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "repository_name", "synthetic": true}, "sqlite": {"expr": "r.\"repository_name\""}}, "description": "Repository of the unit's top-level workspace; empty when none is recorded."},
+    {"name": "project_name", "label": "Project", "type": "text", "group": "Unit", "filter": {"values": {"source": "distinct"}}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "project_name", "synthetic": true}, "sqlite": {"expr": "r.\"project_name\""}}, "description": "The unit's project: the repository, else the working folder (home as ~); empty when the session has no working directory."},
     {"name": "workspace_name", "label": "Workspace", "type": "text", "group": "Unit", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "workspace_name", "synthetic": true}, "sqlite": {"expr": "r.\"workspace_name\""}}},
     {"name": "conversation_id", "relationship": {"objectType": "pharos_conversations", "key": {"id": "conversation_id"}}, "label": "Top-level conversation ID", "type": "text", "render": "conversation_link", "group": "Unit", "select": {"default": false}, "bindings": {"postgres": {"expr": "conversation_id", "synthetic": true}, "sqlite": {"expr": "r.\"conversation_id\""}}, "description": "Set when counting conversations."},
     {"name": "provider", "label": "Provider", "type": "enum", "group": "Unit", "select": {"default": false}, "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "claude", "label": "Claude"}, {"value": "codex", "label": "Codex"}, {"value": "antigravity", "label": "Antigravity"}]}}, "bindings": {"postgres": {"expr": "provider", "synthetic": true}, "sqlite": {"expr": "r.\"provider\""}}, "description": "The top-level conversation's provider."},

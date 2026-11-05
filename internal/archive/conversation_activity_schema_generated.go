@@ -35,6 +35,7 @@ func PharosConversationActivitySchema() querytable.Schema {
 			"workspace_id":             {Name: "workspace_id", Kind: querytable.FieldText, Expr: "r.\"workspace_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"workspace_id\""},
 			"title":                    {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"repository_name":          {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":             {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"conversation_id":          {Name: "conversation_id", Kind: querytable.FieldText, Expr: "r.\"conversation_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"conversation_id\""},
 			"message_id":               {Name: "message_id", Kind: querytable.FieldText, Expr: "r.\"message_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"message_id\""},
 			"root_title":               {Name: "root_title", Kind: querytable.FieldText, Expr: "r.\"root_title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"root_title\""},

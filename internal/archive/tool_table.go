@@ -32,7 +32,7 @@ func init() {
 // summary dimension (tool, shell program, model, repository, agent kind).
 var toolRollupDataset = func() sqlDataset {
 	columns := map[string]string{}
-	for _, name := range []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
+	for _, name := range []string{"id", "day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 		"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 		"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
 		"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
@@ -55,7 +55,7 @@ var toolRollupDataset = func() sqlDataset {
 
 // toolCallDataset serves one row per tool call, excluding mirrored work.
 var toolCallDataset = sqlDataset{
-	from: `FROM tool_calls t JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+	from: `FROM tool_calls t JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + `
 		LEFT JOIN agent_sessions a ON a.id=t.agent_session_id LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)`,
 	base:      "t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	countFrom: "FROM tool_calls t", countAlias: "t",
@@ -64,10 +64,11 @@ var toolCallDataset = sqlDataset{
 	cube:       toolCallCube,
 	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "operation_key": true, "activity": true},
 	optionalJoins: map[string]string{
-		"o": " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)",
-		"w": " JOIN workspaces w ON w.id=t.workspace_id",
-		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
-		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
+		"o":  " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)",
+		"w":  " JOIN workspaces w ON w.id=t.workspace_id",
+		"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+		"pj": projectJoin("w"),
+		"a":  "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
 	},
 	pageFrom:           "FROM tool_calls t",
 	newestFirst:        map[string]string{"started_at": "tool_calls_page_idx"},
@@ -105,7 +106,7 @@ var toolCallDataset = sqlDataset{
 		"day":             "date(t.started_at,'localtime')",
 		"week":            "date(t.started_at,'localtime','-6 days','weekday 1')",
 		"month":           "strftime('%Y-%m',t.started_at,'localtime')",
-		"repository_name": "r.display_name", "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
+		"repository_name": "r.display_name", "project_name": projectNameSQL("w"), "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
 		"source_kind": "w.source_kind", "provider": "t.provider", "model": "t.model", "effort": "t.effort", "model_family": "model_family(t.model)",
 		"model_effort": "model_effort(t.model,t.effort)",
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",

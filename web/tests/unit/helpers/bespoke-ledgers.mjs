@@ -29,7 +29,7 @@ export function writingMessages() {
     return {
       id: `message-${index}`, sent_at: at.toISOString(), ...recorded,
       typed_words: typed, pasted_words: pasted, copied_words: copied, prompt_words: prompt, machine_words: machine, words: typed + pasted + copied + prompt + machine,
-      message_count: 1, conversation_id: `conversation-${conversation}`, work_id: `work-${work}`, workspace_id: `work-${work}`, repository_name: repositories[work % 3],
+      message_count: 1, conversation_id: `conversation-${conversation}`, work_id: `work-${work}`, workspace_id: `work-${work}`, repository_name: repositories[work % 3], project_name: repositories[work % 3],
       provider: conversation % 2 ? "claude" : "codex", source_kind: conversation % 2 ? "claude" : "codex", channel: conversation % 3 ? "desktop" : "cli",
       correction_cue: typed > 0 && index % 4 === 1, positive_cue: typed > 0 && index % 8 === 3, has_source: copied > 0, main_category: typed ? "typed" : pasted ? "pasted" : "harness",
     };
@@ -55,7 +55,7 @@ export function parallelismRecords() {
       const unitMs = 1800000 + 600000 * (slot % 3), elapsedMs = unitMs / level;
       rows.push({
         id: `cell-${day}-${slot}`, started_at: at.toISOString(), ...calendar(at), hour_of_day: pad(at.getHours()), counting, gap_minutes: gap,
-        unit_id: `unit-${unit}`, unit_label: `Workspace ${unit}`, workspace_name: `Workspace ${unit}`, repository_name: repositories[unit % 3], provider: unit % 2 ? "claude" : "codex",
+        unit_id: `unit-${unit}`, unit_label: `Workspace ${unit}`, workspace_name: `Workspace ${unit}`, repository_name: repositories[unit % 3], project_name: repositories[unit % 3], provider: unit % 2 ? "claude" : "codex",
         level, level_band: level >= 4 ? "4+" : String(level), unit_ms: unitMs, elapsed_ms: elapsedMs, unit_hours: unitMs / 3600000, elapsed_hours: elapsedMs / 3600000,
         parallel_elapsed_hours: level > 1 ? elapsedMs / 3600000 : 0,
       });

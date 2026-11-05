@@ -92,6 +92,7 @@ type statisticsRequest struct {
 	WorkspaceIDs       []string            `json:"workspace_ids,omitempty"`
 	Query              string              `json:"query,omitempty"`
 	Repository         string              `json:"repository,omitempty"`
+	Project            string              `json:"project,omitempty"`
 	Owner              string              `json:"owner,omitempty"`
 	Flavor             string              `json:"flavor,omitempty"`
 	Version            string              `json:"version,omitempty"`
@@ -365,7 +366,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	}
 	groups := map[string]bool{}
 	for _, g := range r.GroupBy {
-		if !slices.Contains([]string{"repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
+		if !slices.Contains([]string{"project", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
 			return r, fmt.Errorf("group_by requires unique supported dimensions")
 		}
 		if r.Entity == "workspace" && slices.Contains([]string{"provider", "channel", "machine_id", "execution_machine_id"}, g) {

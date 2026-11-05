@@ -22,17 +22,18 @@ func mcpMethodSQL(prefix string) string {
 
 var skillUsageDataset = sqlDataset{
 	from: `FROM skill_usages s JOIN workspaces w ON w.id=s.workspace_id
-		JOIN conversations c ON c.id=s.conversation_id LEFT JOIN repositories r ON r.id=w.repository_id
+		JOIN conversations c ON c.id=s.conversation_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + `
 		LEFT JOIN messages m ON m.id=s.evidence_message_id
 		LEFT JOIN tool_calls t ON t.id=s.tool_call_id LEFT JOIN agent_sessions a ON a.id=s.agent_session_id LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,s.conversation_id)`,
 	base:    "s.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	lookups: map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "tool_call_id": true},
 	optionalJoins: map[string]string{
-		"o": " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,s.conversation_id)",
-		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
-		"m": "LEFT JOIN messages m ON m.id=s.evidence_message_id",
-		"t": "LEFT JOIN tool_calls t ON t.id=s.tool_call_id",
-		"a": " LEFT JOIN agent_sessions a ON a.id=s.agent_session_id",
+		"o":  " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,s.conversation_id)",
+		"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+		"pj": projectJoin("w"),
+		"m":  "LEFT JOIN messages m ON m.id=s.evidence_message_id",
+		"t":  "LEFT JOIN tool_calls t ON t.id=s.tool_call_id",
+		"a":  " LEFT JOIN agent_sessions a ON a.id=s.agent_session_id",
 	},
 	pageFrom:    "FROM skill_usages s",
 	pageIndexes: map[string]string{"created_at": "skill_usages_page_idx"},
@@ -59,7 +60,7 @@ var skillUsageDataset = sqlDataset{
 		"created_at": "s.created_at", "day": "date(s.created_at,'localtime')", "week": "date(s.created_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',s.created_at,'localtime')",
 		"content_bytes": "s.content_bytes", "provider": "c.provider", "source_kind": "w.source_kind", "model": "COALESCE(t.model,m.model,c.model)", "effort": "CASE WHEN t.id IS NOT NULL THEN t.effort ELSE m.effort END",
 		"model_effort":    "model_effort(COALESCE(t.model,m.model,c.model),CASE WHEN t.id IS NOT NULL THEN t.effort ELSE m.effort END)",
-		"repository_name": "r.display_name", "title": "w.title", "tool_name": "t.tool_name", "mcp_server": "t.mcp_server", "mcp_method": mcpMethodSQL("t."),
+		"repository_name": "r.display_name", "project_name": projectNameSQL("w"), "title": "w.title", "tool_name": "t.tool_name", "mcp_server": "t.mcp_server", "mcp_method": mcpMethodSQL("t."),
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",
 	},
 }

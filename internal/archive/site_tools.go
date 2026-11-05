@@ -127,7 +127,7 @@ func (site *siteMap) browseTool(ctx context.Context, catalog *Catalog, args map[
 		limit = clamp(int(integer(args["limit"])), 1, 200)
 	}
 	offset := max(int(integer(args["offset"])), 0)
-	budget := mcpBudget(args, 3000)
+	budget := mcpBudget(args, 3500)
 	result, err := site.browse(ctx, catalog, path, query)
 	if err != nil {
 		return nil, err

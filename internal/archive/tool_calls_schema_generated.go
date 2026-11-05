@@ -16,6 +16,7 @@ func PharosToolCallsSchema() querytable.Schema {
 			"week":                     {Name: "week", Kind: querytable.FieldText, Expr: "r.\"week\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"week\""},
 			"month":                    {Name: "month", Kind: querytable.FieldText, Expr: "r.\"month\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"month\""},
 			"repository_name":          {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":             {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"source_kind":              {Name: "source_kind", Kind: querytable.FieldEnum, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},
 			"provider":                 {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"channel":                  {Name: "channel", Kind: querytable.FieldText, Expr: "r.\"channel\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"channel\""},

@@ -150,7 +150,7 @@ test("a Tools minimum counts calls, not daily summaries", () => {
   assert.match(analysisNote(tools, state), /fewer than 10 calls are hidden/);
   // Shares take no minimum; units of other catalogs count units.
   assert.equal(analysisQuery(tools, { ...state, metric: "calls", compareAs: "share" }, [], { now }).query.grouping, undefined);
-  assert.match(analysisNote(time, { view: "distribution", unit: "conversation", metric: "calls", split: "repository_name", minSamples: 3 }), /fewer than 3 plotted agent conversations/);
+  assert.match(analysisNote(time, { view: "distribution", unit: "conversation", metric: "calls", split: "project_name", minSamples: 3 }), /fewer than 3 plotted agent conversations/);
 });
 
 test("a trailing window pools a mean's parts: rates and means of calls, never a mean of daily means", () => {
@@ -200,6 +200,11 @@ test("older links: numbered metrics read as measures; only dashboards with a leg
   const filter = { field: "activity", op: "=", value: "command:test" };
   const old = readAnalysisLink(time, { metric: 0, split: "activity" }, [filter]);
   assert.deepEqual([old.where, old.state.selection, old.state.v], [[], { values: ["command:test"], excluded: false }, analysisVersion]);
+  // A legend selection from before projects filtered the repository field;
+  // it is still the selection, not a population of one project.
+  const repository = { field: "repository_name", op: "=", value: "pharos" }, month = { field: "day", op: ">=", value: "2026-09-01" };
+  const renamed = readAnalysisLink(tokenAnalysisCatalog, { view: "trend", metric: "tokens", split: "repository_name" }, [month, repository]);
+  assert.deepEqual([renamed.where, renamed.state.selection], [[month], { values: ["pharos"], excluded: false }]);
   // Tools and MCP drew no legend: their filters were always populations.
   const tool = { field: "tool_name", op: "=", value: "Bash" };
   for (const [catalog, state] of [[tools, { metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 7, display: "interval" }], [mcp, { metric: "mean_output", split: "tool_name", view: "compare", period: "day", rollingPeriods: 0, display: "interval" }]]) {
@@ -535,17 +540,17 @@ test("a catalog's request: its parameters reach every request, and its note ever
 
 test("whole conversations retain messages and delegated output across event repositories", () => {
   const records = [
-    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-a", human_messages: 3, output_tokens: 0 },
-    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", repository_name: "repo-b", human_messages: 0, output_tokens: 200 },
+    { id: "root", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", project_name: "repo-a", human_messages: 3, output_tokens: 0 },
+    { id: "delegate", root_conversation_id: "one", root_provider: "codex", root_model_family: "gpt", project_name: "repo-b", human_messages: 0, output_tokens: 200 },
   ];
   const state = { view: "scatter", unit: "conversation", metric: "messages", metricY: "output" };
-  for (const split of ["none", "provider_model", "repository_name"]) {
+  for (const split of ["none", "provider_model", "project_name"]) {
     const query = analysisQuery(activity, { ...state, split }, [], { now }).query;
     const result = core.evaluateMetrics(records, query, schemas.conversation_activity, { now }).metrics[0];
     assert.equal(result.error, undefined);
     assert.deepEqual(result.buckets.map(bucket => [bucket.value, bucket.y]), [[3, 200]], split);
   }
-  const byRepository = analysisQuery(activity, { view: "compare", unit: "records", metric: "output", split: "repository_name" }, [], { now }).query;
+  const byRepository = analysisQuery(activity, { view: "compare", unit: "records", metric: "output", split: "project_name" }, [], { now }).query;
   const result = core.evaluateMetrics(records, byRepository, schemas.conversation_activity, { now }).metrics[0];
   assert.deepEqual(Object.fromEntries(result.buckets.map(bucket => [bucket.keys[0], bucket.value])), { "repo-a": 0, "repo-b": 200 }, "record views still offer event repositories");
 });

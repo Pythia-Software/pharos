@@ -1,4 +1,5 @@
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
+import { projectBreakdown, projectLegacy } from "./project-analysis";
 
 // Parallelism over the parallelism dataset: one record is one local hour of
 // one workspace or top-level conversation (the user's counting) at
@@ -41,18 +42,18 @@ export function parallelismAnalysisCatalog(counting?: ParallelismCounting): Anal
     dataset: "parallelism", time: { first: "started_at", last: "started_at" }, measures: namedMeasures,
     breakdowns: {
       level_band: { label: `${title}s at once`, fields: ["level_band"], order: ["1", "2", "3", "4+"] },
-      repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
+      project_name: projectBreakdown(),
       ...single([...agent ? [["provider", "Provider"], ["model", "Model"]] as Array<[string, string]> : [], ["workspace_name", "Workspace"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
     },
     records: { label: `${title} hour`, plural: `${title} hours`, note: `Active time for one ${noun} in one local hour, split when the number active at once changes.` },
     units: {
       agent: { label: title, plural: `${title}s`, key: "unit_id", where: [{ field: "unit_id", op: "is_not_null", value: "" }],
-        breakdowns: { repository_name: ["repository_name"], ...agent ? { provider: ["provider"] } : {}, workspace_name: ["workspace_name"], ...origin },
-        note: `Counts ${plural} using your Parallelism setting. Linked sub-agent activity stays with its initiating conversation; its repository and origin stay together.` },
+        breakdowns: { project_name: ["project_name"], ...agent ? { provider: ["provider"] } : {}, workspace_name: ["workspace_name"], ...origin },
+        note: `Counts ${plural} using your Parallelism setting. Linked sub-agent activity stays with its initiating conversation; its project and origin stay together.` },
     },
     cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
     periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
-    trend: { metric: "agent_hours", split: "level_band" },
+    trend: { metric: "agent_hours", split: "level_band" }, legacy: projectLegacy(),
     scatter: ["agent_hours", "active_hours"],
   };
   if (catalog.breakdowns.provider) catalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];

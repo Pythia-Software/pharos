@@ -9,7 +9,7 @@ const authoredUser: WhereTerm[] = [
 ];
 const writingMessageFields: Record<string, string> = {
   sent_at: "authorship_sent_at", day: "authorship_day", week: "authorship_week", month: "authorship_month",
-  title: "authorship_title", repository_name: "authorship_repository_name", source_kind: "authorship_source_kind",
+  title: "authorship_title", repository_name: "authorship_repository_name", project_name: "authorship_project_name", source_kind: "authorship_source_kind",
 };
 const sourceFields = Object.fromEntries(Object.entries(writingMessageFields).map(([source, target]) => [target, source]));
 export const generatedMessageField = (field: string) => writingMessageFields[field] ?? field;

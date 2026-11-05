@@ -1,5 +1,5 @@
 // Library health's storage breakdown: where the library's space goes, as one
-// bar of its parts and a table by Mac, source or repository. The service
+// bar of its parts and a table by Mac, source or project. The service
 // measures and divides the space (storage_breakdown.go); this only draws it.
 (() => {
   'use strict';
@@ -36,7 +36,7 @@
 @media(max-width:500px){.storage-legend li{white-space:normal}.storage-table .storage-split{display:none}.storage-table .storage-name{width:45%}.storage-table .num{width:25%}.storage-breakdown{padding:14px}}
 `;
   const SOURCES = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', antigravity: 'Antigravity', 'antigravity-cli': 'Antigravity CLI'};
-  const VIEWS = [['machines', 'By Mac'], ['sources', 'By source'], ['repositories', 'By repository']];
+  const VIEWS = [['machines', 'By Mac'], ['sources', 'By source'], ['projects', 'By project']];
   // Each part's color: its group's hue, lighter for the smaller parts.
   const FILLS = {
     originals_latest: 'var(--storage-originals)',
@@ -98,7 +98,7 @@
 
   function table(shown, bytes) {
     const element = node('table', 'storage-table'), head = node('tr');
-    const name = view === 'machines' ? 'Mac' : view === 'sources' ? 'Source' : 'Repository';
+    const name = view === 'machines' ? 'Mac' : view === 'sources' ? 'Source' : 'Project';
     for (const [label, className] of [[name, 'storage-name'], ['', 'storage-split-bar'], ['Originals', 'num storage-split'], ['Catalog', 'num storage-split'], ['Total', 'num']]) {
       const cell = node('th', className, label);
       cell.scope = 'col';

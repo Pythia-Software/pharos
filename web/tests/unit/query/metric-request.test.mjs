@@ -73,7 +73,7 @@ test("the Tokens trend sums by its period's field and split; cost by type is by 
   const clauses = (period, split = "type", metric = "tokens") => trendQuery(tokenAnalysisCatalog, { period, split, metric, hours: 6, days: 3 }, []).query.aggregations;
   for (const [period, field] of [["hour", "hour"], ["hours", "hour"], ["day", "day"], ["days", "day"], ["week", "week"], ["month", "month"]]) {
     assert.deepEqual(clauses(period).map(metric => [metric.field, metric.groupBy]), tokenTypes.map(type => [type.key, [field]]), period);
-    for (const split of ["provider", "model_family", "model_effort", "effort", "repository_name", "session_kind"]) {
+    for (const split of ["provider", "model_family", "model_effort", "effort", "project_name", "session_kind"]) {
       assert.deepEqual(clauses(period, split).map(metric => [metric.op, metric.field, metric.groupBy]), [["sum", "total_tokens", [field, split]]]);
       assert.deepEqual(clauses(period, split, "percent_cost").map(metric => [metric.field, metric.groupBy]), [["cost_usd", [field, split]]]);
     }
@@ -81,7 +81,7 @@ test("the Tokens trend sums by its period's field and split; cost by type is by 
   assert.deepEqual(clauses("week", "type", "cost").map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
   assert.deepEqual(clauses("week", "type", "percent").map(metric => metric.field), tokenTypes.map(type => type.key));
   assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "output_tokens:", "agent_sessions"]);
-  for (const aggregations of [tokenSummaryMetrics, clauses("hour", "repository_name"), clauses("day", "provider_model", "cache_read_share"), clauses("week", "model_family", "conversations")]) assert.doesNotThrow(() => core.toQueryRequestV3({ ...core.EMPTY_QUERY, aggregations }, schemas.usage, queryCapabilities,undefined,{rows:false}));
+  for (const aggregations of [tokenSummaryMetrics, clauses("hour", "project_name"), clauses("day", "provider_model", "cache_read_share"), clauses("week", "model_family", "conversations")]) assert.doesNotThrow(() => core.toQueryRequestV3({ ...core.EMPTY_QUERY, aggregations }, schemas.usage, queryCapabilities,undefined,{rows:false}));
 });
 
 

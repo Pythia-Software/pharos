@@ -17,7 +17,7 @@ test("the sparkline stands in only for the shipped population, metric and groupi
   energy.grouping.source.aggregations = energy.grouping.source.aggregations.map(metric => ({ ...metric, field: "energy_kwh" }));
   assert.equal(usesCardTrend(job(energy, item)), false, "an edited measure that keeps its ID must not show emissions");
   const regrouped = structuredClone(query);
-  regrouped.grouping.keys = ["repository_name"];
+  regrouped.grouping.keys = ["project_name"];
   assert.equal(usesCardTrend(job(regrouped, item)), false, "edited grouping keys");
   const having = structuredClone(query);
   having.where = [{ field: query.grouping.summaries[0].id, op: ">", value: "1" }];

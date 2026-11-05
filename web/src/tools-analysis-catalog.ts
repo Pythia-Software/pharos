@@ -2,9 +2,10 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { timeBounds, type TimeFields } from "./chart-range";
 import { toolDashboardWhere } from "./usage-dashboard-model";
+import { projectBreakdown, projectLegacy } from "./project-analysis";
 
 // Tools over the tools rollup: one record is one recorded day's calls of one
-// tool, command, model, repository and origin. A rollup row is no observation
+// tool, command, model, project and origin. A rollup row is no observation
 // a person cares about, so this catalog has no units and no per-record values:
 // Compare and Over time only. Record-level analysis of individual calls
 // (tool_calls, with error signatures, paths, hosts and URLs) is phase 3; it
@@ -34,7 +35,7 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   mcp_method: { label: "MCP method", fields: ["mcp_method"], where: methods, note: "MCP methods count calls with a recorded MCP method only." },
   // A method name can recur on several servers, so cards keep them apart.
   mcp_server_method: { label: "MCP server + method", fields: ["mcp_server", "mcp_method"], where: methods, note: "MCP servers and methods count calls with a recorded MCP method only." },
-  repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
+  project_name: projectBreakdown(),
   source_kind: { label: "Source", fields: ["source_kind"] },
   channel: { label: "Channel", fields: ["channel"] },
   machine_id: { label: "Machine", fields: ["machine_id"] },
@@ -48,9 +49,9 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
 const time: TimeFields = { first: "day", last: "day" };
 export const toolsAnalysisCatalog: AnalysisCatalog = {
   dataset: "tools", time, measures, breakdowns, units: {},
-  records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, repository and origin: a daily summary rather than an individual call. Follow a summary's Calls link to its individual calls." },
+  records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, project and origin: a daily summary rather than an individual call. Follow a summary's Calls link to its individual calls." },
   periods: { day: "day", week: "week", month: "month" },
-  trend: { metric: "calls", split: "tool_category" },
+  trend: { metric: "calls", split: "tool_category" }, legacy: projectLegacy(),
   rangeNote: "Tool summaries record whole local days, so the range snaps to whole days: a range starting mid-day counts that whole day.",
   // A minimum counts calls: a daily summary holds many.
   samples: { unit: "calls", label: "Calls", sum: "call_count" },

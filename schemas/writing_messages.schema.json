@@ -837,6 +837,22 @@
       }
     },
     {
+      "name": "project_name",
+      "label": "Project",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "project_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"project_name\""
+        }
+      },
+      "description": "The repository, else the working folder (home as ~); empty for a session with no working directory (No project)."
+    },
+    {
       "name": "source_kind",
       "label": "Source",
       "type": "enum",

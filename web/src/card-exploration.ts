@@ -5,7 +5,7 @@ import writing from "../../schemas/writing.schema.json";
 import tools from "../../schemas/tools.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
 
-const cohorts = new Set(["repository_name", "source_kind", "channel", "machine_id", "execution_machine_id", "provider", "model", "model_family", "model_effort", "effort", "session_kind", "tool_name", "tool_category", "program", "subcommand", "command_name", "command_category", "mcp_server", "skill_name", "evidence_type", "status"]);
+const cohorts = new Set(["project_name", "repository_name", "source_kind", "channel", "machine_id", "execution_machine_id", "provider", "model", "model_family", "model_effort", "effort", "session_kind", "tool_name", "tool_category", "program", "subcommand", "command_name", "command_category", "mcp_server", "skill_name", "evidence_type", "status"]);
 const targetFields = { writing: new Set(writing.fields.map(field => field.name)), tools: new Set(tools.fields.map(field => field.name)), writing_messages: new Set(writingMessages.fields.map(field => field.name)) };
 const sourceTimes: Partial<Record<UsageDataset, string[]>> = { tool_calls: ["started_at", "ended_at"], writing_messages: ["sent_at"], writing: ["first_message_at", "last_message_at"], conversation_activity: ["event_at"] };
 

@@ -18,6 +18,7 @@ var searchMessagesTool = map[string]any{
 	"inputSchema": map[string]any{"type": "object", "required": []string{"query"}, "properties": map[string]any{
 		"query":           map[string]any{"type": "string", "minLength": 1},
 		"match_mode":      map[string]any{"type": "string", "enum": []string{"terms", "phrase"}, "default": "terms"},
+		"project":         map[string]any{"type": "string", "description": "A project from list_projects: a repository name, or a folder such as ~/notes."},
 		"repository":      map[string]any{"type": "string", "description": "A repository name or remote from list_repositories, not a worktree name."},
 		"conversation_id": map[string]any{"type": "string"},
 		"source":          map[string]any{"type": "string"},
@@ -213,6 +214,10 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 	if repository := firstString(args["repository"]); repository != "" {
 		clauses = append(clauses, repositoryNamePredicate("r"))
 		values = append(values, repository, repository)
+	}
+	if project := firstString(args["project"]); project != "" {
+		clauses = append(clauses, projectPredicate("w"))
+		values = append(values, projectArgs(project)...)
 	}
 	for _, key := range []string{"from", "to"} {
 		if value := firstString(args[key]); value != "" {

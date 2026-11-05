@@ -25,7 +25,7 @@ const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Workspac
 const work = grouped("Workspace", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
 
 export const usageGroupPresets: UsageTablePreset[] = [
-  grouped("Repositories", "Compare repository cost, tokens, sessions and cache reuse", ["repository_name"]),
+  grouped("Projects", "Compare project cost, tokens, sessions and cache reuse", ["project_name"]),
   grouped("Models", "Compare models within each provider", ["provider", "model_family"]),
   grouped("Model + effort", "Keep each provider, model and recorded effort level separate, including missing effort", ["provider", "model_family", "effort"]),
   ...[["channel", "Channels"], ["machine_id", "Machines"], ["execution_machine_id", "Execution machines"]].map(([field,label]) => grouped(label, `Compare usage by ${label.toLowerCase()}`, [field])),

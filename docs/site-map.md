@@ -504,7 +504,7 @@ next:
 
 `query` keeps the list items whose text contains it. Lists page with `limit`
 (50 by default) and `offset`, and an answer sheds items from the end to fit
-`max_output_tokens` (3,000 by default, as three bytes a token), giving
+`max_output_tokens` (3,500 by default, as three bytes a token), giving
 `next_offset`. Query help pages apply the same pagination and text search to
 their `columns` list, keeping the query default and type help on every page.
 

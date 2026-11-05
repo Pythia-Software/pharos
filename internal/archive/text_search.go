@@ -29,6 +29,7 @@ type TextSearchOptions struct {
 	Where                 *textQuery `json:"where,omitempty"`
 	Surface               string     `json:"surface,omitempty"`
 	Repository            string     `json:"repository,omitempty"`
+	Project               string     `json:"project,omitempty"`
 	ConversationID        string     `json:"conversation_id,omitempty"`
 	WorkspaceID           string     `json:"workspace_id,omitempty"`
 	WorkspaceIDs          []string   `json:"workspace_ids,omitempty"`
@@ -660,6 +661,10 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if o.Repository != "" {
 		clauses = append(clauses, `w.repository_id IN (SELECT id FROM repositories WHERE instr(lower(display_name),lower(?))>0 OR instr(lower(COALESCE(canonical_remote,'')),lower(?))>0)`)
 		arguments = append(arguments, o.Repository, o.Repository)
+	}
+	if o.Project != "" {
+		clauses = append(clauses, projectPredicate("w"))
+		arguments = append(arguments, projectArgs(o.Project)...)
 	}
 	if o.From != "" {
 		clauses = append(clauses, "julianday(m.created_at)>=julianday(?)")

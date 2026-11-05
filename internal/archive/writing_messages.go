@@ -36,7 +36,7 @@ var writingMessageDataset = func() sqlDataset {
 
 		"id": "ma.message_id", "conversation_id": "ma.conversation_id", "workspace_id": "ma.workspace_id",
 		"work_id": "COALESCE(ma.work_id,ma.workspace_id)",
-		"title":   "w.title", "repository_name": "r.display_name", "source_kind": "w.source_kind",
+		"title":   "w.title", "repository_name": "r.display_name", "project_name": projectNameSQL("w"), "source_kind": "w.source_kind",
 		"provider": "c.provider", "subagent": "(c.parent_id IS NOT NULL)", "sender": "m.sender",
 		"sent_at": "ma.sent_at", "day": "ma.day", "week": "date(ma.day,'-6 days','weekday 1')", "month": "substr(ma.day,1,7)",
 		"text": "m.text", "chars": "ma.total_chars", "words": "ma.words", "message_count": "1",
@@ -56,17 +56,18 @@ var writingMessageDataset = func() sqlDataset {
 	}
 	return sqlDataset{
 		from: `FROM message_authorship ma JOIN messages m ON m.id=ma.message_id JOIN conversations c ON c.id=ma.conversation_id
-			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id`,
+			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + ` LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id`,
 		countFrom: "FROM message_authorship ma", countAlias: "ma",
 		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
 		columns:    columns,
 		timestamps: map[string]string{"sent_at": "ma.sent_at"},
 		optionalJoins: map[string]string{
-			"o": " LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id",
-			"m": "JOIN messages m ON m.id=ma.message_id",
-			"c": " JOIN conversations c ON c.id=ma.conversation_id",
-			"w": "LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id)",
-			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"o":  " LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id",
+			"m":  "JOIN messages m ON m.id=ma.message_id",
+			"c":  " JOIN conversations c ON c.id=ma.conversation_id",
+			"w":  "LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id)",
+			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+			"pj": projectJoin("w"),
 		},
 		pageFrom:    "FROM message_authorship ma",
 		pageIndexes: map[string]string{"sent_at": "message_authorship_page_idx"},

@@ -324,7 +324,7 @@ func newRhythmTable(data *concurrencyData, messages []rhythmMessage, gap int64) 
 		unit := rhythmUnit{actor: actor, initiator: initiator, automation: automation}
 		unit.id, unit.conversation = conversation, conversation
 		if thread != nil {
-			unit.label, unit.workspace, unit.location, unit.repository = thread.Title, thread.WorkspaceName, thread.location, nilIfEmpty(thread.Repository)
+			unit.label, unit.workspace, unit.location, unit.repository, unit.project = thread.Title, thread.WorkspaceName, thread.location, nilIfEmpty(thread.Repository), nilIfEmpty(thread.Project)
 			unit.provider, unit.model = thread.rootProvider, thread.rootModel
 			unit.channel, unit.machineID, unit.executionMachineID = thread.Channel, thread.MachineID, thread.ExecutionMachineID
 		}
@@ -416,9 +416,9 @@ func newRhythmTable(data *concurrencyData, messages []rhythmMessage, gap int64) 
 			if (table.units[i].actor == actorYou) == group {
 				table.units[i].spans = mergeSpans(table.units[i].spans, 0)
 				members = append(members, i)
-				// The sweep keeps repository levels too; they are not used here.
+				// The sweep keeps project levels too; they are not used here.
 				unit := table.units[i].parallelismUnit
-				unit.repository = nil
+				unit.repository, unit.project = nil, nil
 				base = append(base, unit)
 			}
 		}
@@ -504,7 +504,7 @@ func (table *rhythmTable) maps(fields libraryFields, from, to int64) []map[strin
 		}
 		values := map[string]any{"started_at": at.started, "day": at.day, "hour_of_day": at.hour, "week": at.week, "month": at.month,
 			"engaged_gap_minutes": table.gap, "actor": unit.actor, "initiator": unit.initiator, "automation": automation,
-			"unit_id": unit.id, "unit_label": nilIfEmpty(unit.label), "repository_name": unit.repository, "workspace_name": nilIfEmpty(unit.workspace),
+			"unit_id": unit.id, "unit_label": nilIfEmpty(unit.label), "repository_name": unit.repository, "project_name": unit.project, "workspace_name": nilIfEmpty(unit.workspace),
 			"conversation_id": unit.conversation, "provider": unit.provider, "model": unit.model,
 			"channel": nilIfEmpty(unit.channel), "machine_id": nilIfEmpty(unit.machineID), "execution_machine_id": nilIfEmpty(unit.executionMachineID),
 			"active_ms": row.active, "elapsed_ms": row.elapsed, "parallel_elapsed_ms": row.parallel, "peak_level": peak,

@@ -627,7 +627,7 @@
       "field": "conversation_id"
     }
   },
-  "calls_repositories": {
+  "calls_projects": {
     "dataset": "tool_calls",
     "keys": {
       "conversation": "conversation_id",
@@ -643,7 +643,7 @@
     "summary": {
       "id": "value",
       "op": "count_distinct",
-      "field": "repository_name"
+      "field": "project_name"
     }
   },
   "calls_carried_tokens": {
@@ -746,7 +746,7 @@
       "field": "conversation_id"
     }
   },
-  "skills_repositories": {
+  "skills_projects": {
     "dataset": "skill_usages",
     "keys": {
       "conversation": "conversation_id",
@@ -762,7 +762,7 @@
     "summary": {
       "id": "value",
       "op": "count_distinct",
-      "field": "repository_name"
+      "field": "project_name"
     }
   },
   "skills_loads": {
@@ -1546,7 +1546,7 @@
       "field": "message_id"
     }
   },
-  "agent_experience_repositories": {
+  "agent_experience_projects": {
     "dataset": "agent_events",
     "keys": {
       "conversation": "conversation_id",
@@ -1562,7 +1562,7 @@
     "summary": {
       "id": "value",
       "op": "count_distinct",
-      "field": "repository_name"
+      "field": "project_name"
     }
   },
   "agent_experience_thinking_share": {
