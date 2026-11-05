@@ -1009,7 +1009,12 @@ test('Habits standalone charts preview, pin, restore and open their records',{sk
   await mark.click();await tip.getByRole('link').first().waitFor();await app.settled();
   const url=path(page),name=await mark.getAttribute('aria-label');
   const fresh=await open(t,{url,ready:'.habits-chart-popover.pinned a'});
-  assert.equal(await fresh.page.locator(selector).getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),'true');
+  const restoredMark=fresh.page.locator(selector).getByRole('button',{name,exact:true});
+  assert.equal(await restoredMark.getAttribute('aria-pressed'),'true');
+  for(const key of ['Enter','Space']){
+   await restoredMark.focus();await restoredMark.press(key);await fresh.settled();
+   assert.equal(await fresh.page.locator('.habits-chart-popover.pinned').getByRole('link').first().evaluate(node=>node===document.activeElement),true,`${selector}: ${key} reaches the detail link of a restored pin`);
+  }
   await page.mouse.move(1,1);assert.ok(await tip.isVisible(),'a pin survives leaving the mark');
   await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
  }

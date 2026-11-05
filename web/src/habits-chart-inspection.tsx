@@ -60,7 +60,13 @@ export function HabitsChartInspection({ chart, data, points, fit, children, onSe
   const mark = (item: HabitChartPoint): MarkProps => {
     if (fit) return {};
     const show = () => { if (!pinned && !restoreFocus.current) setPreview(item.key); };
-    const inspect = (keyboard = false) => { focusLink.current = keyboard; setPreview(""); setPin(item.key); onSelect?.(item.key); };
+    const inspect = (keyboard = false) => {
+      const existing = pin === item.key;
+      focusLink.current = keyboard && !existing;
+      setPreview(""); setPin(item.key); onSelect?.(item.key);
+      // Restored/current pins need no render, so their link is already ready.
+      if (keyboard && existing) bubble.current?.querySelector("a")?.focus();
+    };
     return {
       "data-habits-mark": item.key, "data-view-field": "chart_pins", role: "button", tabIndex: 0,
       "aria-label": `${item.heading}: ${item.rows.map(row => `${row.label} ${row.value}`).join(", ")}`,
