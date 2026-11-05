@@ -341,6 +341,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/ask-glow.js":          {"ask-glow.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-prompt.js":        {"ask-prompt.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/event-spans.js":       {"event-spans.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-storage.js":   {"managed-storage.js", "text/javascript; charset=utf-8"},

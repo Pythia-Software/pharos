@@ -500,6 +500,7 @@ APP_HTML = r'''<!doctype html>
 <div class="feedback-toast" id="feedbackToast" role="status" data-feedback-ui data-feedback-drag><button class="feedback-drag-handle" type="button" aria-label="Move feedback status message" title="Drag to move. Arrow keys move when focused."><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-grip"/></svg></button><span id="feedbackToastMessage"></span></div>
 <script src="/assets/header.js"></script>
 <script src="/assets/quick-stats.js"></script>
+<script src="/assets/event-spans.js"></script>
 <script src="/assets/reader-model.js"></script>
 <script src="/assets/storage-breakdown.js"></script>
 <script>

@@ -497,22 +497,17 @@ function messageEventView(message,text=eventText(message)){
 }
 // Two events on near-identical sentences show as one mark: their sentences
 // merge into the span covering both, and the mark's popover lists every
-// label with the text once (eventTipView). Near-identical means one span
-// contains the other, or they share at least EVENT_MERGE_OVERLAP of the text
-// the two cover together. Grouping is transitive. Each event keeps its id
-// (and its own range as ownSentence), so a link to either still selects the
-// merged mark.
-const EVENT_MERGE_OVERLAP=.8;
-function nearSameSpan(a,b){
-  const lo=Math.max(a[0],b[0]),hi=Math.min(a[1],b[1]);if(hi<=lo)return false;
-  if(a[0]<=b[0]&&a[1]>=b[1]||b[0]<=a[0]&&b[1]>=a[1])return true;
-  return (hi-lo)/(Math.max(a[1],b[1])-Math.min(a[0],b[0]))>=EVENT_MERGE_OVERLAP;
-}
+// label with the text once (eventTipView). The rule (nearSameSpan,
+// eventSpanGroups) lives in event-spans.js, shared with the timeline and
+// fingerprint ribbons. Each event keeps its id (and its own range as
+// ownSentence), so a link to either still selects the merged mark.
 function mergeEventSentences(view,text){
-  const parent=view.map((_,index)=>index),find=index=>parent[index]===index?index:(parent[index]=find(parent[index]));
-  for(let i=0;i<view.length;i++)for(let j=i+1;j<view.length;j++)if(nearSameSpan(view[i].sentence,view[j].sentence))parent[find(j)]=find(i);
-  const spans=new Map();view.forEach((event,index)=>{const root=find(index),span=spans.get(root);spans.set(root,span?[Math.min(span[0],event.sentence[0]),Math.max(span[1],event.sentence[1])]:[...event.sentence])});
-  return view.map((event,index)=>{const span=spans.get(find(index));if(span[0]===event.sentence[0]&&span[1]===event.sentence[1])return event;return {...event,ownSentence:event.sentence,sentence:span,sentenceText:text.slice(span[0],span[1]).trim()}});
+  const merged=[...view];
+  for(const group of eventSpanGroups(view.map(event=>event.sentence))){
+    const span=[Math.min(...group.map(index=>view[index].sentence[0])),Math.max(...group.map(index=>view[index].sentence[1]))];
+    for(const index of group){const event=view[index];if(span[0]!==event.sentence[0]||span[1]!==event.sentence[1])merged[index]={...event,ownSentence:event.sentence,sentence:span,sentenceText:text.slice(span[0],span[1]).trim()}}
+  }
+  return merged;
 }
 // What one mark's popover shows: each label once (the likelier, if a kind
 // repeats), then each distinct text once: what was said, what it was about,

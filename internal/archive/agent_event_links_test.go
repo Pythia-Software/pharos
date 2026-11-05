@@ -165,4 +165,8 @@ func TestAgentEventTargetsServedToViews(t *testing.T) {
 	if served["position"] != 0.0 || math.Abs(served["target"].(map[string]any)["position"].(float64)-quote) > 1e-4 {
 		t.Fatalf("positions = %v, target %v; want 0 and %.4f", served["position"], served["target"].(map[string]any)["position"], quote)
 	}
+	// The sentence's byte range, by which views merge near-identical marks.
+	if span, _ := served["span"].([]any); len(span) != 2 || span[0] != 0.0 || span[1] != float64(len(reply)) {
+		t.Fatalf("span = %#v, want [0 %d]", served["span"], len(reply))
+	}
 }

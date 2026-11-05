@@ -9,6 +9,7 @@ import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointer
 import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
+import {eventKindCounts,markIds,mergeAgentEvents,type KindCounts} from './event-merge';
 import {EventGlyph,EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,eventTargetFocus,placeEvents,setEventLinkFocus,useEventLinkFocus} from './event-link-overlay';
 import {linkedTarget,type AgentEventLink} from './event-link-layout';
 import {timeScale,type TimeScale} from './timeline-idle-model';
@@ -21,7 +22,8 @@ import {timeScale,type TimeScale} from './timeline-idle-model';
 // subagent's event lines up with the caller's prompt it is about.
 type EventLayer={events:AgentEventLink[];position:(e:AgentEventLink)=>number|null;targetPosition:(e:AgentEventLink)=>number|null;href?:(e:AgentEventLink)=>string|null};
 
-type Props={scale?:TimeScale;events?:AgentEventLink[];eventHref?:(e:AgentEventLink)=>string|null;eventLayer?:EventLayer;outline?:string;branch?:TimelineSessionBranch;openSession?:()=>void;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
+/** eventCounts: events per kind across the workspace, the population a merged mark's rarest kind comes from (event-merge.ts). */
+type Props={scale?:TimeScale;events?:AgentEventLink[];eventCounts?:KindCounts;eventHref?:(e:AgentEventLink)=>string|null;eventLayer?:EventLayer;outline?:string;branch?:TimelineSessionBranch;openSession?:()=>void;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
 const branchX=(depth:number)=>12+Math.min(depth,8)*12;
 function SessionBranches({props,root}:{props:Props;root:boolean}){
  const branch=props.branch;if(!branch)return null;
@@ -101,7 +103,7 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
  // same hit test, hover and pin below, alongside the message spans.
  const placedEvents=useMemo(()=>eventLayer?placeEvents(eventLayer.events,eventLayer.position,eventLayer.targetPosition):[],[eventLayer]);
  const layout=useMemo(()=>eventLayout(placedEvents,width,height),[placedEvents,width,height]);
- const eventItems=useMemo(()=>{const own=new Map(node.items.flatMap(item=>item.event?[[item.event.id,item] as const]:[]));return new Map(placedEvents.map(p=>[p.event.id,own.get(p.event.id)??{id:JSON.stringify(['event',p.event.id]),start:0,end:0,title:p.event.label,color:'',thinking:p.event.source==='thinking',event:p.event}]));},[node.items,placedEvents]);
+ const eventItems=useMemo(()=>{const own=new Map(node.items.flatMap(item=>item.event?[[item.event.id,item] as const]:[]));return new Map(placedEvents.map(p=>[p.event.id,{...own.get(p.event.id)??{id:JSON.stringify(['event',p.event.id]),start:0,end:0,title:p.event.label,color:'',thinking:p.event.source==='thinking'},event:p.event}]));},[node.items,placedEvents]);
  const px=(at:number)=>Math.max(0,Math.min(width,clock.fraction(at)*width));
  const tools=useMemo(()=>ribbonToolPlacement(inspectItems,px,height,layout?.markers??[]),[inspectItems,clock,width,height,layout]);
  const targets=useMemo(()=>[...[...tools.values()].map(m=>({...m,ids:[m.id],event:null as string|null,arc:null as string|null,events:[] as string[]})),...eventHitTargets(layout).map(t=>({...t,ids:t.events.map(id=>eventItems.get(id)!.id)}))],[tools,layout,eventItems]);
@@ -130,7 +132,7 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
   })}</g>;
  });
  const card=(hits:RibbonObservation[])=>(pinned:boolean)=>pinned?<ObservationCard items={hits} sourceHref={sourceHref} eventHref={eventLayer?.href} close={inspector.close}/>:<ObservationCard items={hits}/>;
- const eventHover=(e:AgentEventLink)=>()=>setEventLinkFocus({event:e.id,target:linkedTarget(e)?.message_id??null,message:e.message_id});
+ const eventHover=(e:AgentEventLink)=>()=>setEventLinkFocus({event:e.id,target:linkedTarget(e)?.message_id??null,message:e.message_id,...(e.members?{events:markIds(e)}:{})});
  const unhover=()=>setEventLinkFocus(null);
  const candidates=useMemo(()=>[...new Map(hitItems.map(item=>[item.mark||item.event?item.id:JSON.stringify([item.message?.id,item.composition]),item])).values()].sort((a,b)=>a.start-b.start||a.id.localeCompare(b.id)).map((item):RibbonHit=>({card:card([item]),hover:item.event?eventHover(item.event):unhover})),[hitItems,sourceHref,eventLayer?.href]);
  const hitAt=(event:React.MouseEvent<Element>):RibbonHit|null=>{
@@ -157,7 +159,7 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
   {clock.cuts.map(cut=><line key={cut.end} className="lt-idle-cut-line" x1={cut.fraction*1000} x2={cut.fraction*1000} y1="0" y2="32" vectorEffect="non-scaling-stroke"/>)}
   {preview?<rect x={x(preview[0])} y="0" width={x(preview[1])-x(preview[0])} height="32" fill="var(--gold)" opacity=".25"/>:null}
   <EventFocusBand node={node} x={x}/>
- </svg>{eventLayer?.events.length?<EventLinkOverlay placed={placedEvents} layout={layout} width={width} height={height} label={`${placedEvents.length} agent events`}/>:null}{inspector.portal}</div>;
+ </svg>{eventLayer?.events.length?<EventLinkOverlay placed={placedEvents} layout={layout} width={width} height={height} label={`${placedEvents.reduce((n,p)=>n+(p.event.members?.length??1),0)} agent events`}/>:null}{inspector.portal}</div>;
 }
 function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
  const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
@@ -169,7 +171,14 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
  const icons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
  // An Agent events row draws only its own events (with their arcs).
  const ownEvents=node.id==='events'||node.id.startsWith('events:')?new Set(node.items.flatMap(item=>item.event?[item.event.id]:[])):null;
- const eventLayer=root?props.eventLayer:ownEvents&&props.eventLayer?{...props.eventLayer,events:props.eventLayer.events.filter(e=>ownEvents.has(e.id))}:undefined;
+ // The session row and the Agent events row merge events on near-identical
+ // text into one mark (event-merge.ts); the group and kind rows below keep
+ // every event, since they exist to decompose.
+ const merge=root||node.id==='events',ownKey=ownEvents?[...ownEvents].join(' '):'';
+ const eventLayer=useMemo(()=>{
+  const layer=root?props.eventLayer:ownEvents&&props.eventLayer?{...props.eventLayer,events:props.eventLayer.events.filter(e=>ownEvents.has(e.id))}:undefined;
+  return layer&&merge?{...layer,events:mergeAgentEvents(layer.events,props.eventCounts??eventKindCounts(props.eventLayer!.events))}:layer;
+ },[props.eventLayer,props.eventCounts,root,merge,ownKey]);
  const eventGlyph=ownEvents&&node.id!=='events'?node.items[0]?.event:undefined;
  const icon=node.id==='events'?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
  const count=ribbonEventCount(node.items);

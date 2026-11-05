@@ -9,6 +9,7 @@ import { Icon } from "./icons";
 import { delegationRouteValues, delegationTabs, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
 import {RecursiveSessionRibbon} from "./label-session-ribbon";
+import {eventKindCounts} from "./event-merge";
 import {nativeTimelineLabels,type NativeTimelineMessage} from "./label-timeline-overlay";
 import {withEventLink} from "./event-link-url";
 import type {AgentEventLink} from "./event-link-layout";
@@ -1665,6 +1666,8 @@ export function ParallelActivity({
     [error, setError] = useState("");
   const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,range[0],range[1]]);
   const labelData=nativeLabels;
+  // Events per kind across every session (whole conversations, not the zoom window): a merged mark shows its rarest kind (event-merge.ts).
+  const eventCounts=useMemo(()=>eventKindCounts([...nativeLabels.events.values()].flat()),[nativeLabels]);
   const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
   const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
@@ -1966,7 +1969,7 @@ export function ParallelActivity({
             <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
-              events={timeline?nativeLabels.events.get(n.id):undefined} eventHref={timeline?e=>eventHref(n,e):undefined}
+              events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
               foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
               restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>

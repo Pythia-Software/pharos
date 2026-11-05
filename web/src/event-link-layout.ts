@@ -34,8 +34,13 @@
 import {laneCandidates,laneMark,placeMarks,type MarkInput,type PlacedMark} from './ribbon-marks';
 /** position: how far into its message (a byte share in [0, 1]) the quoted text starts. */
 export type EventTarget={method:'quote'|'overlap'|'file';message_id?:string;role?:string;kind?:string;start?:number;end?:number;text?:string;strong?:boolean;shared?:string[];score?:number;files?:string[];at?:string|null;position?:number};
-/** position: how far into its message (a byte share in [0, 1]) the event's sentence starts. */
-export type AgentEventLink={id:string;message_id:string;kind:string;label:string;group:string;probability:number;source:string;sentence:string;target:EventTarget|null;position?:number};
+/**
+ * position: how far into its message (a byte share in [0, 1]) the event's
+ * sentence starts; span: the sentence's byte range there. A merged mark
+ * (event-merge.ts) also lists its members, and targets in other messages
+ * than its own target's as also.
+ */
+export type AgentEventLink={id:string;message_id:string;kind:string;label:string;group:string;probability:number;source:string;sentence:string;target:EventTarget|null;position?:number;span?:[number,number];members?:AgentEventLink[];also?:EventTarget[]};
 export type EventShape='up'|'down'|'diamond'|'square';
 // Event groups in the reader's fixed order (reader-model.js EVENT_GROUPS),
 // each with a shape so group never rests on colour alone.
@@ -51,7 +56,8 @@ export const linkedTarget=(e:Pick<AgentEventLink,'target'>)=>e.target?.message_i
 /** A quote of the person's words or a multi-word phrase is strong; word overlap and a one-word quote of agent text are weaker. */
 export const weakTarget=(t:EventTarget)=>t.method==='overlap'||t.method==='quote'&&!t.strong;
 
-export type LayoutEvent={id:string;x:number;targetKey:string|null;targetX:number|null;weak?:boolean};
+/** also: further arcs (other target messages) that reach this event's marker without carrying it. */
+export type LayoutEvent={id:string;x:number;targetKey:string|null;targetX:number|null;weak?:boolean;also?:{key:string;x:number;weak?:boolean}[]};
 export type ArcLayout={key:string;x0:number;x1:number;level:number;side:1|-1;lift:number;rise:number;path:string;events:string[];weak:boolean};
 export type MarkerLayout=PlacedMark&{arc:string|null};
 export type EventLayout={arcs:ArcLayout[];markers:MarkerLayout[];axis:number};
@@ -75,6 +81,7 @@ export function layoutEventArcs(events:LayoutEvent[],options:LayoutOptions):Even
  const sweep=options.sweep??Math.max(3,Math.min(7,width/90)),minSpan=options.minSpan??marker*3;
  const groups=new Map<string,{key:string;x0:number;events:LayoutEvent[]}>();
  for(const e of events){if(e.targetKey===null||e.targetX===null||!Number.isFinite(e.targetX))continue;const g=groups.get(e.targetKey)??{key:e.targetKey,x0:e.targetX,events:[]};g.events.push(e);groups.set(e.targetKey,g);}
+ for(const e of events)for(const t of e.also??[]){if(!Number.isFinite(t.x))continue;const g=groups.get(t.key)??{key:t.key,x0:t.x,events:[]};g.events.push({...e,weak:t.weak});groups.set(t.key,g);}
  const list=[...groups.values()].sort((a,b)=>a.x0-b.x0||a.key.localeCompare(b.key));
  const spans=list.map(g=>({x0:g.x0,x1:Math.min(width,Math.max(g.x0+minSpan,...g.events.map(e=>e.x)))}));
  const levels=arcLevels(spans),depth=Math.max(0,...levels),split=depth>2;

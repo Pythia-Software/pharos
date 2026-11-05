@@ -16,6 +16,9 @@
 .event-link-card+.event-link-card{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 .event-link-card-head{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .event-link-card-head small{color:var(--muted)}
+/* A merged mark: one chip per kind, then where it was said. */
+.event-link-card-kinds{display:flex;gap:4px 10px;align-items:center;flex-wrap:wrap}
+.event-link-card-kinds>small{color:var(--muted)}
 .event-link-card blockquote{margin:6px 0 0;padding:2px 0 2px 8px;border-left:3px solid var(--event-link);overflow-wrap:anywhere}
 .event-link-card blockquote b{display:block;font-size:var(--fs-2xs,10px);text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
 .event-link-card blockquote.is-observation{border-left-color:var(--event-hue,var(--event-link))}

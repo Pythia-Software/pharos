@@ -436,7 +436,7 @@ func (c *Catalog) agentEventLinks(ctx context.Context, conversationID string) ([
 	if err := c.reader().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='agent_events'").Scan(&tables); err != nil || tables == 0 {
 		return nil, err
 	}
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT 'e'||e.id id,e.message_id,e.family,e.probability,e.source,e.sentence,e.subject,e.response,e.sentence_start,
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT 'e'||e.id id,e.message_id,e.family,e.probability,e.source,e.sentence,e.subject,e.response,e.sentence_start,e.sentence_end,
 		(SELECT length(CAST(m.text AS BLOB)) FROM messages m WHERE m.id=e.message_id) message_bytes
 		FROM agent_events e WHERE e.conversation_id=? AND e.probability>=? ORDER BY e.message_id,e.sentence_start,e.probability DESC`, conversationID, agentEventThreshold)
 	if err != nil || len(rows) == 0 {
@@ -505,7 +505,10 @@ func agentEventLinkRows(rows []map[string]any, messages []eventLinkMessage, even
 		}
 		item := map[string]any{"id": events[i].ID, "message_id": events[i].MessageID, "kind": family.Key, "label": family.Label, "group": family.Group,
 			"probability": math.Round(probability*1000) / 1000, "source": firstString(row["source"]), "sentence": sentence,
-			"target": target}
+			"target": target,
+			// The sentence's byte range in its message: views merge events on
+			// near-identical sentences (assets/event-spans.js) by it.
+			"span": []int{int(integer(row["sentence_start"])), int(integer(row["sentence_end"]))}}
 		if position, ok := agentEventPosition(int(integer(row["sentence_start"])), int(integer(row["message_bytes"]))); ok {
 			item["position"] = position
 		}
