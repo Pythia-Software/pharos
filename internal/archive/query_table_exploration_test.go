@@ -15,7 +15,7 @@ import (
 )
 
 func queryExplorationCall(server *Server, token, method, path, body string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r := queryFixtureHTTPRequest(method, path, strings.NewReader(body))
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -48,8 +48,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			w := call(http.MethodGet, "/api/query/"+dataset+"/capabilities", nil)
 			var handshake struct {
-				MetricCapabilities qt.SQLiteMetricCapabilities `json:"metricCapabilities"`
-				QueryCapabilities  qt.QueryCapabilitiesV3      `json:"queryCapabilities"`
+				QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
 			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &handshake) != nil || !handshake.QueryCapabilities.GroupedRows || !handshake.QueryCapabilities.CalendarGrouping {
 				t.Fatal("capabilities", w.Code, w.Body.String())
@@ -61,16 +60,6 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
 				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
-			}
-			// Usage charts its compact facts by period and split with V2 metrics.
-			if groups = 2_000; dataset == "usage" || dataset == "message_labels" {
-				groups = 100_000
-			}
-			if dataset == "tools" {
-				groups = 10_000
-			}
-			if handshake.MetricCapabilities.Version != 2 || handshake.MetricCapabilities.MaxGroups != groups {
-				t.Fatalf("incorrect advertised V2 budgets: %+v", handshake.MetricCapabilities)
 			}
 
 			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
@@ -103,7 +92,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 					specs = append(specs, qt.AggSpec{ID: name, Expression: "SUM([" + name + "])"})
 				}
 			}
-			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: selection, Limit: 10}})
+			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: selection, Limit: 10}})
 			if w.Code != 200 {
 				t.Fatal("typed rows", w.Code, w.Body.String())
 			}
@@ -180,7 +169,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			t.Fatal("bad envelope accepted", path, w.Code)
 		}
 	}
-	r := httptest.NewRequest(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", strings.NewReader(body))
+	r := queryFixtureHTTPRequest(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+config.APIToken)
 	r.Header.Set("Origin", "https://other.example")
 	w = httptest.NewRecorder()
@@ -271,7 +260,7 @@ func TestQuerySnapshotsPharosHTTP(t *testing.T) {
 	if w := queryExplorationCall(server, "", "GET", path, ""); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	r := httptest.NewRequest("PUT", path, strings.NewReader(body))
+	r := queryFixtureHTTPRequest("PUT", path, strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+config.APIToken)
 	r.Header.Set("Origin", "http://evil.test")
 	w := httptest.NewRecorder()

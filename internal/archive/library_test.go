@@ -171,7 +171,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 	server := testServer(t, config, catalog)
 	post := func(path, body string) map[string]any {
 		t.Helper()
-		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request := queryFixtureHTTPRequest(http.MethodPost, path, strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
@@ -201,7 +201,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 		t.Fatalf("pending subagent count filter hid the library: %#v", pending)
 	}
 	metrics := post("/api/query/library/metrics", `{"version":2,"where":[],"orderBy":[],"limit":1,"offset":0,"metrics":[{"id":"n","op":"count","groupBy":["repository_name"]}]}`)
-	var want qt.SQLiteMetricsV2Result
+	var want queryFixtureMetricsResult
 	encoded, _ := json.Marshal(metrics)
 	if err := json.Unmarshal(encoded, &want); err != nil || want.Metrics[0].Error != "" {
 		t.Fatal(err, metrics)
@@ -302,7 +302,7 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 		}
 		call := func(method, path, body string) any {
 			t.Helper()
-			request := httptest.NewRequest(method, path, strings.NewReader(body))
+			request := queryFixtureHTTPRequest(method, path, strings.NewReader(body))
 			request.Header.Set("Authorization", "Bearer test-token")
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)
@@ -358,15 +358,15 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 			qt.AggSpec{ID: "outcomes", Op: "count_distinct", Field: "outcome"}, qt.AggSpec{ID: "cost", Op: "max", Field: "cost_usd"})
 		metrics.Where = []qt.WhereTerm{{Field: "purpose", Op: "is_not_null"}}
 		ctx := context.Background()
-		tx, release, err := beginQueryV2(ctx, catalog.reader())
+		tx, release, err := beginQueryMemory(ctx, catalog.reader())
 		if err != nil {
 			t.Fatal(err)
 		}
-		full := queryV2Dataset("library", PharosLibrarySchema())
+		full := queryFixtureFor("library", PharosLibrarySchema())
 		if full.SourceSQL, err = stageQueryRows(ctx, tx, "full_library_rows", fullRows(""), full.Schema); err != nil {
 			t.Fatal(err)
 		}
-		want, err := full.ExecuteV2In(ctx, tx, nil, &metrics, qt.PlanOptions{})
+		want, err := full.executeFixtureIn(ctx, tx, nil, &metrics, qt.PlanOptions{})
 		release()
 		if err != nil {
 			t.Fatal(err)
@@ -376,7 +376,12 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 				t.Fatalf("metric %s over full rows: %+v", metric.ID, metric)
 			}
 		}
-		if got := call(http.MethodPost, "/api/query/library/metrics", string(mustJSON(t, metrics))); !reflect.DeepEqual(got, decodeJSON(t, mustJSON(t, want.Metrics))) {
+		got := call(http.MethodPost, "/api/query/library/metrics", string(mustJSON(t, metrics)))
+		var actual queryFixtureMetricsResult
+		if err := json.Unmarshal(mustJSON(t, got), &actual); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decodeJSON(t, mustJSON(t, actual)), decodeJSON(t, mustJSON(t, want.Metrics))) {
 			t.Fatalf("refreshed=%v metrics: got %v, want %v", refreshed, got, want.Metrics)
 		}
 	}
@@ -390,7 +395,7 @@ func TestLibraryDefaultPageReadsNoLongTextForOtherRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
-	request := httptest.NewRequest(http.MethodPost, "/api/query/library", strings.NewReader(
+	request := queryFixtureHTTPRequest(http.MethodPost, "/api/query/library", strings.NewReader(
 		`{"select":["title","outcome","pr_numbers"],"orderBy":[{"field":"activity_at","dir":"desc","nulls":"last"},{"field":"id","dir":"asc"}],"limit":1,"offset":0}`))
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()

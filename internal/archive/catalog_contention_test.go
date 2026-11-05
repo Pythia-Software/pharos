@@ -62,7 +62,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/sync/run", false},
 		{http.MethodPost, "/api/query-computed-columns", false},
 	} {
-		if got := interactiveRead(httptest.NewRequest(route.method, route.path, nil)); got != route.query {
+		if got := interactiveRead(queryFixtureHTTPRequest(route.method, route.path, nil)); got != route.query {
 			t.Errorf("%s %s: query demand=%t, want %t", route.method, route.path, got, route.query)
 		}
 	}
@@ -190,7 +190,7 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 
 			// A query arriving after the first commit must pause the next record
 			// without retaining either the writer gate or SQLite's write lock.
-			query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
+			query := queryFixtureHTTPRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
 			query.Header.Set("Authorization", "Bearer "+config.APIToken)
 			w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
 			queryDone := make(chan struct{})
@@ -505,7 +505,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	}
 	for _, request := range requests {
 		read, cancel := context.WithTimeout(ctx, 3*time.Second)
-		r := httptest.NewRequestWithContext(read, request.method, request.path, strings.NewReader(request.body))
+		r := queryFixtureHTTPRequest(request.method, request.path, strings.NewReader(request.body)).WithContext(read)
 		r.Header.Set("Authorization", "Bearer "+config.APIToken)
 		w := httptest.NewRecorder()
 		// Work that ignores the request's context would wait for the writer

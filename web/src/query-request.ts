@@ -1,3 +1,4 @@
+import { QueryError, errorCodeForStatus, queryErrorFromBody, type QueryErrorOptions } from "@pythia-software/query-table-core";
 import { normalizeConcurrencySettings } from "./concurrency-settings";
 // Linked assumptions apply to every request made by that view, including
 // dashboards, source tables, item details and computed metrics. Explicit
@@ -19,8 +20,8 @@ export function viewRequestURL(path: string, view = typeof location === "undefin
 // response body that never finishes) must also stop showing Loading in the UI.
 export const queryRequestTimeoutMs = 45_000;
 
-export class QueryRequestError extends Error {
-  constructor(message: string, readonly status?: number) { super(message); }
+export class QueryRequestError extends QueryError {
+  constructor(message: string, status?: number, code = status === undefined ? "timeout" : "invalid_request", options: QueryErrorOptions = {}) { super(code, message, { ...options, status }); }
 }
 
 // Only query rejection or the client deadline implicates the query itself.
@@ -69,8 +70,8 @@ export async function queryRequest<T>(url: string, init: RequestInit = {}, timeo
     });
     signal.throwIfAborted();
     if (!response.ok) {
-      const message = typeof body.error === "string" ? body.error : body.error?.message;
-      throw new QueryRequestError(message || `Request failed with HTTP ${response.status}`, response.status);
+      const issue = queryErrorFromBody(body, response.status) ?? new QueryError(errorCodeForStatus(response.status), (typeof body.error === "string" ? body.error : body.error?.message) || `Request failed with HTTP ${response.status}`, { status: response.status });
+      throw new QueryRequestError(issue.message, response.status, issue.code, issue);
     }
     return body as T;
   } catch (error) {

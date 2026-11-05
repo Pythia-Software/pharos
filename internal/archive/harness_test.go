@@ -350,7 +350,7 @@ func apiCall(t testing.TB, server *Server, token, method, path string, body any)
 			t.Fatal(err)
 		}
 	}
-	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	request := queryFixtureHTTPRequest(method, path, bytes.NewReader(payload))
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,7 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	qt "github.com/Pythia-Software/query-table/backends/go"
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -41,10 +41,6 @@ type Catalog struct {
 	derived      derivedCache
 	// Initialized under derived.mu; caps simultaneous workload fits.
 	thinkingFitSlots chan struct{}
-	queryCounts      queryCountCache
-	// sourceProofs holds what Query Table proved about SQL datasets' whole
-	// sources, keyed by the data generation it was proven in.
-	sourceProofs qt.SQLiteSourceProofs
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64

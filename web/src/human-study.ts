@@ -1,3 +1,5 @@
+import { postQueryRows } from "./query-transport";
+import type { QueryRequestV3 } from "@pythia-software/query-table-core";
 import { EMPTY_QUERY, applyQuery, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { queryURL } from "./query-links";
 
@@ -157,10 +159,7 @@ async function postRows<T>(dataset: string, request: unknown, signal?: AbortSign
   if (signal?.aborted) abort();
   const timer = setTimeout(() => controller.abort(new Error("Contribution evidence timed out. Try a shorter window.")), 20000);
   try {
-    const response = await fetch(`/api/query/${dataset}/rows-v2`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 2, profile: "qt-sqlite-v1", ...request as object }), signal: controller.signal });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error?.message ?? body.error ?? "Contribution evidence could not be loaded.");
-    return body;
+    return await postQueryRows<T>(dataset, request as QueryRequestV3["result"], controller.signal);
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?: AbortSignal) {

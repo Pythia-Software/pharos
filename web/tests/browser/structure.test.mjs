@@ -538,7 +538,7 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 320, height: 640 }];
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [{
-  bug: "Query Table 0.9.7 fit-to-screen floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
+  bug: "Query Table 1.0.0 screen fitting still floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
   when: (route, viewport) => /^Analyze workspace query (usage|writing_messages|agent_events)$/.test(route.name) && viewport.width >= 1024,
   match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
 }];
@@ -550,7 +550,10 @@ for (const width of [1440, 320]) test(`Search filter suggestions stay readable a
   const app = await open(t, {
     url: `/library?${new URLSearchParams({ q_library: encodeQuery(query) })}`,
     viewport: { width, height: 844 }, ready: "#queryTableLibrary .qt-qb",
-    api: { "GET /api/query/library/distinct": ({ query }) => ({ values: values.filter(value => value.includes(query.get("q") ?? "")), hasMore: false }) },
+    api: { "POST /api/query/library/query-v3": request => {
+      const result = defaultApi["* /api/query/:dataset/:operation"]({ ...request, params: { dataset: "library", operation: "query-v3" } });
+      return request.body.distinct ? { ...result, distinct: { values: values.filter(value => value.includes(request.body.distinct.search)), hasMore: false, hasNull: false } } : result;
+    } },
   });
   const { page } = app;
   const edit = page.getByRole("button", { name: /^Edit filter: Repository/ });

@@ -406,7 +406,7 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  const marker=page.locator('.qt-attention-target').filter({hasText:'needle 41'});await marker.first().waitFor();
  assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
  let scrolls=await page.evaluate(()=>{window.__attentionScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__attentionScrolls++;return original.apply(this,args)};return window.__attentionScrolls});
- const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/rows-v2');
+ const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/query-v3'&&response.request().postDataJSON()?.rows);
  await page.getByRole('button',{name:'Run Now'}).first().click();await refreshed;await app.settled();
  assert.equal(await page.evaluate(()=>window.__attentionScrolls),scrolls);
  const state=fixture.read(page);assert.equal(state.offset,fixture.query.offset);assert.deepEqual(state.where,fixture.query.where);
@@ -760,9 +760,10 @@ test('opening work and returning to Search keeps the native Library search URL',
  const app=await open(t,{url:'/library?'+new URLSearchParams({q_library:encodeQuery(query),text_builder:token}),ready:'#queryTableLibrary .qt-row'}),{page}=app;
  await app.settled();
  const original=decodeQueryStrict(new URL(page.url()).searchParams.get('q_library'));
- // site_link composes view search into the native host state; every request carries it.
+ // site_link composes view search into native host state; collection row requests carry it.
+ // Initial metadata can precede restoration; identity reads are independent of the collection.
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('text_builder')),JSON.parse(original.hostState.params.text_builder[0]));
- const requests=app.calls.filter(call=>call.method==='POST'&&call.path.startsWith('/api/query/library/'));
+ const requests=app.calls.filter(call=>call.method==='POST'&&call.path.startsWith('/api/query/library/')&&call.body?.rows&&!call.body?.source?.where?.some(filter=>filter.field==='id'&&filter.op==='='));
  assert.ok(requests.length>0);
  for(const request of requests)assert.ok(request.query.has('find')||request.query.has('find_where'),`${request.path} dropped the applied search`);
  await page.evaluate(id=>window.pharosOpenDetail(id),workID);
@@ -778,7 +779,7 @@ test('opening work and returning to Search keeps the native Library search URL',
 test('row disclosures record deliberate choices without capturing every rendered default',{skip},async t=>{
  const schema=loadSchema(toolCallsDocument),now=Date.now();
  const rows=Array.from({length:12},(_,i)=>({id:`payload-${i}`,workspace_id:workID,conversation_id:rootConversation,input_text:'Synthetic retained input '.repeat(50),tool_name:'shell',status:'success',started_at:new Date(now).toISOString()}));
- const api={'* /api/query/tool_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
+ const api={'* /api/query/tool_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')}),'GET /api/tool-calls/:id':({params})=>rows.find(row=>row.id===params.id)??{}};
  const route=offset=>'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'tool_calls',q_tool_calls:encodeQuery({...EMPTY_QUERY,select:[{field:'id'},{field:'tool_name'},{field:'__qt_item_details__'}],itemDetails:{modes:['expand']},limit:4,offset,fitToScreen:false})});
  const app=await open(t,{url:route(0),api,ready:'.usage-workspace-table .qt-row'}),{page}=app;
  await page.locator('.usage-workspace-table .qt-row').first().getByRole('button',{name:/^Expand /}).click();
