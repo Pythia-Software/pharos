@@ -57,10 +57,16 @@ lab's "v3" grouping:
    grouping.
 7. **Title it.** An item's title names the problem from its key term, kind and
    place, for example "`trimesh` missing from corpus's environment", "`gh pr edit`
-   keeps failing for agents" or "Known failing check: …". The item's best
+   keeps failing for agents" or "Known failing check: …". Without a key term
+   most members name, the title comes from the stop most members describe:
+   what blocks or lacks what ("Read-only sandbox blocks Go’s temporary build
+   directory (pharos)", "Some parts lack qualified analysis solids"). Failing
+   that, it is the lead cut to the problem. The item's best
    self-contained member sentence (first person, plans and back-references ranked
    down) is kept as its **lead** and quoted under the title.
-8. **Merge known failing checks.** A check that fails regardless of the change
+8. **Split off and merge known failing checks.** Known-failure sentences in a
+   group about something else are split off, so an aside does not name or
+   hide the group's own problem. A check that fails regardless of the change
    (fails on master, unrelated to this change) is a known failing check, not an
    environment problem. Items in the same place that name the same check (a quoted
    name, or two shared distinctive words such as "dashboard parity") merge into one.

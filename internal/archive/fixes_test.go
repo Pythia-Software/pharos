@@ -486,6 +486,7 @@ func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
 	for text, want := range map[string]string{
 		"The same restriction prevented creating the requested local HTML report.":       "Restriction prevented creating the requested local HTML report",
 		"It seems Conductor already renamed the branch, so I'll use the new name.":       "Conductor already renamed the branch",
+		"I'm noticing that the history_search input triggers a double render.":           "The history_search input triggers a double render",
 		"**Test status:** `npm --prefix web test -- dashboards` could not run.":          "`npm --prefix web test -- dashboards` could not run",
 		"Odd, git status shows staged changes I didn't cause — so I'll check the index.": "Git status shows staged changes I didn't cause",
 	} {
@@ -565,6 +566,74 @@ func TestFixesLeadsTitlesAndKnownFailures(t *testing.T) {
 	}
 	if node := fixesFind(items, "Node 24"); node == nil || node.Intended {
 		t.Fatalf("a missing requirement the guidance names is a fix: %+v", node)
+	}
+}
+
+func TestFixesObstacleTitles(t *testing.T) {
+	// Without a key term, the title says what stops the agents and what it
+	// stops, in the words most members use.
+	item := func(sentences ...string) *fixItem {
+		out := &fixItem{}
+		for i, sentence := range sentences {
+			out.events = append(out.events, fixesEvent{ID: int64(i), Workspace: fmt.Sprint("w", i), Sentence: sentence})
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name, place, want string
+		sentences         []string
+	}{
+		{"sandbox", "pharos", "Read-only sandbox blocks Go’s temporary build directory (pharos)", []string{
+			"The targeted Go test could not start because this read-only sandbox denied creation of Go’s temporary build directory.",
+			"The permitted Go test command could not start: the read-only sandbox blocked Go’s temporary build directory.",
+			"The targeted Go test could not start: the read-only sandbox blocked Go from creating its temporary build directory.",
+			"I could not run the permitted Go tests: the read-only sandbox denied creation of Go’s temporary build directory.",
+		}},
+		{"restriction", "pharos", "Restriction blocks standing-preference local HTML report (pharos)", []string{
+			"The same restriction prevented creating the requested local HTML report.",
+			"The same restriction prevented creation of the standing-preference local HTML report.",
+			"The same filesystem restriction prevented creation of the standing-preference local HTML report, so this review is in chat.",
+			"That restriction also prevented creating the standing-preference local HTML report.",
+			"The read-only restriction also prevented creating the standing-preference local HTML report.",
+		}},
+		{"rename", "pharos", "Conductor renames the branch under the agent (pharos)", []string{
+			"It seems Conductor already renamed the branch — the old gbdubs/5vjl6 doesn't exist anymore.",
+			"I notice the branch got renamed to \"gbdubs/library-health-storage-build\" by Conductor.",
+			"I see the branch is already named gbdubs/browser-test-suite-optimize, renamed by Conductor.",
+			"I notice the branch got renamed, probably by Conductor.",
+		}},
+		{"connector", "pharos", "GitHub connector lacks permission (pharos)", []string{
+			"The GitHub connector lacks permission to create PRs in this repository.",
+			"The GitHub connector still lacks permission to create PRs here.",
+		}},
+		{"geometry", "brick-object-corpus", "Some parts lack qualified analysis solids (brick-object-corpus)", []string{
+			"Several curved and angular parts lacked qualified analysis solids, so the draft uses supported tiles.",
+			"The lattice fence parts I inspected lack qualified analysis solids, so I’ll build it with plates.",
+			"Several curved parts lack qualified analysis solids, so I’m using checked rounded-end tiles.",
+			"Some curved bedding pieces lack qualified analysis solids, so I’m checking alternatives.",
+		}},
+	} {
+		if got := fixesObstacleTitle(item(c.sentences...), c.place); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	// Members that don't agree on a stop leave the lead's own words.
+	if got := fixesObstacleTitle(item("The sandbox blocked the build.", "A parser bug blocked the import.", "The dashboard is slow."), "app"); got != "" {
+		t.Errorf("no shared stop: %q", got)
+	}
+
+	// A known-failure aside in a setup group is split off, so it neither
+	// names the setup problem nor hides the known failure.
+	group := fixesGroup{source: "friction"}
+	for i := 0; i < 7; i++ {
+		group.events = append(group.events, fixesEvent{ID: int64(i), Workspace: fmt.Sprint("node-", i), Family: "env_friction", Sentence: "I could not run `npm test` because the shell has Node 20 and the runner requires Node 24."})
+	}
+	for i := 0; i < 2; i++ {
+		group.events = append(group.events, fixesEvent{ID: int64(10 + i), Workspace: fmt.Sprint("flaky-", i), Family: "env_friction", Sentence: "One unrelated unit test (`parallel-hours`) failed once and passed on rerun."})
+	}
+	parts := fixesSplitKnownFailures(group)
+	if len(parts) != 2 || len(parts[0].events) != 7 || len(parts[1].events) != 2 || fixesCategorize(parts[1].source, parts[1].events) != "flaky" {
+		t.Fatalf("split: %+v", parts)
 	}
 }
 

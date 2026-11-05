@@ -1221,7 +1221,9 @@ func fixesBuild(input fixesInput) ([]fixItem, map[string]int, error) {
 	}
 	items := []*fixItem{}
 	for _, group := range groups {
-		items = append(items, fixesItemFromGroup(input, group, use))
+		for _, part := range fixesSplitKnownFailures(group) {
+			items = append(items, fixesItemFromGroup(input, part, use))
+		}
 	}
 	items = fixesMergeSame(input, items)
 	items = append(items, fixesStaleFileItems(input, inScope, taken)...)
@@ -1271,6 +1273,8 @@ func fixesBuild(input fixesInput) ([]fixItem, map[string]int, error) {
 		// findings rather than guidance.
 		item.Tentative = item.Category == "knowledge" && item.WorkItems < 5
 		fixesMarkIntended(item)
+		// A key term shows on the card only when most members name it.
+		item.Terms = fixesCommonTerms(item.events, item.Terms)
 		for _, list := range []*[]string{&item.Terms, &item.Files} {
 			if *list == nil {
 				*list = []string{}
@@ -1319,6 +1323,37 @@ func fixesFill(input fixesInput, item *fixItem) {
 	// A merge adds events, so the reason counts what the item holds now; the
 	// place stays where the item was put.
 	_, _, item.ScopeReason = fixesScope(events)
+}
+
+// fixesSplitKnownFailures takes the known-failure sentences ("an unrelated
+// test failed once and passed on rerun") out of a group about something
+// else. They become a group of their own when they span two work items, to
+// merge with the check they name; otherwise they are left out.
+func fixesSplitKnownFailures(group fixesGroup) []fixesGroup {
+	if group.source == "stale" || fixesCategorize(group.source, group.events) == "flaky" {
+		return []fixesGroup{group}
+	}
+	known, rest := []fixesEvent{}, []fixesEvent{}
+	for _, e := range group.events {
+		if fixesCategoryTerms["flaky"].MatchString(e.Sentence) {
+			known = append(known, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	if len(known) == 0 || fixesWorkItems(rest) < 2 {
+		return []fixesGroup{group}
+	}
+	main := group
+	main.events = rest
+	out := []fixesGroup{main}
+	if fixesWorkItems(known) >= 2 {
+		split := group
+		split.events = known
+		split.anchor, split.anchorShare = "", 0
+		out = append(out, split)
+	}
+	return out
 }
 
 func fixesItemFromGroup(input fixesInput, group fixesGroup, use fixesCodeUse) *fixItem {
@@ -1412,7 +1447,7 @@ func fixesMergeSame(input fixesInput, items []*fixItem) []*fixItem {
 		// Known failures of one test are one item however agents describe it.
 		if item.Category == "flaky" {
 			for _, other := range out {
-				if other.Category == "flaky" && other.Target == item.Target && fixesSameCheck(other.events, item.events) {
+				if other.Category == "flaky" && other.Target == item.Target && (fixesSameCheck(other.events, item.events) || fixesNamesTerm(other.events, item.Terms)) {
 					host, key = other, "check"
 					break
 				}
@@ -1549,6 +1584,7 @@ var (
 		there here pass passes passed passing all now left out tier fast go npm prefix assertion assert something introduced caused cause related
 		without with clean dashboard's itself note noted opening open pr current currently today verify verified against confirm confirmed
 		broader summary lines line known output truncated lost list probably maybe might`)
+	fixesNoticing    = regexp.MustCompile(`(?i)^\W*(?:actually,?\s*|so,?\s*|now,?\s*)?(?:i'?m|i’m|i am|i(?:'ve| have)?|i’ve)\s+(?:realizing|noticing|seeing|realize[sd]?|notice[sd]?|see|saw|found|confirmed|spotted)\s+(?:that\s+|now\s+)?`)
 	fixesReportLabel = regexp.MustCompile(`(?i)^\W*(?:test status|status|verification|tests?|testing|result|results|note|blocker|caveat)[\s*_]*:[\s*_]*`)
 	fixesProhibits   = regexp.MustCompile(`(?i)\b(?:never|must not|mustn.t|not to|don.t|do not|forbids?|forbidden|avoid|without)\b`)
 	fixesFollowsRule = regexp.MustCompile(`(?i)\bper (?:my|the|our|your) (?:notes|rules?|instructions|guidance|memory|memories|preferences?)\b|` +
@@ -1727,7 +1763,14 @@ func fixesProblemTitle(item *fixItem) string {
 		place = "this Mac"
 	}
 	share := func(pattern *regexp.Regexp) float64 { return fixesShare(item.events, pattern) }
-	term := first(fixesCommonTerms(item.events, item.Terms))
+	// A number ("2.16666666666") is a value agents quote, not the problem.
+	terms := []string{}
+	for _, term := range fixesCommonTerms(item.events, item.Terms) {
+		if !fixesNumeric.MatchString(term) {
+			terms = append(terms, term)
+		}
+	}
+	term := first(terms)
 	code := "`" + term + "`"
 	switch {
 	case item.Category == "flaky" && item.Check != "":
@@ -1749,6 +1792,9 @@ func fixesProblemTitle(item *fixItem) string {
 	case item.Category == "flaky" && term != "":
 		return "Known failing check involving " + code
 	}
+	if title := fixesObstacleTitle(item, place); title != "" {
+		return title
+	}
 	return fixesLeadTitle(item.Lead)
 }
 
@@ -1756,6 +1802,9 @@ func fixesProblemTitle(item *fixItem) string {
 // no trailing plan ("…, so I'll …"), and short.
 func fixesLeadTitle(text string) string {
 	text = fixesPlan.ReplaceAllString(text, "")
+	if loc := fixesNoticing.FindStringIndex(text); loc != nil && len(text)-loc[1] > 20 {
+		text = text[loc[1]:]
+	}
 	if loc := fixesReportLabel.FindStringIndex(text); loc != nil && len(text)-loc[1] > 20 {
 		text = text[loc[1]:]
 	}
@@ -1788,4 +1837,25 @@ func fixesMarkIntended(item *fixItem) {
 	item.Intended = true
 	item.IntendedReason = fmt.Sprintf("%d of its %d events cite a rule the agent was following (its notes, instructions or guidance), so this is the guidance working as intended rather than something to fix.", following, len(item.events))
 	item.Suggestion = "Nothing to fix: agents are following a rule on purpose. If they lose time getting around it, add the approved way to do the task beside the rule."
+}
+
+// fixesNamesTerm says whether two or more of a known failure's members name
+// one of another's key terms: "the `parallel-hours` test failed once" and
+// "rounding in the parallel-hours parity test" are the same check.
+func fixesNamesTerm(events []fixesEvent, terms []string) bool {
+	for _, term := range terms {
+		if fixesNumeric.MatchString(term) {
+			continue
+		}
+		n := 0
+		for _, e := range events {
+			if fixesTermIndex(e.Sentence, term) {
+				n++
+			}
+		}
+		if n >= 2 {
+			return true
+		}
+	}
+	return false
 }
