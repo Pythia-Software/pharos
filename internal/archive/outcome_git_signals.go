@@ -24,9 +24,18 @@ type gitSignals struct {
 	Added  map[string]map[string]lineSet // commit → file → lines it adds
 }
 
-// reflogCommitActions are the reflog entries of a commit made in the
-// checkout, as opposed to one checked out, reset to or pulled.
-var reflogCommitActions = []string{"commit", "cherry-pick", "revert", "rebase"}
+// reflogMadeCommit reports whether a reflog entry is of a commit made in the
+// checkout, as opposed to one checked out, reset to or pulled: a commit,
+// cherry-pick or revert, or a commit a rebase wrote. A rebase's start, finish
+// or abort names a commit it did not write, such as its upstream.
+func reflogMadeCommit(action string) bool {
+	head, message, _ := strings.Cut(action, ": ")
+	if strings.HasPrefix(head, "rebase") {
+		return !strings.Contains(head, "(start)") && !strings.Contains(head, "(finish)") && !strings.Contains(head, "(abort)") &&
+			!strings.HasPrefix(head, "rebase finished") && !strings.HasPrefix(message, "checkout ") && !strings.HasPrefix(message, "fast-forward")
+	}
+	return slices.ContainsFunc([]string{"commit", "cherry-pick", "revert"}, func(prefix string) bool { return strings.HasPrefix(head, prefix) })
+}
 
 // readGitSignals reads the signals for contested commits, each with the
 // sessions that could have made it. A signal that cannot be read is left
@@ -68,14 +77,14 @@ func readGitSignals(ctx context.Context, dir string, sessions map[string]*gitSes
 			if !ok || !wanted[hash] || slices.Contains(signals.MadeIn[hash], location) {
 				continue
 			}
-			if slices.ContainsFunc(reflogCommitActions, func(prefix string) bool { return strings.HasPrefix(action, prefix) }) {
+			if reflogMadeCommit(action) {
 				signals.MadeIn[hash] = append(signals.MadeIn[hash], location)
 			}
 		}
 	}
 
 	if output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, []byte(strings.Join(hashes, "\n")+"\n"),
-		"-c", "core.quotePath=false", "log", "--no-walk=unsorted", "--stdin", "-p", "--no-prefix", "--no-renames", "--no-color", "--format=%x1e%H"); err == nil {
+		append([]string{"-c", "core.quotePath=false", "log", "--no-walk=unsorted", "--stdin", "-p", "--no-prefix", "--no-renames", "--no-color", "--format=%x1e%H"}, gitRawDiff...)...); err == nil {
 		for hash, files := range readAddedLines(string(output)) {
 			if wanted[hash] {
 				signals.Added[hash] = files

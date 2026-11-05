@@ -250,17 +250,24 @@ Mac recorded that still exist.
   under `nice -n 10` with a 60-second timeout for the log and 10 seconds for
   everything else.
 - **Cache.** A repository's scan key is its refs (heads, remotes, tags and
-  `refs/notes/ai`) plus its sessions' edit windows, files and printed
-  commits. An unchanged key runs no `git log` and writes nothing, so the
+  `refs/notes/ai`) and its worktrees' detached HEADs, plus its sessions'
+  edit windows, files (with each file's first and last edit and its kept
+  line fingerprints) and printed commits. An unchanged key runs no `git log` and writes nothing, so the
   cached views stay valid. A scan that could not start is keyed by its
   reason; one that timed out is tried again when the repository changes or
   on the next day.
 - **What it reads.** `git log --branches --remotes --tags --no-renames
-  --numstat` since a day before the earliest session edit: each commit's
-  hash, parent count, author and commit times, and lines per file. For a
-  commit several sessions could have made, also its diff and the HEAD
-  reflog of the candidates' checkouts. The diff's added lines are
-  fingerprinted and compared in memory, never stored.
+  --numstat`, plus the worktrees' detached HEADs (`git worktree list
+  --porcelain`), since a day before the earliest session edit or printed
+  commit: each commit's hash, parent count, author and commit times, and
+  lines per file. For a commit several sessions could have made, also its
+  diff and the HEAD reflog of the candidates' checkouts: an entry of a
+  commit made there (a commit, cherry-pick, revert or a commit a rebase
+  wrote), not one checked out, reset to or a rebase's start, finish or
+  abort. The diff's added lines are fingerprinted and compared in memory,
+  never stored. Every diff is read with `--no-textconv --no-ext-diff`: a
+  repository's attributes can name a converter or diff program, which
+  would run, and a converter with a cache writes notes.
 - **Commits linked to the session.** A link comes either from a hash the
   session's own `git commit` printed (direct, confidence 1.0) or by
   inference: the commit is not a merge, its author time falls in the
@@ -280,7 +287,9 @@ Mac recorded that still exist.
   when mainline reaches it, or when a mainline commit since has the same
   `git patch-id --stable` (a rebase, cherry-pick or one-commit squash). A
   cherry-pick keeps the author time, so both copies link to the session;
-  the change is linked once, as the copy. In a shallow clone a commit
+  the change is linked once, as the copy, with the stronger evidence of
+  the two (a printed hash still counts when only inference linked the
+  copy). Another session's link to the original stays. In a shallow clone a commit
   mainline does not reach is unknown, not "not landed", and so is a commit
   whose patch could not be read.
 - **Reverts.** A later commit reverts a linked one when its message says
@@ -510,7 +519,8 @@ first and rework judged once per marked session (`session_rework_dirty`).
 
 - It never runs `git fetch` or `git pull`, writes notes, installs hooks, or
   changes config, refs or the working tree. Every command is read-only and
-  sets `GIT_NO_LAZY_FETCH=1`.
+  sets `GIT_NO_LAZY_FETCH=1`, and no diff runs a program the repository
+  names (`--no-textconv --no-ext-diff`).
 - It never runs git in a path another Mac recorded
   (`workspace_sightings.host_id`), because that path may be an unrelated
   checkout here.
