@@ -19,8 +19,8 @@ var outcomeMCPTools = []map[string]any{
 			"project":           map[string]any{"type": "string", "description": "A project name from list_projects: a repository, or a folder as ~/path."},
 			"label":             map[string]any{"type": "string", "enum": outcomeLabels},
 			"workspace_ids":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 100},
-			"from":              map[string]any{"type": "string", "description": "Sessions active at or after this time (RFC 3339 or date)."},
-			"to":                map[string]any{"type": "string", "description": "Sessions active before this time."},
+			"from":              map[string]any{"type": "string", "description": "Sessions last active at or after this time: an RFC 3339 timestamp or a UTC date."},
+			"to":                map[string]any{"type": "string", "description": "Sessions last active at or before this time; a date includes its whole day (UTC)."},
 			"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 			"offset":            map[string]any{"type": "integer", "minimum": 0},
 			"max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
@@ -52,13 +52,19 @@ func (c *Catalog) listOutcomes(ctx context.Context, args map[string]any) (map[st
 		where = append(where, "w.id IN (SELECT value FROM json_each(?))")
 		values = append(values, jsonText(ids))
 	}
-	if from := firstString(args["from"]); from != "" {
-		where = append(where, "COALESCE(w.activity_at,'')>=?")
-		values = append(values, from)
-	}
-	if to := firstString(args["to"]); to != "" {
-		where = append(where, "COALESCE(w.activity_at,'')<?")
-		values = append(values, to)
+	// Times compare as instants, so a bound with an offset means what it says.
+	for _, key := range []string{"from", "to"} {
+		if value := firstString(args[key]); value != "" {
+			if _, valid := parseTime(strings.TrimSpace(value)); !valid {
+				return nil, fmt.Errorf("%s must be a valid timestamp or date", key)
+			}
+			operator := ">="
+			if key == "to" {
+				operator = "<="
+			}
+			where = append(where, "julianday(w.activity_at)"+operator+"julianday(?)")
+			values = append(values, timeBound(value, key == "to"))
+		}
 	}
 	label := firstString(args["label"])
 	if label != "" && !slices.Contains(outcomeLabels, label) {
@@ -114,13 +120,10 @@ func (c *Catalog) listOutcomes(ctx context.Context, args map[string]any) (map[st
 	}
 	result["items"] = items
 	result["note"] = "outcome_why names the evidence and its tier. Landed and committed need local Git; every other label comes from the session's own tool calls, so sessions in plain folders are labelled too. Commit links below confidence 0.7 are candidates and are not counted."
-	fitConversationItems(result, budget)
-	// The next page starts after the last item that fit the budget.
-	shown, _ := result["items"].([]map[string]any)
-	if next := offset + len(shown); next < total {
-		result["next_offset"] = next
-	} else {
-		result["next_offset"] = nil
+	// The next page starts after the last item that fit the budget; one
+	// that fits none is an error, not a page that never advances.
+	if err := fitAuditPage(result, budget, offset, total); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -132,7 +135,8 @@ func (c *Catalog) getFileHistory(ctx context.Context, args map[string]any) (map[
 	if err != nil {
 		return nil, err
 	}
-	// Fit the budget by shedding the oldest sessions and commits first.
+	// Fit the budget by shedding the oldest sessions and commits first, then
+	// files past the first, which a narrower path or project names.
 	budget := mcpBudget(args, 2500)
 	files, _ := result["files"].([]map[string]any)
 	for len(jsonText(result)) > budget*3 {
@@ -145,8 +149,12 @@ func (c *Catalog) getFileHistory(ctx context.Context, args map[string]any) (map[
 				}
 			}
 		}
+		if !shed && len(files) > 1 {
+			files = files[:len(files)-1]
+			result["files"], result["files_truncated"], shed = files, true, true
+		}
 		if !shed {
-			break
+			return nil, fmt.Errorf("max_output_tokens is too small for one file's history; increase the output budget")
 		}
 	}
 	return result, nil

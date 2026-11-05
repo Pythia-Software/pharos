@@ -15,6 +15,8 @@ test("missing Git facts read as not applicable or not checked, never as none", (
   assert.equal(gitText({ status: "not_checked", reason: "Local Git has not checked this repository on this Mac yet." }, 0), "Local Git has not checked this repository on this Mac yet.");
   assert.match(gitText({ status: "checked" }, 0), /no commit/);
   assert.match(gitText({ status: "checked" }, 2), /^2 commits/);
+  // Git is read from the first session edit: an empty list says since when.
+  assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z" }, 0), /no commit of this file since 2026-09-01\. Earlier commits are not read/);
   // A tool that recorded no counts is not a change of zero lines.
   assert.equal(linesText(null, null), "lines not recorded");
   assert.equal(linesText(1200, 0), "+1,200 −0");

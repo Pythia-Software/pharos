@@ -46,6 +46,15 @@ func TestFileHistoryWithGit(t *testing.T) {
 	byHand := repo.commit(2, "By hand", map[string]string{"main.go": "package main\n\nfunc main() { run() }\n"})
 	repo.commit(1, "Unrelated", map[string]string{"other.go": "package other\n"})
 	f.edit("elsewhere", "util.go", 3)
+	// A patch's second file is recorded only in session_files, placed by
+	// the session's checkout.
+	f.session("patcher", "")
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET location='`+repo.dir+`' WHERE id='patcher'`)
+	f.call("patcher", filepath.Join(repo.dir, "lib.go"), "repo-app", "lib.go", 3.5, "apply_patch", map[string]any{"patch": "*** Begin Patch\n*** Add File: " +
+		filepath.Join(repo.dir, "lib.go") + "\n" + added(code("lib", 0, 2)) + "\n*** Add File: " + filepath.Join(repo.dir, "lib_test.go") + "\n" + added(code("lib_test", 0, 2)) + "\n*** End Patch"}, 4, 0)
+	// A change set that found main.go in second's workspace.
+	execTx(t, f.catalog.DB, `INSERT INTO change_sets(id,workspace_id,classification,created_at) VALUES('set','second','attempted','`+daysAgo(4.9)+`')`,
+		`INSERT INTO change_files(change_set_id,path,status,tracked) VALUES('set','main.go','modified',1)`)
 	repo.git(time.Now(), "update-ref", "refs/remotes/origin/main", "HEAD")
 	f.refresh()
 
@@ -66,12 +75,56 @@ func TestFileHistoryWithGit(t *testing.T) {
 		if integer(latest["edits"]) != 2 || latest["outcome_label"] != "landed" || !strings.Contains(firstString(latest["url"]), "message=call-") {
 			t.Fatalf("latest session: %#v", latest)
 		}
-		if git := file["git"].(map[string]any); git["status"] != "checked" {
+		// Git was read from a day before the first session edit, and says so.
+		git := file["git"].(map[string]any)
+		since, _ := parseTime(firstString(git["commits_since"]))
+		if git["status"] != "checked" || !since.Before(time.Now().Add(-10*24*time.Hour)) || since.Before(time.Now().Add(-12*24*time.Hour)) {
 			t.Fatalf("git: %#v", git)
 		}
 		want := []string{byHand[:7] + " ", second[:7] + " second", first[:7] + " first"}
 		if got := fileHistoryHashes(file); strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Fatalf("%s commits: %v, want %v", path, got, want)
+		}
+	}
+	for _, path := range []string{"lib_test.go", filepath.Join(repo.dir, "lib_test.go")} {
+		history := callProjectTool(t, f.catalog, "get_file_history", map[string]any{"path": path})
+		files := history["files"].([]any)
+		if len(files) != 1 || strings.Join(fileHistorySessions(files[0].(map[string]any)), " ") != "patcher" ||
+			!strings.Contains(firstString(files[0].(map[string]any)["sessions"].([]any)[0].(map[string]any)["url"]), "message=call-") {
+			t.Fatalf("a patch's second file at %s: %#v", path, history)
+		}
+	}
+	// File search finds each edited file once, with its project and the
+	// message of its first edit, a change set's find included.
+	for query, want := range map[string]int{"main.go": 2, "lib_test.go": 1} {
+		found, err := f.catalog.LibraryFind(t.Context(), LibraryFindOptions{Kind: "file", Query: query, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits := found["items"].([]libraryHit)
+		for _, hit := range hits {
+			if hit.Project == "" || hit.MessageID == "" {
+				t.Fatalf("file search %s: %#v", query, hits)
+			}
+		}
+		if len(hits) != want {
+			t.Fatalf("file search %s: %#v", query, hits)
+		}
+	}
+	// A budget too small for one answer is an error, never an empty page or
+	// an answer past it.
+	for tool, args := range map[string]map[string]any{"list_outcomes": {}, "get_file_history": {"path": "main.go"}} {
+		args["max_output_tokens"] = 200
+		if _, err := callMCP(f.catalog, tool, args); err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+			t.Fatalf("%s within 200 tokens: %v", tool, err)
+		}
+	}
+	// A time with an offset is the instant it names.
+	later := time.Now().Add(time.Hour).In(time.FixedZone("EDT", -4*3600)).Format(time.RFC3339)
+	for args, want := range map[[2]string]int64{{later, ""}: 0, {"", time.Now().UTC().Format("2006-01-02")}: 4} {
+		listed := callProjectTool(t, f.catalog, "list_outcomes", map[string]any{"from": args[0], "to": args[1]})
+		if integer(listed["total"]) != want {
+			t.Fatalf("list_outcomes from %q to %q: %#v", args[0], args[1], listed)
 		}
 	}
 	// A path in no session's edits says so instead of an empty list.

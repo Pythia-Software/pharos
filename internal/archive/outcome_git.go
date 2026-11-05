@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS git_repository_scans(
   status TEXT NOT NULL,
   reason TEXT,
   scanned_at TEXT NOT NULL,
+  history_since TEXT,
   PRIMARY KEY(repository_id,host_id)) WITHOUT ROWID;
 `
 
@@ -160,6 +161,9 @@ type gitScan struct {
 	// Edited are the repository's files some session edited: the commits
 	// that changed them are kept for file history.
 	Edited map[string]bool
+	// Since is how far back the scan read: commits before it are not
+	// stored, so file history says it covers only the time since.
+	Since time.Time
 }
 
 var errGitTimeout = errors.New("git timed out")
@@ -456,7 +460,7 @@ func scanRepository(ctx context.Context, dir string, sessions map[string]*gitSes
 	if err != nil {
 		return gitScan{Status: "not_checked", Reason: gitFailure(err)}
 	}
-	scan := gitScan{Status: "checked", Commits: commits, Edited: map[string]bool{}}
+	scan := gitScan{Status: "checked", Commits: commits, Edited: map[string]bool{}, Since: since.Add(-24 * time.Hour)}
 	for _, id := range members {
 		for path := range sessions[id].Files[repository] {
 			scan.Edited[path] = true
@@ -958,9 +962,14 @@ func (c *Catalog) writeGitScan(ctx context.Context, repository, host, key string
 				}
 			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at) VALUES(?,?,?,?,?,?)
-			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at`,
-			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now())
+		var since any
+		if !scan.Since.IsZero() {
+			since = scan.Since.UTC().Format(time.RFC3339)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO git_repository_scans(repository_id,host_id,scan_key,status,reason,scanned_at,history_since) VALUES(?,?,?,?,?,?,?)
+			ON CONFLICT(repository_id,host_id) DO UPDATE SET scan_key=excluded.scan_key,status=excluded.status,reason=excluded.reason,scanned_at=excluded.scanned_at,
+			history_since=excluded.history_since`,
+			repository, host, key, scan.Status, nilIfEmpty(scan.Reason), now(), since)
 		return err
 	})
 }

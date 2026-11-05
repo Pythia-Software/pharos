@@ -399,6 +399,24 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 	if err != nil {
 		return nil, err
 	}
+	// A file a change set found is found once, with what the session's
+	// edits add: its project, and its first edit's conversation and message
+	// where the change set had no conversation or the same one.
+	edits := map[string]libraryHit{}
+	for _, hit := range edited {
+		edits[hit.WorkspaceID+"\x00"+hit.Path] = hit
+	}
+	for index := range hits {
+		hit := &hits[index]
+		edit, ok := edits[hit.WorkspaceID+"\x00"+hit.Path]
+		if !ok {
+			continue
+		}
+		hit.Project = edit.Project
+		if edit.ConversationID != "" && (hit.ConversationID == "" || hit.ConversationID == edit.ConversationID) {
+			hit.ConversationID, hit.MessageID, hit.Provider, hit.Attribution = edit.ConversationID, edit.MessageID, edit.Provider, edit.Attribution
+		}
+	}
 	changed := map[string]bool{}
 	for _, hit := range hits {
 		changed[hit.WorkspaceID+"\x00"+hit.Path] = true
@@ -445,15 +463,11 @@ func (c *Catalog) findEditedFiles(ctx context.Context, o LibraryFindOptions, sco
 	}
 	scope = strings.ReplaceAll(scope, "cs.workspace_id", "sf.workspace_id")
 	rows, err := queryMapsContext(ctx, c.reader(), `WITH matching AS (
-		SELECT sf.workspace_id,sf.file_key,sf.path,sf.repository_id,sf.edits FROM session_files sf
+		SELECT sf.workspace_id,sf.file_key,sf.path,sf.repository_id,sf.first_edit_at,sf.edits FROM session_files sf
 		WHERE (`+comparison+`)`+scope+` AND sf.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
 		ORDER BY sf.last_edit_at DESC`+capSQL+`
 	) SELECT m.workspace_id,m.path,m.edits,w.title,`+projectNameSQL("w")+` project,
-		(SELECT t.conversation_id||char(31)||COALESCE(t.call_message_id,'')||char(31)||COALESCE(t.provider,'') FROM tool_calls t
-			WHERE t.workspace_id=m.workspace_id AND t.tool_category='edit'
-			AND (m.repository_id IS NOT NULL AND t.path_repository_id=m.repository_id AND t.repo_path=m.path
-				OR m.repository_id IS NULL AND 'path:'||t.path_absolute=m.file_key)
-			ORDER BY COALESCE(t.started_at,''),t.sequence LIMIT 1) edit
+		`+firstEditCallSQL("m", "t.conversation_id||char(31)||COALESCE(t.call_message_id,'')||char(31)||COALESCE(t.provider,'')")+` edit
 		FROM matching m JOIN workspaces w ON w.id=m.workspace_id`+projectJoin("w"), append([]any{o.Query}, args[2:]...)...)
 	if err != nil {
 		return nil, err

@@ -13,7 +13,7 @@ export type FileHistoryLink = { workspace_id: string; method: string; confidence
 export type FileHistoryCommit = {
   hash: string; author_at?: string; lines_added?: number; lines_removed?: number; on_mainline?: boolean | null; reverted_by?: string | null; sessions: FileHistoryLink[];
 };
-export type FileHistoryGit = { status: "checked" | "not_checked" | "not_applicable" | string; reason?: string | null; checked_at?: string; commits_truncated?: boolean };
+export type FileHistoryGit = { status: "checked" | "not_checked" | "not_applicable" | string; reason?: string | null; checked_at?: string; commits_since?: string | null; commits_truncated?: boolean };
 export type FileHistoryFile = {
   file_key: string; path: string; repository_id?: string; project?: string | null; project_kind?: string;
   sessions: FileHistorySession[]; sessions_truncated?: boolean; commits: FileHistoryCommit[]; git: FileHistoryGit;
@@ -41,10 +41,15 @@ export function linesText(added: number | null | undefined, removed: number | nu
 
 // gitText is what local Git contributes for a file: commits where it checked
 // the repository, and otherwise why there are none. It is never an error:
-// a folder's history comes from transcripts alone.
+// a folder's history comes from transcripts alone. Local Git is read from
+// the repository's first session edit, so commits are counted since then.
 export function gitText(git: FileHistoryGit, commits: number): string {
   if (git.status === "not_applicable") return "A folder, not a Git repository: this history comes from the sessions' own edits.";
-  if (git.status === "checked") return commits ? `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"} changed this file, from local Git.` : "Local Git found no commit of this file.";
+  if (git.status === "checked") {
+    const since = git.commits_since ? ` since ${git.commits_since.slice(0, 10)}` : "";
+    const found = commits ? `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"} changed this file${since}, from local Git.` : `Local Git found no commit of this file${since}.`;
+    return since ? `${found} Earlier commits are not read.` : found;
+  }
   return git.reason || "Local Git has not checked this repository.";
 }
 
