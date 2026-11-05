@@ -744,13 +744,15 @@ export function ThinkingHourly({
 export function ThinkingCDF({
   groups,
   action,
+  title = "How long are the waits?",
 }: {
   groups: ThinkingGroup[];
   action?: React.ReactNode;
+  title?: string;
 }) {
   return (
     <ThinkingFigure
-      title="How long are the waits?"
+      title={title}
       action={action}
       note="Curves require 100 usable gaps from five conversations. Each curve is an individual-request quantile function at 1% steps."
     >

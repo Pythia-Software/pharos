@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { DashboardSelect } from "./dashboard-select";
 import { ChartSelect } from "./usage-chart";
 import { preferences } from "./preferences";
@@ -7,7 +7,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { initiatorLabels } from "./habits-analysis-catalog";
 import { CreateDashboardCard } from "./create-dashboard-card";
 import { CalendarChart, DaysChart, PunchcardChart } from "./habits-charts";
-import type { HabitsCardTarget } from "./habits-card";
+import { habitsCardTitle, readHabitsCardView, type HabitsCardTarget, type HabitsCardView } from "./habits-card";
 import {
   defaultHabitsSettings, engagedGaps, formatClock, formatDay, formatGap, formatHours, habitsSettingsKey, healthStats,
   normalizeHabitsSettings, recentWork, punchcardViews, streakActors, streakDays, todayLabel, toggleVacation, validDay,
@@ -22,6 +22,7 @@ import "./habits.css";
 
 const savedSettings = () => normalizeHabitsSettings(preferences().get<unknown>(habitsSettingsKey, defaultHabitsSettings));
 const saveSettings = (settings: HabitsSettings) => preferences().set(habitsSettingsKey, settings);
+const HabitsViewContext = createContext<HabitsCardView>(readHabitsCardView(new URLSearchParams()));
 
 function useHabits(mode: HabitsMode, days: number) {
   const [settings, setSettings] = useState(savedSettings);
@@ -62,16 +63,17 @@ export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
   if (error && !data) return <p className="query-table-error" role="alert">{error}</p>;
   if (!data) return <p className="muted" role="status">Loading your habits…</p>;
   const day = validDay(selected) ? data.days.find(item => item.day === selected) : undefined;
-  return <section className="habits-panel" aria-label="Habits" aria-busy={loading}>
+  const cardView: HabitsCardView = { mode, weeks: Number(weeks), calendar, weekends: weekends !== "hide", punchcard: view, range: punchcardDays, shapeDays: Number(shapeDays) };
+  return <HabitsViewContext.Provider value={cardView}><section className="habits-panel" aria-label="Habits" aria-busy={loading}>
     <div className="habits-streaks-head">
       <div className="usage-chart-controls habits-controls">
         <ChartSelect label="Streaks count" value={mode} onChange={setMode} options={[["all", "Every day"], ["weekdays", "Weekdays only"]]} />
       </div>
-      <CreateDashboardCard target="habits-streaks" />
+      <Heading target="habits-streaks" />
     </div>
     <Streaks data={data} settings={settings} />
     <div className="habits-card" data-pharos-target="section:habits-calendar">
-      <Heading title="Days" target="habits-calendar" />
+      <Heading target="habits-calendar" />
       <div className="usage-chart-controls habits-controls">
         <ChartSelect label="Whose days" value={calendar} onChange={setCalendar} options={streakActors.map(actor => [actor.id, actor.label])} />
         <ChartSelect label="Range" ariaLabel="Calendar range" value={weeks} onChange={setWeeks} options={[["13", "Last 13 weeks"], ["26", "Last 26 weeks"], ["53", "Last year"]]} />
@@ -92,12 +94,13 @@ export function HabitsPanel({ analysis }: { analysis?: React.ReactNode }) {
     <p className="usage-dashboard-note">Your time is estimated from the messages you typed: each one adds its typing time, and messages within {settings.engagedGap} minutes join one engaged block. Agent turns are split by whether you were engaged and by who started them. {data.coverage.unmatched_turns ? `${data.coverage.unmatched_turns.toLocaleString()} of ${data.coverage.turns.toLocaleString()} turns have no prompt to read who started them; they count as unattended.` : ""}</p>
     <Automations data={data} />
     <HabitsSettingsPanel settings={settings} onChange={update} />
-  </section>;
+  </section></HabitsViewContext.Provider>;
 }
 
 // A section's heading, with the standard control that makes it a Home card.
-function Heading({ title, target }: { title: string; target: HabitsCardTarget }) {
-  return <div className="habits-card-title"><h3>{title}</h3><CreateDashboardCard target={target} /></div>;
+function Heading({ target }: { target: HabitsCardTarget }) {
+  const view = useContext(HabitsViewContext);
+  return <div className="habits-card-title"><h3>{habitsCardTitle(target, view)}</h3><CreateDashboardCard target={target} /></div>;
 }
 
 // Your streak only: agents and automatic runs have their calendars below.
@@ -132,7 +135,7 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "numer
 const punchcardRanges: Array<[string, string]> = [["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"], ["365", "Last year"], ["all", "All time"]];
 function Punchcard({ data, view, onView, days, onDays }: { data: HabitsSummary; view: PunchcardView; onView: (view: PunchcardView) => void; days: string; onDays: (days: string) => void }) {
   return <div className="habits-card" data-pharos-target="section:habits-punchcard">
-    <Heading title="When" target="habits-punchcard" />
+    <Heading target="habits-punchcard" />
     <div className="usage-chart-controls habits-controls">
       <ChartSelect label="Whose time" ariaLabel="Punchcard time" value={view} onChange={onView} options={punchcardViews} />
       <ChartSelect label="Range" ariaLabel="Punchcard range" value={days} onChange={onDays} options={punchcardRanges} />
@@ -145,7 +148,7 @@ function Punchcard({ data, view, onView, days, onDays }: { data: HabitsSummary; 
 const shapeRanges: Array<[string, string]> = [["7", "Last 7 days"], ["14", "Last 14 days"], ["28", "Last 28 days"], ["56", "Last 56 days"], ["90", "Last 90 days"]];
 function WorkdayShape({ data, days, onDays }: { data: HabitsSummary; days: number; onDays: (days: string) => void }) {
   return <div className="habits-card" data-pharos-target="section:habits-days">
-    <Heading title="Your days" target="habits-days" />
+    <Heading target="habits-days" />
     <div className="usage-chart-controls habits-controls"><ChartSelect label="Range" ariaLabel="Your days range" value={String(days)} onChange={onDays} options={shapeRanges} /></div>
     <p className="muted">The faint bar runs from your first engaged minute to your last; the solid pieces are when you were engaged, coloured by time of day.</p>
     <DaysChart data={data} count={days} />
@@ -156,7 +159,7 @@ function Health({ data }: { data: HabitsSummary }) {
   const health = useMemo(() => healthStats(data.days, 28), [data.days]);
   const percent = (value?: number) => value === undefined ? "—" : `${Math.round(value * 100)}%`;
   return <section className="habits-pace" data-pharos-target="section:habits-pace">
-    <Heading title="Pace" target="habits-pace" />
+    <Heading target="habits-pace" />
     <p className="muted">The last four weeks.</p>
     <div className="mcp-metrics dashboard-stats habits-health">
       <div className="mcp-metric"><span>Days off</span><strong>{health.restDays}</strong><small>longest run without one: {streakDays(health.longestWithoutRest)}</small></div>
@@ -169,9 +172,9 @@ function Health({ data }: { data: HabitsSummary }) {
 
 function Automations({ data }: { data: HabitsSummary }) {
   const days = useMemo(() => { const result: string[] = []; for (let day = data.punchcard.from; day <= data.punchcard.to; day = shift(day)) result.push(day); return result.slice(-400); }, [data.punchcard]);
-  if (!data.automations.length) return <div className="habits-card" data-pharos-target="section:habits-automations"><Heading title="Automatic agent runs" target="habits-automations" /><p className="muted">No agent runs started by a schedule, script, orchestrator or another agent in this range.</p></div>;
+  if (!data.automations.length) return <div className="habits-card" data-pharos-target="section:habits-automations"><Heading target="habits-automations" /><p className="muted">No agent runs started by a schedule, script, orchestrator or another agent in this range.</p></div>;
   return <div className="habits-card" data-pharos-target="section:habits-automations">
-    <Heading title="Automatic agent runs" target="habits-automations" />
+    <Heading target="habits-automations" />
     <p className="muted">What started agents without a message from you, {formatDay(data.punchcard.from)} to {formatDay(data.punchcard.to)}. A scheduled run is missed when a gap is more than twice its usual one.</p>
     <div className="habits-scroll"><table className="habits-automations">
       <thead><tr><th scope="col">Started by</th><th scope="col">Kind</th><th scope="col">Runs</th><th scope="col">Days</th><th scope="col">Agent time</th><th scope="col">Cadence</th><th scope="col">Missed</th><th scope="col">Last run</th><th scope="col">Daily runs</th></tr></thead>

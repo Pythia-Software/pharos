@@ -1976,6 +1976,10 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   assert.ok(await dialog.getByRole('textbox',{name:'Title',exact:true}).evaluate(el=>el===document.activeElement));
   await holdsFocus(page,dialog,create);
   await create.click();
+  for(const [width,height] of [[1440,900],[320,568]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.scrollWidth<=el.clientWidth;}),'default card copy fits the viewport');
+  }
   await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
   await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
   await dialog.getByRole('combobox',{name:'Category',exact:true}).selectOption('cost');
