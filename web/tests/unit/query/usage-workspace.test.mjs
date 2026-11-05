@@ -510,8 +510,9 @@ test("Tools comparisons weight failure rates and mean durations by their actual 
 
 
 test("Tool summary call links keep every dimension of the selected row", () => {
-  const base = { day: "2026-10-01", tool_name: "read_mcp_resource", tool_category: "mcp", provider: "codex", model: "gpt", effort: "high", project_name: "test", session_kind: "root", source_kind: "codex", program: null, subcommand: null, command_category: null, mcp_server: "alpha" };
-  const rows = [{ ...base, id: "exact" }, { ...base, id: "server", mcp_server: "beta" }, { ...base, id: "category", command_category: "read" }, { ...base, id: "tool-category", tool_category: "read" }];
+  const base = { day: "2026-10-01", tool_name: "read_mcp_resource", tool_category: "mcp", provider: "codex", model: "gpt", effort: "high", repository_name: "test", project_name: "test", session_kind: "root", source_kind: "codex", program: null, subcommand: null, command_category: null, mcp_server: "alpha" };
+  // The same project, from a folder before it became the repository's checkout.
+  const rows = [{ ...base, id: "exact" }, { ...base, id: "server", mcp_server: "beta" }, { ...base, id: "category", command_category: "read" }, { ...base, id: "tool-category", tool_category: "read" }, { ...base, id: "folder", repository_name: null }];
   const query = { ...EMPTY_QUERY, where: toolSummaryCallFilters(base) };
   assert.deepEqual(applyQuery(rows, query, loadSchema(toolCalls)).rows.map(row => row.id), ["exact"]);
 });
