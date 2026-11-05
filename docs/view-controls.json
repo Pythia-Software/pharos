@@ -7818,6 +7818,17 @@
       "reason": "Refresh retries a read without changing the applied view."
     },
     {
+      "key": "ff2a2d2e22b3d073:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:compaction-waits\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "d6018b26f8871d02:0",
       "file": "web/src/timeline-columns.tsx",
       "owner": "handle",
