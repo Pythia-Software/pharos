@@ -453,7 +453,7 @@ func TestFreshnessAfterAutomaticIndexSchedulesAnalyses(t *testing.T) {
 	// Background Processing are on: each analysis waits for its item's
 	// cadence (§11), Frequently or Hourly before it has measurements.
 	rows, byDomain := ledger()
-	cadence := map[string]string{"an.identities": cadenceFrequent, "an.git": cadenceFrequent, "an.tools": cadenceFrequent, "an.authorship": cadenceHourly, "findings": cadenceHourly}
+	cadence := map[string]string{"an.identities": cadenceFrequent, "an.git": cadenceFrequent, "an.tools": cadenceFrequent, "an.authorship": cadenceFrequent, "findings": cadenceHourly}
 	for _, domain := range append(analyses, "findings") {
 		row := expectRow(t, byDomain, domain, freshScheduled, "scheduled-"+cadence[domain], "")
 		if row.Next == nil || *row.Next != cadenceNext[cadence[domain]] || row.Behind.Count != nil {

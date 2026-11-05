@@ -207,7 +207,9 @@ func (c *Catalog) Close() error {
 // preservation contract of these rows.
 // 21: library delivery checkpoints. Older writers ignore moved inventories
 // and can recreate history explicitly moved out of a source library.
-const catalogSchemaVersion = 21
+// 22: provisional authorship and the durable estimates queue. Older full
+// writers do not maintain per-message completion state.
+const catalogSchemaVersion = 22
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

@@ -75,7 +75,7 @@ const humanPromptParts = [
 ];
 function classifiedPrompt(id, parts) {
   let end=0;
-  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
+  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,provisional:true,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
 }
 const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
 const authoredTurnMessages = [authoredPrompt,
@@ -349,6 +349,7 @@ const ROUTES = [
   // Older Analyze and Tools links open what replaced their pages.
   { name: "Analyze legacy link", url: '/analyze?analyze_view=carbon&analyze_chart={"metric":"energy"}', ready: ".usage-dashboard #carbonSummary" },
   { name: "Tools legacy link", url: "/tools?tools_view=summary", ready: ".usage-workspace-table .qt-row" },
+  { name: "Writing estimates awaiting refinement", url: "/analyze?analyze_topic=human", ready: '[aria-label="Human Words summary"][aria-busy="false"]' },
   { name: "Conversations dashboard", url: "/analyze?analyze_topic=activity", ready: '.dashboard-stats[aria-label="Conversations summary"][aria-busy="false"]' },
   {name:'Message Labels dashboard',url:'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels',ready:'.usage-labels-dashboard .usage-chart'},
   {name:'Message Labels specific hierarchy',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend',metric:'messages',split:'label'})}),ready:'.usage-labels-dashboard .usage-chart'},
@@ -487,13 +488,13 @@ const ROUTES = [
   ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
-  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#agentEventsEnabled", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
       status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." },
       agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled)." } },
   } },
-  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },

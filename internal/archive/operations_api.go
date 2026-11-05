@@ -449,7 +449,7 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 		case activity.Label == "Updating findings":
 			ok = running(kinds("analysis.findings"))
 		case activity.Label == "Classifying your writing":
-			ok = running(kinds("analysis.authorship"))
+			ok = running(kinds("analysis.authorship", "analysis.authorship.refine"))
 		case activity.Label == "Indexing the Library view":
 			ok = running(kinds("maintenance.library-view"))
 		}

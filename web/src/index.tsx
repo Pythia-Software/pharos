@@ -1012,7 +1012,7 @@ function ToolTimeSummary({ where, selected = false }: { where: WhereTerm[]; sele
   </div>;
 }
 
-type AuthorshipStatus = { built_at: string | null; running: boolean; stale: boolean; error: string | null };
+type AuthorshipStatus = { built_at: string | null; running: boolean; stale: boolean; error: string | null; refined_at?: string | null; refinement_pending?: boolean; provisional_messages?: number; pending_messages?: number; deferred_messages?: number; refining?: boolean };
 
 // Tracks the background classification, polling while it runs, and reports
 // each finished build so the page can reload.
@@ -1212,7 +1212,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
       {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average over messages containing your writing")}
       {card("Typed share", words ? `${Math.round(typed / words * 100)}%` : "—", `of ${compactNumber(words)} words in your messages`)}
     </div>
-    {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Classification update failed: ${status.error}` : status.running ? "Updating text classifications…" : status.stale ? "Text classifications need an update." : status.built_at ? `Text classified ${new Date(status.built_at).toLocaleString()}` : "Waiting for text classification."}</p> : null}
+    {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Writing update failed: ${status.error}` : status.refining ? "Refining writing history… Recent estimates may change." : status.running ? "Updating writing estimates…" : status.built_at ? `Writing updated ${new Date(status.built_at).toLocaleString()}.` : "Waiting for writing estimates."}{status.pending_messages ? ` ${status.pending_messages.toLocaleString()} messages await an estimate.` : ""}{status.provisional_messages ? ` ${status.provisional_messages.toLocaleString()} messages have provisional estimates.` : ""}{status.deferred_messages ? ` ${status.deferred_messages.toLocaleString()} large messages await overnight refinement.` : ""}{status.refined_at ? ` History refined ${new Date(status.refined_at).toLocaleString()}.` : ""}{status.refinement_pending ? " Historical refinement is scheduled overnight." : ""}</p> : null}
   </>;
 }
 
