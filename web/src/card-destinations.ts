@@ -30,6 +30,9 @@ const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = e
 const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
 const dashboards: Record<string, CardDashboard> = {
+ "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
+ "human-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
+ "thinking-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
   "error-signatures": calls("calls", "error_signature", { minSamples: 2 }),
   "error-reach": calls("projects", "error_signature"),
   "cross-repo-errors": calls("calls", "project_error"),
@@ -40,6 +43,9 @@ const dashboards: Record<string, CardDashboard> = {
   "skill-reach": skills("projects", "skill_name", { view: "compare" }),
   "usage-work": tokens("tokens", "project_name", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
   "delegation-depth": tokens("tokens", "delegated_run_depth", { view: "compare" }),
+  "delegation-breadth": tokens("delegated_runs", "none", { view: "distribution", unit: "delegating_run" }),
+  "task-delegated-runs": tokens("delegated_runs", "none", { view: "distribution", unit: "conversation" }),
+  "delegation-fanout-trend": tokens("average_fanout", "none", { view: "trend", period: "week", nonzero: true }),
   "model-session-costs": tokens("cost", "provider_model", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
   "largest-subagent-weight": tokens("delegated_runs", "provider_model_effort", { view: "compare", unit: "conversation", reduce: "max" }),
   "session-delegation-count": tokens("delegated_runs", "provider_model_effort", { view: "distribution", unit: "conversation", scale: "logarithmic" }),

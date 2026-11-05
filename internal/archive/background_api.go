@@ -57,6 +57,29 @@ func runningItems(views []opView) (map[string]bool, []string) {
 	return items, order
 }
 
+// waitingItems includes items accepted by a pass but not yet reached. A
+// manual cadence describes future scheduling, not the state of an accepted
+// Run now while its prerequisites are running.
+func waitingItems(views []opView) map[string]bool {
+	waiting := map[string]bool{}
+	for _, view := range views {
+		if view.Spec.Kind != "background.update" || !liveState(view.State) {
+			continue
+		}
+		for index, step := range view.Plan {
+			if index+1 <= view.Step.Index {
+				continue
+			}
+			for _, item := range backgroundItems {
+				if item.Label == step.Name {
+					waiting[item.ID] = true
+				}
+			}
+		}
+	}
+	return waiting
+}
+
 // stoppableItems is the operation that Stop ends for each item a stoppable
 // operation is working on: a top-level one, as the snapshot offers Stop.
 func stoppableItems(views []opView) map[string]OpID {
@@ -243,6 +266,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		rows[row.Domain] = row
 	}
 	live, order := runningItems(views)
+	queued := waitingItems(views)
 	stops := stoppableItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
@@ -260,6 +284,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
+		case in.requested[item.ID] || queued[item.ID]:
+			state = "queued"
 		case item.ID == "backup" && in.backupDestination == "":
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
@@ -452,24 +478,13 @@ func itemChoices(item backgroundItem, settings backgroundSettings) []map[string]
 	return append(choices, map[string]any{"value": cadenceManual, "label": "Only when I ask"})
 }
 
-// A temporary move is one bucket faster or slower than the effective schedule.
-// Fixed, opt-in and manually disabled work keep their existing controls.
+// Every item can move to any of the other columns for a week. These
+// buttons offer the same choices as dragging, including without a pointer.
 func itemCadenceMoves(item backgroundItem, settings backgroundSettings) []map[string]any {
-	if !item.Adaptive {
-		return nil
-	}
-	index := slices.Index(cadences, settings.cadence(item))
-	if index < 0 {
-		return nil
-	}
 	moves := []map[string]any{}
-	for _, move := range []struct {
-		offset int
-		verb   string
-	}{{-1, "Promote"}, {1, "Demote"}} {
-		if target := index + move.offset; target >= 0 && target < len(cadences) {
-			cadence := cadences[target]
-			moves = append(moves, map[string]any{"cadence": cadence, "label": move.verb + " to " + cadenceLabels[cadence] + " for a week"})
+	for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+		if cadence != settings.cadence(item) {
+			moves = append(moves, map[string]any{"cadence": cadence, "label": "Move to " + cadenceLabels[cadence] + " for a week"})
 		}
 	}
 	return moves
@@ -650,7 +665,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 // postBackgroundSettings answers POST /api/background/settings: mode (on,
 // pause, manual; pause_minutes, default 60), interval_seconds, daily_at
 // ("HH:MM"), hold_when_busy, and overrides ({item: cadence, or "" for
-// automatic}), temporary_cadences ({adaptive item: cadence for seven days,
+// automatic}), temporary_cadences ({item: cadence for seven days,
 // or "" to end the temporary schedule}).
 func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	ctx := r.Context()
@@ -768,9 +783,9 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		for id, rawCadence := range values {
-			item, known := backgroundItemByID(id)
+			_, known := backgroundItemByID(id)
 			cadence, valid := rawCadence.(string)
-			if !known || !item.Adaptive || !valid || (cadence != "" && !slices.Contains(cadences, cadence)) {
+			if !known || !valid || (cadence != "" && !validBackgroundCadence(cadence)) {
 				writeError(w, fmt.Errorf("%q cannot temporarily run on %q", id, cadence), 400)
 				return
 			}
@@ -854,6 +869,8 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 			// the saved schedule is unchanged.
 			s.requestIndex()
 		case item.continuous:
+			s.Catalog.resumeLibraryRefresh()
+			run = append(run, id)
 		case item.requiresLabels && !s.Config().Labels.Enabled:
 			// Labels are off here (the broker asks every library after a
 			// download).

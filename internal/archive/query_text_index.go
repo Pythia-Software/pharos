@@ -160,13 +160,17 @@ func (c *Catalog) indexQueryTextBatch(ctx context.Context, index queryTextIndex)
 	return last.Valid, tx.Commit()
 }
 func (c *Catalog) maintainQueryTextIndexes(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	// One operation for the whole build, forgotten if there was nothing to build.
-	pass := c.beginPass(ctx, "maintenance.search.query", triggerVersion)
+	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	for _, index := range []queryTextIndex{humanQueryText, toolQueryText, toolQueryFacts} {
 		for {
-			if c.queries.wait(ctx) != nil {
+			if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(ctx) != nil {
 				return
+			}
+			if pass == nil {
+				pass = c.beginPass(ctx, "maintenance.search.query", triggerVersion)
 			}
 			var more bool
 			var err error

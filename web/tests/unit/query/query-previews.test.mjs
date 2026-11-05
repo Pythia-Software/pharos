@@ -19,13 +19,18 @@ function fixture(t, intercept = () => undefined) {
     const path = String(url), request = init.body ? JSON.parse(init.body) : undefined;
     requests.push({ path, request });
     const replacement = await intercept(path, request, init);
-    if (replacement) return replacement;
+    if (replacement) {
+      if (!replacement.ok || request?.version !== 3) return replacement;
+      const partial=await replacement.json();
+      const dataset=path.split("/")[3];
+      return response({...serverQuery(request,rows,schemas[dataset]??schemas.tool_calls),...partial});
+    }
     if (path.includes("computed-columns")) return response([]);
     if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution, queryCapabilities });
-    if (path.includes("query-v3")) return response(serverQuery(request));
-    if (path.includes("rows-v2")) return response(core.applyQuery(rows, request, schemas.tool_calls));
+    if (path.includes("query-v3")) return response(serverQuery(request,rows,schemas[path.split("/")[3]]??schemas.tool_calls));
+    if (path.includes("query-v3")) return response(core.applyQuery(rows, request, schemas.tool_calls));
     const metrics = request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) }));
-    return response(core.evaluateMetrics(rows, query(metrics, request), schemas.tool_calls));
+    return response(core.evaluateMetrics(rows, query(metrics, request.result), schemas.tool_calls));
   };
   t.after(() => { global.fetch = priorFetch; global.location = priorLocation; clearPreviewCache(); });
   return requests;
@@ -39,13 +44,13 @@ test("failure rate includes successful calls and preserves all dashboard results
   assert.equal(preview.metrics[1].result.buckets[0].value, 2);
   assert.equal(preview.metrics[2].result.buckets[0].value, 10);
   assert.match(preview.summary, /10 observations/);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("compatible dashboards batch despite duplicate metric IDs and split at twenty", async t => {
   const requests = fixture(t), previews = new Map();
   await loadQueryPreviews(Array.from({ length: 23 }, (_, i) => job(String(i), [{ id: "same", op: "sum", field: "duration_ms", groupBy: [], expression: `SUM([duration_ms])+${i}` }])), (id, preview, error) => { assert.ifError(error); previews.set(id, preview); });
-  const batches = requests.filter(request => request.path.endsWith("metrics"));
+  const batches = requests.filter(request => request.path.endsWith("query-v3"));
   assert.deepEqual(batches.map(batch => batch.request.metrics.length), [20, 3]);
   assert.equal(requests.filter(request => request.path.endsWith("capabilities")).length, 1);
   for (let i = 0; i < 23; i++) assert.equal(previews.get(String(i)).metrics[0].result.buckets[0].value, 5500 + i);
@@ -56,7 +61,7 @@ test("distribution cards request separately from their batch siblings", async t 
   const box = { id: "box", op: "count", groupBy: [], distribution: { kind: "box", input: "[duration_ms]", whiskers: "tukey" } };
   const sum = i => ({ id: "sum", op: "sum", field: "duration_ms", groupBy: [], expression: `SUM([duration_ms])+${i}` });
   await loadQueryPreviews([job("a", [sum(1)]), job("b", [box, sum(2)]), job("c", [box]), job("d", [sum(3)])], (id, preview, error) => { assert.ifError(error); previews.set(id, preview); });
-  const batches = requests.filter(request => request.path.endsWith("metrics")).map(batch => batch.request.metrics.length).sort();
+  const batches = requests.filter(request => request.path.endsWith("query-v3")).map(batch => batch.request.metrics.length).sort();
   assert.deepEqual(batches, [1, 2, 2]);
   assert.equal(previews.size, 4);
 });
@@ -72,14 +77,14 @@ test("cover changes reuse full results and preserve distributions and paired axe
   const second = await loadQueryPreview("tool_calls", query(metrics), schemas.tool_calls, { coverMetricId: "pair" });
   assert.equal(second.coverMetricId, "pair");
   assert.equal(second.metrics[1].result.buckets[0].y, 45);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("duration boxes select positive timing while nonempty output sizes preserve provenance", async t => {
   fixture(t, (path, request) => {
-    if (!path.endsWith("metrics")) return;
+    if (!path.endsWith("query-v3")) return;
     const observations = [...rows, { ...rows[0], id: "zero", duration_ms: 0, result_tokens: 0 }];
-    return response(core.evaluateMetrics(observations, query(request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })), request), schemas.tool_calls));
+    return response(core.evaluateMetrics(observations, query(request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })), request.result), schemas.tool_calls));
   });
   const duration = queryRecipes.find(recipe => recipe.id === "duration-distribution");
   const preview = await loadQueryPreview(duration.dataset, query(duration.measures, { where: duration.where }), schemas.tool_calls);
@@ -93,7 +98,7 @@ test("duration boxes select positive timing while nonempty output sizes preserve
 });
 
 test("changing the cover to evidence counts uses the selected metric's unit", async t => {
-  fixture(t, (path, request) => path.endsWith("metrics") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: metric.groupBy.map(() => "review"), value: 10, count: 10 }], processedRows: 10 })) }) : undefined);
+  fixture(t, (path, request) => path.endsWith("query-v3") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: metric.groupBy.map(() => "review"), value: 10, count: 10 }], processedRows: 10 })) }) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "skill-reach");
   const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures), schemas.skill_usages, { recipe, coverMetricId: "skill-evidence-types" });
   assert.equal(preview.summary, "10 records");
@@ -220,7 +225,7 @@ test("relative daily covers chart every local date their window touches, across 
 });
 
 test("sparse tool-size cohorts explain their cutoff in calls rather than conversations", async t => {
-  fixture(t, (path, request) => path.endsWith("metrics") ? response(core.evaluateMetrics(rows.slice(1, 3), query(request.metrics), schemas.tool_calls)) : undefined);
+  fixture(t, (path, request) => path.endsWith("query-v3") ? response(core.evaluateMetrics(rows.slice(1, 3), query(request.metrics), schemas.tool_calls)) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "output-distribution");
   const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures, { where: recipe.where }), schemas.tool_calls, { recipe });
   assert.equal(preview.state, "empty");
@@ -228,7 +233,7 @@ test("sparse tool-size cohorts explain their cutoff in calls rather than convers
 });
 
 test("sparse skill boxes name their actual sample population", async t => {
-  fixture(t, (path, request) => path.endsWith("metrics") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: ["example", "explicit_invocation"], value: 200, count: 2, distribution: { kind: "box", summary: { n: 2, min: 100, q1: 125, median: 150, q3: 175, max: 200, mean: 150 } } }], processedRows: 2 })) }) : undefined);
+  fixture(t, (path, request) => path.endsWith("query-v3") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: ["example", "explicit_invocation"], value: 200, count: 2, distribution: { kind: "box", summary: { n: 2, min: 100, q1: 125, median: 150, q3: 175, max: 200, mean: 150 } } }], processedRows: 2 })) }) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "skill-body-sizes");
   const state = query(recipe.measures, { where: recipe.where });
   const preview = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe });
@@ -251,8 +256,8 @@ test("canonical computed fields carry current revisions, labels and typed result
   let sent;
   fixture(t, (path, request) => {
     if (path.includes("computed-columns")) return response([definition]);
-    if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, computedFields: true }, computedExecution: { ...execution, fields: { "@computed/seconds": { type: "number", select: true, sort: true, measure: true, group: false } }, resolvedRevisions: { seconds: "2" } } });
-    if (path.endsWith("metrics")) { sent = request; return response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: [], value: metric.field === "@computed/seconds" ? 5.5 : 5500, count: 10 }], processedRows: 10, coverage: "exact" })) }); }
+    if (path.endsWith("capabilities")) return response({ queryCapabilities, computedExecution: { ...execution, fields: { "@computed/seconds": { type: "number", select: true, sort: true, measure: true, group: false } }, resolvedRevisions: { seconds: "2" } } });
+    if (path.endsWith("query-v3")) { sent = request; return response({ execution:{...execution,resolvedRevisions:{seconds:"2"}}, metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: [], value: metric.field === "@computed/seconds" ? 5.5 : 5500, count: 10 }], processedRows: 10, coverage: "exact" })) }); }
   });
   const results = new Map();
   await loadQueryPreviews([job("raw", [{ id: "raw", op: "sum", field: "duration_ms", groupBy: [] }]), job("computed", [{ id: "seconds", op: "sum", field: "@computed/seconds", groupBy: [] }])], (id, preview, error) => { assert.ifError(error); results.set(id, preview); });
@@ -268,13 +273,13 @@ test("residual computed predicates fail locally while healthy sibling queries co
   const requests = fixture(t), results = new Map();
   const metric = [{ id: "count", op: "count", groupBy: [] }];
   await loadQueryPreviews([job("bad", metric, {}, { where: [{ field: "@computed/missing", op: ">", value: "0" }] }), job("good", metric)], (id, preview, error) => results.set(id, { preview, error }));
-  assert.match(String(results.get("bad").error), /residual|filter/i);
+  assert.equal(results.get("bad").error.code, "residual_query");
   assert.equal(results.get("good").preview.state, "ready");
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("server-rejected batches isolate the bad formula without replaying successful work", async t => {
-  const requests = fixture(t, (path, request) => path.endsWith("metrics") && request.metrics.some(metric => metric.expression === "SUM([duration_ms])") ? response({ error: "backend failure for SUM" }, 400) : undefined);
+  const requests = fixture(t, (path, request) => path.endsWith("query-v3") && request.metrics.some(metric => metric.expression === "SUM([duration_ms])") ? response({ error: "backend failure for SUM" }, 400) : undefined);
   const results = new Map();
   await loadQueryPreviews([job("bad", [{ id: "x", op: "count", groupBy: [], expression: "SUM([duration_ms])" }]), job("good", [{ id: "x", op: "count", groupBy: [], expression: "COUNT()" }])], (id, preview, error) => {
     assert.ok(!results.has(id), `published ${id} more than once`);
@@ -282,22 +287,22 @@ test("server-rejected batches isolate the bad formula without replaying successf
   });
   assert.match(String(results.get("bad").error), /backend failure/);
   assert.equal(results.get("good").preview.total, 10);
-  assert.deepEqual(requests.filter(request => request.path.endsWith("metrics")).map(request => request.request.metrics.map(metric => metric.expression)), [["SUM([duration_ms])", "COUNT()"], ["SUM([duration_ms])"], ["COUNT()"]]);
+  assert.deepEqual(requests.filter(request => request.path.endsWith("query-v3")).map(request => request.request.metrics.map(metric => metric.expression)), [["SUM([duration_ms])", "COUNT()"], ["SUM([duration_ms])"], ["COUNT()"]]);
 });
 
 test("shown-row scopes preserve saved paging and stay separate from the complete population", async t => {
   const requests = fixture(t), metric = { id: "n", op: "count", groupBy: [] };
   await loadQueryPreviews([job("all", [metric]), job("page", [{ ...metric, scope: "shownRows" }], {}, { limit: 3, offset: 2 })], (_id, _preview, error) => assert.ifError(error));
-  const batches = requests.filter(request => request.path.endsWith("metrics"));
+  const batches = requests.filter(request => request.path.endsWith("query-v3"));
   assert.equal(batches.length, 2);
-  assert.equal(batches.find(batch => batch.request.metrics[0].scope === "shownRows").request.offset, 2);
+  assert.equal(batches.find(batch => batch.request.metrics[0].scope === "shownRows").request.result.offset, 2);
 });
 
 test("Library searches retain indexed options and never share batches or cached populations", async t => {
   const requests = fixture(t), metric = { id: "n", op: "count", groupBy: [] };
   const jobs = ["first", "second"].map(id => ({ ...job(id, [metric], { url: `/library?search=${id}&kind=file&case=1&fuzzy=0&separators=1` }), dataset: "library", schema: schemas.library }));
   await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
-  const batches = requests.filter(request => request.path.includes("/metrics"));
+  const batches = requests.filter(request => request.path.includes("/query-v3"));
   assert.equal(batches.length, 2);
   for (const [i, batch] of batches.entries()) {
     const params = new URL(batch.path, global.location.origin).searchParams;
@@ -308,25 +313,25 @@ test("Library searches retain indexed options and never share batches or cached 
     assert.equal(params.get("find_separators"), "1");
   }
   await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
-  assert.equal(requests.filter(request => request.path.includes("/metrics")).length, 2);
+  assert.equal(requests.filter(request => request.path.includes("/query-v3")).length, 2);
 });
 
 test("legacy Library previews preserve default-on fuzzy matching and explicit opt-out", async t => {
   const requests = fixture(t);
   const jobs = ["", "&fuzzy=0"].map((suffix, index) => ({ ...job(`legacy-${index}`, [], { url: `/library?search=migration${suffix}` }), dataset: "library", schema: schemas.library }));
   await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
-  const fuzzy = requests.filter(request => request.path.includes("rows-v2")).map(request => new URL(request.path, global.location.origin).searchParams.get("find_fuzzy"));
+  const fuzzy = requests.filter(request => request.path.includes("query-v3")).map(request => new URL(request.path, global.location.origin).searchParams.get("find_fuzzy"));
   assert.deepEqual(fuzzy.sort(), ["0", "1"]);
 });
 
 test("visual Library bookmarks preserve their tree, scope, cursor, and incomplete coverage", async t => {
-  const requests = fixture(t, path => path.includes("rows-v2") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
+  const requests = fixture(t, path => path.includes("query-v3") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
   const draft = { editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
     root: { kind: "group", join: "any", exclude: false, children: ["cache", "buffer"].map(text => ({ kind: "words", text, other: "", distance: "8", exclude: false })) },
     scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
   const url = `/library?${new URLSearchParams({ text_builder: JSON.stringify(draft), text_cursor: "saved-cursor" })}`;
   const preview = await loadQueryPreview("library", query([]), schemas.library, { url });
-  const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
+  const params = new URL(requests.find(r => r.path.includes("query-v3")).path, global.location.origin).searchParams;
   assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });
   assert.equal(params.get("find_surface"), "user");
   assert.equal(params.get("find_repository"), "pharos");
@@ -339,7 +344,6 @@ test("Human Words bookmark previews preserve the bounded message search and curs
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-14T12:00:00Z") });
   let complete = false, limited = false, population = [];
   const requests = fixture(t, (path, request) => {
-    if (path.includes("rows-v2")) return response({ total: 0, rows: [], find: { search: { complete } } });
     if (path.includes("/writing_messages/query-v3")) {
       const result = sharedServerQuery(request, population, schemas.writing_messages);
       return response({ ...result, metrics: result.metrics.map(metric => ({ ...metric, coverage: "exact" })), find: { limited, search: { complete } } });
@@ -350,7 +354,7 @@ test("Human Words bookmark previews preserve the bounded message search and curs
     scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
   const url = `/analyze?${new URLSearchParams({ message_query: JSON.stringify(draft), message_cursor: "saved-cursor" })}`;
   const preview = await loadQueryPreview("writing_messages", query([]), schemas.writing_messages, { url });
-  const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
+  const params = new URL(requests.find(r => r.path.includes("query-v3")).path, global.location.origin).searchParams;
   assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });
   assert.equal(params.get("find_surface"), "user");
   assert.equal(params.get("find_repository"), "pharos");
@@ -387,9 +391,9 @@ test("a broken visual bookmark fails visibly without unfiltering itself or other
 test("row excerpts preserve the saved offset and cap only the preview length", async t => {
   const requests = fixture(t);
   await loadQueryPreview("tool_calls", query([], { limit: 2, offset: 5 }), schemas.tool_calls);
-  const request = requests.find(request => request.path.includes("rows-v2")).request;
-  assert.equal(request.limit, 2);
-  assert.equal(request.offset, 5);
+  const request = requests.find(request => request.path.includes("query-v3")).request;
+  assert.equal(request.result.limit, 2);
+  assert.equal(request.result.offset, 5);
 });
 
 test("empty distributions stay empty while observed zero rates remain valid saved views", async t => {
@@ -413,14 +417,14 @@ test("cancellation also suppresses cached publications", async t => {
   await loadQueryPreviews(jobs, () => { publications++; controller.abort(); }, controller.signal);
   assert.equal(publications, 1);
   await loadQueryPreviews(jobs, () => assert.fail("already aborted cache hit published"), controller.signal);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("cancellation prevents publication and leaves no aborted result in the cache", async t => {
   const controller = new AbortController();
-  const requests = fixture(t, (path) => { if (path.endsWith("metrics")) { controller.abort(); return response({ metrics: [] }); } });
+  const requests = fixture(t, (path) => { if (path.endsWith("query-v3")) { controller.abort(); return response({ metrics: [] }); } });
   await loadQueryPreviews([job("n", [{ id: "n", op: "count", groupBy: [] }])], () => assert.fail("aborted result published"), controller.signal);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("grouped saved views preview the full source before HAVING and result paging", async t => {
@@ -434,7 +438,7 @@ test("grouped saved views preview the full source before HAVING and result pagin
  assert.equal(preview.state,'ready');assert.equal(preview.metrics[0].result.buckets[0].value,2);
  assert.equal(requests.filter(r=>r.path.includes('/query-v3')).length,1);
  assert.equal(requests.filter(r=>r.path.includes('/population')).length,0);
- assert.equal(requests.filter(r=>r.path.includes('/rows-v2')||r.path.endsWith('/metrics')).length,0);
+ assert.ok(requests.filter(r=>r.path.includes('/query-v3')).every(r=>!r.request.rows));
 });
 
 test("calendar previews execute on the server and preserve server failures", async t => {
@@ -447,7 +451,7 @@ test("calendar previews execute on the server and preserve server failures", asy
  assert.ok(preview.metrics[0].result.buckets.some(bucket=>bucket.count===0));
  complete=false;clearPreviewCache();
  await assert.rejects(loadQueryPreview('tool_calls',q,schemas.tool_calls),/incomplete/);
- assert.equal(requests.filter(r=>r.path.endsWith('/metrics')||r.path.includes('/population')).length,0);
+ assert.ok(requests.filter(r=>r.path.includes('/query-v3')).every(r=>!r.request.rows));
 });
 
 test("all-time writing hours combine older dates and repeated DST hours into the clock-hour cover", async t => {
@@ -487,7 +491,7 @@ test("daily repository words average seven calendar days with history before the
   const history = new Date(first); history.setDate(history.getDate() - 1);
   const population = [dated("history", history, 70, "one"), dated("first", first, 140, "one"), dated("other-repo", first, 35, "two"), dated("automated", first, 0, "one")];
   fixture(t, (path, request) => {
-    if (path.includes("/writing_messages/metrics")) return response(core.evaluateMetrics(population, query(request.metrics, request), schema, { now }));
+    if (path.includes("/writing_messages/query-v3")) return response(core.evaluateMetrics(population, query(request.metrics, request.result), schema, { now }));
   });
   const preview = await loadQueryPreview(item.dataset, item.query, schema, { recipe, window: item.window, cover: item.cover, url: item.url });
   assert.equal(preview.state, "ready");
@@ -522,7 +526,7 @@ test("headline numbers represent complete additive measures with their units", a
 test("truncated and errored measures never produce a headline total", async t => {
   let partial = true;
   const requests = fixture(t, (path, request) => {
-    if (path.endsWith("metrics")) return response({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: partial ? "partial" : "exact", groupCount: partial ? 20 : 2, buckets: [{ keys: ["Bash"], value: 5, count: 5 }, ...partial ? [] : [{ keys: ["Read"], value: null, count: 1, error: "Cannot calculate" }]], processedRows: 100 })) });
+    if (path.endsWith("query-v3")) return response({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: partial ? "partial" : "exact", groupCount: partial ? 20 : 2, buckets: [{ keys: ["Bash"], value: 5, count: 5 }, ...partial ? [] : [{ keys: ["Read"], value: null, count: 1, error: "Cannot calculate" }]], processedRows: 100 })) });
   });
   const metric = { id: "calls", op: "count", groupBy: ["tool_name"] };
   const preview = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls);
@@ -558,9 +562,9 @@ test("cost history shares identical loads, preserves mixed windows, and refetche
  const now=Date.now(),d=86400000,population=[{id:'recent',first_usage_at:new Date(now-d).toISOString(),total_tokens:1,price_status:'priced',cost_usd:70},{id:'older',first_usage_at:new Date(now-20*d).toISOString(),total_tokens:1,price_status:'priced',cost_usd:140}];
  let truncated=false;
  const requests=fixture(t,(path,request)=>{
-  if(!path.endsWith('/usage/metrics'))return;
+  if(!path.endsWith('/usage/query-v3'))return;
   assert.deepEqual(request.metrics[0].groupBy,['first_usage_at']);
-  const body=core.evaluateMetrics(population,{...core.EMPTY_QUERY,...request,aggregations:request.metrics},schemas.usage);
+  const body=core.evaluateMetrics(population,{...core.EMPTY_QUERY,...request.result,aggregations:request.metrics},schemas.usage);
   if(!truncated){truncated=true;body.metrics[0].groupCount=10001;body.metrics[0].buckets=body.metrics[0].buckets.slice(0,1);}
   return response(body);
  });
@@ -568,12 +572,12 @@ test("cost history shares identical loads, preserves mixed windows, and refetche
  const jobs=[7,7,30].map((days,i)=>{const item=instantiateRecipe(recipe,days);return{id:String(i),dataset:'usage',query:item.query,schema:schemas.usage,options:{recipe:item,window:item.window,cover:item.cover}};});
  const result=new Map();await loadQueryPreviews(jobs,(id,preview,error)=>{assert.equal(error,undefined);result.set(id,preview);});
  assert.equal(result.get('0').study.value,70);assert.equal(result.get('1').study.value,70);assert.equal(result.get('2').study.value,210);assert.equal(result.get('0').study.lookbackDays,7);assert.equal(result.get('2').study.lookbackDays,7);assert.equal(result.get('0').study.points.at(-1),10);
- assert.equal(requests.filter(r=>r.path.endsWith('/usage/metrics')).length,4,'two periods plus the two replacement ranges; the duplicate seven-day card shares its load');
- assert.equal(requests.filter(r=>r.path.includes('/rows')||r.path.includes('/query-v3')).length,0,'only reduced timestamp totals are downloaded');
+ assert.equal(requests.filter(r=>r.path.endsWith('/usage/query-v3')).length,4,'two periods plus the two replacement ranges; the duplicate seven-day card shares its load');
+ assert.ok(requests.filter(r=>r.path.includes('/query-v3')).every(r=>!r.request.rows),'only reduced timestamp totals are downloaded');
 });
 
 test("partial cost history is rejected instead of manufacturing a total", async t => {
- fixture(t,(path,request)=>path.endsWith('/usage/metrics')?response({metrics:[{id:request.metrics[0].id,coverage:'partial',buckets:[],processedRows:0}]}):undefined);
+ fixture(t,(path,request)=>path.endsWith('/usage/query-v3')?response({metrics:[{id:request.metrics[0].id,coverage:'partial',buckets:[],processedRows:0}]}):undefined);
  const recipe=queryRecipes.find(r=>r.id==='api-cost-total'),item=instantiateRecipe(recipe,7);
  await assert.rejects(loadQueryPreview('usage',item.query,schemas.usage,{recipe:item,window:item.window,cover:item.cover}),/Complete API cost history/);
 });
@@ -595,7 +599,7 @@ test("metric filters and minimum group sizes run only where advertised and discl
   const errors = [{ field: "error_count", op: ">", value: "0" }];
   const measures = [{ id: "calls", op: "sum", field: "call_count", groupBy: ["project_name"], minCount: 4, where: [{ field: "duration_ms", op: ">=", value: "400" }] }];
   // Without the handshake flags the card fails on its own instead of dropping the controls.
-  fixture(t);
+  fixture(t,path => path.endsWith("capabilities") ? response({queryCapabilities:{...queryCapabilities,metricFilters:false,metricMinCount:false,metricMinCountMeasures:false},computedExecution:execution}) : undefined);
   await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /filter|minimum|minCount/i);
   await assert.rejects(loadQueryPreview("tool_calls", query([{ id: "errors", op: "count", groupBy: [], where: errors }]), schemas.tool_calls), /filter/i);
   clearPreviewCache();
@@ -653,7 +657,7 @@ test("grouped cards with link columns execute without sending the links", async 
 
 test("parallel hours by day headline is the share of active hours with several agents", async t => {
   const population = [["2026-10-19", "1", 6], ["2026-10-19", "2", 2], ["2026-10-20", "3", 1], ["2026-10-20", "4+", 1]].map(([day, level_band, elapsed_hours], i) => ({ id: String(i), day, level_band, elapsed_hours }));
-  fixture(t, (path, request) => path.endsWith("/metrics") ? response(core.evaluateMetrics(population, query(request.metrics, request), schemas.parallelism)) : undefined);
+  fixture(t, (path, request) => path.endsWith("/query-v3") ? response(core.evaluateMetrics(population, query(request.metrics, request.result), schemas.parallelism)) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "parallel-days");
   const preview = await loadQueryPreview("parallelism", query(recipe.measures), schemas.parallelism, { recipe });
   assert.equal(preview.headlineMetric.value, "40%");
@@ -671,7 +675,7 @@ test("cached card covers revalidate and remain visible after refresh failure", a
   let fail = false, release, requestStarted;
   const refreshingRequest = new Promise(resolve => { requestStarted = resolve; });
   const requests = fixture(t, async path => {
-    if (fail && path.endsWith("metrics")) {
+    if (fail && path.endsWith("query-v3")) {
       await new Promise(resolve => { release = resolve; requestStarted(); });
       return response({ error: "Offline" }, 503);
     }
@@ -807,8 +811,8 @@ test("scrolling promotes newly visible cards ahead of the remaining cold queue",
   const started = new Promise(resolve => { began = resolve; });
   const order = [];
   fixture(t, async (path, request) => {
-    if (!path.endsWith("rows-v2")) return;
-    order.push(request.where[0].value);
+    if (!path.endsWith("query-v3")) return;
+    order.push(request.result.where[0].value);
     if (order.length <= 3) { if (order.length === 3) began(); await gate; }
   });
   const jobs = Array.from({ length: 6 }, (_, index) => ({

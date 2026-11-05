@@ -111,6 +111,7 @@ var askSignalFuncs = map[string]askSignalFunc{
 	"activity.days":          askActiveDays,
 	"activity.repos":         askRepositories,
 	"writing.volume":         askWritingVolume,
+	"labels.coverage":        askLabelCoverage,
 	"writing.back_and_forth": askBackAndForth,
 	"writing.supplied":       askSupplied,
 	"agent.friction":         askAgentFriction,
@@ -1385,4 +1386,18 @@ func askSuggestionFamilyKnown(id string) bool {
 func (s *Server) askEnabled(ctx context.Context) bool {
 	settings, err := s.askSettings(ctx)
 	return err == nil && settings.Enabled
+}
+
+// Label exploration is useful only after the optional labeler has completed
+// conversations. A writing-volume signal would offer it in unlabeled libraries.
+func askLabelCoverage(ctx context.Context, run *askSignalRun) (askSignal, error) {
+	if !askTableExists(ctx, run.c.reader(), "message_labels_conversations") || !askTableExists(ctx, run.c.reader(), "message_labels_dirty") {
+		return askSignal{}, nil
+	}
+	var count int
+	err := run.c.reader().QueryRowContext(ctx, `SELECT count(*) FROM message_labels_conversations c WHERE c.units>0 AND NOT EXISTS(SELECT 1 FROM message_labels_dirty d WHERE d.conversation_id=c.conversation_id)`).Scan(&count)
+	if err != nil || count == 0 {
+		return askSignal{}, err
+	}
+	return askSignal{Score: saturate(float64(count), 200), Support: count, Lead: fmt.Sprintf("%d conversations have stored message classifications available to explore.", count)}, nil
 }

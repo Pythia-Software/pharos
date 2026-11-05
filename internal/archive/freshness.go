@@ -562,15 +562,15 @@ func (l *ledger) conversations(ctx context.Context, c *Catalog) {
 		// (autoSources); the others are read in full by the other-sources
 		// background item, on its cadence.
 		wholeSource := state != nil && state.kind != "" && !automaticProvider(state.kind)
-		cadence := cadenceFrequent
+		cadence := l.itemCadence("conversations")
 		if wholeSource {
 			cadence = l.itemCadence("other-sources")
 		}
-		manualOnly := wholeSource && cadence == cadenceManual && l.backgroundKnown && l.background.Mode == "on"
+		manualOnly := cadence == cadenceManual && l.backgroundKnown && l.background.Mode == "on"
 		scheduled := settingsErr == nil && settings.Enabled && cadence != cadenceManual && (wholeSource || len(settings.Sources) == 0 || slices.Contains(settings.Sources, name))
 		window := max(2*interval, interval+15*time.Minute)
 		entry.next = nextManualIndex
-		if scheduled && wholeSource {
+		if scheduled && (wholeSource || cadence != cadenceFrequent) {
 			entry.next, window = cadenceNext[cadence], cadenceWindow[cadence]
 		} else if scheduled {
 			entry.next = nextScheduledIndex
@@ -663,6 +663,11 @@ func (l *ledger) view(ctx context.Context, c *Catalog, meta map[string]string, m
 	default:
 		entry.state, entry.reason = freshBehind, "refreshing"
 	}
+	if entry.state == freshBehind && l.backgroundKnown {
+		if item, _ := backgroundItemByID("search"); l.background.cadence(item) != cadenceFrequent && !l.in.viewStopped {
+			l.scheduledFor(&entry, "search", "")
+		}
+	}
 	l.add(entry)
 }
 
@@ -678,6 +683,11 @@ func (l *ledger) search(ctx context.Context, c *Catalog, meta map[string]string,
 		case l.nothingToDo(&entry):
 		default:
 			entry.state, entry.reason = freshBehind, "version"
+		}
+		if entry.state == freshBehind && l.backgroundKnown {
+			if item, _ := backgroundItemByID("search"); l.background.cadence(item) != cadenceFrequent {
+				l.scheduledFor(&entry, "search", "")
+			}
 		}
 		l.add(entry)
 	}

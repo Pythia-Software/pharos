@@ -23,6 +23,7 @@ import { queryFromURL, readRollingWindow } from "../../../src/query-links";
 import { restoreSearch } from "../../../src/search-composer-state";
 import { readFindingsRoute } from "../../../src/findings-route";
 import { readDelegationRoute } from "../../../src/delegation-route";
+import { readViewState } from "../../../src/view-state";
 import { legacyRoutes, idSources, readerParams } from "../../../src/site-routes";
 
 globalThis.location ??= new URL("http://localhost/");
@@ -70,7 +71,7 @@ test("the site map's rules judge every dashboard case, partial charts included, 
     assert.equal(chartVerdict(item.topic, item.chart), item.verdict, name);
     assert.equal(judgeChart(facts, map.analyze.version, item.chart), item.verdict, name);
     verdicts[item.verdict]++;
-    const view = facts.views[merged(item.topic, item.chart).view ?? "trend"];
+    const view = facts.views[readChart(facts, item.chart).merged.view ?? "trend"];
     if (view && view.keys.some(key => !(key in item.chart))) partial++;
     // What the rules draw is what the page draws, and keeping only the
     // view's keys (what Go writes) changes neither the verdict nor the drawing.
@@ -206,6 +207,11 @@ test("every other page's link reads back through its page's reader", () => {
         if (value !== null && option.values) assert.ok(option.values.some(choice => choice.value === value), `${name} ${option.param}`);
       }
       for (const [key, value] of Object.entries(item.state ?? {})) assert.equal(search.get(key), value, name);
+    } else if (item.path === "settings/sync") {
+      const query = decodeQueryStrict(readViewState("sync_operations", "", search));
+      assert.deepEqual(query.where, [{ field: "kind", op: "!=", value: "maintenance.checkpoint" }], name);
+      assert.deepEqual(query.orderBy, [{ field: "seconds", dir: "desc" }], name);
+      assert.deepEqual(readViewState("query_layout", {}, search), { sync_operations: false, sync_sources: true }, name);
     } else if (item.path === "work") {
       assert.equal(decodeURIComponent(url.pathname.split("/")[2]), item.state.work_id, name);
       for (const { name: param } of readerParams) assert.equal(search.get(param), item.state[param] ?? null, `${name} ${param}`);

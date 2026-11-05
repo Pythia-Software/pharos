@@ -7346,8 +7346,7 @@
         }
       },
       "days": [
-        7,
-        30
+        365
       ],
       "action": "Explore Tokens and Cost",
       "cover": {
@@ -17645,6 +17644,407 @@
       "retired": true
     },
     {
+      "id": "task-delegated-runs",
+      "title": "Delegated runs per root task",
+      "description": "Total active delegated runs per root task over the last {days} days, including tasks with no delegation.",
+      "category": "delegation",
+      "idea": "models-06",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        365
+      ],
+      "unit": "runs",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "!=",
+          "value": ""
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root project; missing project stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. One observation per root task with positive-token usage from itself or its children in the selected period. Count all distinct active delegated descendants at every depth, merging handles, linked transcripts and continuations. The initiating execution is excluded from the run count. Zero-delegation tasks remain in the distribution; roots with only child activity are included. These are selected-period counts, not lifetime counts for tasks selected by recent activity.",
+      "exploration": {
+        "keys": [
+          "root_project_name",
+          "root_conversation_id"
+        ],
+        "summaries": [
+          {
+            "id": "dg_runs",
+            "op": "formula",
+            "expression": "COUNT_DISTINCT(NULLIF([delegated_session_id],\"\"))",
+            "label": "Active delegated runs"
+          },
+          {
+            "id": "dg_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Period tokens"
+          },
+          {
+            "id": "dg_title",
+            "op": "row",
+            "field": "root_title",
+            "label": "Root task"
+          }
+        ],
+        "valueField": "dg_runs",
+        "unit": "runs",
+        "subjects": "root tasks",
+        "action": "Inspect total delegated runs per task",
+        "labelFields": [
+          "dg_title",
+          "root_project_name"
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "last_usage_at",
+              "dir": "desc",
+              "nulls": "last"
+            },
+            {
+              "field": "id",
+              "dir": "asc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "coverMetric": {
+          "id": "dg_runs",
+          "op": "count",
+          "field": "dg_runs",
+          "groupBy": [],
+          "label": "Total delegated runs per root task",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[dg_runs]"
+          },
+          "display": {
+            "kind": "histogram",
+            "xLabel": "Delegated runs per root task",
+            "yLabel": "Root tasks",
+            "xFormat": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_runs",
+        "kind": "histogram"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "nonzero": false,
+          "v": 2,
+          "metric": "delegated_runs",
+          "split": "none",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          },
+          "view": "distribution",
+          "unit": "conversation"
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect total delegated runs per task"
+      }
+    },
+    {
+      "id": "delegation-fanout-trend",
+      "title": "Average fan-out over time",
+      "description": "Weekly average direct child runs per delegating agent over the last {days} days, including initiating agents and nested parents.",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "category": "delegation",
+      "idea": "models-06",
+      "days": [
+        365
+      ],
+      "unit": "runs per delegating agent",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "!=",
+          "value": ""
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">=",
+          "value": "0"
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "!=",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "dg_fanout",
+          "op": "sum",
+          "expression": "COUNT_DISTINCT([delegated_session_id])/NULLIF(COUNT_DISTINCT([delegated_parent_session_id]),0)",
+          "groupBy": [
+            "week"
+          ],
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "label": "Average direct child runs per delegating agent",
+          "display": {
+            "kind": "line",
+            "xLabel": "Week",
+            "yLabel": "Direct children per delegating agent",
+            "format": {
+              "kind": "number",
+              "decimals": 1
+            }
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "dg_fanout",
+        "kind": "line",
+        "showHeadline": false,
+        "showLegend": false,
+        "height": 300
+      },
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root project; missing project stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. Each point is one recorded Monday-based week inside the selected range. Divide distinct active direct child executions by distinct canonical parents in that week; every child has one resolved parent, so this is the arithmetic mean of direct-child counts over agents that delegate. Include initiating agents and nested parents even if their own usage falls outside the week. Repeated usage days, linked handles and transcripts do not inflate either count. An execution active in several weeks contributes in each. Weeks with no qualifying delegation are omitted; boundary weeks use only selected facts. No smoothing or cumulative counts are applied.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "week",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "nonzero": true,
+          "v": 2,
+          "metric": "average_fanout",
+          "split": "none",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          },
+          "view": "trend"
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect average delegation fan-out"
+      }
+    },
+    {
+      "id": "delegation-breadth",
+      "title": "Delegated runs by breadth",
+      "description": "Direct child runs per delegating agent over the last {days} days, including initiating agents and nested parents.",
+      "category": "delegation",
+      "idea": "models-06",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        365
+      ],
+      "unit": "runs",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "!=",
+          "value": ""
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">=",
+          "value": "0"
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "!=",
+          "value": ""
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root project; missing project stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. One observation per canonical delegating execution, including initiating agents and nested parents. Breadth counts distinct direct children with positive-token usage inside the window. Linked handles, child transcripts, repeated days and continuations count once. A parent's own usage need not fall inside the window. Agents with no active direct children are excluded. Descendants of a child belong to that child's observation; this does not measure simultaneous execution or maximum width at a depth.",
+      "exploration": {
+        "keys": [
+          "root_conversation_id",
+          "delegated_parent_session_id"
+        ],
+        "summaries": [
+          {
+            "id": "dg_runs",
+            "op": "formula",
+            "expression": "COUNT_DISTINCT(NULLIF([delegated_session_id],\"\"))",
+            "label": "Active delegated runs"
+          },
+          {
+            "id": "dg_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Period tokens"
+          },
+          {
+            "id": "dg_title",
+            "op": "row",
+            "field": "root_title",
+            "label": "Root task"
+          },
+          {
+            "id": "dg_repository",
+            "op": "row",
+            "field": "root_project_name",
+            "label": "Root project"
+          }
+        ],
+        "valueField": "dg_runs",
+        "unit": "runs",
+        "subjects": "delegating agents",
+        "action": "Inspect delegation breadth",
+        "labelFields": [
+          "dg_title",
+          "delegated_parent_session_id"
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "last_usage_at",
+              "dir": "desc",
+              "nulls": "last"
+            },
+            {
+              "field": "id",
+              "dir": "asc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "coverMetric": {
+          "id": "dg_runs",
+          "op": "count",
+          "field": "dg_runs",
+          "groupBy": [],
+          "label": "Direct child runs per delegating agent",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[dg_runs]"
+          },
+          "display": {
+            "kind": "histogram",
+            "xLabel": "Direct child runs",
+            "yLabel": "Delegating agents",
+            "xFormat": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_runs",
+        "kind": "histogram"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "nonzero": false,
+          "v": 2,
+          "metric": "delegated_runs",
+          "split": "none",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          },
+          "view": "distribution",
+          "unit": "delegating_run"
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect delegation breadth"
+      }
+    },
+    {
       "id": "repository-delegated-share",
       "title": "Delegated token share",
       "description": "Delegated tokens divided by all resolved task tokens over the last {days} days, by root project.",
@@ -20380,6 +20780,180 @@
         "dataset": "usage",
         "detailAction": "Review model pricing"
       }
+    },
+    {
+      "id": "message-labels-trend",
+      "title": "Message labels over time",
+      "description": "Stored message labels over the last {days} days.",
+      "dataset": "message_labels",
+      "field": "occurred_at",
+      "category": "views",
+      "idea": "labels-01",
+      "unit": "messages",
+      "days": [
+        30,
+        90
+      ],
+      "where": [],
+      "measures": [
+        {
+          "id": "label_messages",
+          "op": "count_distinct",
+          "field": "message_id",
+          "groupBy": [
+            "day",
+            "family"
+          ],
+          "label": "Messages by general label"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "label_messages",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "labels",
+        "chart": {
+          "v": 2,
+          "view": "trend_line",
+          "metric": "messages",
+          "split": "family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "share": true
+        },
+        "dataset": "message_labels",
+        "detailAction": "Explore message labels"
+      },
+      "action": "Explore Message Labels",
+      "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
+    },
+    {
+      "id": "human-labels-trend",
+      "title": "How human input changes",
+      "description": "Stored message labels over the last {days} days.",
+      "dataset": "message_labels",
+      "field": "occurred_at",
+      "category": "views",
+      "idea": "labels-01",
+      "unit": "messages",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "source",
+          "op": "=",
+          "value": "human"
+        }
+      ],
+      "measures": [
+        {
+          "id": "label_messages",
+          "op": "count_distinct",
+          "field": "message_id",
+          "groupBy": [
+            "day",
+            "family"
+          ],
+          "label": "Messages by general label"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "label_messages",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "labels",
+        "chart": {
+          "v": 2,
+          "view": "trend_line",
+          "metric": "messages",
+          "split": "family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "share": true
+        },
+        "dataset": "message_labels",
+        "detailAction": "Explore message labels"
+      },
+      "action": "Explore Message Labels",
+      "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
+    },
+    {
+      "id": "thinking-labels-trend",
+      "title": "What agents think about",
+      "description": "Stored message labels over the last {days} days.",
+      "dataset": "message_labels",
+      "field": "occurred_at",
+      "category": "views",
+      "idea": "labels-01",
+      "unit": "messages",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "source",
+          "op": "=",
+          "value": "thinking"
+        }
+      ],
+      "measures": [
+        {
+          "id": "label_messages",
+          "op": "count_distinct",
+          "field": "message_id",
+          "groupBy": [
+            "day",
+            "family"
+          ],
+          "label": "Messages by general label"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "label_messages",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "labels",
+        "chart": {
+          "v": 2,
+          "view": "trend_line",
+          "metric": "messages",
+          "split": "family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "share": true
+        },
+        "dataset": "message_labels",
+        "detailAction": "Explore message labels"
+      },
+      "action": "Explore Message Labels",
+      "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
     },
     {
       "dataset": "usage",

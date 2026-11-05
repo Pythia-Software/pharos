@@ -362,6 +362,7 @@ operation.
 | `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D:w W:w | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
+| `maintenance.labels.query` | Index message labels · Indexing message labels | version, chained | svc | D:w W:w | labels.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.upgrade-count` | Count upgrade steps · Counting upgrade steps | version (once the service serves, when the stored count is not this build's) | svc | D:w W:w | upgrade, an.ledger | — | Stops; it counts again the next time Pharos opens the library. | batch | >5 s | bg |
 | `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
@@ -771,6 +772,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `search.text` | — | `text_search_documents_version` not `1`; count unknown | `building`, `version` | `maintenance.search.text` |
 | `search.tools` | — | `tool_command_fts_version` not `1`; count unknown | `building`, `version` | `maintenance.search.tools` |
 | `search.query` | — | the three `*_ready` keys not at their index's version; count unknown | `building`, `version` | `maintenance.search.query` |
+| `labels.query` | `message_label_facts_ready` matches the independent query algorithm and local calendar | `COUNT(*)` of `message_label_facts_dirty`, unit conversation | `building`, `version`, `changed` | `maintenance.labels.query` |
 | `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `scheduled-frequent` / `scheduled-hourly` / `scheduled-daily` (`scheduled`: work waits for its background item's cadence, §11), `late` (behind: it has waited longer than its cadence's window, 30 min, 3 h or 30 h, since `sync_deferred.pending_since`), `deferred-by-schedule` (behind: background updates are off or paused, or the item is set to only when you ask), `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
 | `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
@@ -1466,10 +1468,10 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   each library's service by the PID it started (so a service too busy to
   answer is still measured), the Terminal commands each service's snapshot
   names (or, without a service, the library's leases), and the app-level
-  commands' leases. The broker's own figure leaves out its exited
-  children's time: they are the services it reads itself, and a service
-  reaped after hours would otherwise count its whole life again. The
-  native app (Swift) is not measured.
+  commands' leases. Reaped child CPU is reconciled against readings of
+  children and descendants already sampled, so a short helper contributes
+  without charging a service twice when a worker tree exits. The native app
+  (Swift) is not measured.
 - **How.** `proc_pid_rusage(pid, RUSAGE_INFO_V4)`, made as the `proc_info`
   system call (336, `PROC_INFO_CALL_PIDRUSAGE`) with `syscall.Syscall6`,
   as `capture_iopolicy_darwin.go` makes `iopolicysys`: the package has no
@@ -1491,10 +1493,13 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   (`TestResourceSamplingIsCheap`).
 - **What.** On macOS the kernel process tree adds active descendants (including
   labeling CLIs and their workers) as separate rows with process names and PIDs,
-  attributed to their owning library. CPU uses each process's own user and system
-  time so exiting workers are not counted again through their parent. Work that
-  starts and exits between samples can be missed. If the process tree is
-  unavailable, the fallback includes exited child CPU in the parent. CPU is
+  attributed to their owning library. CPU uses each live process's own user and system
+  time. The parent's reaped-child counter supplies CPU for helpers that
+  finish between samples; previously sampled child CPU is subtracted when
+  that child exits, including descendants that exit with it. Liveness comes
+  from the current kernel process table: a cached service snapshot can still
+  list an exited worker. A helper still running at the last sample and
+  exiting before the next can only be measured at its parent's next sample. CPU is
   the delta over the wall time between two readings, as % of one core (`null`
   until a second reading); memory is `ri_phys_footprint` (Activity
   Monitor's figure); disk is the delta of `ri_diskio_bytesread` plus
@@ -1506,9 +1511,11 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   (another `ri_proc_start_abstime`), when the previous reading is more
   than 10 s old (no page was open: an average over the gap is not the
   current load), and when its children's time grew by more than the
-  interval × cores (a long child reaped). A total's `cpu_percent` is
-  `null` (memory only) while any of its processes has none, and so is its
-  `disk_bytes_per_second`. `cpu_percent` is a whole number, and
+  interval × cores after overlap is deducted (an unmeasured long child
+  reaped). A total's rates sum the processes that have two samples; the
+  `cpu_partial` and `disk_partial` flags mark a lower bound when a new
+  process has no rate yet. If no process has two samples, the rate is
+  `null`. `cpu_percent` is a whole number, and
   `memory_bytes` and `disk_bytes_per_second` two significant figures.
 - **Change detection.** `resources` objects are left out of the snapshot's
   tag (`statusTag`), so a document whose only change is its load keeps its
@@ -1516,10 +1523,12 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   stream carries the latest resources in every event, and sends a
   resources-only update at most every 5 s (`statusResourcesRefresh`)
   while a client listens.
-- **Subprocesses** (`git`, `gh`, `diskutil`, CLIs) count only when they
-  exit and are reaped, in the child time of the process that ran them: a
-  short call shows in the interval it ended, and one that ran longer than
-  the interval could account for starts a new baseline instead.
+- **Subprocesses** (`git`, `gh`, `diskutil`, CLIs) count as live process
+  rows when sampled, and their remaining CPU counts at reap. I/O has no
+  reaped-child counter, so a helper that finishes between samples can
+  still be missing from I/O. An inaccessible or detached process cannot
+  be counted. These readings are sampled estimates, not a per-operation
+  accounting ledger.
 - **Per-operation** attribution inside a process (pprof labels, already
   used by findings detectors) is not built; questions about load need only
   per-machine and per-library answers.
@@ -1535,7 +1544,7 @@ and in `/api/app/status` (the machine's total as `resources`, and each
 library entry's own as `libraries[].resources`):
 
 ```json
-{"cpu_percent": 45, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+{"cpu_percent": 45, "cpu_partial": false, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "disk_partial": false, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
  "label": "Pharos is using ~45% of one core · 1.2 GB",
  "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
                 "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
@@ -1545,11 +1554,15 @@ library entry's own as `libraries[].resources`):
 `label` and `text` are the server's words. The panel's Load row shows CPU
 (% of one core), RAM and Disk (per second) in one row, each with its icon,
 for the machine in the app and the library otherwise, with `label` and the
-processes' `text` in its tooltip. The panel's Load row is four equal
-cells, CPU | RAM | I/O | Storage: I/O is `disk_bytes_per_second`, and
+processes' `text` in its tooltip. The panel's Load row has five cells,
+CPU | RAM | I/O | Storage | WAL: I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it
 keeps on its drive, from the last drive check, which Health refreshes;
-the snapshot never measures it, and leaves it out before a check).
+the snapshot never measures it, and leaves it out before a check). WAL
+is the size of the catalog's `-wal` file at snapshot time (`wal_bytes`,
+zero when there is no WAL file). When the selected service briefly fails
+to answer, the broker's CPU, RAM and I/O remain visible; previously
+reported Storage and WAL sizes are labeled `last` until it answers again.
 
 **Priority classes to IO policy:**
 
@@ -1645,17 +1658,25 @@ the same schedule from one declaration (`backgroundItems`):
   near a limit does not flap. Placements are stored in
   `background_settings.placements_json`.
 - **Overrides** may permanently move an item to a slower cadence or to only
-  when you ask. Adaptive items also have **Promote/Demote … for a week**
-  actions: they move one bucket faster or slower, even beyond the measured
-  placement. In Settings, dragging an adaptive item onto another cadence's
-  column does the same for any cadence, and dragging it back to its usual
-  one ends the week. The choice is stored per Mac in `background_temporary_cadences`
-  with a seven-day expiry and takes precedence over automatic placement and
-  permanent overrides until then. The usual schedule resumes at expiry or
-  when **End temporary schedule** is selected. Choosing a permanent schedule
-  ends the temporary choice too. Automatic cost measurements continue during
-  the week. Off, pause and battery rules still apply. Fixed and opt-in items
-  have no temporary moves.
+  when you ask, using its existing schedule picker. Every item also has
+  **Move to … for a week** actions for all three other columns. Dragging any
+  item onto another column does the same, including **Only when you ask**;
+  all four columns remain available when empty. The choice is stored per Mac
+  in `background_temporary_cadences` with a seven-day expiry and takes
+  precedence over automatic placement and permanent overrides until then.
+  Dragging it back to its usual column, choosing **End temporary schedule**,
+  or choosing a permanent schedule ends the temporary choice. Automatic
+  cost measurements continue during the week. Off, pause and battery rules
+  still apply. New conversations follows its chosen cadence in the automatic
+  indexing loop, using this Mac's last recorded check for Hourly and Daily;
+  saving settings never counts as a check. Search keeps its continuous
+  catch-up daemons in Frequently;
+  Hourly and Daily catch up the same projections and index backfills in a
+  background pass, and Only when you ask waits for Run now. The Library view's
+  Stop action holds and cancels projection work in either kind of pass;
+  explicit Run now resumes it. Independent index backfills keep their own
+  lifecycles. Indexes maintained
+  directly by ingestion triggers still update with their source data.
 - **Sequencing.** A pass runs the items that bring in new data (captures)
   first, then the stage items through `finishDeferredStages`, in chain
   order. Earlier stages with pending work, read from `sync_deferred` after
@@ -1738,9 +1759,11 @@ the same schedule from one declaration (`backgroundItems`):
   Only when you ask group, and its column heads carry the same ▶. The panel is titled Background Processing,
   under "Library NAME (1/3) on DRIVE", the name linking to Settings →
   Libraries; other libraries are only counted there. Running now and
-  Schedule head their sections, and each running line says where it
-  comes from: "Part of Hourly" for a background pass, else who started
-  it (`trigger`). An alert's title and action share a line, its detail
+  Schedule head their sections. A background pass leads with its current
+  task, shows its cadence beside it, and marks its place among the planned
+  tasks. The marker is a task position, not an elapsed-time percentage; a
+  measured step has a separate progress bar. Other running lines say who
+  started them (`trigger`). An alert's title and action share a line, its detail
   below.
 
 ## Known hazards this contract must not hide

@@ -132,6 +132,8 @@ var toolCallDataset = sqlDataset{
 
 func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 	switch dataset {
+	case "message_labels":
+		return messageLabelDataset, true
 	case "tools":
 		return toolRollupDataset, true
 	case "tool_calls":

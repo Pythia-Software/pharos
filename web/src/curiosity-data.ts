@@ -44,7 +44,6 @@ export type QueryRecipe = {
   action?: string;
   // Current-state and all-time cards carry no rolling lookback.
   period?: "current" | "all";
-  defaultWindow?: "today";
   trend?: CardTrend;
   weekday?: { metricId: string; unit: string };
   destination?: CardDestination;
@@ -186,6 +185,6 @@ export function suggestionPool(clock = new Date(), recipes = queryRecipes, activ
   // and only among the windows that fit the library's activity.
   return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => {
     const windows = fittingWindows(recipe.days ?? [7, 30, 90], activity);
-    return instantiateRecipe(recipe, recipe.defaultWindow ?? windows[index % windows.length], clock);
+    return instantiateRecipe(recipe, windows[index % windows.length], clock);
   });
 }

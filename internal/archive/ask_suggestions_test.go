@@ -334,13 +334,16 @@ func TestAskSuggestionsEndpointAndLeads(t *testing.T) {
 		t.Fatal("suggestions do not follow the days' windows")
 	}
 	var offered map[string]any
-	for _, item := range get()["suggestions"].([]any) {
-		if item.(map[string]any)["id"] == "verification-reliability" {
-			offered = item.(map[string]any)
+	suggestions := get()["suggestions"].([]any)
+	for _, item := range suggestions {
+		candidate := item.(map[string]any)
+		if candidate["area"] == "verification" && strings.Contains(strings.Join(s.Catalog.askSuggestionLeads(t.Context(), candidate["id"].(string)), " "), "go test") {
+			offered = candidate
+			break
 		}
 	}
 	if offered == nil {
-		t.Fatal("tests failing in alpha were not suggested")
+		t.Fatalf("no offered verification question carried the failing-test lead: %v", suggestions)
 	}
 
 	var leads []string
@@ -359,7 +362,7 @@ func TestAskSuggestionsEndpointAndLeads(t *testing.T) {
 	input["prompt"], input["suggestion"] = offered["text"], map[string]any{"id": offered["id"], "text": offered["text"]}
 	askOK(t, s, "send", input)
 	session, err := s.askSession(t.Context(), "chat-1")
-	if err != nil || session.Conversation[0].Suggestion != "verification-reliability" || session.Conversation[0].SuggestionEdited {
+	if err != nil || session.Conversation[0].Suggestion != offered["id"] || session.Conversation[0].SuggestionEdited {
 		t.Fatalf("the suggestion was not recorded: %+v %v", session.Conversation, err)
 	}
 	if len(leads) == 0 || !strings.Contains(strings.Join(leads, " "), "go test") {

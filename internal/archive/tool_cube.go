@@ -10,7 +10,7 @@ import (
 // its numbers. It has a quarter of tool_calls' rows at a fraction of their
 // width, so the Tool calls table answers row counts, filter values and column
 // stats from it whenever a request reads only those fields (see sqlCube),
-// Machine Time's metrics are summed from it (see machineTimeMetricsV2), and
+// Domain summaries are published from these additive facts, and
 // tool_usage_daily is summed from it rather than from the calls.
 // Both are rebuilt together (see rebuildToolRollup) and leave out mirrored
 // workspaces.

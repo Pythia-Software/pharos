@@ -1,6 +1,8 @@
+import { queryCapabilities } from '../../support/query-server.mjs';
+import messageLabels from "../../../../schemas/message_labels.schema.json";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toMetricQuery, toQueryRequestV3 } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
 import modelRequests from "../../../../schemas/model_requests.schema.json";
 import tl1Attempts from "../../../../schemas/tl1_attempts.schema.json";
@@ -30,6 +32,17 @@ const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Da
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
 import { dashboardQueryDetails, dashboardQueryLinks, dashboardQuerySentence } from "../../../src/dashboard-query-links.ts";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links.ts";
+
+test('leaving the label lab opens the chosen analysis without its experiment route switch',()=>{
+  const current=new URLSearchParams({label_lab:'path',label_conversation:'conversation-fixture',label_message:'message-fixture',nav_collapsed:'1'});
+  for(const change of [{mode:'dashboards',topic:'tokens'},{mode:'query',dataset:'tool_calls'}]){
+    const url=new URL(usageWorkspaceURL(change,current),'http://localhost');
+    assert.equal([...url.searchParams.keys()].some(key=>key.startsWith('label_')),false);
+    assert.equal(url.searchParams.get('analyze_mode'),change.mode);
+    assert.equal(url.searchParams.get('nav_collapsed'),'1');
+  }
+  assert.equal(current.get('label_lab'),'path');
+});
 
 test('dashboard series links retain filters, resolve Other and null identities, and select contributing records', () => {
   const range = { from: new Date('2026-10-02T00:00:00Z'), to: new Date('2026-10-03T00:00:00Z'), rolling: false };
@@ -173,7 +186,7 @@ test("dashboard previews distinguish source and group filters and retain custom 
 });
 
 test("all eight dashboards offer four distinct native queries that retain source scope", () => {
-  const documents = { model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
+  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
@@ -195,8 +208,8 @@ test("all eight dashboards offer four distinct native queries that retain source
     for (const link of links) {
       const url = new URL(link.href, "http://localhost"), restored = decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
       assert.deepEqual(restored, normalizeQueryState(link.query));
-      assert.equal(restored.fitToScreen, true, `${topic}: ${link.title} fits its columns to the screen`);
-      assert.deepEqual(toQueryRequestV3(restored, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }).diagnostics ?? [], [], `${topic}: ${link.title}`);
+      assert.equal(restored.fit, "screen", `${topic}: ${link.title} fits its columns to the screen`);
+      assert.doesNotThrow(() => toQueryRequestV3(restored, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }), `${topic}: ${link.title}`);
       assert.deepEqual((restored.grouping?.source ?? restored).where.slice(0, where.length), where);
       assert.equal(readUsageWorkspace(url.searchParams).topic, topic);
       if (topic === "carbon") assert.equal(url.searchParams.get("analyze_carbon"), '{"scenario":"high"}');
@@ -229,7 +242,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -237,7 +250,7 @@ test("the live audit provides 25 valid, distinct queries per dataset and dashboa
     assert.equal(new Set(cases.map(item => item.url)).size, 25);
     for (const item of cases) {
       assert.ok(decodeQueryStrict(encodeQuery(item.query)), item.id);
-      assert.deepEqual(toQueryRequestV3(item.query, schema, capabilities).diagnostics ?? [], [], item.id);
+      assert.doesNotThrow(() => toQueryRequestV3(item.query, schema, capabilities), item.id);
     }
   }
   for (const topic of Object.keys(usageTopics)) {
@@ -259,7 +272,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = { model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const schemas = {message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -269,8 +282,8 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
     assert.equal(readUsageWorkspace(url.searchParams).search, mode === "search");
     const query = { ...EMPTY_QUERY, select: [{ field: "id", width: 175 }], where: [{ field: "id", op: "=", value: "example" }], orderBy: [{ field: "id", dir: "asc" }], limit: 25 };
     const linked = new URL(usageWorkspaceURL({ mode, dataset, query }), "http://localhost");
-    assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${dataset}`)), { ...query, fitToScreen: true }, `${dataset} fits to screen without changing the analysis`);
-    assert.equal(query.fitToScreen, undefined, "Link generation preserves the input query");
+    assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${dataset}`)), { ...query, select: [{ field: "id" }], fit: "screen" }, `${dataset} fits to screen without pinning its source widths`);
+    assert.deepEqual(query.select, [{ field: "id", width: 175 }], "Link generation preserves the input query");
     const tableURL = new URL(queryURL(dataset, query), "http://localhost");
     assert.equal(tableURL.pathname, "/analyze");
     assert.equal(readUsageWorkspace(tableURL.searchParams).dataset, dataset);
@@ -321,7 +334,7 @@ test("Query links retain complete grouped queries and Search explicitly opens so
   const source = { ...EMPTY_QUERY, offset: 50, where: [{ field: "provider", op: "=", value: "codex" }], aggregations: [{ id: "tokens", op: "sum", field: "total_tokens", groupBy: [] }] };
   const query = { ...EMPTY_QUERY, grouping: { source, keys: ["model"], summaries: [], representative: null }, where: [{ field: "sum_tokens", op: ">", value: "1000" }] };
   const params = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query }), "http://localhost").searchParams;
-  assert.deepEqual(decodeQueryStrict(params.get("q_usage")), { ...query, fitToScreen: true });
+  assert.deepEqual(decodeQueryStrict(params.get("q_usage")), { ...query, fit: "screen" });
   assert.deepEqual(usageSearchQuery(query), { ...source, offset: 0, aggregations: [] });
   assert.equal(query.grouping.source.offset, 50, "Link generation must not change the original query");
 });
@@ -437,11 +450,11 @@ test("Tools range filters select whole local calendar days through the native te
   const where = toolDashboardWhere([{ field: "day", op: ">=", value: bounds.from.toISOString() }, { field: "day", op: "<", value: bounds.to.toISOString() }, { field: "provider", op: "=", value: "codex" }], bounds);
   const rows = ["2024-03-07", "2024-03-08", "2024-03-09", "2024-03-10", "2024-03-11", "2024-03-12"].map((day, id) => ({ id, day, provider: "codex", tool_name: "shell", call_count: 1 }));
   const query = { ...EMPTY_QUERY, where, aggregations: [{ id: "calls", op: "sum", field: "call_count", groupBy: ["tool_name"] }] };
-  assert.deepEqual(toMetricQuery(query, schema).diagnostics, []);
+  assert.doesNotThrow(() => toQueryRequestV3(query, schema, queryCapabilities));
   assert.deepEqual(applyQuery(rows, query, schema).rows.map(row => row.day).sort(), ["2024-03-08", "2024-03-09", "2024-03-10", "2024-03-11"]);
   assert.deepEqual(toolDashboardWhere([], {}), []);
   const year = toolDashboardWhere([], { from: new Date(2023, 0, 1), to: new Date(2024, 0, 1) });
-  assert.deepEqual(toMetricQuery({ ...query, where: year }, schema).diagnostics, []);
+  assert.doesNotThrow(() => toQueryRequestV3({ ...query, where: year }, schema, queryCapabilities));
   const endpoints = [{ id: "before", day: "2022-12-31" }, { id: "start", day: "2023-01-01" }, { id: "end", day: "2023-12-31" }, { id: "after", day: "2024-01-01" }];
   assert.deepEqual(applyQuery(endpoints, { ...EMPTY_QUERY, where: year, orderBy: [{ field: "day", dir: "asc" }] }, schema).rows.map(row => row.id), ["start", "end"]);
   for (const [range, expected] of [
@@ -450,7 +463,7 @@ test("Tools range filters select whole local calendar days through the native te
     [{ from: new Date(2024, 0, 2), to: new Date(2023, 0, 1) }, []],
   ]) {
     const query = { ...EMPTY_QUERY, where: toolDashboardWhere([], range), orderBy: [{ field: "day", dir: "asc" }] };
-    assert.deepEqual(toMetricQuery({ ...query, aggregations: [{ id: 'count', op: 'count', groupBy: [] }] }, schema).diagnostics, []);
+    assert.doesNotThrow(() => toQueryRequestV3({ ...query, aggregations: [{ id: 'count', op: 'count', groupBy: [] }] }, schema, queryCapabilities));
     assert.deepEqual(applyQuery(endpoints, query, schema).rows.map(row => row.id), expected);
   }
 });
@@ -513,7 +526,7 @@ import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
 
 test("Analyze defaults and Details cover every dataset without changing explicit saved projections", () => {
-  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), details = usageDetailsSchema(schema, dataset);
     assert.ok(details);
@@ -531,7 +544,7 @@ test("Analyze defaults and Details cover every dataset without changing explicit
 });
 
 test("Analyze keeps every drilldown after the selected data and before native Detail", () => {
-  const documents = { model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const original = loadSchema(document), schema = usageQuerySchema(original, dataset);
     const saved = { ...EMPTY_QUERY, select: [{ field: ITEM_DETAILS_COLUMN }, { field: "id", width: 175 }] };
@@ -557,11 +570,15 @@ test("Analyze keeps every drilldown after the selected data and before native De
 test("a new Analyze table fits the screen while an explicit sizing choice survives restoration", () => {
   const original = loadSchema(usage), schema = usageQuerySchema(original, "usage");
   const fresh = fittedDefaultQuery(original);
-  assert.equal(fresh.fitToScreen, true);
+  assert.equal(fresh.fit, "screen");
+  assert.deepEqual(fresh.select, original.defaultSelect.map(({width, ...column}) => column), "schema defaults do not pin fitted columns");
+  assert.ok(fresh.select.every(column => column.width === undefined));
   assert.equal(fresh.limit, 50, "a new fitted table keeps the dataset page size");
+  const automatic = usageActionQuery({ ...EMPTY_QUERY, fit: "screen" }, schema, "usage");
+  assert.ok(automatic.select.every(column => column.width === undefined), "implicit schema columns also remain free to fit");
   const explicit = { ...EMPTY_QUERY, fitToScreen: false, select: [{ field: "model", width: 240 }], limit: 5 };
   const restored = usageActionQuery(orderedUsageQuery("usage", decodeQueryStrict(encodeQuery(explicit))), schema, "usage");
-  assert.equal(Boolean(restored.fitToScreen), false, "links encode a manual layout as the absence of fitting");
+  assert.equal(Boolean(restored.fit), false, "links encode a manual layout as the absence of fitting");
   assert.deepEqual(restored.select[0], explicit.select[0]);
   assert.equal(restored.limit, 5);
   assert.strictEqual(usageActionQuery(restored, schema, "usage"), restored, "canonicalization settles without resetting the sizing choice");
@@ -579,7 +596,7 @@ test("Drilldown ordering reads a conversation forward and browses populations ne
   assert.deepEqual(applyQuery(rows, scoped, schema).rows.map(row => row.id), ["early", "late"]);
   const [dashboard] = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where }, schema, new URLSearchParams());
   assert.deepEqual(applyQuery(rows, dashboard.query, schema).rows.map(row => row.id), ["early", "late"]);
-  assert.equal(dashboard.query.fitToScreen, true);
+  assert.equal(dashboard.query.fit, "screen");
   const across = orderedUsageQuery("writing_messages", EMPTY_QUERY);
   assert.deepEqual(applyQuery(rows, across, schema).rows.map(row => row.id), ["other", "late", "early"]);
   for (const clause of [{ any: where }, { ...where[0], negated: true }, { ...where[0], op: "contains" }]) {

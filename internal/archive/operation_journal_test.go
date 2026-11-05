@@ -47,7 +47,7 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := journalRows(t, catalog)
-	if row := rows["index.captures"]; row.State != opRunning || row.Legacy != "run-1" || row.Process != "service" || row.Instance != reg.instance || row.EndedAt != "" {
+	if row := rows["index.captures"]; row.State != opRunning || row.Label != "Index captures" || row.Legacy != "run-1" || row.Process != "service" || row.Instance != reg.instance || row.EndedAt != "" {
 		t.Fatalf("start row: %+v", row)
 	}
 	if _, ok := rows["maintenance.search.text"]; ok {

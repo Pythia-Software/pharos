@@ -1,12 +1,13 @@
 import { EMPTY_QUERY, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { canonicalState, normalizeAnalysis, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+import { isTrendView, barsShown, canonicalState, normalizeAnalysis, slicesShown, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+
 import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
-import { defaultCardCover } from "./card-cover";
+import { cardGroupsMax, defaultCardCover, pluralNoun, validCardGroups, type CardGroups } from "./card-cover";
 import type { QuerySuggestion } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
 import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
@@ -45,7 +46,7 @@ export function dashboardCardTargets(address: string): Array<{ id: DashboardCard
     return thinkingTopicTargets(topic).map(id => ({ id, label: thinkingCardTitle(id, state), title: thinkingCardTitle(id, state) }));
   }
   const { topic, state } = readDashboardCard(address), catalog = analysisCatalogs[topic]!, title = dashboardCardTitle(catalog, state);
-  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: state.view === "trend" ? trendTitle(catalog, state) : title, title }];
+  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: isTrendView(state.view) ? trendTitle(catalog, state) : title, title }];
   if (topic === "habits") {
     const view = readHabitsCardView(new URL(address, location.origin).searchParams);
     return [...habitsCardTargets.map(id => ({ id, label: habitsCardTitle(id, view), title: habitsCardTitle(id, view) })), ...charts];
@@ -81,14 +82,15 @@ export function readDashboardCard(address: string, now = new Date()) {
 export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisState): string {
   const view = normalizeAnalysis(catalog, state), measure = catalog.measures[view.metric].label;
   const split = catalog.breakdowns[view.split]?.label;
-  return `${measure}${view.view === "trend" ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
+  return `${measure}${isTrendView(view.view) ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
 }
 
-export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}, templateId?: string): Bookmark {
+export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}, templateId?: string, groups?: number): Bookmark {
   if (!dashboardCardTargets(url).some(item => item.id === target)) throw new Error("This chart cannot be a card.");
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
+  if (groups !== undefined && (!dashboardCardGroups(url, target) || !validCardGroups(groups))) throw new Error("Choose a whole number of groups to show.");
   const items = readBookmarks();
-  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...templateId ? { templateId } : {}, ...dashboardCardLabels(url, target, labels), savedAt: Date.now() };
+  const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...templateId ? { templateId } : {}, ...dashboardCardLabels(url, target, labels), ...groups !== undefined ? { maxGroups: groups } : {}, savedAt: Date.now() };
   writeBookmarks([...items, item]);
   return item;
 }
@@ -135,7 +137,19 @@ export function dashboardCardWindow(address: string, target: DashboardCardTarget
   return relative && "field" in relative ? `Past ${relative.value.slice(1, -1)} days` : dates.length ? "Saved range" : "All time";
 }
 
-export function dashboardCardPresentation(address: string, target: DashboardCardTarget = "chart"): { category: QueryCategory; loading: CardLoadingSpec } {
+// A card can show more or fewer of the chart's groups than its dashboard,
+// which keeps its own count and its full list. Only the catalog chart's
+// breakdowns, over time or compared, have groups to count.
+export function dashboardCardGroups(address: string, target: DashboardCardTarget = "chart"): CardGroups | undefined {
+  if (target !== "chart") return;
+  const { topic, state } = readDashboardCard(address), split = analysisCatalogs[topic]!.breakdowns[state.split];
+  if (!split || !isTrendView(state.view) && !["compare", "distribution"].includes(state.view)) return;
+  if (isTrendView(state.view) && analysisCatalogs[topic]!.trend.allSeries) return;
+  const fallback = isTrendView(state.view) ? state.seriesLimit! : state.view === "compare" && state.compareAs === "share" ? Math.max(slicesShown, (state.selection?.values.length ?? 0) + 1) : barsShown;
+  return { noun: pluralNoun(split.label.toLowerCase()), max: Math.max(cardGroupsMax, fallback), fallback };
+}
+
+export function dashboardCardPresentation(address: string, target: DashboardCardTarget = "chart", groups?: number): { category: QueryCategory; loading: CardLoadingSpec } {
   if (target === "ribbon") return { category: "machines", loading: { kind: "columns", count: 24, height: fittedCoverHeight("columns", 24) } };
   if (isHabitsCardTarget(target)) return habitsCardPresentation(target, readHabitsCardView(readDashboardCard(address).params));
   if (isThinkingCardTarget(target)) return thinkingCardPresentation(target, readThinkingCard(address).state);
@@ -143,7 +157,8 @@ export function dashboardCardPresentation(address: string, target: DashboardCard
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
     : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" || topic === "habits" ? "machines" : "tools";
-  const kind = state.view === "trend" ? state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
-  const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : 4;
+  const kind = isTrendView(state.view) ? state.view === "trend_line" || state.view !== "trend_bar" && state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
+  const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : Math.min(groups ?? 4, cardGroupsMax);
+
   return { category, loading: { kind, count, height: fittedCoverHeight(kind, count) } };
 }

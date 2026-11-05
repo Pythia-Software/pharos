@@ -4,11 +4,15 @@ import { defaultConcurrencySettings, concurrencyRangePresets } from "./concurren
 import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-search-model";
 import { safetyRanks } from "./safety-dashboard-model";
 import { logSourceIds } from "./logs-model";
+import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
+  label_results: field("label_results",["analyze/query/message_labels"],"enum","Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.",["cards","table"],"cards"),
+  timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
+  reader_view: field("reader_view",["work"],"enum","Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.",["conversation","timeline"],"conversation"),
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
   thinking: field("thinking",["analyze/thinking-overview","analyze/thinking-detail","analyze/query/model_requests"],"json","Thinking dashboard applied filters and presentation. All controls share one range; dates are half-open ISO bounds."),
   disclosures: field("disclosures", ["*"], "json", "Expanded content and settings sections by stable section/record identity; values are booleans. Transient menus and editor drafts are excluded."),
@@ -38,7 +42,7 @@ export const viewFields: Record<string, ViewField> = {
   query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["1","7","30","90","180","365"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
-  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table"], "json", "Query builder collapsed state by dataset ID."),
+  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","settings/sync"], "json", "Query builder collapsed state by dataset or background table schema ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
   search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
   chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
@@ -47,11 +51,11 @@ export const viewFields: Record<string, ViewField> = {
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
   card_filters: field("card_filters", ["cards"], "boolean", "Show the card filters.", undefined, false),
   findings_rank: field("findings_rank", ["findings", "findings/table"], "enum", "Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.", ["", "usd", "tokens", "minutes", "failures"]),
-  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions collects review questions for an agent in separate prompts.", ["efficiency", "safety"], "efficiency"),
-  safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action review lifecycle. Copying a prompt moves selected reviews to handed_off.", ["open", "handed_off", "dismissed"], "open"),
-  safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action reviews by their stable repository, machine, or unresolved workspace target.", undefined, ""),
-  safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order risky action reviews by latest activity, call count, or new execution evidence. Ties use latest activity, then stable review ID.", safetyRanks, "recent"),
-  safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a safety case by stable ID; evidence and source links live inside Details.", undefined, ""),
+  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate, in separate prompts.", ["efficiency", "safety"], "efficiency"),
+  safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action notice lifecycle. Copying a prompt moves selected notices to handed_off; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
+  safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
+  safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
+  safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
@@ -76,12 +80,16 @@ export const viewFields: Record<string, ViewField> = {
   habits_weeks: field("habits_weeks", ["analyze/habits"], "enum", "Weeks the Habits activity calendar shows, ending with today's week.", ["13", "26", "53"], "53"),
   habits_punchcard: field("habits_punchcard", ["analyze/habits"], "enum", "Whose time the Habits weekday × hour punchcard shows: you, agents you started (with you or unattended), agents you started while you're away (unattended), automatic agent runs, or agents you started minus you.", ["you", "agents", "unattended", "automated", "difference"], "you"),
   habits_punchcard_days: field("habits_punchcard_days", ["analyze/habits"], "enum", "Days the Habits punchcard and automation table cover, through today, or all for every day captured.", ["7", "30", "90", "365", "all"], "90"),
+  habits_shape_days: field("habits_shape_days", ["analyze/habits"], "enum", "Number of recent days shown in the Habits Your days chart.", ["7", "14", "28", "56", "90"], "28"),
   habits_day: field("habits_day", ["analyze/habits"], "text", "The calendar day selected on the Habits page (YYYY-MM-DD): its details, and the control that marks it as a vacation day."),
   record_keyword: field("record_{dataset}", ["analyze/query/*"], "json", "Record keyword clause: {field:<text field ID>,draft:<TextSearchDraft>}.")
 };
 // These maps have viewer-dependent initial choices. Capture effective entries
 // so an empty map cannot fall back to another browser's saved preference.
 viewFields.query_layout.captureEntries=true;
+for (const schema of Object.values(syncSchemas)) {
+  viewFields[schema.name] = field(`q_${schema.name}`, ["settings/sync"], "text", `Native Query Table definition for ${schema.name}: filters, sorting, columns, grouping, metrics and pagination over the retained snapshot.`);
+}
 
 // Structured examples are exported with each field so an agent can construct
 // the same object the UI owns, without guessing names from prose descriptions.
@@ -90,7 +98,7 @@ const searchTemplate = emptyTextSearch();
 viewFields.disclosures.details={
   example:{quickStatsSettings:true},
   layout_sections:["menuBarPreferences","headerSettings","quickStatsSettings"],
-  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time"},
+  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
   families:{"background:<item ID>":"settings/sync", "sync:forecast:<run ID>":"settings/sync", "cloud:schedule:<destination ID>":"settings/backups", "carbon:row:<tier>:<category>":"analyze/carbon", "status:cadence:<cadence ID>":"overlay=drive", "status:support":"overlay=drive", "library:activity:<activity ID>:<started_at>:details":"overlay=drive", "work:<work ID>:files":"work", "feedback:logs:<submission ID>":"feedback inbox"},
   defaults:"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.",
   note:"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences.",
@@ -117,7 +125,7 @@ viewFields.carbon.details={
   grid:"Key from the shared carbon factors grids, or custom with nonnegative customGrid in g CO2e/kWh.",
 };
 export const attentionTargets = [
-  { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action review card or its open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
+  { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action notice's open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
   { pattern: "page", pages: ["*"], description: "Main page content." },
   { pattern: "control:<field>", pages: ["*"], description: "A registered view field or control wrapper." },
   { pattern: "control:chart:<label>", pages: ["analyze/*"], description: "Chart control identified by its lower-case accessible label, with spaces replaced by hyphens (metric, breakdown, scale)." },
@@ -131,8 +139,8 @@ export const attentionTargets = [
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search; an alias for view.find. Opens page Find, highlights matches and reveals the first. Several text targets become one escaped OR regex. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
-  query_table_json_cells: {status:"blocked",version:"0.9.9",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
-  query_table_attention: {status:"partial",version:"0.9.9",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_json_cells: {status:"blocked",version:"1.0.0",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_attention: {status:"partial",version:"1.0.0",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
 };
 export const viewExclusions = {
   settings: "Settings values and their read-only diagnostics; section openness uses disclosures.",
@@ -179,6 +187,7 @@ export function encodeViewValue(field: ViewField, value: unknown): string {
 // Existing composite owners implement their published codecs directly. Every
 // other host field must have a discovered useViewState/read/write binding.
 export const delegatedViewFields: Record<string,{file:string; symbol:string}> = {
+  label_results:{file:"web/src/message-label-results-model.ts",symbol:"messageLabelHostQuery"},
   dashboard_timezone:{file:"web/src/usage-dashboard-model.ts",symbol:"readDashboardLink"},
   carbon:{file:"internal/archive/assets/carbon.js",symbol:"syncSettingsURL"},
   parallelism:{file:"web/src/concurrency.tsx",symbol:"routeParameter"},
@@ -193,6 +202,7 @@ export const delegatedViewFields: Record<string,{file:string; symbol:string}> = 
   history_search:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
   overlay:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
 };
+for (const schema of Object.values(syncSchemas)) delegatedViewFields[schema.name] = {file:"web/src/sync-tables.tsx",symbol:"useQueryTable"};
 
 for (const name of ["window_mode","window_days","window_field","window_until_field","window_dataset","window_timezone"]) delegatedViewFields[name]={file:"web/src/query-links.ts",symbol:"readRollingWindow"};
 for (const name of ["query_dashboard_chart","query_dashboard_filters","query_dashboard_window","query_opened","query_days","query_report","query_search"]) delegatedViewFields[name]={file:"web/src/usage-workspace-model.ts",symbol:"usageWorkspaceURL"};

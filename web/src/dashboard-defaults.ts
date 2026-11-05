@@ -14,6 +14,7 @@ export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model
 // would otherwise fill most of a sparse month with empty columns.
 const daily = { period: "day", nonzero: true } as const;
 export const dashboardDefaults: Record<string, AnalysisState> = {
+  labels:{metric:"messages",split:"family",period:"day",view:"trend_line",share:true},
   calls: { metric: "calls", split: "tool_name", view: "compare" },
   activity: { metric: "conversations", split: "provider_model", ...daily },
   tokens: { ...defaultTokenChart, ...daily },

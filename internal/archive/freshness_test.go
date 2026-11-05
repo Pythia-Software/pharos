@@ -151,6 +151,25 @@ func runningOp(id, kind, subject string) freshnessOp {
 	return freshnessOp{ID: id, Kind: kind, Subject: subject, Label: row.Label, State: opRunning, Affects: parseAffects(row.Affects), Started: time.Now()}
 }
 
+func TestFreshnessMovedSearch(t *testing.T) {
+	f := newFreshnessFixture(t)
+	f.exec("INSERT INTO workspace_library_dirty(workspace_id) VALUES('w')", "DELETE FROM meta WHERE key='text_search_documents_version'")
+	for _, cadence := range []string{cadenceHourly, cadenceDaily, cadenceManual} {
+		f.exec("INSERT OR REPLACE INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + sqlQuote(currentHost().ID) + ",'search'," + sqlQuote(cadence) + "," + sqlQuote(formatTime(time.Now().Add(time.Hour))) + ")")
+		state, reason, next := freshScheduled, "scheduled-"+cadence, cadenceNext[cadence]
+		if cadence == cadenceManual {
+			state, reason, next = freshBehind, "deferred-by-schedule", nextManualIndex
+		}
+		rows := f.ledger(freshnessInput{})
+		for _, domain := range []string{"view", "search.text"} {
+			row := expectRow(t, rows, domain, state, reason, "")
+			if row.Next == nil || *row.Next != next {
+				t.Fatalf("%s on %s: %+v", domain, cadence, row)
+			}
+		}
+	}
+}
+
 // Conversations (conv:<source>) are current only as of the last check: the
 // scheduled index's success within its interval. Off schedule, after an
 // error or an interruption, their state is unknown, not guessed; an index
@@ -170,6 +189,18 @@ func TestFreshnessConversations(t *testing.T) {
 		{name: "current after a scheduled check", schedule: true,
 			seed:  []string{"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at,indexed_at) VALUES(" + host + ",'claude'," + at(time.Minute) + "," + at(time.Minute) + "," + at(time.Hour) + ")"},
 			state: freshCurrent, asOfFromSeeding: true},
+		{name: "new conversations moved to daily", schedule: true,
+			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(2*time.Hour) + ")",
+				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','daily'," + at(-time.Hour) + ")"},
+			state: freshCurrent, asOfFromSeeding: true},
+		{name: "new conversations past their daily update", schedule: true,
+			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(48*time.Hour) + ")",
+				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','daily'," + at(-time.Hour) + ")"},
+			state: freshUnknown, reason: "overdue", next: nextDailyUpdate, asOfFromSeeding: true},
+		{name: "new conversations moved to only when you ask", schedule: true,
+			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(time.Minute) + ")",
+				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','manual'," + at(-time.Hour) + ")"},
+			state: freshUnknown, reason: "manual-only", next: nextManualIndex, asOfFromSeeding: true},
 		{name: "never indexed", schedule: true, state: freshBehind, reason: "never-indexed", next: nextScheduledIndex},
 		{name: "catching up while an index runs", schedule: true, in: freshnessInput{ops: []freshnessOp{runningOp("op-index", "index.changes.manual", "")}},
 			state: freshBehind, reason: "indexing", catching: "op-index"},

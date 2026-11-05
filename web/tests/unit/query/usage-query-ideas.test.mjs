@@ -21,7 +21,7 @@ for (const [dataset, ideas] of Object.entries(usageQueryIdeas)) test(`${dataset}
   const source = { ...EMPTY_QUERY, fitToScreen: false, where: [{ field: filterField, op: "!=", value: "other" }], limit: 1, offset: 100 };
   for (const idea of ideas) {
     const query = applyQueryIdea(source, idea);
-    assert.equal(query.fitToScreen, true, `${idea.id}: suggested tables auto-fit`);
+    assert.equal(query.fit, "screen", `${idea.id}: suggested tables auto-fit`);
     assert.equal(query.grouping.source.fitToScreen, false, `${idea.id}: the original source preference stays intact`);
     createGroupingModel(schema).validate(query.grouping);
     assert.deepEqual(decodeQueryStrict(encodeQuery(query)), normalizeQueryState(query), idea.id);
@@ -44,7 +44,7 @@ for (const [dataset, ideas] of Object.entries(usageQueryIdeas)) test(`${dataset}
       const destination = resolveGroupLink(query, link, linkTargets);
       const url = new URL(destination.href, "https://pharos.test");
       const restored = decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
-      assert.equal(restored.fitToScreen, true, `${idea.id}: drill-in links auto-fit after URL restoration`);
+      assert.equal(restored.fit, "screen", `${idea.id}: drill-in links auto-fit after URL restoration`);
       assert.deepEqual(restored.where, records.where);
       const expected = data.filter(record => record[filterField] !== "other" && query.grouping.keys.every(key => record[key] === row[key]));
       assert.deepEqual(applyQuery(data, { ...records, limit: 100 }, schema).rows.map(record => record.id).sort(), expected.map(record => record.id).sort(), idea.id);

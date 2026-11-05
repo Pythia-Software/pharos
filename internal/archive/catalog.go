@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,7 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	qt "github.com/Pythia-Software/query-table/backends/go"
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -41,10 +41,6 @@ type Catalog struct {
 	derived      derivedCache
 	// Initialized under derived.mu; caps simultaneous workload fits.
 	thinkingFitSlots chan struct{}
-	queryCounts      queryCountCache
-	// sourceProofs holds what Query Table proved about SQL datasets' whole
-	// sources, keyed by the data generation it was proven in.
-	sourceProofs qt.SQLiteSourceProofs
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -354,6 +350,7 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, index := range []string{
+		messageLabelMessageIndexSQL,
 		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
 		// Request-gap aggregation reads only these small timing fields, not tool bodies.
 		"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
@@ -385,6 +382,12 @@ func (c *Catalog) Initialize() error {
 		}
 	}
 	// Its triggers read request and tool-call columns migrated above.
+	// Index an existing optional ledger without creating or running it.
+	if c.hasLabelsLedger() {
+		if _, err := c.DB.Exec(messageLabelLedgerIndexSQL); err != nil {
+			return err
+		}
+	}
 	if err := c.ensureRequestTimings(); err != nil {
 		return fmt.Errorf("initialize request timings: %w", err)
 	}
@@ -570,6 +573,9 @@ func (c *Catalog) Initialize() error {
 			WHERE NOT EXISTS (SELECT 1 FROM workspaces) AND NOT EXISTS (SELECT 1 FROM meta WHERE key=?)`, key, version, key); err != nil {
 			return err
 		}
+	}
+	if err := c.ensureMessageLabelFacts(context.Background()); err != nil {
+		return err
 	}
 	if err := c.ensureQueryCacheGeneration(); err != nil {
 		return fmt.Errorf("initialize query cache invalidation: %w", err)

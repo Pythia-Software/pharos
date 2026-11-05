@@ -1201,20 +1201,37 @@ func TestAuthorshipReplyPagesReleaseReadStatements(t *testing.T) {
 		t.Fatal(err)
 	}
 	override(t, &authorshipReplyBatch, 1)
-	// A callback can acquire the sole connection while classification is in
-	// progress; the old streaming statement held it until the loop ended.
+	// A long writer and writers waiting for it can occupy the whole catalog
+	// pool. Classification must still read, and must release each page's
+	// statement so a progress callback can use the sole reader connection.
 	c.DB.SetMaxOpenConns(1)
+	c.reads.SetMaxOpenConns(1)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
+	writer, err := c.DB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
 	ctx = withWorkProgress(ctx, func(work activityWork) {
 		var n int
-		if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages").Scan(&n); err != nil {
+		if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM messages").Scan(&n); err != nil {
 			t.Error(err)
 		}
 	})
 	got, err := c.classifyInputs(ctx, inputs)
 	if err != nil || jsonText(got) != jsonText(baseline) {
 		t.Fatalf("paged classification differs: %v (%v)", got, err)
+	}
+	// Incremental classification's lazy history lookups need the same
+	// independence from the occupied writer pool.
+	classifier, err := c.loadAuthorshipClassifier(ctx, inputs, inputs[0].SentAt)
+	if err != nil || classifier == nil {
+		t.Fatalf("load incremental classifier: %v", err)
+	}
+	got, err = classifyAuthorship(ctx, c.reader(), inputs, classifier)
+	if err != nil || jsonText(got) != jsonText(baseline) {
+		t.Fatalf("incremental classification differs: %v (%v)", got, err)
 	}
 }
 

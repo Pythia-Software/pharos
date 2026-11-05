@@ -444,9 +444,10 @@ func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `[{"field":"repository_name","op":"contains","value":"pharos"},{"field":"sent_at","op":">=","value":"-7d"},{"field":"sent_at","op":"<","value":"+0s"}]`; compactJSON(where.Where) != want {
-		t.Errorf("filters with the card's window: %s", compactJSON(where.Where))
+	if want := []qt.WhereTerm{{Field: "repository_name", Op: "contains", Value: "pharos"}, {Field: "sent_at", Op: ">=", Value: "-7d"}, {Field: "sent_at", Op: "<", Value: "+0s"}}; !reflect.DeepEqual(where.Where, want) {
+		t.Errorf("filters with the card's window: %+v", where.Where)
 	}
+
 	// A link the dashboard wrote after the same change reads as the same
 	// changed card, already canonical.
 	values := ownURL.Query()
@@ -631,6 +632,17 @@ func TestSiteLinkTodayWindows(t *testing.T) {
 
 func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 	site := testSiteMap(t)
+	for _, mode := range []string{"cards", "table"} {
+		result, err := site.linkTool(map[string]any{"page": "analyze/query/message_labels", "query": map[string]any{"select": []any{map[string]any{"field": "fingerprint"}}, "hostState": map[string]any{"version": 1, "params": map[string]any{"label_results": []string{mode}}}}, "view": map[string]any{"label_results": mode}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		read := roundTrip(t, site, "label result presentation "+mode, result["url"].(string))
+		if read.Query == nil || read.Query.HostState == nil || read.Query.HostState.Params["label_results"][0] != mode {
+			t.Fatalf("lost label presentation: %+v", read)
+		}
+	}
+
 	for _, sample := range []struct{ page, key string }{
 		{"settings/layout", "quickStatsSettings"}, {"settings/layout", "headerSettings"}, {"settings/layout", "menuBarPreferences"},
 		{"settings/sync", "sync:diagnostics"}, {"settings/sync", "sync:forecast:run-1"}, {"settings/sync", "background:writing"},
@@ -657,7 +669,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := roundTrip(t, site, "full query", result["url"].(string))
-	if read.Query == nil || read.Query.Offset != 10 || read.Query.Limit != 5 || len(read.Query.Select) != 1 || read.Query.FitToScreen || len(read.Query.Aggregations) != 1 || len(read.Highlight) != 2 || read.Reveal != "control:disclosures" {
+	if read.Query == nil || read.Query.Offset != 10 || read.Query.Limit != 5 || len(read.Query.Select) != 1 || (read.Query.Fit == "screen") || len(read.Query.Aggregations) != 1 || len(read.Highlight) != 2 || read.Reveal != "control:disclosures" {
 		t.Fatalf("lost view: %+v", read)
 	}
 	advanced := linkArgs(t, `{"page":"library","view":{"search_state":{"editor":"visual","match":"literal","mode":"advanced","text":"failure","root":{"kind":"group","join":"all","children":[],"exclude":false},"scope":{"surface":"prose","roles":[],"kinds":[],"repository":"pharos","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":true,"separators":false}}}`)

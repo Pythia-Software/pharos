@@ -623,3 +623,14 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 /* The reader's Highlight row (ui.py) above a Browse preview's selected turn. */
 .result-highlights:empty { display: none; }
 .result-highlights .transcript-highlights { margin-top: 0; }
+
+/* Taxonomy keys: roles contain general labels, which contain specific labels. */
+.usage-chart-legend:has(.is-hierarchy) { gap: 7px; margin-left: 0; align-items: flex-start; }
+.usage-legend-group.is-hierarchy[role="group"] { min-width: 0; max-width: 100%; align-items: center; gap: 3px 5px; margin: 0; padding: 5px; border: 1px solid color-mix(in srgb,var(--ink) 14%,transparent); border-radius: 5px; }
+.usage-legend-group.is-hierarchy > .usage-legend-provider { font-size: var(--fs-xs); padding: 2px 5px; }
+.usage-legend-group.is-hierarchy .usage-legend-group.is-hierarchy { border-color: color-mix(in srgb,var(--ink) 10%,transparent); padding: 2px 4px; }
+
+/* Category controls mirror their leaves, including a mixed selection. */
+.usage-legend-category { color: inherit; font-size: var(--fs-xs); font-weight: 600; padding: 2px 5px; }
+.usage-legend-category.dimmed { color: var(--muted); }
+.usage-legend-category[aria-pressed="mixed"] { color: var(--accent); border-color: color-mix(in srgb,var(--accent) 45%,transparent); background: color-mix(in srgb,var(--accent) 6%,transparent); }

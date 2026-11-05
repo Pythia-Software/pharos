@@ -474,13 +474,17 @@ func (m *toolOutputMigration) step(ctx context.Context, c *Catalog) (bool, error
 // maintainToolOutputIndex removes tool output from the word index of a
 // catalog written before it was left out, then returns.
 func (c *Catalog) maintainToolOutputIndex(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	// One operation for the whole migration, forgotten if there was none.
-	pass := c.beginPass(ctx, "maintenance.search.tool-output", triggerVersion)
+	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	migration := newToolOutputMigration()
 	for {
-		if c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(ctx) != nil {
 			return
+		}
+		if pass == nil {
+			pass = c.beginPass(ctx, "maintenance.search.tool-output", triggerVersion)
 		}
 		var more bool
 		var err error

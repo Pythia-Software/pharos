@@ -1,4 +1,10 @@
-import { hostQueryV3Transport } from "./host-query-transport";
+import { fitQueryToScreen } from "./query-fit";
+import { queryRow } from "./query-transport";
+import {messageLabelLegacyURL} from "./message-label-legacy";
+import {withFingerprintColumn} from "./fingerprint-columns";
+import {MessageLabelDisplay,MessageLabelCards,messageLabelRenderers} from "./message-label-results";
+import {messageLabelHostQuery,messageLabelConversationQuery,labelResultsMode} from "./message-label-results-model";
+import {messageLabelsCatalog} from "./message-labels-catalog";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewEntry } from "./view-state";
 import { installViewAttention, registerDetailAttentionResolver } from "./view-attention";
@@ -20,7 +26,6 @@ import { usageDetailsSchema } from "./usage-row-model";
 import { fittedDefaultQuery, usageActionQuery, usageQuerySchema, withGroupDetail } from "./usage-query-columns";
 import { orderedUsageQuery } from "./usage-query-order";
 import { usageRowRenderers } from "./usage-row-renderers";
-import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
@@ -38,8 +43,9 @@ import { activityPresentation } from "./machine-activity-data";
 import {  usageTime, type FilterChange } from "./usage-chart";
 import type { TokenChartView } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
-import { MetricRequestError, postMetrics, postQueryV3Metrics, type MetricResult } from "./metric-request";
+import { postMetrics, type MetricResult } from "./metric-request";
 import { tokenSummaryMetrics } from "./token-chart-request";
+import messageLabelsDocument from "../../schemas/message_labels.schema.json";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -51,8 +57,8 @@ import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { LogsPage } from "./logs-page";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, predicatesOf, httpComputedColumnStore, inspectBucketQuery, encodeQuery, loadSchema, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
-import { useQueryTable, type HostQueryOptions, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
+import { EMPTY_QUERY, groupKeyField, groupKeyFields, groupSourceQuery, predicatesOf, httpComputedColumnStore, inspectBucketQuery, encodeQuery, loadSchema, type ComputedColumnStore, type HostQueryState, type QueryCapabilitiesV3, type QueryResultV3, type ComputedExecution, type AggregationClause, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { useQueryTable, type HostQueryOptions, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryFilterRow, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
@@ -88,6 +94,8 @@ import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
+import { SafetySelectionBar, SafetyTableContext } from "./safety";
+import { createQueryHistory } from "./query-history";
 import { Icon } from "./icons";
 import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
@@ -110,9 +118,10 @@ import { readDashboardLink, parallelismSelectionQuery } from "./usage-dashboard-
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
 import { DashboardAnalysis } from "./dashboard-analysis";
 import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
-import { analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, analysisVersion, canonicalState, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
+import { PricingNotice } from "./pricing-notice";
 import { describeTerm, humanAnalysisCatalog, readHumanLink } from "./human-analysis-catalog";
 import { parallelismCatalogShape, parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
 import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
@@ -124,7 +133,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -183,6 +192,7 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  message_labels:loadSchema<Row>(messageLabelsDocument),
   model_requests: loadSchema<Row>(modelRequestsDocument),
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
@@ -228,19 +238,14 @@ async function responseJSON<T>(response: Response): Promise<T> {
 
 // extra carries the Library's keyword search to every request, so rows,
 // metrics, and filter pickers all follow it. onFind hears how it went.
-function recordBudget(dataset: Dataset, where: WhereTerm[]) {
-  const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
-  return where.some(term => predicatesOf(term).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
-}
 startDayClock();
-const queryMetadata = createQueryMetadataLoader();
 // host compiles a table's host query state into the service's parameters. Each
 // request carries the host state it runs with (Query Table adds it), so rows,
 // metrics and filter values never pair one definition's table query with
 // another's keyword search. Field statistics carry none and follow the
 // current definition.
 type HostFind = { find: (state: HostQueryState | undefined) => string; current: () => string };
-function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities, queryCapabilities?: QueryCapabilitiesV3, host?: HostFind): Transport<Row> {
+function makeTransport(dataset: Dataset, queryCapabilities: QueryCapabilitiesV3, extra = "", onFind?: (find: FindSummary | null) => void, host?: HostFind): Transport<Row> {
   const endpoint = (suffix = "", params?: URLSearchParams, collection = true, request?: { hostState?: HostQueryState }) => {
     const query = new URLSearchParams(collection ? extra : "");
     if (collection && host) new URLSearchParams(request?.hostState ? host.find(request.hostState) : host.current()).forEach((value, name) => query.set(name, value));
@@ -250,49 +255,23 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
     return `/api/query/${dataset}${suffix}${query.size ? `?${query}` : ""}`;
   };
   return {
-    metricCapabilities: capabilities,
     queryCapabilities,
-    ...(queryCapabilities?.version === 3 ? { async fetchQueryV3(query: Parameters<NonNullable<Transport<Row>["fetchQueryV3"]>>[0], signal?: AbortSignal) {
+    async fetchQueryV3(query, signal) {
       const result = await queryRequest<QueryResultV3 & { find?: FindSummary }>(endpoint("/query-v3", undefined, true, query), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       });
       onFind?.(result.find ?? null);
       return result;
-    } } : {}),
-    async fetchRow(id, signal) {
-      const result = await queryRequest<{ row: Row | null }>(endpoint("/item", new URLSearchParams({ id: String(id) }), false), { signal });
-      return result.row;
-    },
-    async fetchRowsV2(query, signal) {
-      const result = await queryRequest<FetchRowsResultV2<Row> & { find?: FindSummary }>(endpoint("/rows-v2", recordBudget(dataset, query.where), true, query), {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
-      });
-      onFind?.(result.find ?? null);
-      return result;
-    },
-    async fetchMetrics(query, signal) {
-      return queryRequest(endpoint("/metrics", recordBudget(dataset, query.where), true, query), {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
-      });
-    },
-    async fetchDistinctValues(query, signal) {
-      const params = new URLSearchParams({ field: query.field, q: query.search });
-      if (query.limit) params.set("limit", String(query.limit));
-      const url = endpoint("/distinct", params, true, query);
-      return queryMetadata(url, async () => queryRequest(url), signal);
-    },
-    async fetchFieldStats(fields, signal) {
-      const url = endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") }));
-      return queryMetadata(url, async () => queryRequest(url), signal);
     },
   };
 }
 
-type Capabilities = { metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution };
+type Capabilities = { queryCapabilities: QueryCapabilitiesV3; computedExecution: ComputedExecution };
 const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => queryRequest<Capabilities>(`/api/query/${dataset}/capabilities`, { signal });
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
+  ...messageLabelRenderers,
   safety_state: ({ value }) => safetyStateLabels[String(value) as keyof typeof safetyStateLabels] ?? String(value ?? ""),
   machine_activity: ({ value }) => activityPresentation(String(value ?? "")).label,
   bool_check(context: CellContext<Row>) {
@@ -398,6 +377,7 @@ const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dat
 const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
+  message_labels:"No messages match these labels and filters.",
   model_requests: "No model requests match this query.",
   library: "No work matches this query.",
   usage: "No token usage matches this query.",
@@ -412,12 +392,12 @@ const emptyMessages: Record<Dataset, string> = {
   parallelism: "No agent activity matches this query.",
   rhythm: "No activity matches this query.",
   findings: "No findings match this query.",
-  safety: "No risky action reviews match this query.",
+  safety: "No risky action notices match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No agent messages read for events match this query.",
 };
 
-// query-table-ui 0.3.0 formats metric values with a field's renderer only for
+// Query Table 1.0.0 still formats numeric metrics with a field renderer only for
 // its built-in unit keys (duration_ms, byte_size). Route dollar measures
 // through the byte_size key and back to the usd renderer, so metric panels show
 // "$1,234" instead of "1234.5678". Real byte_size fields are unaffected.
@@ -461,14 +441,17 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // the table's definition; its find compiles them into each request. find
 // carries other request parameters, such as a message search cursor.
 // onFind receives Library message-search coverage when present.
-type SurfaceHost = { requiresV3?: boolean; query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
-function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+type SurfaceHost = { query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
+function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const attention = useMemo(() => createAttentionRegistry(), [dataset]);
   const visible = datasetIsVisible(dataset);
-  const schema = useMemo(() => usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, usageActions]);
+  const schema = useMemo(() => {
+    const base = withFingerprintColumn(schemas[dataset], dataset);
+    return usageActions ? usageQuerySchema(base, dataset as UsageDataset) : base;
+  }, [dataset, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset) } : renderers, [dataset]);
-  const tableRenderers = useUsageTableRenderers(usageRenderers);
+  const tableRenderers = useUsageTableRenderers(dataset==="message_labels"?{...usageRenderers,...messageLabelRenderers}:usageRenderers);
   const detailSchema = useMemo(() => usageDetailsSchema(schema, dataset), [schema, dataset]);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
@@ -479,7 +462,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   hostRef.current = host;
   const hostFind = useRef("");
   // A server table runs only once it knows the server's capabilities: rows
-  // and metrics both go through V2/V3, and nothing reads the legacy routes
+  // and metrics both go through V3, and nothing reads the legacy routes
   // first. A failed handshake shows its error instead.
   useEffect(() => {
     if (!visible || capabilities) return;
@@ -506,10 +489,10 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     });
   }, [dataset, Boolean(visible)]);
   const transport = useMemo(() => {
-    const transport = makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities,
+    if (!capabilities) return undefined;
+    return makeTransport(dataset, capabilities.queryCapabilities, find, value => onFindRef.current?.(value),
       host ? { find: state => hostRef.current?.find(state) ?? "", current: () => hostFind.current } : undefined);
-    return host?.requiresV3 ? hostQueryV3Transport(transport, schema, capabilities?.computedExecution, state => Boolean(state ? hostRef.current?.find(state) : hostFind.current)) : transport;
-  }, [dataset, find, schema, capabilities, Boolean(host), host?.requiresV3]);
+  }, [dataset, find, capabilities, Boolean(host)]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   const [recovered, setRecovered] = useState(false);
@@ -517,7 +500,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     const stored = libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) });
     // Fit a new Analyze table by default, while respecting every restored URL,
     // named/default save and last-used manual sizing choice.
-    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? fittedDefaultQuery(schema) } : stored;
+    return usageActions ? { ...stored, loadLast: async (key: string) => await stored.loadLast(key) ?? (dataset==="message_labels"?messageLabelConversationQuery(fittedDefaultQuery(schema)):fittedDefaultQuery(schema)) } : stored;
   }, [bookmarkRevision, usageActions, schema]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
@@ -545,7 +528,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [dataset, locationRevision, usageActions, schema]);
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
-    active: Boolean(visible) && Boolean(capabilities || capabilityError),
+    active: Boolean(visible) && Boolean(capabilities),
     // Keep URL configuration stable; active pauses execution/synchronization
     // without resetting restoration or undo history when a table is hidden.
     storage, links: portableLinkOptions, debounceMs: 100, syncUrl: true, queryParameter: `q_${dataset}`, canonicalizeQuery,
@@ -554,7 +537,11 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     persistLast: "succeeded", hostQuery: host?.query,
     itemDetails: { attention, storage: propertyStorage, ...(detailSchema ? { schema: detailSchema, defaultModes: ["modal", "expand"] as ("modal" | "expand")[] } : {}), relationships,
       loadRow: async (id, signal) => {
-        const row = await transport.fetchRow!(id, signal);
+        const row = await queryRow<Row>(dataset, schema, id, signal);
+        if (row && dataset === "tool_calls") {
+          const detail = await queryRequest<Row>(`/api/tool-calls/${encodeURIComponent(String(id))}`, { signal });
+          for (const field of ["input_text", "input_text_bytes", "input_text_truncated", "result_text", "result_text_bytes", "result_text_truncated", "result_details", "commands", "urls", "request", "next_request"]) row[field] = detail[field];
+        }
         return row ? { row, loadedFields: Object.keys(row) } : null;
       } },
     onRefresh: () => { openedSearches.current.clear(); const current=apiRef.current;const selectedWindow=readRollingWindow(new URLSearchParams(location.search),dataset);if(selectedWindow?.mode==="today")current.setQuery(previous=>resolveRollingQuery(previous,selectedWindow));const renewed=refreshTodayHost(apiRef.current.query.hostState); if(renewed && !sameHostState(renewed,apiRef.current.query.hostState))apiRef.current.setQuery(previous=>({...previous,hostState:renewed,offset:0})); },
@@ -589,7 +576,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [visible, receipt?.key, receipt?.status]);
   // Empty states describe the rows: a failed metric alone does not empty them.
   const failed = api.execution ? api.execution.rows === "failed" : Boolean(api.error);
-  const resultsView = searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
+  const resultsView = dataset==="message_labels"?labelResultsMode(api.query):searchResultsView(api.query, dataset === "library" ? readLibraryHost(hostState).view : "table");
   const attentionSchema = api.itemDetails?.schema.name;
   const detailsReady = nativeDetailsReady({ visible: Boolean(visible), restored: api.restoration.ready, loading: api.loading, rows: api.execution?.rows, schema: attentionSchema });
   const nativeDetailSurface = resultsView === "table";
@@ -612,20 +599,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     searched.current = find;
     apiRef.current.setQuery(previous => previous.offset ? { ...previous, offset: 0 } : previous);
   }, [find]);
-  // query-table 0.3.0's nullability effect depends on the controller object,
-  // while useQueryTable returns a fresh facade as data arrives. A stable proxy
-  // prevents an effect/request loop and still resolves every property live.
-  const stableApi = useMemo(() => new Proxy({} as QueryTableApi<Row>, {
-    get(_target, property) { return apiRef.current[property as keyof QueryTableApi<Row>]; },
-  }), []);
-  // The source facade also changes as grouped results arrive. Keep filter
-  // metadata effects stable while resolving every intent against its stage.
-  const stableSourceFilters = useMemo(() => new Proxy({} as QueryFilterApi<Row>, {
-    get(_target, property) {
-      const current = apiRef.current;
-      return (current.query.grouping ? current.grouping!.source : current)[property as keyof QueryFilterApi<Row>];
-    },
-  }), []);
+  const sourceFilters = api.query.grouping ? api.grouping!.source : api;
   tableApis.set(dataset, api);
   useEffect(() => {
     // Work-page links may run before Library's first mount or restoration.
@@ -655,6 +629,21 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
     }
   }, [dataset, api.query, visible, api.restoration.ready, api.error]);
 
+  // Where a page opts in, Back and Forward step through its query edits.
+  const steps = useMemo(() => queryHistory ? createQueryHistory(dataset, window.history) : null, [queryHistory, dataset]);
+  // Query Table starts restoring in the same event, so the render that counts
+  // a navigation is not ready until the restored query is.
+  const [navigations, setNavigations] = useState(0);
+  useEffect(() => {
+    if (!steps) return;
+    const navigated = () => { steps.navigated(window.history.state); setNavigations(count => count + 1); };
+    for (const name of ["popstate", "pharos:route"]) window.addEventListener(name, navigated);
+    return () => { for (const name of ["popstate", "pharos:route"]) window.removeEventListener(name, navigated); };
+  }, [steps]);
+  useEffect(() => {
+    if (!steps || !visible || !api.restoration.ready) return;
+    if (steps.observe(api.query, query => apiRef.current.links.local(query, location.href, `q_${dataset}`).url)) window.dispatchEvent(new Event("pharos:uri-changed"));
+  }, [steps, api.query, visible, api.restoration.ready, dataset, navigations]);
   // Drilldowns filter source records, including canonical computed fields.
   const sourceSchema = useMemo(() => ({ ...schema, fields: api.computed.catalogue }), [schema, api.computed.catalogue]);
   // Inactive controllers retain their query state, but their controls must not
@@ -687,18 +676,20 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       }} />
     {Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {queryContent || resultPresentation ? <SourceQueryBuilder dataset={dataset} compact summary={querySummary?.(api)} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
+    {queryContent || resultPresentation ? <SourceQueryBuilder dataset={dataset} compact summary={querySummary?.(api)} api={api} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
-        <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
+        <QueryFilterRow api={sourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
         {queryContent?.(api)}
-      </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
+      </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={api} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
-      onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }} />
+    <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
+      onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
-    {dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
+    {selectionBar && !api.query.grouping ? selectionBar(api) : null}
+    {dataset==="message_labels"&&resultsView==="cards"?<MessageLabelCards api={api}/>:dataset === "library" && resultsView === "conversation" ? <ConversationResults api={api} searching={searching} failed={failed} renderers={tableRenderers} />
+
       : <DataTable
       maxHeight={100000}
       fields={api.query.grouping ? usageGroupFields(api.visibleFields, api.query) : api.visibleFields}
@@ -707,6 +698,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       onQueryChange={api.setQuery}
       renderers={tableRenderers}
       rowId={api.rowId}
+      selection={selectionBar && !api.query.grouping ? api.selection : undefined}
       columnDrag={api.columnDrag}
       itemDetails={api.itemDetails ?? undefined}
       linkTargets={linkTargets}
@@ -718,7 +710,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, groupKeyField(key)));
         const records = complete ? groupSourceQuery(api.query, row, sourceSchema) : null;
-        return <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" /><button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}>Records</button></>;
+        return <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" /><button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}>Records</button></>;
       }, trailingLabel: usageActions ? "Drill in" : "Inspect" }
         : trailing ? { trailing: (row: Row) => <><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" />{trailing(row, api)}</>, trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : [...new URLSearchParams(location.search).getAll("highlight"),new URLSearchParams(location.search).get("reveal")??""].some(target=>target.startsWith("row:")) ? {trailing:(row:Row)=><span data-pharos-target={`row:${api.rowId(row)}`} aria-hidden="true" />} : {})}
     />}
@@ -961,10 +953,10 @@ function compactNumber(value: number): string {
   return Math.round(n).toLocaleString();
 }
 
-// Fetches metrics for the given filters from /metrics, refetching when they
+// Fetches V3 metrics for the given filters, refetching when they
 // change or Usage is refreshed. Results are
 // tagged so a stale response never renders under new chart settings.
-function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[], largerBudget = false) {
+function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[]) {
   const key = JSON.stringify({ where, clauses });
   const [state, setState] = useState<{ key: string; refresh: number; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", refresh: 0, metrics: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
@@ -975,16 +967,11 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     postMetrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal)
-      .catch(failure => {
-        // Guided record graphs can exceed /metrics's generic group budget.
-        // Use the same native V3 fallback as the existing Machine Time view.
-        if (largerBudget && failure instanceof MetricRequestError && failure.resourceLimit) return postQueryV3Metrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal);
-        throw failure;
-      })
+
       .then(metrics => setState({ key, refresh, metrics, error: "", loading: false }))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, refresh, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
-  }, [dataset, key, refresh, largerBudget]);
+  }, [dataset, key, refresh]);
   return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.refresh !== refresh || state.loading, error: state.key === key ? state.error : "" };
 }
 
@@ -1101,6 +1088,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 }
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
+  if(topic==="labels")return <CatalogDashboard catalog={messageLabelsCatalog} dataset="message_labels" name="labels" defaults={dashboardDefaults.labels}/>;
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} summary={where => <ConversationsSummary where={where} />} />;
@@ -1132,9 +1120,9 @@ function CarbonDashboard() {
 function HabitsDashboard() {
   const headline = useDashboardHeadline();
   return <CatalogDashboard catalog={habitsAnalysisCatalog} dataset="rhythm" name="habits" defaults={dashboardDefaults.habits} chartHeadline={false}
-    before={<>
+    frame={views => <>
       {headline ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>Habits</h2></div>, headline) : null}
-      <HabitsPanel />
+      <HabitsPanel analysis={views(habitsAnalysisCatalog)} />
     </>} />;
 }
 
@@ -1174,14 +1162,14 @@ const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAn
 
 function TokenUsageDashboard() {
   const state = useUsageDashboardState<TokenTrendView>(dashboardDefaults.tokens as TokenTrendView, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
-  if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
-  if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
-    onChange={state.update} onView={choose} onFilter={state.onFilter} />;
-  return <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}
+  return <><PricingNotice copy={copyText} />{state.error ? <p className="query-table-error" role="alert">{state.error}</p>
+    : !isTrendView(state.view.view) ? <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
+    onChange={state.update} onView={choose} onFilter={state.onFilter} />
+    : <AnalysisTrend catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}
     format={tokenAmount} tick={tokenTick}>
     <TokenSummary where={state.where} />
-  </AnalysisTrend>;
+  </AnalysisTrend>}</>;
 }
 
 // Human Words reads messages (writing_messages) through the engine. Text
@@ -1294,7 +1282,7 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
   const views: CatalogViews = (drawn, amount = format) => {
     const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
     return <>
-      {(state.view.view ?? "trend") !== "trend"
+      {!isTrendView(state.view.view)
         ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
         : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
       {panels?.(state.where, state.onFilter)}
@@ -1345,8 +1333,8 @@ function AgentExperienceSummary({ where }: { where: WhereTerm[] }) {
 const agentEventDailyEvents: AggregationClause[] = [{ id: "events", op: "count", groupBy: ["day", "family_group"] }];
 const agentEventDailyRead: AggregationClause[] = [{ id: "read", op: "count", groupBy: ["day"] }];
 function AgentExperienceRates({ where }: { where: WhereTerm[] }) {
-  const events = useMetrics("agent_events", where, agentEventDailyEvents, true);
-  const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead, true);
+  const events = useMetrics("agent_events", where, agentEventDailyEvents);
+  const read = useMetrics("agent_event_messages", readWhere(where), agentEventDailyRead);
   const readBuckets = read.metrics.find(metric => metric.id === "read")?.buckets ?? [];
   const period = ratePeriod(daySpan(readBuckets));
   const periods = eventRates(events.metrics.find(metric => metric.id === "events")?.buckets ?? [], readBuckets, period);
@@ -1386,6 +1374,7 @@ function SkillsDashboard() {
 function UsagePage() {
   useLocationRevision();
   if (location.pathname !== "/analyze") return null;
+  if(new URLSearchParams(location.search).has("label_lab")){history.replaceState(history.state,"",messageLabelLegacyURL(new URLSearchParams(location.search)));}
   if (!isUsageWorkspace()) history.replaceState(history.state, "", canonicalAnalyzeURL(location.pathname, new URLSearchParams(location.search)) + location.hash);
   return <UsageChartColorsProvider>
     <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
@@ -1397,11 +1386,12 @@ function UsagePage() {
 // its own state into record_search, which the service validates and runs.
 function AnalyzeQueryTable({ dataset }: { dataset: UsageDataset }) {
   const fields = schemas[dataset].fields;
-  const host = useMemo((): SurfaceHost => ({ requiresV3: true, query: recordKeywordHostQuery(dataset, fields), find: state => recordKeywordFind(state, dataset, fields) }), [dataset]);
+  const host = useMemo((): SurfaceHost => ({ query: dataset==="message_labels"?messageLabelHostQuery(fields):recordKeywordHostQuery(dataset, fields), find: state => recordKeywordFind(state, dataset, fields) }), [dataset]);
   return <>
     {/* Keep record predicates and grouped HAVING in the native builder,
         including datasets whose older pages use RecordSearchEditor. */}
     <QuerySurface dataset={dataset} usageActions host={host}
+      resultPresentation={dataset==="message_labels"?api=><MessageLabelDisplay api={api}/>:undefined}
       querySummary={api => { const value = readRecordKeyword(api.query.hostState, dataset, fields); return value ? <span>{(api.query.grouping?.source ?? api.query).where.length} source filters{api.query.grouping ? ` · ${api.query.where.length} group filters` : ""} · {recordKeywordSummary(value, fields, usageDatasets[dataset])}</span> : undefined; }}
       queryContent={api => <AnalyzeRecordKeyword api={api} dataset={dataset} host={host.query} />}
       presets={dataset === "mcp_calls" ? () => <MCPUsageNote /> : undefined} />
@@ -1560,7 +1550,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open review</a>} />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

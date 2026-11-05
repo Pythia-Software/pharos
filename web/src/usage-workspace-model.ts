@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { retainPageView } from "./view-contract";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
@@ -5,6 +6,7 @@ import { analysisVersion } from "./dashboard-analysis-model";
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
+  message_labels:{label:"Message labels",description:"Stored message functions, coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
   model_requests: { label: "Model requests", description: "Retained request usage and post-tool timing evidence.", field: "model", searchLabel: "Model request names" },
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
   conversation_activity: { label: "Conversation activity", description: "Human messages and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
@@ -23,6 +25,7 @@ export const usageDatasets = {
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
+  labels:{label:"Message Labels",description:"Explore conversation functions over time, compare labels and follow their matching conversations."},
   activity: { label: "Conversations", description: "How many conversations are you having, and how much do they produce? Explore conversations, your messages and model output across models and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
   tokens: { label: "Tokens and Cost", description: "How much are agents consuming? Choose a measure, a breakdown, and a time range." },
@@ -42,10 +45,12 @@ export const usageTopics = { ...engineUsageTopics,
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
+  message_labels:"labels",
   model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
   tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
+  labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
   calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events",
 };
@@ -53,6 +58,7 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
+  message_labels:["occurred_at"],
   model_requests: ["requested_at"],
   tl1_attempts: ["started_at"],
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
@@ -175,6 +181,9 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   const previous = readUsageWorkspace(current), next = { ...previous, ...change };
   const mode = next.mode === "search" ? "query" : next.mode;
   const params = new URLSearchParams(current);
+  // Leaving the opted-in label lab must actually open the requested dashboard
+  // or table instead of carrying its route switch into that destination.
+  for (const key of [...params.keys()]) if (key.startsWith("label_")) params.delete(key);
   if (next.topic !== previous.topic && !(["thinking-overview","thinking-detail"].includes(next.topic)&&["thinking-overview","thinking-detail"].includes(previous.topic))) { params.delete("analyze_filters"); params.delete("analyze_window"); params.delete("analyze_timezone"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
   for (const key of [...params.keys()]) {
     if (key.startsWith("record_") && (key !== `record_${next.dataset}` || next.dataset !== previous.dataset || mode === "dashboards")) params.delete(key);
@@ -191,7 +200,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (mode !== "dashboards") {
     const query = change.query;
     if (query) {
-      params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
+      params.set(`q_${next.dataset}`, encodeQuery(fitQueryToScreen(query)));
       if (current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
     } else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
@@ -227,7 +236,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
 // (readAnalysisLink). A card's filters are always its population, so where a
 // link stops being a card link its chart is marked current, and its filters
 // stay the population.
-const analysisTopics = new Set<string>(["tokens", "calls", "activity", "tools", "mcp", "time", "skills", "agent_experience"]);
+const analysisTopics = new Set<string>(["labels", "tokens", "calls", "activity", "tools", "mcp", "time", "skills", "agent_experience"]);
 export function stampCardChart(params: URLSearchParams) {
   if (!analysisTopics.has(params.get("analyze_topic") ?? "") || !params.has("analyze_chart")) return;
   try {

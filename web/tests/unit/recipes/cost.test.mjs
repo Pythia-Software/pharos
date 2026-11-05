@@ -1,3 +1,4 @@
+import { queryCapabilities } from '../../support/query-server.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {cardCoverQuery,core,execution,recipeHarness,schemas} from '../helpers/recipes.mjs';
@@ -34,7 +35,7 @@ test('cost history uses exact elapsed boundaries, divides by seven even for spar
  const d=86400000,rows=[usage('recent',{first_usage_at:now-d,cost_usd:70}),usage('edge',{first_usage_at:now-7*d,cost_usd:7}),usage('before',{first_usage_at:now-7*d-1,cost_usd:140}),usage('start',{first_usage_at:now-37*d,cost_usd:21}),usage('too-old',{first_usage_at:now-37*d-1,cost_usd:999}),usage('now',{first_usage_at:now,cost_usd:999}),usage('unpriced',{price_status:'partial',cost_usd:999})];
  for(const days of [7,30]){
   const {query}=card('api-cost-total',days),history=apiCostTrendQuery(query.grouping.source,now-Math.max(37,days)*d,now);
-  for(let offset=0;offset<history.aggregations.length;offset+=20)assert.deepEqual(core.toMetricQuery({...history,aggregations:history.aggregations.slice(offset,offset+20)},schemas.usage,execution).diagnostics,[]);
+  for(let offset=0;offset<history.aggregations.length;offset+=20)assert.doesNotThrow(() => core.toQueryRequestV3({...history,aggregations:history.aggregations.slice(offset,offset+20)},schemas.usage,queryCapabilities,execution,{rows:false}));
   const result=core.evaluateMetrics(rows,history,schemas.usage,{now}).metrics[0],study=buildApiCostTrend(apiCostTrendFacts(result),days,now);
   assert.equal(study.value,days===7?77:217);assert.equal(study.points.length,31);assert.equal(study.points[30],11);assert.equal(study.points[0],3);assert.equal(study.lookbackDays,7);assert.equal(study.pointTimes[0],now-30*d);assert.equal(study.pointTimes[30],now);assert.equal(study.format,'USD');assert.match(study.pointValueLabel,/per day|\/ day/);
   assert.throws(()=>apiCostTrendFacts({...result,coverage:'partial'}),/Complete/);assert.equal(apiCostTrendFacts({...result,groupCount:result.buckets.length+1}),undefined);assert.throws(()=>apiCostTrendFacts({...result,processedRows:999}),/Incomplete/);

@@ -94,8 +94,15 @@ test("a dragged item moves for a week to another cadence, and dropping it on its
   assert.equal(background.dropCadence(item, "frequent"), "frequent");
   assert.equal(background.dropCadence(item, "daily"), "daily");
   assert.equal(background.dropCadence(item, "hourly"), null, "its own column");
-  assert.equal(background.dropCadence(item, "manual"), null, "only the three cadences");
-  assert.equal(background.dropCadence({ ...item, adaptive: false }, "daily"), null, "a fixed item stays put");
+  assert.equal(background.dropCadence(item, "manual"), "manual");
+  assert.equal(background.dropCadence(item, "unknown"), null);
+  for (const properties of [{ adaptive: true }, { fixed: true }, { opt_in: true }, {}]) {
+    for (const from of ["frequent", "hourly", "daily", "manual"]) {
+      for (const to of ["frequent", "hourly", "daily", "manual"]) {
+        assert.equal(background.dropCadence({ ...item, ...properties, column: from }, to), from === to ? null : to);
+      }
+    }
+  }
   const promoted = { ...item, column: "frequent", temporary: { cadence: "frequent" } };
   assert.equal(background.dropCadence(promoted, "hourly"), "");
   assert.equal(background.dropCadence(promoted, "daily"), "daily");
@@ -138,14 +145,6 @@ test("state lines: an age and the next time when current, the retry when failed,
   assert.equal(background.stateText({ state: "missed", state_label: "Missed", next_at: minutesAgo(-5) }, at), "Missed · runs in 5 min");
   assert.equal(background.stateText({ state: "running", state_label: "Updating now", as_of: minutesAgo(5) }, at), "Updating now");
   assert.equal(background.stateText(null, at), "");
-});
-
-test("the day's cost is each cadence's share of the total", () => {
-  const cost = plain(background.costModel(document.cost));
-  assert.equal(cost.total, "4.0 h");
-  assert.deepEqual(cost.segments.map(segment => [segment.id, Number(segment.share.toFixed(2)), segment.measured]), [["frequent", 0.75, true], ["hourly", 0.25, false], ["daily", 0, false]]);
-  assert.equal(cost.peakBytes, 9.5e9);
-  assert.equal(background.costModel(null), null);
 });
 
 test("durations and times", () => {

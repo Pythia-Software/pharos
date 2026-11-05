@@ -3,11 +3,12 @@ package archive
 import "strings"
 
 type usageConversationAttribution struct {
-	roots          map[string]map[string]any
-	delegatedRuns  map[string]string
-	delegatedDepth map[string]int64
-	sessionRoles   map[string]string
-	unresolved     map[string]string
+	roots            map[string]map[string]any
+	delegatedRuns    map[string]string
+	delegatedDepth   map[string]int64
+	delegatedParents map[string]string
+	sessionRoles     map[string]string
+	unresolved       map[string]string
 	// canonical names the conversation each mirror alias stands for, and runs
 	// its execution identity: "" for a root's own (or continued) execution.
 	canonical, runs map[string]string
@@ -173,7 +174,7 @@ func resolveUsageConversationRoots(conversations, sessions, links, launches, led
 		}
 	}
 	result := &usageConversationAttribution{roots: map[string]map[string]any{}, canonical: map[string]string{}, runs: map[string]string{},
-		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, sessionRoles: map[string]string{}, unresolved: map[string]string{}}
+		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, delegatedParents: map[string]string{}, sessionRoles: map[string]string{}, unresolved: map[string]string{}}
 	for id := range byID {
 		result.roots[id], result.canonical[id] = resolved[canonical(id)], canonical(id)
 		if result.roots[id] == nil {
@@ -303,6 +304,14 @@ func resolveUsageConversationRoots(conversations, sessions, links, launches, led
 	for session, run := range result.delegatedRuns {
 		if depth, known := depths[run]; known {
 			result.delegatedDepth[session] = depth
+			if depth > 0 {
+				parent := runParents[run]
+				if parent == "" {
+					root := result.roots[firstString(bySession[session]["conversation_id"])]
+					parent = "conversation:" + firstString(root["id"])
+				}
+				result.delegatedParents[session] = parent
+			}
 		}
 	}
 	// Split recorded roots by structural delegation, across the full recorded

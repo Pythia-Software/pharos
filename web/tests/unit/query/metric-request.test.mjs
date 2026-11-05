@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { core, schemas } from "../helpers/recipes.mjs";
-import { answerQuery, population } from "../../support/query-server.mjs";
-import { MetricRequestError, metricRequest, metricResults, postMetrics, postQueryV3Metrics } from "../../../src/metric-request";
+import { queryCapabilities, answerQuery, population } from "../../support/query-server.mjs";
+import { MetricRequestError, metricRequest, metricResults, postMetrics } from "../../../src/metric-request";
 import { queryRequest, queryFetch, QueryRequestError, shouldSkipQueryOnRestore } from "../../../src/query-request";
 import { tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
 import { trendQuery } from "../../../src/dashboard-trend-model";
@@ -24,21 +24,20 @@ function server(t, dataset, reply = () => undefined) {
   return { requests, rows };
 }
 
-test("a metric request is a V2 body of the clauses' calculations over where", () => {
-  const where = [{ any: [{ field: "day", op: "=", value: "2026-09-01" }, { field: "day", op: "=", value: "2026-09-02" }] }];
-  const request = metricRequest(schemas.tool_calls, where, [{ id: "time", op: "sum", field: "duration_ms", groupBy: ["day"], label: "Time" }, { id: "population", op: "count", groupBy: [] }]);
-  assert.equal(request.version, 2);
-  assert.deepEqual(request.where, where);
-  assert.deepEqual(request.metrics, [{ id: "time", op: "sum", field: "duration_ms", groupBy: ["day"] }, { id: "population", op: "count", groupBy: [] }], "labels are presentation");
-  assert.deepEqual(request.diagnostics, []);
-  assert.throws(() => metricRequest(schemas.tool_calls, [{ any: [{ field: "day", op: "=", value: "2026-09-01" }] }], [{ id: "n", op: "count", groupBy: [] }]), MetricRequestError, "a request the server would refuse fails before it is sent");
+test("metric requests use V3 without rows and reject unsupported fields", () => {
+ const where=[{field:'day',op:'=',value:'2026-09-01'}];
+ const clauses=[{id:'time',op:'sum',field:'duration_ms',groupBy:['day'],label:'Time'}];
+ const request=metricRequest(schemas.tool_calls,where,clauses,queryCapabilities);
+ assert.equal(request.version,3);assert.equal(request.rows,false);
+ assert.deepEqual(request.result.where,where);assert.equal(request.metrics[0].label,undefined);
+ assert.throws(()=>metricRequest(schemas.tool_calls,[{field:'missing',op:'=',value:'x'}],clauses,queryCapabilities),error=>error.code==="residual_query");
 });
 
 test("a failed or missing metric fails the read instead of reading as zero", () => {
   const clauses = [{ id: "a", op: "count", groupBy: [] }, { id: "b", op: "count", groupBy: ["tool_name"] }];
   const ok = { metrics: [{ id: "b", buckets: [{ keys: ["Bash"], value: 2, count: 2 }] }, { id: "a", buckets: [{ keys: [], value: 2, count: 2 }] }] };
   assert.deepEqual(metricResults(ok, clauses).map(metric => metric.id), ["a", "b"], "one result per clause, in order");
-  const failed = { metrics: [ok.metrics[1], { id: "b", buckets: [], error: "group population exceeds host budget" }] };
+  const failed = { metrics: [ok.metrics[1], { id: "b", buckets: [], error: "group population exceeds host budget", errorCode:"resource_limit" }] };
   assert.throws(() => metricResults(failed, clauses), error => error instanceof MetricRequestError && error.resourceLimit && /group population/.test(error.message));
   assert.throws(() => metricResults({ metrics: [{ id: "b", buckets: [], error: "type_error" }, ok.metrics[1]] }, clauses), error => error instanceof MetricRequestError && !error.resourceLimit);
   assert.throws(() => metricResults({ metrics: [ok.metrics[1]] }, clauses), /omitted the metric b/);
@@ -49,17 +48,17 @@ test("metrics post to the dataset's /metrics, and a population limit is a resour
   const { requests, rows } = server(t, "tool_calls");
   const [calls] = await postMetrics("tool_calls", schemas.tool_calls, [], [{ id: "calls", op: "count", groupBy: [] }]);
   assert.equal(calls.buckets[0].value, rows.length);
-  assert.equal(requests[0].path, "/api/query/tool_calls/metrics");
-  server(t, "tool_calls", () => response({ error: "resource_limit: matching population exceeds host budget" }, 400));
+  assert.deepEqual(requests.map(request=>request.path),["/api/query/tool_calls/capabilities","/api/query/tool_calls/query-v3"]);
+  server(t, "tool_calls", () => response({ error: { code:"resource_limit", message:"matching population exceeds host budget" } }, 422));
   await assert.rejects(postMetrics("tool_calls", schemas.tool_calls, [], [{ id: "calls", op: "count", groupBy: [] }]), error => error instanceof MetricRequestError && error.resourceLimit);
   server(t, "tool_calls", () => response({ error: "boom" }, 500));
   await assert.rejects(postMetrics("tool_calls", schemas.tool_calls, [], [{ id: "calls", op: "count", groupBy: [] }]), error => error.message === "boom" && !error.resourceLimit);
 });
 
-test("the larger-budget read runs the same metrics through /query-v3 without rows", async t => {
+test("standalone charts run the same metrics through /query-v3 without rows", async t => {
   const { requests, rows } = server(t, "tool_calls");
   const where = [{ field: "status", op: "=", value: "ok" }];
-  const [time, calls] = await postQueryV3Metrics("tool_calls", schemas.tool_calls, where, [{ id: "time", op: "sum", field: "duration_ms", groupBy: ["tool_name"] }, { id: "calls", op: "count", groupBy: [] }]);
+  const [time, calls] = await postMetrics("tool_calls", schemas.tool_calls, where, [{ id: "time", op: "sum", field: "duration_ms", groupBy: ["tool_name"] }, { id: "calls", op: "count", groupBy: [] }]);
   assert.deepEqual(requests.map(request => request.path), ["/api/query/tool_calls/capabilities", "/api/query/tool_calls/query-v3"]);
   const sent = requests[1].body;
   assert.equal(sent.version, 3);
@@ -82,7 +81,7 @@ test("the Tokens trend sums by its period's field and split; cost by type is by 
   assert.deepEqual(clauses("week", "type", "cost").map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
   assert.deepEqual(clauses("week", "type", "percent").map(metric => metric.field), tokenTypes.map(type => type.key));
   assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "output_tokens:", "agent_sessions"]);
-  for (const aggregations of [tokenSummaryMetrics, clauses("hour", "project_name"), clauses("day", "provider_model", "cache_read_share"), clauses("week", "model_family", "conversations")]) assert.deepEqual(core.toMetricQuery({ ...core.EMPTY_QUERY, aggregations }, schemas.usage).diagnostics, []);
+  for (const aggregations of [tokenSummaryMetrics, clauses("hour", "project_name"), clauses("day", "provider_model", "cache_read_share"), clauses("week", "model_family", "conversations")]) assert.doesNotThrow(() => core.toQueryRequestV3({ ...core.EMPTY_QUERY, aggregations }, schemas.usage, queryCapabilities,undefined,{rows:false}));
 });
 
 

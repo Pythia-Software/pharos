@@ -559,6 +559,7 @@ type journalRow struct {
 	ParentID  string          `json:"parent_id,omitempty"`
 	RootID    string          `json:"root_id"`
 	Kind      string          `json:"kind"`
+	Label     string          `json:"label"`
 	Variant   string          `json:"variant,omitempty"`
 	Subject   string          `json:"subject,omitempty"`
 	Trigger   string          `json:"trigger"`
@@ -601,6 +602,11 @@ func scanJournalRows(rows *sql.Rows) ([]journalRow, error) {
 			row.StepTotal = &total.Float64
 		}
 		row.Detail = json.RawMessage(defaultString(detail, "{}"))
+		if kind, ok := lookupOperationKind(row.Kind); ok {
+			row.Label = kind.label(row.Variant)
+		} else {
+			row.Label = row.Kind
+		}
 		result = append(result, row)
 	}
 	return result, rows.Err()

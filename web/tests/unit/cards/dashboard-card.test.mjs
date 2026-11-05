@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMPTY_QUERY, encodeQuery } from '@pythia-software/query-table-core';
-import { DASHBOARD_CARD_ACTION, dashboardCardLabels, dashboardCardURL, dashboardCardSource, pageCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets, dashboardCardDescription } from '../../../src/dashboard-card-model';
+import { DASHBOARD_CARD_ACTION, dashboardCardLabels, dashboardCardURL, dashboardCardSource, pageCardURL, readDashboardCard, collectDashboardCard, dashboardCardCollected, dashboardCardWindow, dashboardCardPresentation, dashboardCardTargets, dashboardCardDescription, dashboardCardGroups } from '../../../src/dashboard-card-model';
 import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
@@ -157,6 +157,31 @@ test('dashboard card covers fit the marks they draw, loading and loaded', async 
   assert.equal(fittedCoverHeight('columns',4),fittedCoverHeight('columns',24),'column charts keep one height');
 });
 
+test('a dashboard card can show its own count of the chart groups while the dashboard keeps its own', async t => {
+  fixture(t);
+  const local = usageLedger();
+  const url = view => makeURL({metric:'tokens',minSamples:0,split:'repository_name',...view},[]);
+  assert.deepEqual(dashboardCardGroups(url({view:'compare'})),{noun:'projects',max:100,fallback:12});
+  assert.equal(dashboardCardGroups(url({view:'compare',compareAs:'share'})).fallback,8);
+  assert.equal(dashboardCardGroups(url({view:'trend'})).fallback,15);
+  for (const view of [{view:'compare',split:'none'},{view:'scatter',metricY:'cost',unit:'conversation'},{view:'cycle',cycle:'hour',split:'none'}]) assert.equal(dashboardCardGroups(url(view)),undefined,JSON.stringify(view));
+  for (const view of [{view:'compare'},{view:'distribution',unit:'conversation'}]) {
+    const address = url(view), before = readDashboardCard(address).state;
+    const preview = await loadDashboardCardPreview(address,schemas.usage,undefined,local,now,'chart',undefined,undefined,undefined,1);
+    assert.equal(preview.metrics[0].clause.display.maxGroups,1);
+    assert.deepEqual(readDashboardCard(address).state,before,'the dashboard address is unchanged');
+  }
+  const trend = url({view:'trend'});
+  const all = await loadDashboardCardPreview(trend,schemas.usage,undefined,local,now);
+  const one = await loadDashboardCardPreview(trend,schemas.usage,undefined,local,now,'chart',undefined,undefined,undefined,1);
+  assert.ok(all.series.length > one.series.length && one.series.length <= 2, 'one series, plus Other');
+  const card = collectDashboardCard(url({view:'compare'}),'Repositories','','chart',{},undefined,3);
+  assert.equal(card.maxGroups,3);
+  assert.equal(updateBookmark(card.id,'Repositories','',undefined,undefined,undefined,null).maxGroups,undefined);
+  assert.throws(()=>collectDashboardCard(url({view:'scatter',metricY:'cost',unit:'conversation'}),'Pairs','','chart',{},undefined,3),/whole number/);
+  assert.equal(dashboardCardPresentation(url({view:'compare'}),'chart',3).loading.count,3);
+});
+
 test('cycle previews fold the same complete weekdays as the dashboard', async t => {
   fixture(t);
   const local = usageLedger();
@@ -191,10 +216,13 @@ test('dashboard cards use the existing Home preview loader alongside ordinary sa
   const address = makeURL({metric:'tokens',split:'provider',view:'compare'},[]);
   await loadQueryPreviews([
     {id:'dashboard',dataset:'usage',schema:schemas.usage,query:EMPTY_QUERY,options:{dashboard:address}},
-    {id:'query',dataset:'usage',schema:schemas.usage,query:{...EMPTY_QUERY,aggregations:[{id:'tokens',op:'sum',field:'total_tokens',groupBy:[]}]}}
+    {id:'query',dataset:'usage',schema:schemas.usage,query:{...EMPTY_QUERY,aggregations:[{id:'tokens',op:'sum',field:'total_tokens',groupBy:[]}]}},
+    {id:'counted',dataset:'usage',schema:schemas.usage,query:EMPTY_QUERY,options:{dashboard:address,groups:2}},
+    {id:'counted-query',dataset:'usage',schema:schemas.usage,query:{...EMPTY_QUERY,aggregations:[{id:'tokens',op:'sum',field:'total_tokens',groupBy:['provider']}]},options:{groups:2}},
   ],(id,preview,error)=>{assert.ifError(error);results.set(id,preview);});
   assert.equal(results.get('dashboard').state,'ready');
   assert.equal(results.get('query').state,'ready');
+  for (const id of ['counted','counted-query']) assert.equal(results.get(id).metrics[0].clause.display.maxGroups,2,`${id} carries its card's count`);
 });
 
 test('Carbon cards retain independent assumptions when refreshed from Home', async t => {
@@ -289,7 +317,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
     windows: [], punchcard: { from: '2026-10-01', to: '2026-10-07', weeks: empty().map(hours => hours.map(() => 1)), cells: { you: empty(), with_you: empty(), unattended: empty(), automated: empty() } },
     automations: [{ initiator: 'scripted', label: 'claude -p', runs: 3, active_days: 3, agent_hours: 3, first_run: 0, last_run: 0, median_gap_ms: 2 * 86400000, missed: 0, daily: {} }],
     coverage: { turns: 10, unmatched_turns: 0, typed_messages: 6, messages: 6 } };
-  const address = '/analyze?' + new URLSearchParams({ analyze_topic: 'habits', habits_calendar: 'automated', habits_weekends: 'hide', habits_weeks: '13', habits_punchcard: 'agents', habits_punchcard_days: 'all', habits_day: '2026-10-03' });
+  const address = '/analyze?' + new URLSearchParams({ analyze_topic: 'habits', habits_calendar: 'automated', habits_weekends: 'hide', habits_weeks: '13', habits_punchcard: 'agents', habits_punchcard_days: 'all', habits_shape_days: '7', habits_day: '2026-10-03' });
   const url = dashboardCardURL(address, analysisCatalogs.habits, dashboardDefaults.habits, []);
   assert.equal(new URL(url, location.origin).searchParams.has('habits_day'), false, 'a selected day is not part of a card');
   assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-punchcard', 'habits-days', 'habits-pace', 'habits-automations', 'chart']);
@@ -302,6 +330,7 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   assert.equal(yearPreview.habits.weeks, 17);
   assert.match(yearPreview.note, /open it for the year/);
   assert.equal(dashboardCardWindow(url, 'habits-punchcard'), 'All time');
+  assert.equal(dashboardCardWindow(url, 'habits-days'), 'Past 7 days');
   assert.equal(dashboardCardWindow(url, 'habits-streaks'), 'Today');
   assert.equal(dashboardCardPresentation(url, 'habits-calendar').category, 'machines');
   assert.equal(dashboardCardPresentation(url, 'habits-streaks').category, 'human');
@@ -319,7 +348,8 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   const calendar = await preview('habits-calendar');
   assert.deepEqual([calendar.state, calendar.habits.chart, calendar.habits.actor, calendar.habits.weeks, calendar.habits.weekends], ['ready', 'calendar', 'automated', 13, false]);
   assert.equal((await preview('habits-punchcard')).habits.view, 'agents');
-  assert.equal((await preview('habits-days')).habits.chart, 'days');
+  const shape = await preview('habits-days');
+  assert.deepEqual([shape.habits.chart, shape.habits.count], ['days', 7]);
   assert.equal((await preview('habits-pace')).insights.length, 4);
   assert.deepEqual((await preview('habits-automations')).ranking.map(item => item.value), [3]);
 

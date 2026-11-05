@@ -2,6 +2,7 @@ package labeler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -29,6 +30,8 @@ type RunnerConfig struct {
 	Worker string
 	Args   []string
 	Env    []string
+	// GPU reserves the single shared Metal device and at least 3072 MB.
+	GPU bool
 	// Workers processes, each with Threads intra-op threads, and InFlight
 	// batches outstanding at each (default 2; 1 for one at a time).
 	Workers, Threads, InFlight int
@@ -69,6 +72,14 @@ func (r *Runner) MaxBatch() int {
 	return batch
 }
 
+// TokenBudget caps a caller's token budget to the backend's memory limit.
+func (r *Runner) TokenBudget(requested int) int {
+	if limit := r.pool.Ready().Limits.MaxTokens; limit > 0 && (requested <= 0 || requested > limit) {
+		return limit
+	}
+	return requested
+}
+
 // Capacity is how many batches the runner keeps in flight: InFlight per
 // worker (default 2).
 func (r *Runner) Capacity() int {
@@ -100,7 +111,7 @@ func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, token
 		lengths[i] = len(row.IDs)
 	}
 	results := make([]RowOutputs, len(rows))
-	batches := PackBatches(lengths, tokenBudget, r.MaxBatch(), r.Model.PadMultiple)
+	batches := PackBatches(lengths, r.TokenBudget(tokenBudget), r.MaxBatch(), r.Model.PadMultiple)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -163,6 +174,7 @@ type Manager struct {
 	// runners by model (file and SHA-256).
 	runners         map[string]*managed
 	threads, memory int
+	gpu             int
 	closed          bool
 }
 
@@ -170,6 +182,7 @@ type managed struct {
 	runner          *Runner
 	users           int
 	threads, memory int
+	gpu             int
 	lastUsed        time.Time
 	timer           *time.Timer
 }
@@ -185,7 +198,8 @@ func modelKey(model *Model) string { return model.Path + "@" + model.SHA256 }
 // runnerKey is a model with how its workers run: a different configuration
 // (one at a time, other thread counts) is another runner.
 func runnerKey(model *Model, cfg RunnerConfig) string {
-	return fmt.Sprintf("%s|%s|%d|%d|%d|%d", modelKey(model), cfg.Worker, max(1, cfg.Workers), max(1, cfg.Threads), cfg.InFlight, cfg.MaxBatch)
+	args, _ := json.Marshal(struct{ Args, Env []string }{cfg.Args, cfg.Env})
+	return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%t|%s", modelKey(model), cfg.Worker, max(1, cfg.Workers), max(1, cfg.Threads), cfg.InFlight, cfg.MaxBatch, cfg.GPU, args)
 }
 
 // Runner returns model's runner, starting it within the budget when it is
@@ -211,9 +225,19 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 		m.dropLocked(key, entry, true)
 	}
 	cfg.Workers, cfg.Threads = max(1, cfg.Workers), max(1, cfg.Threads)
+	memoryMB := model.MemoryMB
+	gpu := 0
+	if cfg.GPU {
+		gpu = 1
+		cfg.Workers = 1
+		memoryMB = max(memoryMB, 3072)
+	}
 	fits := func(workers int) bool {
+		if m.gpu+gpu > 1 {
+			return false
+		}
 		return (m.budget.Threads <= 0 || m.threads+workers*cfg.Threads <= m.budget.Threads) &&
-			(m.budget.MemoryMB <= 0 || m.memory+workers*model.MemoryMB <= m.budget.MemoryMB)
+			(m.budget.MemoryMB <= 0 || m.memory+workers*memoryMB <= m.budget.MemoryMB)
 	}
 	for !fits(cfg.Workers) {
 		if m.evictIdleLocked() {
@@ -223,16 +247,20 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 			cfg.Workers--
 			continue
 		}
+		if gpu > 0 && m.gpu > 0 {
+			return nil, nil, fmt.Errorf("%w: the shared GPU is in use", ErrBudget)
+		}
 		return nil, nil, fmt.Errorf("%w: model %s needs %d threads and %d MB; %d threads and %d MB of %d and %d are in use",
-			ErrBudget, model.Manifest.Name, cfg.Threads, model.MemoryMB, m.threads, m.memory, m.budget.Threads, m.budget.MemoryMB)
+			ErrBudget, model.Manifest.Name, cfg.Threads, memoryMB, m.threads, m.memory, m.budget.Threads, m.budget.MemoryMB)
 	}
 	runner, err := NewRunner(ctx, model, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	entry := &managed{runner: runner, users: 1, threads: cfg.Workers * cfg.Threads, memory: cfg.Workers * model.MemoryMB}
+	entry := &managed{runner: runner, users: 1, threads: cfg.Workers * cfg.Threads, memory: cfg.Workers * memoryMB, gpu: gpu}
 	m.threads += entry.threads
 	m.memory += entry.memory
+	m.gpu += entry.gpu
 	m.runners[key] = entry
 	return runner, m.releaser(key, entry), nil
 }
@@ -282,11 +310,15 @@ func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
 	delete(m.runners, key)
 	m.threads -= entry.threads
 	m.memory -= entry.memory
+	m.gpu -= entry.gpu
 	if entry.timer != nil {
 		entry.timer.Stop()
 	}
-	if kill {
+	if kill || entry.gpu > 0 {
 		entry.runner.pool.Kill()
+		if entry.gpu > 0 {
+			entry.runner.pool.Close()
+		}
 	} else {
 		go entry.runner.pool.Close()
 	}
@@ -339,7 +371,7 @@ func (m *Manager) Close() {
 	m.closed = true
 	entries := m.runners
 	m.runners = map[string]*managed{}
-	m.threads, m.memory = 0, 0
+	m.threads, m.memory, m.gpu = 0, 0, 0
 	m.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, entry := range entries {

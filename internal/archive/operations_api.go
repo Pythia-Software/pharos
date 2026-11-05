@@ -143,7 +143,7 @@ func operationStep(view opView) map[string]any {
 }
 
 // operationEntry is one operation in the snapshot's shape.
-func operationEntry(view opView, children []opView, at time.Time) map[string]any {
+func operationEntry(view opView, byID map[OpID]opView, at time.Time) map[string]any {
 	kind := view.Kind
 	entry := map[string]any{"id": view.ID, "kind": view.Spec.Kind, "variant": nilIfEmpty(view.Spec.Variant), "subject": nilIfEmpty(view.Spec.Subject),
 		"label": kind.label(view.Spec.Variant), "verb": kind.Verb, "state": view.State, "state_label": stateLabel(view), "detail": nilIfEmpty(stateDetail(view)),
@@ -169,9 +169,9 @@ func operationEntry(view opView, children []opView, at time.Time) map[string]any
 		entry["stop"] = map[string]any{"method": "POST", "path": "/api/operations/stop", "body": map[string]any{"id": view.ID}}
 	}
 	running := []map[string]any{}
-	for _, child := range children {
-		if !opTerminal(child.State) {
-			running = append(running, operationEntry(child, nil, at))
+	for _, id := range view.Children {
+		if child, ok := byID[id]; ok && child.Kind != nil && !child.Kind.Hidden && !child.Tentative && !opTerminal(child.State) {
+			running = append(running, operationEntry(child, byID, at))
 		}
 	}
 	entry["children"] = running
@@ -317,13 +317,7 @@ func (s *Server) operationsDocumentViews(ctx context.Context, fresh bool) (map[s
 		if opTerminal(view.State) && at.Sub(view.Ended) > operationsRecent {
 			continue
 		}
-		children := []opView{}
-		for _, id := range view.Children {
-			if child, ok := byID[id]; ok {
-				children = append(children, child)
-			}
-		}
-		operations = append(operations, operationEntry(view, children, at))
+		operations = append(operations, operationEntry(view, byID, at))
 	}
 	config := s.Config()
 	drive := libraryDriveOf(config)

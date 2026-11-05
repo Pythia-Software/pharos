@@ -2,9 +2,9 @@ import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pyt
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
-import { analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
+import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
-import { DASHBOARD_CARD_ACTION, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
+import { DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
 import { loadConcurrencyData } from "./concurrency-store";
@@ -25,17 +25,19 @@ import { compactionColumns, isThinkingCardTarget, orderedBoxes, readThinkingCard
 import { hoursOfDay, weekdays } from "./weekday-cover";
 
 // A dashboard address carries no authored cover, so its card fits the chart.
+// A card's own group count replaces the dashboard's for its chart only.
 // A ribbon card reads the captured timing snapshot the ribbon draws, and a
 // Habits card the habits summary its section draws (timing and habits stand
 // in for them in tests). A Thinking card draws as the Thinking card with its
-// measures does, over the page's population.
-export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary, thinking?: ThinkingResponse): Promise<QueryPreview> {
+// measures does, over the page's population. A card's own group count
+// replaces the dashboard's for its chart only.
+export async function loadDashboardCardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), target: DashboardCardTarget = "chart", timing?: ConcurrencyData, habits?: HabitsSummary, thinking?: ThinkingResponse, groups?: number): Promise<QueryPreview> {
   if (isHabitsCardTarget(target)) {
     const view = readHabitsCardView(readDashboardCard(address, new Date(now)).params);
     return habitsCardPreview(target, view, habits ?? await loadHabitsSummary(view, signal));
   }
   if (isThinkingCardTarget(target)) return thinkingPreview(address, schema, target, signal, now, thinking);
-  return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now));
+  return fittedPreview(target === "ribbon" ? ribbonPreview(address, timing ?? await loadConcurrencyData(), now) : await dashboardPreview(address, schema, signal, local, now, groups));
 }
 
 async function thinkingPreview(address: string, schema: FieldSchema, target: ThinkingCardTarget, signal: AbortSignal | undefined, now: number, thinking?: ThinkingResponse): Promise<QueryPreview> {
@@ -79,8 +81,10 @@ function ribbonPreview(address: string, data: ConcurrencyData, now: number): Que
     dashboardTrend: { prepared: true, xLabel: cover.hourly ? "hours" : "day", yLabel: cover.label, unit: "" } };
 }
 
-async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now()): Promise<QueryPreview> {
-  const { topic, dataset, state, where, params } = readDashboardCard(address, new Date(now));
+async function dashboardPreview(address: string, schema: FieldSchema, signal?: AbortSignal, local?: LocalRows, now = Date.now(), groups?: number): Promise<QueryPreview> {
+  const opened = readDashboardCard(address, new Date(now)), { topic, dataset, where, params } = opened;
+  const counted = groups !== undefined && dashboardCardGroups(address);
+  const state = counted && isTrendView(opened.state.view) ? { ...opened.state, seriesLimit: groups } : opened.state;
   if (schema.name !== `pharos_${dataset}`) throw new Error("This dashboard card's dataset is unavailable.");
   const calculator = window.pharosCarbon;
   if (topic === "carbon" && !calculator) throw new Error("Carbon assumptions are still loading. Refresh this card to try again.");
@@ -99,7 +103,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const request = { ...catalog.request?.params, ...topic === "parallelism" ? { parallelism_settings: JSON.stringify({ counting: parallelism.counting, gap: parallelism.gap }) } : {} };
   const run = (query: Parameters<typeof runAnalysisQuery>[2]) => runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
-  if (state.view === "trend") {
+  if (isTrendView(state.view)) {
     const trend = trendQuery(catalog, state, where, { now, zone });
     const built = trendSeries(catalog, state, trend, await run(trend.query), { now, label });
     if (built.error) throw new Error(built.error);
@@ -110,7 +114,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, state), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, state),
-      dashboardTrend: { prepared: true, lines: built.lines || state.display === "cumulative", percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
+      dashboardTrend: { prepared: true, lines: state.view !== "trend_bar" && (built.lines || state.display === "cumulative"), bars: state.view === "trend_bar", grouped: state.view === "trend_bar" && (!built.additive || state.scale === "logarithmic" && !state.share), percent: state.share, nonzero: state.nonzero && !state.share, scale: state.scale, reference: built.norm,
         unit: percent ? "percent" : catalog.measures[state.metric].format.kind === "duration" ? "ms" : catalog.measures[state.metric].unit,
         xLabel: state.period, yLabel: trendTitle(catalog, state) } };
   }
@@ -118,7 +122,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   if (analysis.problem) throw new Error(analysis.problem);
   const result = (await run(analysis.query))[0];
   if (!result) throw new Error("The dashboard returned no chart result.");
-  let clause = analysis.clause, entry = selectGroups(result, analysis.selection);
+  let clause = counted ? { ...analysis.clause, display: { ...analysis.clause.display!, maxGroups: groups } } : analysis.clause, entry = selectGroups(result, analysis.selection);
   if (entry.error) throw new Error(entry.error);
   if (state.view === "cycle") {
     if (analysis.native) nativeCycleResult(analysis, entry);

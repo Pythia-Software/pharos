@@ -1,3 +1,4 @@
+import { queryCapabilities } from "../../support/query-server.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { core, execution, schemas } from "../helpers/recipes.mjs";
@@ -33,10 +34,10 @@ test("an observed history of zero emissions is a ready trend, not an empty card"
   global.fetch = async (url, init = {}) => {
     const path = String(url), request = init.body ? JSON.parse(init.body) : undefined;
     if (path.includes("computed-columns")) return Response.json([]);
-    if (path.endsWith("capabilities")) return Response.json({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution });
-    assert.ok(path.endsWith("/usage/metrics"), path);
+    if (path.endsWith("capabilities")) return Response.json({ queryCapabilities, computedExecution: execution });
+    assert.ok(path.endsWith("/usage/query-v3"), path);
     // Every day has usage records whose estimated CO₂e is exactly zero (custom grid 0).
-    const days = request.where.at(-1).any?.map(term => term.value) ?? [request.where.at(-1).value];
+    const days = request.result.where.at(-1).any?.map(term => term.value) ?? [request.result.where.at(-1).value];
     return Response.json({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: "exact", buckets: days.map(day => ({ keys: [day], value: metric.id === "trend-rows" ? 3 : 0, count: 3 })) })) });
   };
   const item = instantiateRecipe(recipe, 7);
