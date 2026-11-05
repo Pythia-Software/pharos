@@ -64,12 +64,16 @@ func (c *Catalog) indexToolSearchBatch(ctx context.Context) (bool, error) {
 }
 
 func (c *Catalog) maintainToolSearch(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	// One operation for the whole build, forgotten if there was nothing to build.
-	pass := c.beginPass(ctx, "maintenance.search.tools", triggerVersion)
+	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	for {
-		if c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(ctx) != nil {
 			return
+		}
+		if pass == nil {
+			pass = c.beginPass(ctx, "maintenance.search.tools", triggerVersion)
 		}
 		var more bool
 		var err error

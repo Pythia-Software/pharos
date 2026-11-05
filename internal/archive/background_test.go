@@ -209,6 +209,210 @@ func TestBackgroundVerificationQueueRespectsCadence(t *testing.T) {
 	}
 }
 
+// Every declared item uses the chosen column, including work whose default
+// cadence used to be fixed or opt-in. Scheduling and Run now remain separate.
+func TestBackgroundPlanMovesEveryItem(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	ago := formatTime(at.Add(-48 * time.Hour))
+	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
+		upgradePending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
+		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
+	for _, item := range backgroundItems {
+		in.runs[item.ID] = backgroundRunRow{succeeded: ago}
+	}
+	for _, stage := range stageOrder {
+		in.deferred[stage] = deferredRow{generation: 2, completed: 1, changedAt: ago, completedAt: ago}
+	}
+	for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Temporary: map[string]temporaryCadence{}}
+		settings.sync = syncSettings{Interval: 300, NextAt: formatTime(at.Add(-48*time.Hour + 5*time.Minute))}
+		settings.lastConversationCheck = at.Add(-48 * time.Hour)
+		for _, item := range backgroundItems {
+			settings.Temporary[item.ID] = temporaryCadence{Cadence: cadence}
+		}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			wantDue := cadence != cadenceManual && plan.ID != "conversations" && !(plan.ID == "search" && cadence == cadenceFrequent)
+			if plan.Cadence != cadence || plan.Due != wantDue || (cadence == cadenceManual && !plan.Next.IsZero()) {
+				t.Errorf("%s on %s: %+v, want due=%v", plan.ID, cadence, plan, wantDue)
+			}
+		}
+		if got := automaticDue(settings, powerState{}, false, at); got != (cadence != cadenceManual) {
+			t.Errorf("scheduled conversations on %s: due=%v", cadence, got)
+		}
+		in.requested = map[string]bool{}
+		for _, item := range backgroundItems {
+			in.requested[item.ID] = true
+		}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if plan.ID != "conversations" && !plan.Due {
+				t.Errorf("Run now ignored %s on %s", plan.ID, cadence)
+			}
+		}
+		in.requested = nil
+	}
+}
+
+func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	for _, cadence := range cadences {
+		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Temporary: map[string]temporaryCadence{}}
+		in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", upgradePending: true,
+			verificationNext: at.Add(-time.Hour), runs: map[string]backgroundRunRow{}}
+		for _, id := range []string{"search", "preserve", "verification", "other-sources", "upgrade", "backup"} {
+			settings.Temporary[id] = temporaryCadence{Cadence: cadence}
+			in.runs[id] = backgroundRunRow{succeeded: formatTime(at.Add(-time.Minute))}
+		}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if _, tracked := in.runs[plan.ID]; tracked && plan.Due {
+				t.Errorf("%s on %s ran again too soon: %+v", plan.ID, cadence, plan)
+			}
+		}
+	}
+}
+
+func TestConversationsMovedScheduleWaitsForItsCadenceAndQuiet(t *testing.T) {
+	t.Run("settings saves preserve overdue checks", func(t *testing.T) {
+		catalog, config := testCatalog(t)
+		server := testServer(t, config, catalog)
+		ctx := context.Background()
+		at := time.Now()
+		last := at.Add(-48 * time.Hour)
+		execTx(t, catalog.DB,
+			"INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES("+sqlQuote(currentHost().ID)+",'last-check',"+sqlQuote(formatTime(last))+",'{}')",
+			"INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES('another-mac','other-check',"+sqlQuote(formatTime(at))+",'{}')")
+		post := func(body map[string]any) {
+			t.Helper()
+			response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings", body)
+			if response.Code != http.StatusOK {
+				t.Fatalf("settings save: %s", response.Body.String())
+			}
+		}
+		for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+			post(map[string]any{"mode": "pause", "daily_at": at.Add(-time.Hour).Format("15:04"),
+				"temporary_cadences": map[string]any{"conversations": cadence}})
+			for _, body := range []map[string]any{{"mode": "on"}, {"hold_when_busy": false}, {"interval_seconds": 600}} {
+				post(body)
+				settings, err := catalog.backgroundSettings(ctx, at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !automaticDue(settings, powerState{}, false, at) {
+					t.Errorf("%s overdue check was postponed by %v: %+v", cadence, body, settings.conversationsPlan(time.Time{}, at))
+				}
+			}
+		}
+		// A real completed check, unlike a settings save, advances the schedule.
+		execTx(t, catalog.DB, "INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES("+sqlQuote(currentHost().ID)+",'completed-check',"+sqlQuote(formatTime(at))+",'{}')")
+		settings, err := catalog.backgroundSettings(ctx, at)
+		if err != nil || automaticDue(settings, powerState{}, false, at) {
+			t.Fatalf("completed daily check did not advance the schedule: %+v (%v)", settings, err)
+		}
+	})
+	at := time.Date(2026, 10, 29, 15, 0, 0, 0, time.Local)
+	for _, cadence := range []string{cadenceHourly, cadenceDaily, cadenceManual} {
+		settings := backgroundSettings{Mode: "on", DailyAt: defaultDailyAt,
+			Temporary: map[string]temporaryCadence{"conversations": {Cadence: cadence}}}
+		settings.sync = syncSettings{Interval: 300, NextAt: formatTime(at.Add(4 * time.Minute))}
+		settings.lastConversationCheck = at.Add(-time.Minute)
+		if automaticDue(settings, powerState{}, false, at) {
+			t.Errorf("%s ran again before its next window", cadence)
+		}
+		if !automaticDue(settings, powerState{}, true, at) {
+			t.Errorf("Run now did not bypass %s", cadence)
+		}
+		settings.lastConversationCheck = at.Add(-2 * time.Hour)
+		if cadence == cadenceDaily {
+			settings.lastConversationCheck = at.Add(-24 * time.Hour)
+		}
+		quiet := at.Add(9 * time.Minute)
+		plan := settings.conversationsPlan(quiet, at)
+		if cadence != cadenceManual && !plan.Next.Equal(quiet) {
+			t.Errorf("%s did not wait for quiet: %+v", cadence, plan)
+		}
+	}
+}
+
+func TestBackgroundSearchFollowsScheduleAndRunNow(t *testing.T) {
+	catalog, config := libraryFixture(t)
+	server := testServer(t, config, catalog)
+	ctx := context.Background()
+	response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+		map[string]any{"temporary_cadences": map[string]any{"search": cadenceManual}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("moving Search: %s", response.Body.String())
+	}
+	gate := searchScheduleGate{}
+	waiting, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	pass := catalog.beginPass(ctx, "maintenance.search.text", triggerVersion)
+	pass.worked(1)
+	if err := gate.wait(waiting, catalog, &pass); err != context.DeadlineExceeded {
+		t.Fatalf("continuous Search did not wait on its manual schedule: %v", err)
+	}
+	if live, _ := runningItems(server.ops.views()); live["search"] {
+		t.Fatal("a held Search daemon left an operation running")
+	}
+	if dirtyCount(t, catalog) == 0 {
+		t.Fatal("fixture must have pending Search work")
+	}
+	// Scheduled Search must leave stopped projection work pending.
+	if !catalog.stopLibraryRefresh() {
+		t.Fatal("could not stop Search refresh")
+	}
+	pending := dirtyCount(t, catalog)
+	for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+		response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+			map[string]any{"hold_when_busy": false, "temporary_cadences": map[string]any{"search": cadence}})
+		if response.Code != http.StatusOK {
+			t.Fatalf("moving Search to %s: %s", cadence, response.Body.String())
+		}
+		settings, err := catalog.backgroundSettings(ctx, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, plan := range backgroundPlan(settings, backgroundInputs{}, time.Now()) {
+			if plan.ID == "search" {
+				server.runBackgroundPass(ctx, cadence, []string{"search"}, []itemPlan{plan})
+			}
+		}
+		if !catalog.libraryRefreshStopped() || dirtyCount(t, catalog) != pending {
+			t.Errorf("%s Search bypassed Stop: pending=%d, want %d", cadence, dirtyCount(t, catalog), pending)
+		}
+	}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+		map[string]any{"temporary_cadences": map[string]any{"search": cadenceManual}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("moving Search back to manual: %s", response.Body.String())
+	}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/run", map[string]any{"item": "search"})
+	if response.Code != http.StatusAccepted || !server.peekRequested()["search"] {
+		t.Fatalf("Search Run now was not queued: %s", response.Body.String())
+	}
+	if !server.backgroundPass(ctx, time.Now()) {
+		t.Fatal("Search Run now did not run")
+	}
+	if dirtyCount(t, catalog) != 0 {
+		t.Fatal("Search Run now left workspaces waiting")
+	}
+	settings, err := catalog.backgroundSettings(ctx, time.Now())
+	search, _ := backgroundItemByID("search")
+	if err != nil || settings.cadence(search) != cadenceManual {
+		t.Fatal("Run now changed the Search schedule")
+	}
+	if run := catalog.backgroundRuns(ctx)["search"]; run.succeeded == "" || run.err != "" {
+		t.Fatalf("Search catch-up failed: %+v", run)
+	}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/background/settings",
+		map[string]any{"temporary_cadences": map[string]any{"search": ""}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("restoring Search: %s", response.Body.String())
+	}
+	gate = searchScheduleGate{}
+	if err := gate.wait(ctx, catalog); err != nil {
+		t.Fatalf("Search did not resume its continuous default: %v", err)
+	}
+}
+
 // An override can only slow an item down; a fixed item has none; an
 // opt-in item runs only when chosen.
 func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {
@@ -573,7 +777,7 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		items := get()["view"].(map[string]any)["items"].([]any)
 		for _, raw := range items {
 			item := raw.(map[string]any)
-			if item["id"] == "writing" && (item["column"] != cadenceHourly || item["temporary_cadence"] == nil || len(item["cadence_moves"].([]any)) != 2) {
+			if item["id"] == "writing" && (item["column"] != cadenceHourly || item["temporary_cadence"] == nil || len(item["cadence_moves"].([]any)) != 3) {
 				t.Fatalf("temporary schedule missing from view: %+v", item)
 			}
 		}
@@ -608,7 +812,7 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 		}
 		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": cadenceManual}}, http.StatusOK)
 		settings, _ = catalog.backgroundSettings(ctx, time.Now())
-		if len(settings.Temporary) != 0 || settings.cadence(writing) != cadenceManual || len(itemCadenceMoves(writing, settings)) != 0 {
+		if len(settings.Temporary) != 0 || settings.cadence(writing) != cadenceManual || len(itemCadenceMoves(writing, settings)) != 3 {
 			t.Fatal("a permanent choice must end the temporary schedule")
 		}
 		post("/api/background/settings", map[string]any{"overrides": map[string]any{"writing": ""}}, http.StatusOK)
@@ -616,14 +820,27 @@ func TestBackgroundSettingsAPI(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"temporary_cadences": "hourly"},
 		{"temporary_cadences": map[string]any{"writing": nil}},
-		{"temporary_cadences": map[string]any{"writing": cadenceManual}},
 		{"temporary_cadences": map[string]any{"writing": "sometimes"}},
-		{"temporary_cadences": map[string]any{"search": cadenceDaily}},
-		{"temporary_cadences": map[string]any{"backup": cadenceDaily}},
 		{"temporary_cadences": map[string]any{"nothing": cadenceHourly}},
 	} {
 		post("/api/background/settings", body, http.StatusBadRequest)
 	}
+	t.Run("all items move between all four columns", func(t *testing.T) {
+		for _, item := range backgroundItems {
+			for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+				post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{item.ID: cadence}}, http.StatusOK)
+				settings, err := catalog.backgroundSettings(ctx, time.Now())
+				if err != nil || settings.cadence(item) != cadence || len(itemCadenceMoves(item, settings)) != 3 {
+					t.Fatalf("%s did not move to %s: %+v (%v)", item.ID, cadence, settings, err)
+				}
+				later, err := catalog.backgroundSettings(ctx, time.Now().Add(temporaryCadenceDuration+time.Minute))
+				if err != nil || later.cadence(item) != later.usual(item) {
+					t.Fatalf("%s did not return to its usual schedule: %+v (%v)", item.ID, later, err)
+				}
+			}
+			post("/api/background/settings", map[string]any{"temporary_cadences": map[string]any{item.ID: ""}}, http.StatusOK)
+		}
+	})
 	post("/api/background/run", map[string]any{"item": "writing"}, http.StatusAccepted)
 	if !server.peekRequested()["writing"] {
 		t.Fatal("Run now asks the next pass for the item")

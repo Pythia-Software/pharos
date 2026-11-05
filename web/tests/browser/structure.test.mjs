@@ -826,15 +826,37 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
 });
 
-test("Background Processing items drag to another schedule for a week", { skip }, async t => {
-  const { page, calls } = await open(t, { url: '/settings/sync', ready: '#backgroundSchedule .bg-col' });
-  const writing = page.locator('#backgroundSchedule .bg-item[data-item="writing"]');
-  const response = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/background/settings');
-  await writing.dragTo(page.locator('#backgroundSchedule .bg-col[data-cadence="frequent"]'));
-  await response;
-  const saved = calls.find(call => call.method === 'POST' && call.path === '/api/background/settings');
-  assert.deepEqual(saved?.body, { temporary_cadences: { writing: 'frequent' } });
-  assert.equal(await page.locator('#backgroundSchedule .bg-item[data-item="findings"]').getAttribute('draggable'), null, 'only adaptive work moves');
+test("Background Processing items drag between all four columns for a week", { skip }, async t => {
+  let document = structuredClone(defaultApi['GET /api/background']);
+  const { page, calls } = await open(t, { url: '/settings/sync', viewport: { width: 1800, height: 1800 }, ready: '#backgroundSchedule .bg-col', api: {
+    'GET /api/background': () => document,
+    'POST /api/background/settings': ({ body }) => {
+      for (const [id, cadence] of Object.entries(body.temporary_cadences)) {
+        const item = document.view.items.find(item => item.id === id);
+        item.cadence = cadence || item.usual_cadence;
+        item.column = item.cadence;
+        item.temporary_cadence = cadence ? { cadence, expires_at: new Date(Date.now() + 7 * 86400000).toISOString() } : null;
+      }
+      document.view.cadences = document.view.cadences.map(column => ({ ...column,
+        items: document.view.items.filter(item => item.cadence === column.id).map(item => item.id) }));
+      document.view.unscheduled = document.view.items.filter(item => item.cadence === 'manual').map(item => item.id);
+      return document;
+    },
+  } });
+  const schedule = page.locator('#backgroundSchedule');
+  // Empty the fourth column first: it must remain a destination for every item.
+  const backup = schedule.locator('.bg-item[data-item="backup"]');
+  await backup.locator('.bg-grip').dragTo(schedule.locator('.bg-col[data-cadence="daily"]'));
+  await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
+  for (const id of document.view.items.map(item => item.id)) {
+    for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
+      const item = schedule.locator(`.bg-item[data-item="${id}"]`);
+      await item.locator('.bg-grip').dragTo(schedule.locator(`.bg-col[data-cadence="${cadence}"]`));
+      await schedule.locator(`.bg-col[data-cadence="${cadence}"] .bg-item[data-item="${id}"]`).waitFor();
+    }
+  }
+  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings'
+    && call.body?.temporary_cadences?.conversations === 'manual'), 'fixed items accept the manual column');
   // A redraw keeps keyboard focus on the item's run button.
   await page.getByRole('button', { name: 'Run Findings now', exact: true }).focus();
   await page.evaluate(() => window.pharosBackground.render());

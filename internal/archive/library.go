@@ -359,9 +359,11 @@ type libraryCatchUp struct {
 	since time.Time
 	// stopped is set while the user has stopped the refresh: maintainLibrary
 	// leaves dirty workspaces dirty (reads compute them live) until it is
-	// resumed or the service restarts. cancel abandons the pass in progress.
-	stopped bool
-	cancel  context.CancelFunc
+	// resumed or the service restarts. Every active pass is cancellable,
+	// including overlapping continuous and explicitly requested catch-up.
+	stopped  bool
+	nextPass uint64
+	passes   map[uint64]context.CancelFunc
 }
 
 func (c *Catalog) noteLibraryRefresh(count int, err error) {
@@ -393,8 +395,8 @@ func (c *Catalog) stopLibraryRefresh() bool {
 		return false
 	}
 	c.catchUp.stopped, c.catchUp.since = true, time.Time{}
-	if c.catchUp.cancel != nil {
-		c.catchUp.cancel()
+	for _, cancel := range c.catchUp.passes {
+		cancel()
 	}
 	return true
 }
@@ -424,10 +426,15 @@ func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), boo
 		return nil, nil, false
 	}
 	pass, cancel := context.WithCancel(ctx)
-	c.catchUp.cancel = cancel
+	if c.catchUp.passes == nil {
+		c.catchUp.passes = map[uint64]context.CancelFunc{}
+	}
+	c.catchUp.nextPass++
+	id := c.catchUp.nextPass
+	c.catchUp.passes[id] = cancel
 	return pass, func() {
 		c.catchUp.mu.Lock()
-		c.catchUp.cancel = nil
+		delete(c.catchUp.passes, id)
 		c.catchUp.mu.Unlock()
 		cancel()
 	}, true
@@ -469,6 +476,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // none; filling previews and measuring parallelism likewise. A publication
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	var view, previews, parallelism *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
@@ -484,7 +492,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
 	var originsAt time.Time
 	for {
-		if c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &view, &previews, &parallelism) != nil || c.queries.wait(ctx) != nil {
 			return
 		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {

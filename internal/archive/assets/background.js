@@ -165,7 +165,7 @@
       dot: DOTS[row.state] ?? '', text: stateText(row, now), running: row.state === 'running', empty: !row.items?.length,
       items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
     }));
-    // Only when you ask: on no schedule, so in none of the columns.
+    // Only when you ask is the fourth column, on no automatic schedule.
     const unscheduled = (view.unscheduled || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now));
     // Only when you ask runs as the manual cadence: not while one of its
     // items runs, nor when none of them can.
@@ -218,7 +218,7 @@
   // schedule: that cadence for a week, "" to end the week when it is the
   // item's usual cadence, or null when it cannot move there.
   function dropCadence(item, cadence) {
-    if (!item?.adaptive || !CADENCE_ICONS[cadence] || cadence === item.column) return null;
+    if (!item?.id || !['frequent', 'hourly', 'daily', 'manual'].includes(cadence) || cadence === item.column) return null;
     return item.temporary && cadence === item.usual ? '' : cadence;
   }
 
@@ -297,7 +297,7 @@
   }
 
   // Dropping a dragged item on a column moves it there for a week, as its
-  // Promote and Demote buttons do.
+  // Move buttons do.
   function dropTarget(section, cadence) {
     const accepts = () => dropCadence(dragging, cadence) != null;
     section.ondragover = event => {
@@ -318,7 +318,7 @@
   }
 
   function renderColumns(model) {
-    const columns = node('div', 'bg-cols');
+    const columns = node('div', 'bg-cols bg-four');
     for (const column of model.columns) {
       const section = node('section', 'bg-col');
       section.setAttribute('aria-label', column.label);
@@ -370,16 +370,15 @@
     }
     // Only when you ask is one more column; four go two by two until
     // they fit on one line.
-    if (model.unscheduled?.length) {
-      columns.classList.add('bg-four');
-      columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable));
-    }
+    columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable));
     return columns;
   }
 
   function renderUnscheduled(items, runnable) {
     const section = node('section', 'bg-col bg-unscheduled');
     section.setAttribute('aria-label', 'Only when you ask');
+    section.dataset.cadence = 'manual';
+    dropTarget(section, 'manual');
     const head = node('div', 'bg-col-head'), title = node('h4', '', 'Only when you ask');
     title.append(runButton('Only when you ask', 'manual', !runnable));
     head.append(title);
@@ -391,7 +390,7 @@
   function renderItem(item) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
-    if (item.adaptive) {
+    if (item.id) {
       entry.draggable = true;
       entry.ondragstart = event => {
         dragging = item;
@@ -420,7 +419,7 @@
     headLine.append(head, runButton(item.label, {item: item.id}, item.state === 'running' || item.state === 'unavailable'));
     if (item.cost?.class) headLine.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
     entry.append(headLine, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
-    if (item.adaptive) {
+    if (item.id) {
       // A grip under the dot: this item drags to another schedule.
       const grip = node('span', 'bg-grip');
       grip.setAttribute('aria-hidden', 'true');
