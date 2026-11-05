@@ -47,7 +47,7 @@ func preferRollouts(items []captureItem) []captureItem {
 }
 
 // planCapture lists exactly what the source's adapter would read.
-func planCapture(source SourceConfig) (capturePlan, error) {
+func planCapture(ctx context.Context, source SourceConfig) (capturePlan, error) {
 	plan := capturePlan{complete: true}
 	if strings.EqualFold(source.Kind, "codex") {
 		source = resolveRolloutSource(source)
@@ -83,7 +83,7 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		})
 		plan.files = preferRollouts(plan.files)
 		if info.IsDir() {
-			databases, err := codexNamingDatabases(context.Background(), source.Path)
+			databases, err := codexNamingDatabases(ctx, source.Path)
 			if err != nil {
 				return plan, fmt.Errorf("Codex names are unavailable: %w", err)
 			}
@@ -134,7 +134,7 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 				!strings.HasSuffix(name, "-wal") && !strings.HasSuffix(name, "-shm") && !strings.HasSuffix(name, "-journal")
 		})
 		for _, candidate := range candidates {
-			if ok, err := conductorConversationDatabase(candidate.path); err != nil {
+			if ok, err := conductorConversationDatabase(ctx, candidate.path); err != nil {
 				plan.warnings = append(plan.warnings, captureError{Path: candidate.path, Error: err.Error()})
 				plan.skipped = append(plan.skipped, candidate.rel)
 			} else if ok {
@@ -294,8 +294,8 @@ func (p *capturePlan) walk(root string, info fs.FileInfo, prefix string, include
 	return items
 }
 
-func conductorConversationDatabase(file string) (bool, error) {
-	db, err := openSourceSQLite(context.Background(), file)
+func conductorConversationDatabase(ctx context.Context, file string) (bool, error) {
+	db, err := openSourceSQLite(ctx, file)
 	if err != nil {
 		return false, err
 	}

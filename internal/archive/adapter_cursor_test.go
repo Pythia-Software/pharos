@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -345,7 +346,7 @@ func TestCursorCaptureHoldsOnlyTheChats(t *testing.T) {
 	useHost(t, "host-a")
 	root := cursorFixture(t)
 	source := SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true}
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}

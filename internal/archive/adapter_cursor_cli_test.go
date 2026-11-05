@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -396,7 +397,7 @@ func TestCursorCLICaptureHoldsOnlyTheChats(t *testing.T) {
 	useHost(t, "host-a")
 	root := cursorCLIFixture(t)
 	source := cursorCLISource(root)
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}

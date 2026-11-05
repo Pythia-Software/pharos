@@ -95,7 +95,7 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 	// Codex naming databases are parsing dependencies, acquired through row
 	// export rather than a native backup on each timer tick.
 	if strings.EqualFold(source.Kind, "codex") {
-		plan, err := planCapture(source)
+		plan, err := planCapture(ctx, source)
 		if err != nil {
 			return result, err
 		}
@@ -511,7 +511,7 @@ func retainedRecordIdentity(view *captureView, record *WorkspaceRecord, parts []
 // evidence budget. SQLite-dependent groups use the logical rollout instead.
 func (c *Catalog) acquireAuditFilesystemGroup(ctx context.Context, unit syncUnit) (retainedInput, error) {
 	source := unit.Source
-	plan, err := planCapture(source)
+	plan, err := planCapture(ctx, source)
 	if err != nil {
 		return retainedInput{}, err
 	}

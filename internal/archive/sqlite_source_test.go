@@ -165,6 +165,23 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a symlinked database is copied with the WAL beside the file it names", func(t *testing.T) {
+		real := filepath.Join(t.TempDir(), "real.db")
+		sqliteNotes(t, real, "WAL")
+		sqliteHolder(t, real, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
+		alias := filepath.Join(t.TempDir(), "alias.db")
+		if err := os.Symlink(real, alias); err != nil {
+			t.Fatal(err)
+		}
+		db, err := openSourceSQLite(context.Background(), alias)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if got := sqliteBodies(t, db); got != "first,second" || sqliteReadVia(alias) != sqliteReadCopy {
+			t.Fatalf("read %q via %s", got, sqliteReadVia(alias))
+		}
+	})
 	t.Run("a transaction not yet committed is left out of the copy", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "uncommitted.db")
 		sqliteNotes(t, path, "WAL")
@@ -385,7 +402,9 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 		defer reused.Process.Kill()
 		reusedCopy := filepath.Join(copies, strconv.Itoa(reused.Process.Pid)+"-left")
 		ownerCopy := filepath.Join(copies, "1-open")
-		for _, dir := range []string{reusedCopy, ownerCopy} {
+		// This process's ID, used by one that ended before it started.
+		before := filepath.Join(copies, strconv.Itoa(os.Getpid())+"-before")
+		for _, dir := range []string{reusedCopy, ownerCopy, before} {
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -393,12 +412,17 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 		if err := os.Chtimes(reusedCopy, old, old); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chtimes(before, old.Add(-48*time.Hour), old.Add(-48*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
 		sweepSQLiteCopies()
 		if _, err := os.Stat(left); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("an ended process's copy is left: %v", err)
 		}
-		if _, err := os.Stat(reusedCopy); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("a copy whose process ID was reused is left: %v", err)
+		for _, dir := range []string{reusedCopy, before} {
+			if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a copy whose process ID was reused is left: %s, %v", dir, err)
+			}
 		}
 		if _, err := os.Stat(ownerCopy); err != nil {
 			t.Fatalf("a running process's copy was removed: %v", err)

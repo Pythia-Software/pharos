@@ -513,7 +513,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	if selected != nil {
 		plan = *selected
 	} else {
-		plan, err = planCapture(source)
+		plan, err = planCapture(ctx, source)
 	}
 	if err == nil && isConductorSource(source.Kind) {
 		includeKnownCaptureDatabases(&plan, manifest, source)

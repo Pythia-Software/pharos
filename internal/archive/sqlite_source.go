@@ -56,8 +56,14 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 	if _, statErr := os.Stat(path); statErr != nil {
 		return nil, err
 	}
+	// SQLite resolves a symlinked database, and finds its WAL and journal
+	// beside the file the link names; so does the rest of the ladder.
+	resolved, resolveErr := filepath.EvalSymlinks(path)
+	if resolveErr != nil {
+		return nil, errors.Join(err, resolveErr)
+	}
 	cause := map[bool]string{true: "locked", false: "unreadable"}[locked]
-	pending, stateErr := sqlitePendingState(path)
+	pending, stateErr := sqlitePendingState(resolved)
 	if stateErr != nil {
 		return nil, errors.Join(err, stateErr)
 	}
@@ -65,13 +71,13 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 		noteSQLiteRead(path, sqliteRead{Via: sqliteReadWaiting, Cause: cause, Reason: err.Error()})
 		return nil, fmt.Errorf("%s: %w", path, errSQLiteWriteInProgress)
 	}
-	if !locked && !pending.frames && sqliteReadOnlyVolume(path) {
-		if db, immutableErr := openPinnedSQLite(ctx, sqliteURI(path)+"?mode=ro&immutable=1&_pragma=query_only(1)"); immutableErr == nil {
+	if !locked && !pending.frames && sqliteReadOnlyVolume(resolved) {
+		if db, immutableErr := openPinnedSQLite(ctx, sqliteURI(resolved)+"?mode=ro&immutable=1&_pragma=query_only(1)"); immutableErr == nil {
 			noteSQLiteRead(path, sqliteRead{Via: sqliteReadImmutable, Cause: cause, Reason: err.Error()})
 			return db, nil
 		}
 	}
-	db, copyErr := openSQLiteCopy(ctx, path)
+	db, copyErr := openSQLiteCopy(ctx, resolved)
 	if copyErr != nil {
 		via := sqliteReadFailed
 		if errors.Is(copyErr, errSQLiteWriteInProgress) {
@@ -294,17 +300,17 @@ var sweepSQLiteCopiesOnce sync.Once
 
 // sweepSQLiteCopies removes the copies of processes that have ended. Each
 // copy's folder is named for the process that made it; a process with that
-// ID that started after the folder was made has reused the ID.
+// ID that started after the folder was made, this one included, has reused
+// the ID.
 func sweepSQLiteCopies() {
 	entries, err := os.ReadDir(sqliteCopyRoot)
 	if err != nil {
 		return
 	}
-	self := os.Getpid()
 	for _, entry := range entries {
 		name, _, _ := strings.Cut(entry.Name(), "-")
 		pid, err := strconv.Atoi(name)
-		if err != nil || pid == self {
+		if err != nil {
 			continue
 		}
 		ended := syscall.Kill(pid, 0) == syscall.ESRCH

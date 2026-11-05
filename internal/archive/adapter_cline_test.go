@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -216,7 +217,7 @@ func TestClineCaptureHoldsOnlyTheSessions(t *testing.T) {
 	useHost(t, "host-a")
 	root := clineFixture(t)
 	source := SourceConfig{Name: "cline", Kind: "cline", Path: root, Account: "local", Enabled: true}
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}

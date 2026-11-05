@@ -1812,7 +1812,7 @@ func compressColdFiles(t *testing.T, config Config, catalog *Catalog) []string {
 
 func TestCaptureCompressesColdFiles(t *testing.T) {
 	config, catalog, target, claude := coldFilesFixture(t)
-	plan, err := planCapture(config.Sources[0])
+	plan, err := planCapture(context.Background(), config.Sources[0])
 	if err != nil {
 		t.Fatal(err)
 	}

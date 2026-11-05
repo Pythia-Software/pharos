@@ -125,7 +125,7 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	sort.Strings(candidates)
 	for _, path := range candidates {
 		if boundary, ok := a.context().Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary); ok && a.view == nil && !boundary.reconciled[path] {
-			supported, err := conductorConversationDatabase(path)
+			supported, err := conductorConversationDatabase(a.context(), path)
 			if err != nil {
 				return err
 			}

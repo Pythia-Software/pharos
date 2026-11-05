@@ -24,7 +24,7 @@ func (c *Catalog) acquireLogicalGroup(ctx context.Context, source SourceConfig, 
 	if err = session.writeHost(now(), now()); err != nil {
 		return retainedInput{}, err
 	}
-	plan, err := planCapture(source)
+	plan, err := planCapture(ctx, source)
 	if err != nil {
 		return retainedInput{}, err
 	}
@@ -146,7 +146,7 @@ func (catalog *Catalog) acquireLogicalGroupLocked(ctx context.Context, source So
 	// Validate membership and every file/database in the cross-input closure.
 	// Present-but-unreadable dependencies are errors; absent optional inputs are
 	// represented by the immutable inventory, never a live filesystem fallback.
-	after, err := planCapture(source)
+	after, err := planCapture(ctx, source)
 	if err != nil || !after.complete || len(after.warnings) > 0 || !slices.Equal(after.files, plan.files) || !slices.Equal(after.databases, plan.databases) {
 		return retainedInput{}, errors.New("dependency membership changed during acquisition")
 	}

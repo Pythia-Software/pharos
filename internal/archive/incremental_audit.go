@@ -329,7 +329,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		}
 		var input retainedInput
 		if unit.Source.Kind == "codex" && unit.Source.Options["sqlite_record_capture"] != true {
-			plan, e := planCapture(unit.Source)
+			plan, e := planCapture(ctx, unit.Source)
 			if e != nil {
 				result.Detail = e.Error()
 				return

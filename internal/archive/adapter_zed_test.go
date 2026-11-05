@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -357,7 +358,7 @@ func TestZedCaptureHoldsOnlyTheThreads(t *testing.T) {
 	useHost(t, "host-a")
 	root := zedFixture(t)
 	source := zedSource(root)
-	plan, err := planCapture(source)
+	plan, err := planCapture(context.Background(), source)
 	if err != nil {
 		t.Fatal(err)
 	}
