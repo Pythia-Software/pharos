@@ -217,6 +217,10 @@ func (c *Catalog) refreshBranchUsage(ctx context.Context) error {
 			return err
 		}
 		id := firstString(row["id"])
+		// Only events that kept their source record are read; the Claude
+		// adapter keeps it for every event with usage. Claude Code records
+		// gitBranch on those too, so each turn's own record places it, and a
+		// branch recorded on a prompt is recorded again on the response.
 		events, err := queryMapsContext(ctx, c.reader(), `SELECT am.agent_session_id,m.created_at,m.model,m.raw_text FROM messages m
 			JOIN agent_session_messages am ON am.message_id=m.id
 			WHERE m.conversation_id=? AND m.raw_text IS NOT NULL

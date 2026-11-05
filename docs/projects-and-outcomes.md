@@ -378,17 +378,25 @@ each branch. It follows CodeBurn's by-branch lens (see References).
 - **Turn by turn.** Claude Code records the checkout's branch (`gitBranch`)
   on each event. Each turn is on the last branch recorded at or before it,
   so a session that switches branches spends on each in turn. A response
-  whose usage is repeated on each content block counts once.
+  whose usage is repeated on each content block counts once. Claude Code
+  records `gitBranch` on its responses as well as its prompts (all 10,166
+  usage events in a sample of the library had one), so each turn's own
+  record places it, and a switch recorded on a prompt is recorded again on
+  the next response.
 - **How it is stored.** The usage ledger is hourly, per session and model.
   `agent_session_branch_shares` records the tokens each branch's turns used
   in each of those hours. The `branch_usage` dataset splits each priced
-  ledger row among branches by those tokens. Only branch names and token
-  counts are stored, both already in the transcript.
+  ledger row among branches by those tokens and keeps its hour, so hourly
+  trends and time ranges place the spend when it happened. Only branch
+  names and token counts are stored, both already in the transcript.
 - **When it runs.** A background stage (`refreshBranchUsage`,
   `branch_usage.go`) runs after commit linking and never on a request. It
   reads only the events Pharos kept whole, which include every usage event.
   It skips a conversation whose sessions' usage has not changed since it
-  was last read (`branch_usage_scans`).
+  was last read (`branch_usage_scans`). When the rules of outcomes, commit
+  linking or spend by branch change, opening the library schedules the
+  stage (`scheduleToolDerivations`), so a library with nothing new to index
+  still derives again.
 - **Session-level branches.** Codex records one branch per session, and
   Conductor one per workspace; their messages carry no per-turn branch. A
   session without per-turn branches is on that branch for all its usage.
