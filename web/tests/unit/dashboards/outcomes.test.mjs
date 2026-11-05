@@ -52,6 +52,9 @@ test("panel ratios pool sums per group and have no ratio without a denominator",
     [{ keys: ["pharos"], value: 300 }, { keys: ["notes"], value: 40 }],
     key => outcomeGroupLabel("project_name", key));
   assert.deepEqual(rows.map(row => [row.label, row.ratio]), [["pharos", 0.1], ["notes", 0], [outcomesAnalysisCatalog.breakdowns.project_name.empty ?? "None", null]]);
+  // A cost of nothing priced is unknown, not $0; a priced $0 stays zero.
+  const costs = outcomeRatioRows([{ keys: ["unpriced"], value: null }, { keys: ["free"], value: 0 }], [{ keys: ["unpriced"], value: 1 }, { keys: ["free"], value: 1 }], key => key);
+  assert.deepEqual(costs.map(row => [row.key, row.numerator, row.ratio]), [["free", 0, 0], ["unpriced", null, null]]);
   const coverage = outcomeTierCoverage([{ keys: ["transcript"], value: 3 }, { keys: ["none"], value: 1 }]);
   assert.deepEqual(coverage.map(row => [row.tier, row.sessions, row.share]), [["local_git", 0, 0], ["transcript", 3, 0.75], ["none", 1, 0.25]]);
 });

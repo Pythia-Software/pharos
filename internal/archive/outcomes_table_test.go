@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -50,6 +51,11 @@ func TestOutcomeRowsTiersAndBranches(t *testing.T) {
 	f.outcomeFixture.edit("notes", "/notes/a.md", "", "", 20, "", code("note", 0, 3))
 	execTx(t, f.catalog.DB, `UPDATE workspaces SET project_folder='~/notes',branch='main' WHERE id='notes'`)
 	f.outcomeFixture.session("chat", "chatgpt")
+	// A repository this Mac never checked out: not checked, and why.
+	execTx(t, f.catalog.DB, `INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo-gone','gone','x','x')`)
+	f.outcomeFixture.session("gone", "claude")
+	execTx(t, f.catalog.DB, `UPDATE workspaces SET repository_id='repo-gone' WHERE id='gone'`)
+	f.outcomeFixture.edit("gone", "/gone/main.go", "repo-gone", "main.go", 5, "", code("gone", 0, 3))
 	f.refresh()
 	rows, err := f.catalog.outcomeRows(context.Background())
 	if err != nil {
@@ -57,15 +63,21 @@ func TestOutcomeRowsTiersAndBranches(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, row := range rows {
-		got[firstString(row["id"])] = fmt.Sprintf("%v %v %v %v %v", row["outcome_label"], row["evidence_tier"], row["git_check"], row["branch"], row["kept_change"])
+		got[firstString(row["id"])] = fmt.Sprintf("%v %v %v %v %v %v", row["outcome_label"], row["evidence_tier"], row["git_check"], row["git_check_reason"], row["branch"], row["kept_change"])
 	}
 	want := map[string]string{
-		"committed": "landed local_git checked feature/x 1",
-		"idle":      "no_changes transcript not_applicable <nil> 0",
-		"notes":     "changed_kept transcript not_applicable <nil> 1",
-		"chat":      "unknown none not_applicable <nil> 0",
+		"committed": "landed local_git checked <nil> feature/x 1",
+		"idle":      "no_changes transcript not_applicable <nil> <nil> 0",
+		"notes":     "changed_kept transcript not_applicable <nil> <nil> 1",
+		"chat":      "unknown none not_applicable <nil> <nil> 0",
+		"gone":      "changed_recent transcript not_checked No checkout of this repository was recorded on this Mac. <nil> 0",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("outcome rows:\n got %v\nwant %v", got, want)
+	}
+	// Its cells read the project's kind and whether and why Git checked it,
+	// whichever columns a query shows.
+	if fields := queryRowActionFields("outcomes", []string{"branch", "linked_commits"}); !slices.Contains(fields, "project_kind") || !slices.Contains(fields, "git_check") || !slices.Contains(fields, "git_check_reason") {
+		t.Fatalf("outcome row fields: %v", fields)
 	}
 }

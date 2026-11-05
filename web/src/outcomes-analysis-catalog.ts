@@ -64,20 +64,24 @@ export function outcomeCatalogFor(tiers: Iterable<string>): AnalysisCatalog {
 
 // The Outcomes dashboard's panels: a pooled ratio per group, from two sums
 // grouped by the same field, largest denominator first; a group with no
-// denominator has no ratio (null), never zero.
-export type OutcomeRatioRow = { key: string; label: string; numerator: number; denominator: number; ratio: number | null };
+// denominator has no ratio (null), never zero, and nor does a group whose
+// numerator is unknown (a sum of nothing priced), which is not zero either.
+export type OutcomeRatioRow = { key: string; label: string; numerator: number | null; denominator: number; ratio: number | null };
 type Bucket = { keys: unknown[]; value: unknown };
 export function outcomeRatioRows(numerators: Bucket[], denominators: Bucket[], label: (key: string) => string, limit = 8): OutcomeRatioRow[] {
   const rows = new Map<string, OutcomeRatioRow>();
   const row = (bucket: Bucket) => {
     const key = bucket.keys[0] == null ? "" : String(bucket.keys[0]);
-    if (!rows.has(key)) rows.set(key, { key, label: label(key), numerator: 0, denominator: 0, ratio: null });
+    if (!rows.has(key)) rows.set(key, { key, label: label(key), numerator: null, denominator: 0, ratio: null });
     return rows.get(key)!;
   };
-  for (const bucket of numerators) row(bucket).numerator += Number(bucket.value) || 0;
+  for (const bucket of numerators) {
+    const item = row(bucket);
+    if (bucket.value != null) item.numerator = (item.numerator ?? 0) + (Number(bucket.value) || 0);
+  }
   for (const bucket of denominators) row(bucket).denominator += Number(bucket.value) || 0;
-  return [...rows.values()].map(item => ({ ...item, ratio: item.denominator > 0 ? item.numerator / item.denominator : null }))
-    .sort((a, b) => b.denominator - a.denominator || b.numerator - a.numerator || a.label.localeCompare(b.label)).slice(0, limit);
+  return [...rows.values()].map(item => ({ ...item, ratio: item.denominator > 0 && item.numerator != null ? item.numerator / item.denominator : null }))
+    .sort((a, b) => b.denominator - a.denominator || (b.numerator ?? -1) - (a.numerator ?? -1) || a.label.localeCompare(b.label)).slice(0, limit);
 }
 
 // Coverage: sessions at each evidence tier, every tier listed, highest first.
