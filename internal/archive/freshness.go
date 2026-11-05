@@ -224,7 +224,7 @@ type freshnessCapture struct {
 var freshnessMetaKeys = []string{"message_trigram_version", toolOutputMergedKey, "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
 	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
-	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "findings_generation", "findings_built_at",
+	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "authorship_quick_generation", "authorship_quick_at", "authorship_refined_at", "findings_generation", "findings_built_at",
 	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git", upgradeCountKey, initializedBuildKey}
 
 // libraryVersionOnce is libraryVersion, which hashes the projection's
@@ -824,13 +824,13 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	l.add(tools)
 
 	// Writing classification: built for the ledger and record generations.
-	authorship := domainEntry{domain: "an.authorship", group: "analyses", label: "Writing classification", asOf: meta["authorship_built_at"], state: freshCurrent}
+	authorship := domainEntry{domain: "an.authorship", group: "analyses", label: "Writing estimates", asOf: latestTime(meta["authorship_built_at"], meta["authorship_quick_at"]), state: freshCurrent}
 	want := inputs + "/" + authorshipVersion
 	changedAt, isDeferred = pendingDeferral("authorship")
 	switch {
 	case metaErr != nil || deferredErr != nil:
 		authorship.state = freshUnknown
-	case meta["authorship_generation"] == want && !isDeferred:
+	case (meta["authorship_generation"] == want || meta["authorship_quick_generation"] == want) && !isDeferred && !c.authorshipQuickPending():
 	case l.nothingToDo(&authorship):
 	case chainFailure(&authorship, ends, changedAt):
 	case isDeferred:
@@ -841,6 +841,15 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		authorship.state, authorship.reason, authorship.next = freshBehind, "changed", nextManualIndex
 	}
 	l.add(authorship)
+	refinement := domainEntry{domain: "an.authorship.refined", group: "analyses", label: "Writing refinement", asOf: meta["authorship_refined_at"], state: freshCurrent}
+	switch {
+	case metaErr != nil:
+		refinement.state = freshUnknown
+	case l.nothingToDo(&refinement):
+	case meta["authorship_generation"] != want:
+		l.scheduledFor(&refinement, "writing-refine", meta["authorship_built_at"])
+	}
+	l.add(refinement)
 
 	// The tool ledger: conversations whose ledger is from an older version.
 	// Counting them reads every conversation, so the ledger takes the count

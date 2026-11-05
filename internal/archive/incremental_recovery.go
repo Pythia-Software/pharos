@@ -439,19 +439,16 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			return err
 		}
 	}
-	// Repository merges can invalidate analyses, so snapshot dirty generations
-	// after GitHub resolution and before the remaining stages.
-	rows, err := queryMapsContext(ctx, s.Catalog.DB, "SELECT name,generation FROM sync_deferred WHERE generation>completed_generation")
-	if err != nil {
-		return err
+	// Earlier stages can dirty later consumers. Snapshot each stage just before
+	// its work, while retaining changes that arrive during that work for later.
+	readGeneration := func(name string) (int64, error) {
+		var value int64
+		err := s.Catalog.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT generation FROM sync_deferred WHERE name=? AND generation>completed_generation),0)`, name).Scan(&value)
+		return value, err
 	}
-	generation := map[string]int64{}
-	for _, row := range rows {
-		generation[firstString(row["name"])] = integer(row["generation"])
-	}
-	complete := func(name string) error {
+	complete := func(name string, generation int64) error {
 		return s.Catalog.writeTransaction(ctx, "complete deferred "+name, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, "UPDATE sync_deferred SET completed_generation=MAX(completed_generation,?),completed_at=? WHERE name=?", generation[name], now(), name)
+			_, err := tx.ExecContext(ctx, "UPDATE sync_deferred SET completed_generation=MAX(completed_generation,?),completed_at=? WHERE name=?", generation, now(), name)
 			return err
 		})
 	}
@@ -463,37 +460,53 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		{"git", func() error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		{"tools", func() error { return s.Catalog.ensureToolRollup(ctx) }},
 		{"authorship", func() error {
-			// The rebuild runs in the background, as a child of this stage.
-			// A rebuild a page started may be running; it does not check
-			// again while this index runs (startAuthorship), so once it ends
-			// this stage starts its own. A few rounds also cover the moment
-			// between a rebuild and its own follow-up.
-			for round := 1; ; round++ {
-				started := s.Catalog.refreshAuthorshipInContext(withOp(ctx, stage))
-				for s.Catalog.authorshipRunning() {
+			// A page may already be estimating older inputs. Wait for that
+			// bounded pass, then give this index at most one pass of its own.
+			// A daily refinement does not make an index wait for a full scan.
+			refining := func() bool {
+				s.Catalog.authorship.mu.Lock()
+				defer s.Catalog.authorship.mu.Unlock()
+				return s.Catalog.authorship.refining
+			}
+			wait := func() error {
+				for s.Catalog.authorshipRunning() && !refining() {
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
 					case <-time.After(50 * time.Millisecond):
 					}
 				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				want, built, err := s.Catalog.authorshipGenerations()
+				return ctx.Err()
+			}
+			if err := wait(); err != nil {
+				return err
+			}
+			if refining() {
+				return nil
+			}
+			started := s.Catalog.refreshAuthorshipInContext(withOp(ctx, stage))
+			if err := wait(); err != nil {
+				return err
+			}
+			if refining() {
+				return nil
+			}
+			if !started {
+				want, built, err := s.Catalog.authorshipEstimateGenerations()
 				if err != nil {
 					return err
 				}
-				if want == built {
-					return nil
-				}
-				s.Catalog.authorship.mu.Lock()
-				failed := s.Catalog.authorship.lastError != ""
-				s.Catalog.authorship.mu.Unlock()
-				if round == 3 || (started && failed) {
-					return errors.New("authorship rebuild did not complete; dirty generation retained")
+				if want != built || s.Catalog.authorshipQuickPending() {
+					return errors.New("writing estimates did not start; dirty generation retained")
 				}
 			}
+			s.Catalog.authorship.mu.Lock()
+			failure := s.Catalog.authorship.lastError
+			s.Catalog.authorship.mu.Unlock()
+			if failure != "" {
+				return fmt.Errorf("writing estimates: %s", failure)
+			}
+			return nil
 		}},
 		{"findings", func() error {
 			// A page or another explicit action may already be discovering
@@ -518,17 +531,14 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 	// Local labels come last, and only where they are turned on: a backlog
 	// never delays findings, and a library without them runs the chain as
 	// before (docs/local-labeler.md).
+	disabled := []string{}
 	if settings := s.Config().Labels; settings.Enabled {
 		stages = append(stages, struct {
 			name string
 			work func() error
 		}{"labels", func() error { return s.chainLabels(ctx, settings) }})
-	} else if generation["labels"] > 0 {
-		// With labels off there is nothing to label: what indexing marked
-		// is done, so it never reads as waiting.
-		if err := complete("labels"); err != nil {
-			return err
-		}
+	} else {
+		disabled = append(disabled, "labels")
 	}
 	// Agent events follow, also only where they are turned on.
 	if settings := s.Config().AgentEvents; s.agentEventsEnabled(ctx) {
@@ -536,10 +546,8 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			name string
 			work func() error
 		}{"agent_events", func() error { return s.chainAgentEvents(ctx, s.Config().Labels, settings) }})
-	} else if generation["agent_events"] > 0 {
-		if err := complete("agent_events"); err != nil {
-			return err
-		}
+	} else {
+		disabled = append(disabled, "agent_events")
 	}
 	for _, stage := range stages {
 		if err := ctx.Err(); err != nil {
@@ -549,7 +557,11 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			continue
 		}
 		if err := runPhase(stage.name, func() error {
-			err := stage.work()
+			generation, err := readGeneration(stage.name)
+			if err != nil {
+				return err
+			}
+			err = stage.work()
 			if errors.Is(err, errStageContinues) {
 				// Its share is done; the rest stays pending for later.
 				return nil
@@ -557,9 +569,22 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			if err != nil {
 				return err
 			}
-			return complete(stage.name)
+			return complete(stage.name, generation)
 		}); err != nil {
 			return err
+		}
+	}
+	// Disabled consumers have nothing to process, including inputs dirtied by
+	// this chain. Acknowledge them after the producing stages have finished.
+	for _, name := range disabled {
+		generation, err := readGeneration(name)
+		if err != nil {
+			return err
+		}
+		if generation > 0 {
+			if err := complete(name, generation); err != nil {
+				return err
+			}
 		}
 	}
 	// The freshness ledger's upgrade count (§5), cheap next to the whole

@@ -150,13 +150,13 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 // ensureAuthorshipForLabels brings the authorship ledger current first: the
 // labeler reads human pieces from it, as the chain runs labels after it.
 func (c *Catalog) ensureAuthorshipForLabels(ctx context.Context, stderr io.Writer) error {
-	want, built, err := c.authorshipGenerations()
+	want, built, err := c.authorshipEstimateGenerations()
 	if err != nil || want == built {
 		return err
 	}
-	fmt.Fprintln(stderr, "labels: classifying your writing first (the authorship ledger is behind)")
+	fmt.Fprintln(stderr, "labels: updating writing estimates first (historical refinement runs overnight)")
 	started := time.Now()
-	if err := c.RebuildAuthorship(ctx, want); err != nil {
+	if err := c.UpdateAuthorship(ctx, want); err != nil {
 		return fmt.Errorf("authorship: %w", err)
 	}
 	fmt.Fprintf(stderr, "labels: authorship took %s\n", time.Since(started).Round(time.Second))
@@ -223,7 +223,7 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 	status["segments"] = segments
 	generation, _ := c.metaValue(ctx, "labels_generation")
 	builtAt, _ := c.metaValue(ctx, "labels_built_at")
-	_, authorship, _ := c.authorshipGenerations()
+	_, authorship, _ := c.authorshipEstimateGenerations()
 	status["generation"], status["built_at"] = generation, builtAt
 	switch {
 	case generation == "":

@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS authorship_questions(conversation_id TEXT PRIMARY KEY
 `
 
 func (c *Catalog) ensureAuthorshipState() error {
+	if err := c.ensureQuickAuthorshipState(); err != nil {
+		return err
+	}
 	if _, err := c.DB.Exec(authorshipStateDDL); err != nil {
 		return err
 	}
@@ -250,7 +253,7 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 		return nil, err
 	}
 	run := &authorshipIncremental{checkpoint: checkpoint, reason: "checkpoint unavailable"}
-	_, built, err := c.authorshipGenerations()
+	_, built, err := c.authorshipGenerationsContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -718,8 +721,14 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 		if err := tx.QueryRowContext(ctx, "SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
 			return err
 		}
-		metadata := map[string]string{"authorship_generation": generation, "authorship_built_at": now()}
+		metadata := map[string]string{"authorship_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
+		if full {
+			metadata["authorship_refined_at"] = now()
+		}
 		if revision == run.checkpoint.revision {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM authorship_pending"); err != nil {
+				return err
+			}
 			for key, value := range map[string]string{"version": authorshipStateVersion, "generation": generation, "watermark": watermark, "graph": graph} {
 				metadata["authorship_state_"+key] = value
 			}
