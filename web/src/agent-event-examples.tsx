@@ -1,3 +1,4 @@
+import { postQueryRows } from "./query-transport";
 import { useEffect, useState } from "react";
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import { agentEventKindLabel } from "./agent-events-analysis-catalog";
@@ -33,11 +34,9 @@ function useEventRows(where: WhereTerm[], limit: number) {
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    const request = { version: 2, profile: "qt-sqlite-v1", select: fields, where: JSON.parse(key), orderBy: [{ field: "probability", dir: "desc" }, { field: "occurred_at", dir: "desc" }, { field: "id", dir: "asc" }], limit, offset: 0 };
-    fetch("/api/query/agent_events/rows-v2", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal: controller.signal })
-      .then(async response => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error?.message ?? body.error ?? "Events could not be loaded.");
+    const request = { select: fields, where: JSON.parse(key), orderBy: [{ field: "probability", dir: "desc" as const }, { field: "occurred_at", dir: "desc" as const }, { field: "id", dir: "asc" as const }], limit, offset: 0 };
+    postQueryRows<EventRow>("agent_events",request,controller.signal)
+      .then(body => {
         setState({ key, rows: body.rows ?? [], total: Number(body.total) || 0, error: "", loading: false });
       })
       .catch(failure => { if (!controller.signal.aborted) setState({ key, rows: [], total: 0, error: failure instanceof Error ? failure.message : String(failure), loading: false }); });

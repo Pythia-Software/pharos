@@ -475,7 +475,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 // Resources as a service reports them (§10): itself and a Terminal command.
-const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const statusResources = (label, processes) => ({ cpu_percent: 3, gpu: { utilization_percent: 62, sampled_at: iso(0), basis: "IOAccelerator.AppUsage.accumulatedGPUTime" }, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
 const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
   { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
 const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
@@ -486,6 +486,9 @@ const statusHeadings = { work: "Work", data: "Data" };
 // /api/background report it.
 const backgroundItem = (id, label, cadence, state, changes = {}) => ({
   id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence, usual_cadence: cadence,
+  cadence_moves: ["frequent", "hourly", "daily", "manual"].filter(target => target !== cadence).map(target => ({
+    cadence: target, label: `Move to ${{ frequent: "Frequently", hourly: "Hourly", daily: "Daily", manual: "Only when you ask" }[target]} for a week`,
+  })),
   adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
   as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s", typical: "Typically 30–45 s" },
   choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
@@ -505,18 +508,17 @@ const idleBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
     sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
-  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
-    cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
-    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min", typical: "Typically 5–8 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("writing", "Update writing estimates", "frequent", "current", { cost: { seconds: 2, runs: 7, class: "light", text: "a few seconds", typical: "Typically a few seconds" } }),
   backgroundItem("findings", "Findings", "hourly", "current"),
   backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "failed", { error: "git rev-list timed out after 5 s in ~/code/a-repository-with-a-very-long-name-that-has-to-wrap" }),
-  backgroundItem("writing", "Your writing", "hourly", "running"),
+  backgroundItem("writing", "Update writing estimates", "frequent", "running"),
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
@@ -567,7 +569,7 @@ export const busyStatus = {
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
   freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
-  library: {...idleStatus.library, wal_bytes: 64e6},
+  library: {...idleStatus.library, wal_bytes: 2e9},
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -667,11 +669,13 @@ export const defaultApi = {
   "GET /api/query-object-references": { references: [] },
 
   "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
+  "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
   // Query Table, on the production transport.
   "POST /api/query/usage/carbon": carbon,
   "POST /api/query/writing/series": ({ body }) => ({ works: 2, ...(body?.hourly ? { hourly: [] } : {}),
     daily: Array.from({ length: 14 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), typed_messages: 3, messages: 5, ...writingCounts(120 + index * 10, 40, 900) })),
     totals: { messages: 70, typed_messages: 42, first_day: new Date(now - 13 * day).toLocaleDateString("en-CA"), ...writingCounts(2000, 560, 12600) } }),
+  "GET /api/tool-calls/:id": ({ params }) => datasets.tool_calls.find(row => String(row.id) === params.id) ?? {},
   "* /api/query/:dataset/:operation": ({ params, body, query }) => schemas[params.dataset] && answerQuery(params.operation, body, datasets[params.dataset], schemas[params.dataset], { now, id: query.get("id") }),
   "POST /api/query/:dataset": ({ params, body }) => schemas[params.dataset] && answerQuery("rows", body, datasets[params.dataset], schemas[params.dataset], { now }),
 
@@ -682,7 +686,7 @@ export const defaultApi = {
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
-  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
+  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
@@ -734,7 +738,7 @@ export const defaultApi = {
   },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
-  "GET /api/authorship": { built_at: iso(3600000), running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
+  "GET /api/authorship": { built_at: iso(120000), refined_at: iso(8*3600000), provisional_messages: 12, refinement_pending: true, pending_messages: 0, refining: false, running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,

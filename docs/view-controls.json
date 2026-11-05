@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -245,6 +245,10 @@
     },
     {
       "file": "web/src/data-taxonomy.tsx",
+      "field": "query_layout"
+    },
+    {
+      "file": "web/src/sync-tables.tsx",
       "field": "query_layout"
     },
     {
@@ -4367,15 +4371,6 @@
       "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
-      "key": "19871f71c3d02175:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "CardGroupsField",
-      "control": "value={draft.groups} onChange={groups => update({ groups })}",
-      "contract": "editing",
-      "reason": "How many chart groups the new card shows. An unapplied authoring draft saved only with the card, never a dashboard view parameter; the dashboard keeps its own count."
-    },
-    {
       "key": "2da290a1c01e8a10:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
@@ -4410,6 +4405,15 @@
       "control": "onClick={() => dialog.current?.close()}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ff498fde464eaf4:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "CardGroupsField",
+      "control": "value={draft.groups} onChange={value => { const count = value.trim() ? Number(value) : undefined; update({ groups: value, description: draft.description === dashboardCardDescription(draft.url, draft.target, from.schema, groups) ? dashboardCardDescription(draft.url, draft.target, from.schema, validCardGroups(count) ? count : undefined) : draft.description }); }}",
+      "contract": "editing",
+      "reason": "New card group-count draft; also refreshes the unedited default description. Saved only with the card, while the dashboard retains its own group count."
     },
     {
       "key": "b4d31e6a92c6f43b:0",
@@ -5684,67 +5688,67 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "782e951cbf10c182:0",
+      "key": "00c6447476393db3:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "HabitsSettingsPanel",
-      "control": "onChange={update}",
-      "contract": "settings",
-      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
-    },
-    {
-      "key": "807c26364addf6f8:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "CalendarChart",
       "control": "onSelect={setSelected}",
       "contract": "view.habits_day",
       "reason": "Selects or clears the calendar day through habits_day."
     },
     {
-      "key": "a2a903535d89bfce:0",
+      "key": "26e0848933ff750e:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={calendar} onChange={setCalendar}",
-      "contract": "view.habits_calendar",
-      "reason": "Writes habits_calendar through useViewState."
-    },
-    {
-      "key": "afce7374875b6312:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={mode} onChange={setMode}",
-      "contract": "view.habits_streak",
-      "reason": "Writes habits_streak through useViewState."
-    },
-    {
-      "key": "bb9fd842bddd5bee:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "DayDetail",
       "control": "onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))}",
       "contract": "view.habits_day",
       "reason": "Selects the calendar day through habits_day; its vacation switch saves to the habit settings (pharos-habits-v1), not the view."
     },
     {
-      "key": "d73e684db4c89234:0",
+      "key": "384e3fe78886bc91:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={weeks} onChange={setWeeks}",
-      "contract": "view.habits_weeks",
-      "reason": "Writes habits_weeks through useViewState."
+      "owner": "HabitsPanels",
+      "tag": "HabitsSettingsPanel",
+      "control": "onChange={update}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
     },
     {
-      "key": "dc058267a3b501a8:0",
+      "key": "399a2db4800b62d7:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={calendar} onChange={setCalendar}",
+      "contract": "view.habits_calendar",
+      "reason": "Writes habits_calendar through useViewState."
+    },
+    {
+      "key": "62c663a43b279ae5:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
       "tag": "ChartSelect",
       "control": "value={weekends} onChange={setWeekends}",
       "contract": "view.habits_weekends",
       "reason": "Writes habits_weekends through useViewState."
+    },
+    {
+      "key": "a998566b759387ca:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={mode} onChange={setMode}",
+      "contract": "view.habits_streak",
+      "reason": "Writes habits_streak through useViewState."
+    },
+    {
+      "key": "d58768ff4d085138:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={weeks} onChange={setWeeks}",
+      "contract": "view.habits_weeks",
+      "reason": "Writes habits_weeks through useViewState."
     },
     {
       "key": "7d1a49d4d82e3d7d:0",
@@ -5818,7 +5822,7 @@
       "tag": "ChartSelect",
       "control": "value={String(days)} onChange={onDays}",
       "contract": "view.habits_shape_days",
-      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanel's useViewState binding."
+      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanels' useViewState binding."
     },
     {
       "key": "0cc6b34321064cd2:0",
@@ -6144,13 +6148,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "4af7943147f725a8:0",
+      "key": "2ae56d618fbd40b1:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "button",
-      "control": "onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}",
+      "control": "onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}",
       "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
       "key": "4fe03021c57d9fcb:0",
@@ -6171,13 +6175,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "cc9d50ef6a6ff735:0",
+      "key": "9765fd6b72a02f3c:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "MetricsPanel",
-      "control": "onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}",
+      "control": "onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}",
       "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
       "key": "6d045847d0c95152:0",
@@ -6440,6 +6444,35 @@
       "control": "\"input\"",
       "contract": "view.find",
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
+      "key": "26f74b7cb0ed5e94:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"tokens.pricing-prompt\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "352f14ea9b260a3e:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "button",
+      "control": "onClick={() => void copyPrompt()}",
+      "contract": "action",
+      "reason": "Copies the generated pricing research prompt to the clipboard; does not change the content view or dismiss missing prices."
+    },
+    {
+      "key": "5613c684de087e62:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "textarea",
+      "control": "aria-label=\"Pricing refresh prompt\" value={pricing?.prompt ?? \"\"}",
+      "contract": "action",
+      "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
     },
     {
       "key": "502369976da84683:0",
@@ -7199,8 +7232,8 @@
       "owner": "SyncQueryTable",
       "tag": "MetricsPanel",
       "control": "onInspect={(bucket, clause) => { const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "74c21543f498bd83:0",
@@ -7208,17 +7241,17 @@
       "owner": "SyncQueryTable",
       "tag": "DataTable",
       "control": "onQueryChange={api.setQuery}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
-      "key": "cf14e4c3c5c1cee0:0",
+      "key": "98a927a3547e1c1f:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "SyncQueryTable",
       "tag": "QueryBuilder",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "control": "onCollapsedChange={setCollapsed}",
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "7c0248af1a26259f:0",

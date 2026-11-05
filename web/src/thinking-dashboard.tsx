@@ -15,6 +15,7 @@ import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
 import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { thinkingCardTitle } from "./thinking-card";
 
 import {
   thinkingBreakdowns,
@@ -682,7 +683,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           {detail ? (
             <>
               <div className="thinking-card-title">
-                <h2>Compare whole distributions</h2>
+                <h2>{thinkingCardTitle("thinking-distributions", state)}</h2>
                 <CreateDashboardCard target="thinking-distributions" />
               </div>
               {fixed ? (
@@ -913,6 +914,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               <div className="thinking-overview-pair">
                 <ThinkingCDF
                   groups={data.groups}
+                  title={thinkingCardTitle("thinking-waits", state)}
                   action={<CreateDashboardCard target="thinking-waits" />}
                 />
                 <div>
@@ -1019,7 +1021,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               </ViewDisclosure>
               <div className="thinking-card-title">
                 <h2 className="thinking-section-title">
-                  Compaction and thinking time
+                  {thinkingCardTitle("thinking-compactions", state)}
                 </h2>
                 <CreateDashboardCard target="thinking-compactions" />
               </div>

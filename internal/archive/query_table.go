@@ -329,13 +329,13 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		return
 	}
 	// The legacy grouped route is gone. A page loaded before an upgrade can
-	// still call it; reloading picks up /metrics.
+	// still call it; reloading picks up /query-v3.
 	if operation == "aggregations" {
 		writeError(w, fmt.Errorf("this version of Pharos no longer serves this request; reload the page"), http.StatusGone)
 		return
 	}
 	if operation == "metrics" || operation == "rows-v2" {
-		s.postQueryV2(w, r, dataset, operation)
+		writeError(w, fmt.Errorf("this query protocol is no longer supported; reload the page to use query-v3"), http.StatusGone)
 		return
 	}
 	schema, err := s.queryTableSchema(dataset)

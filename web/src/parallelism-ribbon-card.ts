@@ -15,6 +15,13 @@ export function ribbonCardTitle(settings: ConcurrencySettings): string {
   return `Concurrent ${units(settings)}${settings.mode === "model" ? " with model activity" : " over time"}${settings.repository ? ` in ${settings.repository}` : ""}`;
 }
 
+export function ribbonCardDescription(settings: ConcurrencySettings): string {
+  const range = settings.zoom ? `Selected interval ${new Date(settings.zoom[0]).toISOString()} to ${new Date(settings.zoom[1]).toISOString()}.`
+    : settings.range === "custom" ? `Dates ${settings.startDay || settings.day || "latest day"} to ${settings.endDay || settings.startDay || settings.day || "latest day"}.`
+    : settings.range === "day" && settings.day ? `Date ${settings.day}.` : "";
+  return `${range ? `${range} ` : ""}Average concurrent ${units(settings)}, stacked by repository${settings.repository ? `, limited to ${settings.repository}` : ""}. ${settings.mode === "model" ? "Model activity intervals." : `Agent turns; join activity across gaps up to ${settings.gap} minutes.`}`;
+}
+
 export function ribbonCardWindow(settings: ConcurrencySettings): string {
   if (settings.zoom) return "Saved range";
   if (settings.range === "today") return "Today";

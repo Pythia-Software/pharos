@@ -19,7 +19,7 @@ import (
 )
 
 const labelsUsage = `usage:
-  pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--full] [--one-at-a-time] [--dry-run] [--json] [--export-items FILE [--export-text]]
+  pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--backend auto|cpu|mlx] [--full] [--one-at-a-time] [--dry-run] [--json] [--export-items FILE [--export-text]]
   pharos [--config PATH] labels status [--json]
   pharos [--config PATH] labels fetch
   pharos [--config PATH] labels explain MESSAGE_ID [--infer]`
@@ -52,6 +52,7 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 		flags.IntVar(&settings.BatchTokens, "batch-tokens", settings.BatchTokens, "padded tokens per batch")
 		flags.IntVar(&settings.MaxBatch, "max-batch", settings.MaxBatch, "items per batch")
 		flags.IntVar(&settings.Workers, "workers", settings.Workers, "worker processes")
+		flags.StringVar(&settings.Backend, "backend", settings.Backend, "auto, cpu or mlx")
 		flags.IntVar(&settings.Threads, "threads", settings.Threads, "threads per worker")
 		full := flags.Bool("full", false, "rebuild every conversation's items")
 		single := flags.Bool("one-at-a-time", false, "one item per batch, one batch at a time (a baseline)")
@@ -149,13 +150,13 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 // ensureAuthorshipForLabels brings the authorship ledger current first: the
 // labeler reads human pieces from it, as the chain runs labels after it.
 func (c *Catalog) ensureAuthorshipForLabels(ctx context.Context, stderr io.Writer) error {
-	want, built, err := c.authorshipGenerations()
+	want, built, err := c.authorshipEstimateGenerations()
 	if err != nil || want == built {
 		return err
 	}
-	fmt.Fprintln(stderr, "labels: classifying your writing first (the authorship ledger is behind)")
+	fmt.Fprintln(stderr, "labels: updating writing estimates first (historical refinement runs overnight)")
 	started := time.Now()
-	if err := c.RebuildAuthorship(ctx, want); err != nil {
+	if err := c.UpdateAuthorship(ctx, want); err != nil {
 		return fmt.Errorf("authorship: %w", err)
 	}
 	fmt.Fprintf(stderr, "labels: authorship took %s\n", time.Since(started).Round(time.Second))
@@ -222,7 +223,7 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 	status["segments"] = segments
 	generation, _ := c.metaValue(ctx, "labels_generation")
 	builtAt, _ := c.metaValue(ctx, "labels_built_at")
-	_, authorship, _ := c.authorshipGenerations()
+	_, authorship, _ := c.authorshipEstimateGenerations()
 	status["generation"], status["built_at"] = generation, builtAt
 	switch {
 	case generation == "":
@@ -310,21 +311,23 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 		}
 	}
 	if infer {
-		runner, release, err := c.labelerManager(settings).Runner(ctx, model, labelrt.RunnerConfig{Worker: settings.Worker, Args: runtimeArgs(settings),
+		runner, release, err := c.labelerManager(settings).Runner(ctx, model, labelrt.RunnerConfig{GPU: model.MayUseGPU(settings.Backend), Worker: settings.Worker, Args: runtimeArgs(settings),
 			Workers: 1, Threads: settings.Threads, MaxBatch: max(1, settings.MaxBatch)})
 		if err != nil {
 			return nil, err
 		}
 		defer release()
-		result, err := runner.RunBatch(ctx, rows, []string{"probs"})
+		result, err := runner.Run(ctx, rows, []string{"probs"}, settings.BatchTokens)
 		if err != nil {
 			return nil, err
 		}
-		probs := result.Tensor("probs").Float32
 		var mask uint64
 		chunks := []map[string]any{}
 		for row, item := range items {
-			p := probs[row*model.Labels() : (row+1)*model.Labels()]
+			p := result[row]["probs"]
+			if len(p) != model.Labels() {
+				return nil, fmt.Errorf("labeler worker returned %d probabilities for chunk %d; expected %d", len(p), row, model.Labels())
+			}
 			chunk := model.Decide(p, item.Segment)
 			mask |= chunk
 			chunks = append(chunks, map[string]any{"labels": model.LabelNames(chunk), "probs": labelProbMap(model, p)})
@@ -335,10 +338,17 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 }
 
 func runtimeArgs(settings LabelerSettings) []string {
-	if settings.Runtime == "" {
-		return nil
+	var args []string
+	if settings.Runtime != "" {
+		args = append(args, "--runtime", settings.Runtime)
 	}
-	return []string{"--runtime", settings.Runtime}
+	if settings.Backend != "" {
+		args = append(args, "--backend", settings.Backend)
+	}
+	if settings.MLXRuntime != "" {
+		args = append(args, "--mlx-runtime", settings.MLXRuntime)
+	}
+	return args
 }
 
 func thresholdRow(model *labelrt.Model, segment string) map[string]float32 {

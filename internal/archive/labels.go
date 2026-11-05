@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS message_labels_models (
   model TEXT PRIMARY KEY,
   labels_json TEXT NOT NULL
 );
-` + messageLabelLedgerIndexSQL + ";"
+` + messageLabelLedgerIndexSQL + ";" + messageLabelMaskIndexSQL + ";"
 
 // labelsDirtyTriggers mark a conversation dirty when anything its items are
 // built from changes: its messages, their classification, reasoning
@@ -188,6 +188,8 @@ type LabelerSettings struct {
 	// Worker is the worker executable; Runtime the ONNX Runtime library it
 	// loads (passed as --runtime).
 	Worker, Runtime string
+	// Backend is auto (default), cpu or mlx; MLXRuntime overrides the native engine.
+	Backend, MLXRuntime string
 	// Threads per worker, workers, and the padded-token budget of a batch.
 	Threads, Workers, BatchTokens, MaxBatch int
 	// ThreadBudget and MemoryBudgetMB bound every model's workers together
@@ -206,13 +208,16 @@ func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
 		}
 		return expandPath(os.Getenv(key))
 	}
+	dir := env("PHAROS_LABELS_MODEL_DIR", resolvePath(base, stringValue(root, "labels_model_dir", "")))
 	settings := LabelerSettings{
-		Enabled:  boolValue(root, "labels_enabled", false),
-		ModelDir: env("PHAROS_LABELS_MODEL_DIR", resolvePath(base, stringValue(root, "labels_model_dir", ""))),
-		Variant:  stringValue(root, "labels_variant", "int8"),
-		Worker:   env("PHAROS_LABELS_WORKER", resolvePath(base, stringValue(root, "labels_worker", ""))),
-		Runtime:  env("PHAROS_ORT_LIBRARY", resolvePath(base, stringValue(root, "labels_runtime", ""))),
-		Threads:  intValue(root, "labels_threads", 4), Workers: intValue(root, "labels_workers", 1),
+		Enabled:    boolValue(root, "labels_enabled", false),
+		ModelDir:   dir,
+		Variant:    stringValue(root, "labels_variant", labelsAssets.Model.modelVariant(dir)),
+		Worker:     env("PHAROS_LABELS_WORKER", resolvePath(base, stringValue(root, "labels_worker", ""))),
+		Runtime:    env("PHAROS_ORT_LIBRARY", resolvePath(base, stringValue(root, "labels_runtime", ""))),
+		Backend:    stringValue(root, "labels_backend", "auto"),
+		MLXRuntime: env("PHAROS_MLX_LIBRARY", resolvePath(base, stringValue(root, "labels_mlx_runtime", ""))),
+		Threads:    intValue(root, "labels_threads", 4), Workers: intValue(root, "labels_workers", 1),
 		BatchTokens: intValue(root, "labels_batch_tokens", 16384), MaxBatch: intValue(root, "labels_max_batch", 64),
 		ThreadBudget: intValue(root, "labels_thread_budget", 0), MemoryBudgetMB: intValue(root, "labels_memory_budget_mb", 8192),
 		IdleSeconds: intValue(root, "labels_idle_seconds", 120),
@@ -477,7 +482,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	if err := c.ensureLabelsSchema(ctx); err != nil {
 		return stats, err
 	}
-	_, authorship, err := c.authorshipGenerations()
+	_, authorship, err := c.authorshipEstimateGenerations()
 	if err != nil {
 		return stats, err
 	}
@@ -514,7 +519,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 		if err := c.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_labels_dirty`).Scan(&dirty); err != nil {
 			return stats, err
 		}
-		_, current, err := c.authorshipGenerations()
+		_, current, err := c.authorshipEstimateGenerations()
 		if err != nil {
 			return stats, err
 		}
@@ -764,7 +769,7 @@ func (r *labelsRun) startPool(ctx context.Context) error {
 		return nil
 	}
 	started := time.Now()
-	cfg := labelrt.RunnerConfig{Worker: r.settings.Worker, Args: runtimeArgs(r.settings), Workers: max(1, r.settings.Workers), Threads: r.settings.Threads,
+	cfg := labelrt.RunnerConfig{GPU: r.model.MayUseGPU(r.settings.Backend), Worker: r.settings.Worker, Args: runtimeArgs(r.settings), Workers: max(1, r.settings.Workers), Threads: r.settings.Threads,
 		MaxBatch: max(1, r.settings.MaxBatch), Backoff: labelsWorkerBackoff,
 		OnRestart: func(slot int, cause error) { r.progress("labels: restarting worker %d after: %v", slot, cause) }}
 	if r.opts.OneAtATime {
@@ -863,7 +868,7 @@ func (r *labelsRun) execute(parent context.Context, builder *labelsItemBuilder, 
 		for i, seq := range window {
 			lengths[i] = len(seq.message.seqs[seq.chunk])
 		}
-		for _, indices := range labelrt.PackBatches(lengths, r.settings.BatchTokens, r.maxBatch(), r.model.PadMultiple) {
+		for _, indices := range labelrt.PackBatches(lengths, r.runner.TokenBudget(r.settings.BatchTokens), r.maxBatch(), r.model.PadMultiple) {
 			batch := labelsBatch{}
 			for _, index := range indices {
 				batch.seqs = append(batch.seqs, window[index])
@@ -1208,9 +1213,32 @@ func (r *labelsRun) buildConversation(ctx context.Context, builder *labelsItemBu
 	return builder.conversation(ctx, id)
 }
 
+// labelsWriteGrace bounds the whole writer's drain after inference stops,
+// including time waiting for the catalog. While inference is running, waiting
+// behind another catalog writer must not exhaust a per-flush deadline.
+var labelsWriteGrace = 30 * time.Second
+
+func labelsWriteContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	grace := labelsWriteGrace
+	stop := context.AfterFunc(parent, func() {
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			cancel()
+		case <-ctx.Done():
+		}
+	})
+	return ctx, func() { stop(); cancel() }
+}
+
 // write stores finished jobs in batched transactions: at most about 500
-// rows or two seconds' worth each.
+// rows or two seconds' worth each. The run owns the writes' lifetime; only
+// stopping starts the grace period for storing already finished jobs.
 func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
+	ctx, cancel := labelsWriteContext(ctx)
+	defer cancel()
 	var pending []*labelsJob
 	rows := 0
 	var failure error
@@ -1220,14 +1248,11 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 			return
 		}
 		started := time.Now()
-		// What is finished is stored even when the run is stopping.
-		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
 		labeledAt := now()
-		err := r.c.writeTransaction(writeCtx, "store message labels", func(tx *sql.Tx) error {
+		err := r.c.writeTransaction(ctx, "store message labels", func(tx *sql.Tx) error {
 			for _, job := range pending {
 				for _, id := range job.stale {
-					if _, err := tx.ExecContext(writeCtx, `DELETE FROM message_labels WHERE message_id=? AND conversation_id=?`, id, job.conversation); err != nil {
+					if _, err := tx.ExecContext(ctx, `DELETE FROM message_labels WHERE message_id=? AND conversation_id=?`, id, job.conversation); err != nil {
 						return err
 					}
 				}
@@ -1237,7 +1262,7 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 						complete = false
 						continue
 					}
-					if _, err := tx.ExecContext(writeCtx, `INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at)
+					if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at)
 						VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET conversation_id=excluded.conversation_id,segment=excluded.segment,labels=excluded.labels,
 						probs=excluded.probs,chunks=excluded.chunks,tokens=excluded.tokens,input_hash=excluded.input_hash,model=excluded.model,contract=excluded.contract,labeled_at=excluded.labeled_at`,
 						message.id, message.conversation, message.segment, int64(message.mask), encodeLabelProbs(message.probs), len(message.seqs), message.tokens,
@@ -1248,14 +1273,14 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 				if !complete {
 					continue
 				}
-				if _, err := tx.ExecContext(writeCtx, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES(?,?,?,?)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES(?,?,?,?)
 					ON CONFLICT(conversation_id) DO UPDATE SET structure=excluded.structure,units=excluded.units,built_at=excluded.built_at`,
 					job.conversation, job.structure, job.units, labeledAt); err != nil {
 					return err
 				}
 				// A mark written after this run read it carries another token
 				// and stays.
-				if _, err := tx.ExecContext(writeCtx, `DELETE FROM message_labels_dirty WHERE conversation_id=? AND token=?`, job.conversation, job.token); err != nil {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM message_labels_dirty WHERE conversation_id=? AND token=?`, job.conversation, job.token); err != nil {
 					return err
 				}
 			}

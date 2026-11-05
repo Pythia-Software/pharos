@@ -73,6 +73,8 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
     [{ metric: "conversations", split: "none", display: "cumulative" }, { display: "interval" }, /running count of distinct conversations/],
     [{ metric: "output_share", split: "none", rollingPeriods: 7, rollingOp: "sum" }, { rollingOp: "mean" }, /pools its window/],
     [{ metric: "agent_sessions", split: "none", period: "days", days: 3 }, { period: "day" }, /counted per hour, day, week or month/],
+    [{ metric: "average_fanout", split: "none", period: "days", days: 3 }, { period: "day" }, /several periods would add/],
+    [{ metric: "average_fanout", split: "none", period: "hours", hours: 3 }, { period: "hour" }, /several periods would add/],
     [{ metric: "cost", split: "type" }, { split: "provider" }, /Token type splits tokens only/],
     [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no norm/],
     [{ metric: "tokens", split: "none", display: "cumulative", norm: true }, { norm: false }, /running totals/],
@@ -455,7 +457,7 @@ test("a combined selection filters the executed query where a filter can state i
   const pairs = [["codex", "gpt-5"], ["claude", "sonnet"]].map(pair => JSON.stringify(pair));
   const state = { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider_model", selection: { values: pairs, excluded: false } };
   const scatter = analysisQuery(catalog, state, range, { now });
-  assert.deepEqual(core.toQueryRequestV3(scatter.query, schema, capabilities, execution, { now, rows: false }).diagnostics, [], "an OR across two fields is a valid filter");
+  assert.doesNotThrow(() => core.toQueryRequestV3(scatter.query, schema, capabilities, execution, { now, rows: false }), "an OR across two fields is a valid filter");
   const drawn = selectGroups(core.evaluateMetrics(rows, scatter.query, schema, { now }).metrics[0], scatter.selection);
   const roots = rows.filter(row => pairs.includes(JSON.stringify([row.root_provider, row.root_model_family])));
   assert.deepEqual(new Set(drawn.buckets.map(bucket => bucket.keys.at(-1))).size, Math.min(3, new Set(roots.map(row => row.root_conversation_id)).size));
@@ -471,7 +473,7 @@ test("a combined selection filters the executed query where a filter can state i
   assert.deepEqual(selectionWhere(["provider", "model_family"], { values: many, excluded: false }), [term]);
   const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: many, excluded: false } }, range, { now });
   assert.ok(compare.query.where.some(item => JSON.stringify(item) === JSON.stringify(term)) && !compare.selection.late);
-  assert.deepEqual(core.toQueryRequestV3(compare.query, schema, capabilities, execution, { now, rows: false }).diagnostics, []);
+  assert.doesNotThrow(() => core.toQueryRequestV3(compare.query, schema, capabilities, execution, { now, rows: false }));
   assert.deepEqual(core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0].buckets.map(bucket => bucket.keys), [["codex", "gpt-5"]], "only the selected pairs that hold usage");
   assert.ok(compare.supporting.grouping.source.where.some(item => JSON.stringify(item) === JSON.stringify(term)));
   const opened = analysisInspectQuery(compare, { keys: ["codex", "gpt-5"], value: 1, count: 1 }, compare.clause, schema, "compare");

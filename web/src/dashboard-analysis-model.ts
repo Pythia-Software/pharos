@@ -105,7 +105,7 @@ export type AnalysisCatalog = {
   // trend offers it disabled.
   periods: Partial<Record<TrendPeriodField, string>>;
   // The day-boundary rule. Days, weeks and months are the recorded calendar
-  // fields (periods), as the cards group them, so the trend runs on /metrics
+  // fields (periods), as the cards group them, so the trend runs on /query-v3
   // and its supporting query is grouped. Records with a true timestamp group
   // it for hours, in the viewer's zone (UTC clock hours placed at the local
   // hour, dateGrouping), as the hour and weekday cycles do. A day-grained
@@ -370,7 +370,8 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     share: !measure.additive && !measure.populationShare ? `${measure.label} does not add up across groups, so it has no shares` : state.split === noSplit ? "Shares need a breakdown" : undefined,
     cumulative: kind === "count" ? `A running count of distinct ${measure.unit} cannot be built from per-period counts` : kind === "level" ? `${measure.label} does not accumulate` : undefined,
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
-    multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
+    multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts`
+      : kind === "level" ? `${measure.label} is calculated per hour, day, week or month; several periods would add its values` : undefined,
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
     norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
     component, name,

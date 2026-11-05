@@ -1,6 +1,41 @@
 import assert from 'node:assert/strict';
 import {messageLabelFingerprintCache} from '../../../src/message-label-results-model';
 import {test} from 'node:test';
+import {EMPTY_QUERY,loadSchema,readFieldValue,toServerQuery,toQueryRequestV3,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
+import {withFingerprintColumn} from '../../../src/fingerprint-columns';
+import {schemaDocuments} from '../../../src/schema-documents';
+
+test('fingerprint columns request stable entity identities even as the only selected column',()=>{
+ for(const [dataset,identity,renderer] of [['library','id','workspace_fingerprint'],['writing','id','workspace_fingerprint'],['usage','conversation_id','label_fingerprint'],['writing_messages','conversation_id','label_fingerprint'],['tool_calls','conversation_id','label_fingerprint'],['tl1_attempts','workspace_id','workspace_fingerprint']]){
+  const original=loadSchema(schemaDocuments[dataset]),schema=withFingerprintColumn(original,dataset),field=schema.fields.find(f=>f.name==='fingerprint');
+  assert.equal(field.render,renderer,dataset);
+  assert.equal(readFieldValue(field,{id:'row',conversation_id:'conversation',workspace_id:'workspace'}),identity==='id'?'row':identity==='conversation_id'?'conversation':'workspace');
+  assert.equal(readFieldValue(field,{id:'unrelated-row'}),identity==='id'?'unrelated-row':undefined,'never use an event ID as a conversation ID');
+  const query={...EMPTY_QUERY,select:[{field:'fingerprint',width:180}],orderBy:[]};
+  const projected=toServerQuery(query,schema).select;
+  assert.ok(projected.includes(identity),dataset);
+  assert.ok(!projected.includes('fingerprint'),'render-only field never reaches SQL');
+  const request=toQueryRequestV3(query,schema,{version:3,profile:'qt-sqlite-v1',groupedRows:true,computedSourceFilters:true});
+  assert.deepEqual(request.diagnostics??[],[],dataset);
+  assert.deepEqual(decodeQueryStrict(encodeQuery(query)).select,query.select);
+  assert.equal(withFingerprintColumn(schema,dataset),schema);
+  assert.deepEqual(schema.defaultSelect,original.defaultSelect);
+  const workspace=schema.fields.find(field=>field.name==='workspace_fingerprint');
+  if(identity==='conversation_id'&&original.fields.some(field=>field.name==='workspace_id')){
+   assert.equal(readFieldValue(workspace,{id:'event',workspace_id:'work'}),'work');
+   const workspaceQuery={...query,select:[{field:'workspace_fingerprint'}]};
+   assert.ok(toServerQuery(workspaceQuery,schema).select.includes('workspace_id'));
+  }
+ }
+ const labels=loadSchema(schemaDocuments.message_labels);
+ const enriched=withFingerprintColumn(labels,'message_labels');
+ assert.equal(enriched.fields.find(field=>field.name==='fingerprint'),labels.fields.find(field=>field.name==='fingerprint'),'keep the existing label grouping key');
+ assert.ok(enriched.fields.some(field=>field.name==='workspace_fingerprint'));
+ for(const dataset of ['tools','mcp_calls']){
+  const schema=loadSchema(schemaDocuments[dataset]);
+  assert.equal(withFingerprintColumn(schema,dataset),schema,'aggregate or caller records have no source fingerprint');
+ }
+});
 
 test('fingerprint requests share work, retain recently visited pages and reload evicted conversations',async()=>{
  const calls=[],cache=messageLabelFingerprintCache(async id=>{calls.push(id);return id;},2);

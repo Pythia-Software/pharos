@@ -20,7 +20,7 @@ export function messageLabelFingerprintCache<Value>(load:(id:string)=>Promise<Va
  };
 }
 export function messageLabelConversationQuery(source:QueryState):QueryState {
- return {...EMPTY_QUERY,limit:40,fitToScreen:true,grouping:{source:{...(source.grouping?.source??source),offset:0,aggregations:[]},keys:['fingerprint'],summaries:[
+ return {...EMPTY_QUERY,limit:40,fit:"screen" as const,grouping:{source:{...(source.grouping?.source??source),offset:0,aggregations:[]},keys:['fingerprint'],summaries:[
  {id:'conversation_title',op:'row',field:'title',label:'Conversation'},{id:'conversation_workspace',op:'row',field:'workspace_id',label:'Workspace'},
  {id:'conversation_repository',op:'row',field:'repository_name',label:'Repository'},
  {id:'matching_messages',op:'count_distinct',field:'message_id',label:'Matching messages'},

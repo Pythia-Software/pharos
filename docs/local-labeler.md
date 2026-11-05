@@ -38,8 +38,10 @@ runtime instead, and comes first:
 |---|---|---|
 | `labels_enabled` | — | `true` labels messages as the chain's last stage and in the Message labels background item, and downloads the model when it is missing (default `false`) |
 | `labels_model_dir` | `PHAROS_LABELS_MODEL_DIR` | the model directory (below); default the app bundle's, then the download |
-| `labels_variant` | — | `int8` (default) or `fp32` |
+| `labels_variant` | — | `int8` or `fp32`; managed downloads use the model release's default, while custom directories retain int8 unless set |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |
+| `labels_backend` | — | `auto` (default), `cpu`, or `mlx`; shared by message labels and agent events. MLX needs a verified FP32 companion ([Apple silicon GPU](#apple-silicon-gpu)) |
+| `labels_mlx_runtime` | `PHAROS_MLX_LIBRARY` | native MLX engine override; default `mlx/libpharos_mlx.dylib` beside the worker |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
 | `labels_threads` | — | intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → Cores |
 | `labels_workers` | — | worker processes (default 1) |
@@ -55,10 +57,140 @@ macos/fetch-onnxruntime.sh            # pinned release, SHA-256 checked, into bu
 CGO_ENABLED=1 go build -o build/pharos-labeler-ort ./cmd/pharos-labeler-ort
 ```
 
+## Apple silicon GPU
+
+The worker supports native C++ MLX inference for the Ettin 68M target-pooling
+Kestrel message classifier and Jayhawk event/sentence classifier. Tokenization,
+framing, thresholds and the worker protocol are shared with the CPU path.
+MLX runs compiled FP32 operations on Metal; Python is unnecessary at runtime.
+See [MLX compilation](https://ml-explore.github.io/mlx/build/html/usage/compile.html).
+
+The pinned MLX 0.32.4 **macOS 26 wheel** and its native engine require macOS
+26.2 or later and Apple silicon. These are the runtime binaries validated for
+this backend; this is not a claim about every MLX distribution. Pharos and its
+CPU worker retain their macOS 14 minimum. The app build bundles the engine,
+`libmlx.dylib`, `libjaccl.dylib`, `mlx.metallib` and license notices, signing
+nested libraries before the app. The service never links MLX.
+
+> **TODO (high priority): shrink the bundled MLX runtime.**
+>
+> The v0.8.7 app bundles approximately **238 MB** of MLX libraries, including
+> a **214 MB `mlx.metallib`**. This addition explains virtually all of the
+> installed-size jump from v0.8.5. Go stripping and LZMA reduce the download,
+> but the large GPU runtime remains in the installed app.
+>
+> Revisit upstream's `MLX_METAL_JIT=ON` and `MinSizeRel` build options. This
+> optimization is **deferred and unverified**. Keep the prebuilt runtime
+> until the following validation is complete:
+>
+> - Build a pinned upstream release on a Mac with a compatible SDK and the
+>   Metal compiler; retain safetensors support and required license notices.
+> - Measure installed and compressed sizes, first-use shader compilation,
+>   cached startup, steady inference and memory usage.
+> - Verify Kestrel and Jayhawk predictions and decisions across batch and
+>   sequence shapes, Apple silicon generations, and supported macOS versions.
+> - Verify CPU fallback, hardened signing, notarization and a Sparkle update
+>   round trip; review the minimum GPU OS version explicitly.
+>
+> Upstream guidance: [MLX binary-size minimization](https://ml-explore.github.io/mlx/build/html/install.html#binary-size-minimization).
+
+`auto` selects MLX only for a selected FP32 ONNX model with a verified MLX
+companion. Unsupported machines or unavailable native libraries use that same
+FP32 ONNX file on CPU, with a startup diagnostic. `mlx` requires the GPU backend
+and returns an error if it cannot start. Corrupt companions are errors; a
+running session never changes device silently. Ready metadata reports the
+actual runtime, device and provider. `cpu` forces ONNX Runtime.
+
+Version 1 downloads contain only int8 ONNX, so they continue on
+CPU. A prepared version 2 release kit includes int8, FP32 ONNX and MLX in each
+model archive. Its pending descriptor selects FP32 for managed downloads;
+after publication and pin promotion, enabling labels/events downloads those
+models and selects MLX automatically on supported Macs. End users need no
+model paths or companion configuration. Explicit int8 settings and custom
+model directories retain their existing behavior. CPU fallback for a selected
+FP32 model always uses FP32, preserving its model identity across devices.
+See [Cleanroom model publication](#cleanroom-model-publication).
+
+Build the native runtime and worker locally:
+
+```sh
+macos/build-labeler-mlx.sh build/mlx
+CGO_CFLAGS="-O2 -g -mmacosx-version-min=14.0" \
+  CGO_LDFLAGS="-mmacosx-version-min=14.0" CGO_ENABLED=1 go build -o build/pharos-labeler-ort ./cmd/pharos-labeler-ort
+```
+
+In an export environment with Python 3.11+, numpy, torch, onnx and safetensors,
+add each companion to a **copy** of its complete FP32 model directory:
+
+```sh
+python3 tools/export_labeler_mlx.py /path/to/message-model \
+  --checkpoint /path/to/message-checkpoint.pt \
+  --encoder-config /path/to/encoder-config.json --task kestrel
+python3 tools/export_labeler_mlx.py /path/to/event-model \
+  --checkpoint /path/to/event-checkpoint.pt \
+  --encoder-config /path/to/encoder-config.json --task jayhawk
+python3 tools/package_labeler_model.py /path/to/message-model --variant fp32 --out build/models
+```
+
+The exporter checks the supported encoder configuration and that every FP32
+checkpoint tensor occurs in the ONNX export (including transposed matrices).
+It writes `model.mlx.safetensors`, metadata identifying `ettin-68m-v1` and its
+task, the source ONNX SHA-256, and the companion digest in `manifest.json`.
+Both model loaders verify the digest and source identity. The native engine
+checks exact tensor names, shapes and FP32 types. The canonical model file
+and SHA in the protocol remain the FP32 ONNX reference. As with every model
+update, changing the manifest triggers the ledger's existing rebuild rule.
+
+Configure the converted directories in the library configuration:
+
+```toml
+labels_model_dir = "/path/to/message-model"
+labels_variant = "fp32"
+agent_events_model_dir = "/path/to/event-model"
+agent_events_variant = "fp32"
+labels_backend = "auto"
+# Development builds only; app bundles find these beside the worker:
+labels_worker = "/path/to/pharos/build/pharos-labeler-ort"
+labels_mlx_runtime = "/path/to/pharos/build/mlx/libpharos_mlx.dylib"
+# labels_runtime still locates ONNX Runtime for CPU fallback.
+```
+
+One GPU worker is admitted across both models, with at least 3,072 MB reserved
+from the existing memory budget. The native engine sets MLX's soft evaluation
+limit to 3 GiB and its unused-buffer cache limit to 512 MiB. These are allocator
+guidelines, not a hard process-memory cap; MLX can temporarily exceed them
+during evaluation. Without an explicit cache limit, varied batch shapes can
+retain tens of gigabytes of unused Metal buffers on a large-memory Mac.
+Closing the model also clears that buffer cache. Idle workers are evicted when
+the other model needs the GPU; active contention returns the existing
+budget-exhausted error.
+Admission conservatively reserves this capacity for eligible `auto` sessions
+even when startup subsequently falls back to CPU. Power, cancellation, restart
+and idle-expiry policies still apply. Batches respect the worker's 256-row and 16,384
+padded-token limits; Kestrel accepts 512 tokens and Jayhawk 768 per row.
+
+The optional Go integration test can recheck both native classifiers against
+ONNX Runtime with short and maximum-length mixed batches, output selection,
+padding and empty sentence slots:
+
+```sh
+PHAROS_MLX_TEST_MODELS="/path/to/message-model:/path/to/event-model" \
+  PHAROS_MLX_LIBRARY="$PWD/build/mlx/libpharos_mlx.dylib" \
+  PHAROS_ORT_LIBRARY="/path/to/libonnxruntime.dylib" \
+  go test -run TestMLXNativeParity -v ./cmd/pharos-labeler-ort
+```
+
+The native implementation was checked on an M3 Ultra against saved FP32 ONNX
+CPU outputs for 582 messages and 396 event candidates. All message label sets,
+event verdicts, family decisions and sentence decisions matched. Maximum
+probability differences were 0.000013 for messages and 0.000005 for events and
+sentences. These are corpus checks, not a guarantee of identical floating
+point values for every possible input.
+
 ## Commands
 
 ```sh
-pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--full] [--one-at-a-time] [--dry-run] [--json]
+pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--backend auto|cpu|mlx] [--full] [--one-at-a-time] [--dry-run] [--json]
 pharos [--config PATH] labels status [--json]
 pharos [--config PATH] labels explain MESSAGE_ID [--infer]
 pharos [--config PATH] labels fetch
@@ -313,6 +445,22 @@ those ids), and the conversation's `labels` (`labeled`, `pending`, and the
 taxonomy rows its labels name). It only reads, and attaches nothing to a
 catalog without a ledger.
 
+## Fingerprints in result tables
+
+Library search and other workspace tables offer **Fingerprint** in the column
+chooser. Conversation and message tables offer their conversation's
+**Fingerprint** and, when the workspace is known, **Workspace fingerprint**.
+Selected fingerprints also appear in Library's conversation cards. Column
+selection, order and width travel with saved queries and copied URLs.
+
+These use the same compact message-label ribbon as label-search results:
+colors show accepted labels and hatching shows recorded branch overlap.
+A workspace combines its conversations in time order. Fingerprints load only
+when displayed, send no message bodies, and never start labeling. Each reads
+at most 2,400 retained events; **Sample** marks a truncated fingerprint.
+Pending conversations remain unlabeled without hiding accepted labels from
+other conversations in the workspace.
+
 ## Scheduling and power
 
 Labels follow the [background updates](background-work.md#11-background-updates)
@@ -359,6 +507,7 @@ schedule rather than one of their own:
 | A batch keeps crashing workers, or the worker rejects it (`bad_request`, `run_failed`) | The batch is split and sent one item at a time, so one bad item fails only its message, which stays pending for the next run. |
 | Workers keep crashing (8 restarts in a row with no batch succeeding) | The run ends **interrupted**, keeping what it stored. |
 | A conversation cannot be built (a damaged row; a panic is caught) | It keeps its dirty mark for the next run; the others go on. A stored classification that no longer fits its message counts as none until authorship catches up. |
+| Another operation holds the catalog writer | Finished labels wait in the bounded pipeline, slowing inference until the writer is available. Waiting during a running backfill has no separate save deadline. On stop, all finished work shares one 30-second drain budget; work that cannot be saved stays pending for the next run. |
 | The labels cannot be stored | The run stops at once with the write's error. |
 
 The worker holds no file on the library's drive, so it never delays an eject.
@@ -500,9 +649,13 @@ model. To publish a new model version:
 
 1. Package the model directory:
    `python3 tools/package_labeler_model.py MODEL_DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json`.
-   It writes `build/labeler/<name>-N.tar.gz` with the manifest, the int8
-   ONNX file and the tokenizer at its root, checks them against the
-   manifest, and pins the archive's SHA-256 and size. The archive is
+   It writes `build/labeler/<name>-N.tar.gz` with the manifest, the selected
+   ONNX file and the tokenizer at its root (`--variant all` includes both ONNX
+   variants and the MLX companion). It checks them against the
+   manifest, and pins the archive's SHA-256 and size. A single-variant archive
+   also sets the managed download default to that variant. With `--variant all`,
+   the existing default is preserved (int8 when unset); use `--default-variant`
+   to select a different included variant. The archive is
    deterministic: packaging the same directory again gives the same bytes.
 2. On the deployment Mac, create the GitHub release `labeler-<name>-N` on
    `Pythia-Software/pharos` and attach that archive under its own name, for
@@ -513,6 +666,79 @@ model. To publish a new model version:
    that have an older one keep it until they label again with the new
    build, which downloads the new version beside it (rows record the model,
    so a switch relabels).
+
+### Cleanroom model publication
+
+The prepared MLX model releases are independent of the app release and its
+signing keys. Export and package on the development/research Mac; transfer
+only the finished release kit to the cleanroom. The cleanroom never needs
+checkpoints, Python ML packages, conversion tools or research directories.
+
+To prepare a new kit from already converted model directories:
+
+```sh
+python3 tools/prepare_labeler_release.py \
+  --message-model /path/to/converted-kestrel \
+  --event-model /path/to/converted-jayhawk \
+  --version 2 --out build/labeler-models-v2 \
+  --candidate internal/archive/labels/assets.mlx-v2.json \
+  --validation-report /path/to/native-mlx-validation.json
+```
+
+The source directories must include both ONNX variants, verified MLX weights
+and the tokenizer. The optional validation report carries aggregate parity
+results only. The tool verifies every archived file and writes:
+
+- `build/labeler-models-v2/`: both deterministic model archives, per-archive
+  checksum files, release notes, candidate `assets.json`, a provenance index,
+  an offline verifier/publisher and the supplied validation summary.
+- `build/labeler-models-v2.tar` and `.tar.sha256`: the portable handoff. No
+  model files or transfer archives belong in git.
+- `internal/archive/labels/assets.mlx-v2.json`: reviewed pending app pins.
+  **The active `assets.json` remains unchanged until publication succeeds.**
+
+Transfer the tar and its checksum file to the cleanroom, then verify and unpack:
+
+```sh
+shasum -a 256 -c labeler-models-v2.tar.sha256
+tar -xf labeler-models-v2.tar
+python3 labeler-models-v2/publish_labeler_models.py verify labeler-models-v2
+```
+
+The transferred publisher uses only Python 3.10+ and the cleanroom's existing
+`gh` login. From its clean `origin/master` checkout:
+
+```sh
+python3 /path/to/labeler-models-v2/publish_labeler_models.py \
+  publish /path/to/labeler-models-v2
+```
+
+This creates the two separate `labeler-<name>-2` draft releases, uploads their
+archives and checksum files, verifies GitHub's asset digests, and publishes
+with `--latest=false`. It leaves app releases and the Sparkle feed alone.
+Interrupted uploads reuse matching draft assets; conflicting or already
+published assets are never overwritten. No app-signing setup is involved.
+
+After both model releases are public, run this from a development checkout:
+
+```sh
+python3 /path/to/labeler-models-v2/publish_labeler_models.py \
+  promote /path/to/labeler-models-v2
+```
+
+Promotion verifies both published assets before updating only `model` and
+`agent_events_model` in the active descriptor, preserving runtime pins. Review,
+commit and merge that small pin change. The normal cleanroom app release then
+builds from clean `origin/master`; it embeds those pins and fetches the pinned
+MLX SDK for its native engine, without requiring the prepared model archives.
+End-user Macs fetch the model archives when labeling is enabled.
+
+The version 2 pins declare `default_variant: fp32`. This is a deliberate model
+migration: int8 and FP32 can yield different scores and some decisions. The
+existing model identity/rebuild rules rescore affected ledgers once. Keeping
+FP32 canonical on CPU and GPU avoids silently changing variants on fallback.
+The int8 files remain available for explicit `labels_variant = "int8"` and
+`agent_events_variant = "int8"` configurations.
 
 The app release itself needs nothing new: `pharos` embeds the descriptor,
 and `macos/build-app.sh` builds the worker into

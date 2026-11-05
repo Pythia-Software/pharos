@@ -111,7 +111,7 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "effort-tokens", Expression: "SUM([total_tokens])", GroupBy: []string{"hour", "effort"}, Scope: scope})
 			q.Where = []qt.WhereTerm{{Field: "effort", Op: "=", Value: high}}
 			q.Limit = 1
-			v2Result, err := testServer(t, config, catalog).executeQueryV2(context.Background(), "usage", nil, v2Schema, nil, &q)
+			v2Result, err := testServer(t, config, catalog).executeQueryFixture(context.Background(), "usage", nil, v2Schema, nil, &q)
 			if err != nil {
 				t.Fatal(err)
 			}

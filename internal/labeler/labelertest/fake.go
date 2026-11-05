@@ -24,6 +24,8 @@ const (
 	FakeCountEnv  = "PHAROS_LABELER_FAKE_COUNT"
 	// FakeHelloEnv optionally records each worker's handshake as JSONL.
 	FakeHelloEnv = "PHAROS_LABELER_FAKE_HELLO"
+	// FakeMaxTokensEnv optionally imposes a backend padded-token limit.
+	FakeMaxTokensEnv = "PHAROS_LABELER_FAKE_MAX_TOKENS"
 )
 
 // FakeProb is the fake model: (sum of the row's real token ids + j) mod 100
@@ -115,6 +117,7 @@ func FakeWorker(mode string) int {
 	}
 	ready := labeler.Ready{Protocol: labeler.ProtocolVersion, Worker: labeler.WorkerInfo{Name: "fake", Version: "1", Runtime: "none"}}
 	ready.Limits.MaxBatch, ready.Limits.MaxSeq = 64, max(512, hello.MaxSeq)
+	ready.Limits.MaxTokens, _ = strconv.Atoi(os.Getenv(FakeMaxTokensEnv))
 	writeJSON(labeler.FrameReady, ready)
 	if mode == "deaf" {
 		time.Sleep(time.Hour) // until killed
@@ -145,6 +148,9 @@ func FakeWorker(mode string) int {
 			req, err := labeler.DecodeRun(payload)
 			if err == nil {
 				err = labeler.ValidateRun(req, hello.RunInputs(), hello.VocabSize, 64, ready.Limits.MaxSeq)
+			}
+			if err == nil && ready.Limits.MaxTokens > 0 && req.Inputs[0].Elements() > ready.Limits.MaxTokens {
+				err = fmt.Errorf("batch exceeds %d padded tokens", ready.Limits.MaxTokens)
 			}
 			if err != nil {
 				writeJSON(labeler.FrameError, labeler.ErrorReply{ID: req.ID, Code: labeler.ErrCodeBadRequest, Message: err.Error()})

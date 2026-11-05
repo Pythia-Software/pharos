@@ -10,6 +10,47 @@ import messageLabelsDocument from '../../../schemas/message_labels.schema.json' 
 import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
+test('workspace fingerprint columns restore in search tables and conversation cards',{skip},async t=>{
+ const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5};
+ const app=await open(t,{url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint svg'}),{page}=app;
+ assert.ok(await page.getByRole('img',{name:/recorded branches workspace fingerprint/}).count());
+ await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
+ await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
+ await app.settled();
+ await page.reload();
+ await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
+ assert.ok(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed')==='true');
+ await app.shot('workspace-fingerprints');
+});
+
+test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
+ const query={...EMPTY_QUERY,where:[{field:'kind',op:'=',value:'backup.local'}],orderBy:[{field:'seconds',dir:'asc'}]};
+ const params=new URLSearchParams({q_sync_operations:encodeQuery(query),query_layout:JSON.stringify({sync_operations:true,sync_sources:false})});
+ const first=await open(t,{url:'/settings/sync?'+params,ready:'#syncHistoryTables .qt-row'});
+ const history=page=>page.getByRole('region',{name:'Recent run history',exact:true});
+ await first.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===1);
+ assert.ok(await history(first.page).getByText('Back up',{exact:true}).isVisible());
+ assert.ok(await history(first.page).getByRole('button',{name:'Expand query builder',exact:true}).isVisible());
+ assert.ok(await first.page.getByRole('region',{name:'Source status',exact:true}).getByRole('button',{name:'Add filter',exact:true}).isVisible());
+ await history(first.page).getByRole('button',{name:'Expand query builder',exact:true}).click();
+ await first.page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('query_layout')).sync_operations===false);
+ const linked=path(first.page);
+ const fresh=await open(t,{url:linked,ready:'#syncHistoryTables .qt-row'});
+ await fresh.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===1);
+ assert.ok(await history(fresh.page).getByRole('button',{name:'Remove Kind filter',exact:true}).isVisible());
+ assert.ok(await history(fresh.page).getByRole('button',{name:'Collapse query builder',exact:true}).isVisible());
+ const restored=decodeQueryStrict(new URL(fresh.page.url()).searchParams.get('q_sync_operations'));
+ assert.deepEqual(restored.where,query.where);
+ assert.deepEqual(restored.orderBy,query.orderBy);
+ // Back/Forward must restore the query on the mounted page.
+ const all=new URL(fresh.page.url());all.searchParams.set('q_sync_operations',encodeQuery(EMPTY_QUERY));
+ await fresh.page.evaluate(url=>{history.pushState(null,'',url);window.dispatchEvent(new PopStateEvent('popstate'));},all.href);
+ await fresh.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===3);
+ await fresh.page.goBack();
+ await fresh.page.waitForFunction(()=>document.querySelectorAll('#syncHistoryTables .qt-row').length===1);
+ assert.ok(await history(fresh.page).getByText('Back up',{exact:true}).isVisible());
+});
+
 test('saved Parallel activity links open the native Timeline and retain the selected range and session',{skip},async t=>{
  const analysis=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
  const range=[analysis.start+10000,analysis.end-10000],params=new URLSearchParams({explorer:'parallel',delegation_start:String(range[0]),delegation_end:String(range[1]),delegation_session:'s-root',delegation_labels:'off'});
@@ -372,7 +413,7 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  const marker=page.locator('.qt-attention-target').filter({hasText:'needle 41'});await marker.first().waitFor();
  assert.equal(await page.evaluate(()=>document.activeElement===document.body),true);
  let scrolls=await page.evaluate(()=>{window.__attentionScrolls=0;const original=Element.prototype.scrollIntoView;Element.prototype.scrollIntoView=function(...args){window.__attentionScrolls++;return original.apply(this,args)};return window.__attentionScrolls});
- const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/rows-v2');
+ const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/query/mcp_calls/query-v3'&&response.request().postDataJSON()?.rows);
  await page.getByRole('button',{name:'Run Now'}).first().click();await refreshed;await app.settled();
  assert.equal(await page.evaluate(()=>window.__attentionScrolls),scrolls);
  const state=fixture.read(page);assert.equal(state.offset,fixture.query.offset);assert.deepEqual(state.where,fixture.query.where);
@@ -747,9 +788,10 @@ test('opening work and returning to Search keeps the native Library search URL',
  const app=await open(t,{url:'/library?'+new URLSearchParams({q_library:encodeQuery(query),text_builder:token}),ready:'#queryTableLibrary .qt-row'}),{page}=app;
  await app.settled();
  const original=decodeQueryStrict(new URL(page.url()).searchParams.get('q_library'));
- // site_link composes view search into the native host state; every request carries it.
+ // site_link composes view search into native host state; collection row requests carry it.
+ // Initial metadata can precede restoration; identity reads are independent of the collection.
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('text_builder')),JSON.parse(original.hostState.params.text_builder[0]));
- const requests=app.calls.filter(call=>call.method==='POST'&&call.path.startsWith('/api/query/library/'));
+ const requests=app.calls.filter(call=>call.method==='POST'&&call.path.startsWith('/api/query/library/')&&call.body?.rows&&!call.body?.source?.where?.some(filter=>filter.field==='id'&&filter.op==='='));
  assert.ok(requests.length>0);
  for(const request of requests)assert.ok(request.query.has('find')||request.query.has('find_where'),`${request.path} dropped the applied search`);
  await page.evaluate(id=>window.pharosOpenDetail(id),workID);
@@ -765,7 +807,7 @@ test('opening work and returning to Search keeps the native Library search URL',
 test('row disclosures record deliberate choices without capturing every rendered default',{skip},async t=>{
  const schema=loadSchema(toolCallsDocument),now=Date.now();
  const rows=Array.from({length:12},(_,i)=>({id:`payload-${i}`,workspace_id:workID,conversation_id:rootConversation,input_text:'Synthetic retained input '.repeat(50),tool_name:'shell',status:'success',started_at:new Date(now).toISOString()}));
- const api={'* /api/query/tool_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')})};
+ const api={'* /api/query/tool_calls/:operation':({params,body,query})=>answerQuery(params.operation,body,rows,schema,{now,id:query.get('id')}),'GET /api/tool-calls/:id':({params})=>rows.find(row=>row.id===params.id)??{}};
  const route=offset=>'/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_data:'tool_calls',q_tool_calls:encodeQuery({...EMPTY_QUERY,select:[{field:'id'},{field:'tool_name'},{field:'__qt_item_details__'}],itemDetails:{modes:['expand']},limit:4,offset,fitToScreen:false})});
  const app=await open(t,{url:route(0),api,ready:'.usage-workspace-table .qt-row'}),{page}=app;
  await page.locator('.usage-workspace-table .qt-row').first().getByRole('button',{name:/^Expand /}).click();
@@ -947,6 +989,31 @@ test('Message Labels category menus apply to descendants and restore mixed selec
  await page.setViewportSize({width:390,height:900});await category.click();
  const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
  await page.keyboard.press('Escape');assert.equal(await category.evaluate(node=>node===document.activeElement),true);
+});
+
+test('Habits panels and the standard dashboard restore their independent controls',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_topic=habits',ready:'.usage-chart-bars:not(.loading) > button'}),{page}=app;
+ await page.getByRole('combobox',{name:'Whose days',exact:true}).selectOption('agents');
+ await page.getByRole('combobox',{name:'Calendar range',exact:true}).selectOption('13');
+ await page.getByRole('combobox',{name:'Punchcard range',exact:true}).selectOption('30');
+ await page.locator('.habits-settings > summary').click();await app.settled();
+ const population=new URL(page.url()).searchParams.get('analyze_filters');
+ await page.locator('.usage-chart').scrollIntoViewIfNeeded();
+ const actor=page.locator('.usage-chart-legend').getByRole('button').first(),actorName=await actor.getAttribute('aria-label');
+ await actor.click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ assert.equal(await actor.getAttribute('aria-pressed'),'true');
+ const view=page.getByRole('combobox',{name:'View',exact:true});
+ await view.selectOption('compare');await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
+ await view.selectOption('trend');await page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),population,'legend and view changes preserve the population');
+ const fresh=await open(t,{url:path(page),ready:'.usage-chart-bars:not(.loading) > button'});
+ assert.equal(await fresh.page.getByRole('combobox',{name:'View',exact:true}).inputValue(),'trend');
+ assert.equal(await fresh.page.locator('.usage-chart-legend').getByRole('button',{name:actorName,exact:true}).getAttribute('aria-pressed'),'true');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Whose days',exact:true}).inputValue(),'agents');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Calendar range',exact:true}).inputValue(),'13');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Punchcard range',exact:true}).inputValue(),'30');
+ assert.equal(await fresh.page.locator('.habits-settings').evaluate(element=>element.open),true);
+ await fresh.shot('habits-restored');
 });
 
 test('native Message Labels dashboards and conversation cards share standard navigation and saved query presentation',{skip},async t=>{

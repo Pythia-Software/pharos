@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
@@ -429,6 +431,91 @@ func TestLabelsBuilderWaitsForTheWorkers(t *testing.T) {
 	}
 }
 
+func TestLabelsWriteContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parent, stop := context.WithCancel(context.Background())
+		defer stop()
+		ctx, cancel := labelsWriteContext(parent)
+		defer cancel()
+		// Virtual time: a live writer may wait longer than the stop grace.
+		timer := time.NewTimer(2 * labelsWriteGrace)
+		<-timer.C
+		if ctx.Err() != nil {
+			t.Fatalf("a running writer expired while waiting: %v", ctx.Err())
+		}
+		stoppedAt := time.Now()
+		stop()
+		synctest.Wait()
+		if ctx.Err() != nil {
+			t.Fatalf("stopping left no time to save finished work: %v", ctx.Err())
+		}
+		<-ctx.Done()
+		if elapsed := time.Since(stoppedAt); elapsed != labelsWriteGrace {
+			t.Fatalf("stop drain lasted %s, want %s", elapsed, labelsWriteGrace)
+		}
+		cancel() // Cleanup is safe even after the grace expires.
+	})
+}
+
+func TestLabelsWriterDrainsWhileStopping(t *testing.T) {
+	for _, releaseWriter := range []bool{true, false} {
+		t.Run(fmt.Sprintf("catalog_available=%v", releaseWriter), func(t *testing.T) {
+			if !releaseWriter {
+				override(t, &labelsWriteGrace, 100*time.Millisecond)
+			}
+			catalog := labeledCatalog(t)
+			if err := catalog.ensureLabelsSchema(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			execTx(t, catalog.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c-root','pending')
+				ON CONFLICT(conversation_id) DO UPDATE SET token=excluded.token`)
+			release, err := catalog.acquireWriteGate(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if release != nil {
+					release()
+				}
+			}()
+			ctx, stop := context.WithCancel(t.Context())
+			defer stop()
+			run := &labelsRun{c: catalog, identity: "test", stats: &LabelsRunStats{}, cancel: stop}
+			jobs := make(chan *labelsJob, 1)
+			jobs <- &labelsJob{conversation: "c-root", token: "pending", structure: "test", units: 1, complete: true,
+				messages: []*labelsMessage{{id: "m-h1", conversation: "c-root", segment: "H-typed", hash: "test", seqs: [][]int32{{1}}, probs: []float32{1}, mask: 1}}}
+			close(jobs)
+			done := make(chan error, 1)
+			go func() { done <- run.write(ctx, jobs) }()
+			waitUntil(t, 5*time.Second, "the label writer to queue", catalog.writersWaiting)
+			stop()
+			if releaseWriter {
+				release()
+				release = nil
+			}
+			select {
+			case err = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("stopping waited indefinitely for the catalog")
+			}
+			var built, dirty int
+			if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_conversations WHERE conversation_id='c-root'`).Scan(&built); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty WHERE conversation_id='c-root'`).Scan(&dirty); err != nil {
+				t.Fatal(err)
+			}
+			if releaseWriter {
+				if err != nil || labelCount(t, catalog, "") != 1 || run.stats.MessagesLabeled != 1 || built != 1 || dirty != 0 {
+					t.Fatalf("finished labels were not saved during stop: %+v built=%d dirty=%d err=%v", run.stats, built, dirty, err)
+				}
+			} else if !errors.Is(err, context.Canceled) || labelCount(t, catalog, "") != 0 || run.stats.MessagesLabeled != 0 || built != 0 || dirty != 1 {
+				t.Fatalf("blocked stop lost its pending work: %+v built=%d dirty=%d err=%v", run.stats, built, dirty, err)
+			}
+		})
+	}
+}
+
 func TestLabelsStopAndResume(t *testing.T) {
 	catalog := labeledCatalog(t)
 	settings := labelsTestSettings(t, "slow")
@@ -499,6 +586,9 @@ func TestLabelsRunInTheAnalysisChainOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestLabelsStatusAndExplain(t *testing.T) {
+	// Lower the backend budget so the existing long-message fixture needs
+	// multiple requests, even though its chunks fit the row limit.
+	t.Setenv(labelertest.FakeMaxTokensEnv, "512")
 	catalog := labeledCatalog(t)
 	settings := labelsTestSettings(t, "ok")
 	status, err := catalog.LabelsStatus(t.Context(), settings)
@@ -524,6 +614,45 @@ func TestLabelsStatusAndExplain(t *testing.T) {
 	if err != nil || explained["excluded"].(map[string]any)["reason"] != "unselected_branch" {
 		t.Fatalf("explain m-branch: %v %v", explained, err)
 	}
+	t.Run("long message respects backend token budget", func(t *testing.T) {
+		model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		explained, err := catalog.LabelsExplain(t.Context(), settings, "m-n2", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items := explained["items"].([]map[string]any)
+		inferred := explained["inferred"].(map[string]any)
+		chunks := inferred["chunks"].([]map[string]any)
+		if len(items) < 2 || len(chunks) != len(items) {
+			t.Fatalf("long explanation lost chunks: %d items, %d inferred", len(items), len(chunks))
+		}
+		longest := 0
+		var union uint64
+		for row, item := range items {
+			ids, _ := model.Tokenizer.FrameWithSpans(labelrt.FrameInput{
+				Segment: item["segment"].(string), Cohort: item["cohort"].(string), Sender: item["sender_role"].(string),
+				Context: item["context"].(string), Text: item["text"].(string),
+			})
+			longest = max(longest, len(ids))
+			probs := make([]float32, model.Labels())
+			for label := range probs {
+				probs[label] = labelertest.FakeProb(ids, label)
+			}
+			if !reflect.DeepEqual(chunks[row]["probs"], labelProbMap(model, probs)) {
+				t.Fatalf("chunk %d probabilities lost their input order", row)
+			}
+			union |= model.Decide(probs, item["segment"].(string))
+		}
+		if len(items)*labelrt.PadLength(longest, model.PadMultiple) <= 512 {
+			t.Fatal("fixture does not exceed the backend token budget")
+		}
+		if !reflect.DeepEqual(inferred["labels"], model.LabelNames(union)) {
+			t.Fatal("chunk labels were not merged")
+		}
+	})
 }
 
 // A model whose input contract adds a pooling mask over the target text
@@ -852,6 +981,73 @@ func TestLabelsBacklogWaitsForPower(t *testing.T) {
 	}
 }
 
+func TestWorkspaceLabelFingerprint(t *testing.T) {
+	c, config := testCatalog(t)
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('ribbon-work','test','test','ribbon-work','Ribbon work','2026-01-01'),('elsewhere','test','test','elsewhere','Other work','2026-01-01');
+ INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('first','ribbon-work','claude','test','first'),('second','ribbon-work','claude','test','second'),('outside','elsewhere','claude','test','outside');
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('first-a','first','a','assistant','message','Private report','a','2026-01-01T12:00:00Z'),('second-a','second','a','user','message','Private request','b','2026-01-01T13:00:00Z'),('outside-a','outside','a','user','message','Other workspace','c','2026-01-01T11:00:00Z');
+ INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,depth,provider,parent_id) VALUES('first-main','ribbon-work','first','main','root',0,'claude',NULL),('first-middle','ribbon-work','first','middle','subagent',1,'claude','first-main'),('first-child','ribbon-work','first','child','subagent',2,'claude','first-middle'),('first-unused','ribbon-work','first','unused','subagent',1,'claude','first-main');
+ INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('first-child','first-a',0)`)
+	srv := testServer(t, config, c)
+	read := func(id string, status int) map[string]any {
+		t.Helper()
+		w := apiCall(t, srv, config.APIToken, http.MethodGet, "/api/labels/workspaces/"+id, nil)
+		var body map[string]any
+		if w.Code != status || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatalf("workspace fingerprint: %d %s", w.Code, w.Body.String())
+		}
+		return body
+	}
+	read("missing", 404)
+	check := func(body map[string]any, count int) []any {
+		t.Helper()
+		conversation := body["conversation"].(map[string]any)
+		messages := conversation["messages"].([]any)
+		if conversation["work_id"] != "ribbon-work" || len(messages) != count {
+			t.Fatalf("wrong workspace evidence: %v", conversation)
+		}
+		for _, value := range messages {
+			m := value.(map[string]any)
+			if m["conversation_id"] == "outside" || m["text"] != "" || m["work_id"] != "ribbon-work" || firstString(m["session_id"]) == "" {
+				t.Fatalf("wrong or private ribbon evidence: %v", m)
+			}
+		}
+		return messages
+	}
+	body := read("ribbon-work", 200)
+	messages := check(body, 2)
+	if messages[0].(map[string]any)["id"] != "first-a" || messages[1].(map[string]any)["session_id"] != "second" {
+		t.Fatalf("lost message order or fallback session: %v", messages)
+	}
+	sessions := body["conversation"].(map[string]any)["sessions"].([]any)
+	if len(sessions) != 4 || messages[0].(map[string]any)["session_id"] != "first-child" {
+		t.Fatalf("lost recorded ancestors or included unused branches: %v", sessions)
+	}
+	var ledger int
+	if err := c.reader().QueryRow("SELECT count(*) FROM sqlite_master WHERE name='message_labels'").Scan(&ledger); err != nil || ledger != 0 {
+		t.Fatal("fingerprint initialized labeling", err)
+	}
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('ribbon-test','["P","C"]');
+ INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('first-a','first','AR',2,x'00000000',1,1,'a','ribbon-test','test','2026-01-01'),('second-a','second','HU',1,x'00000000',1,1,'b','ribbon-test','test','2026-01-01');
+ INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('first','test',1,'2026-01-01'),('second','test',1,'2026-01-01');
+ DELETE FROM message_labels_dirty;
+ INSERT INTO message_labels_dirty(conversation_id,token) VALUES('second','dirty')`)
+	body = read("ribbon-work", 200)
+	messages = check(body, 2)
+	if body["pending"] != true || len(messages[0].(map[string]any)["labels"].([]any)) != 1 || len(messages[1].(map[string]any)["labels"].([]any)) != 0 || messages[1].(map[string]any)["chunks"] != float64(0) {
+		t.Fatalf("mixed freshness hid valid labels or exposed stale labels: %v", body)
+	}
+	override(t, &messageLabelFingerprintLimit, 1)
+	body = read("ribbon-work", 200)
+	check(body, 1)
+	if body["truncated"] != true {
+		t.Fatalf("workspace sample was not bounded: %v", body)
+	}
+}
+
 func TestMessageLabelQueryProjection(t *testing.T) {
 	c, config := testCatalog(t)
 	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,location,title,indexed_at) VALUES('label-work','test','test','label-work','/test','Label work','2026-01-01');
@@ -860,7 +1056,7 @@ func TestMessageLabelQueryProjection(t *testing.T) {
 	read := func() []map[string]any {
 		table, _ := c.sqlDatasetFor("message_labels")
 		table, _ = table.project([]string{"id", "message_id", "label_status", "label", "family"}).preferCoveringScan(nil)
-		rows, err := queryMapsContext(context.Background(), c.reader(), table.v2Source(PharosMessageLabelsSchema()))
+		rows, err := queryMapsContext(context.Background(), c.reader(), table.querySourceSQL(PharosMessageLabelsSchema()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1013,6 +1209,7 @@ func TestMessageLabelQueryProjection(t *testing.T) {
 
 func TestMessageLabelFacts(t *testing.T) {
 	c, config := testCatalog(t)
+	c.ops = newOpRegistry("service")
 	ctx := t.Context()
 	override(t, &messageLabelFactsBatch, 1)
 	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,location,title,indexed_at) VALUES('facts-work','test','test','facts-work','/test','Label work','2026-01-01');
@@ -1023,7 +1220,7 @@ func TestMessageLabelFacts(t *testing.T) {
  ('facts-b1','facts-b','b1','assistant','thinking','Thinking','b1','2026-01-01T14:00:00Z')`)
 	read := func(table sqlDataset) map[string]map[string]any {
 		t.Helper()
-		rows, err := queryMapsContext(ctx, c.reader(), table.v2Source(PharosMessageLabelsSchema()))
+		rows, err := queryMapsContext(ctx, c.reader(), table.querySourceSQL(PharosMessageLabelsSchema()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1047,13 +1244,22 @@ func TestMessageLabelFacts(t *testing.T) {
 	}
 	flush := func() {
 		t.Helper()
+		pass := c.beginPass(ctx, "maintenance.labels.query", triggerChained)
+		defer pass.end(nil)
+		var progress activityWork
+		runCtx := withWorkProgress(ctx, func(work activityWork) { progress = work })
 		for n := 0; n < 100; n++ {
-			count, err := c.refreshMessageLabelFacts(ctx)
+			var count int
+			var err error
+			pass.runIO(runCtx, func(ctx context.Context) { count, err = c.refreshMessageLabelFacts(ctx) })
 			if err != nil {
 				t.Fatal(err)
 			}
 			if count == 0 {
 				return
+			}
+			if progress.Unit != "conversation" || progress.Done <= 0 || progress.Total < progress.Done {
+				t.Fatalf("message-label query indexing did not report its committed conversations: %+v", progress)
 			}
 		}
 		t.Fatal("facts did not finish")
@@ -1100,8 +1306,8 @@ func TestMessageLabelFacts(t *testing.T) {
 	// Parent + descendant masks emit only leaves. Overlapping children count
 	// once as messages in both the parent filter and family grouping.
 	srv := testServer(t, config, c)
-	query := qt.MetricQuery{Version: 2, Limit: 20, Where: []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "label", Op: "=", Value: "P.request"}, {Field: "label", Op: "starts_with", Value: "P.request."}}}}, Metrics: []qt.AggSpec{{ID: "messages", Op: "count_distinct", Field: "message_id", GroupBy: []string{"family"}}}}
-	out, err := srv.executeQueryV2(ctx, "message_labels", nil, PharosMessageLabelsSchema(), nil, &query)
+	query := queryFixtureMetrics{Version: 2, Limit: 20, Where: []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "label", Op: "=", Value: "P.request"}, {Field: "label", Op: "starts_with", Value: "P.request."}}}}, Metrics: []qt.AggSpec{{ID: "messages", Op: "count_distinct", Field: "message_id", GroupBy: []string{"family"}}}}
+	out, err := srv.executeQueryFixture(ctx, "message_labels", nil, PharosMessageLabelsSchema(), nil, &query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1112,6 +1318,77 @@ func TestMessageLabelFacts(t *testing.T) {
 	if scalar("SELECT count(*) FROM message_label_facts") != 3 || scalar("SELECT count(*) FROM message_label_memberships") != 5 {
 		t.Fatal("fact/membership grain differs")
 	}
+	identities := func() map[string]int64 {
+		t.Helper()
+		rows, err := queryMapsContext(ctx, c.DB, "SELECT message_id,rowid FROM message_label_facts")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := map[string]int64{}
+		for _, row := range rows {
+			ids[firstString(row["message_id"])] = integer(row["rowid"])
+		}
+		return ids
+	}
+	originalIDs := identities()
+	// An unchanged refresh does not rewrite either persistent projection, even
+	// when several invalidations coalesced into the same queue entry.
+	execTx(t, c.DB, `INSERT OR IGNORE INTO message_label_facts_dirty VALUES('facts-a');
+ INSERT OR IGNORE INTO message_label_facts_dirty VALUES('facts-a')`)
+	if count, timing, err := c.refreshMessageLabelFactsBudget(ctx, messageLabelFactsMessages); err != nil || count != 1 || timing.changedFacts != 0 || timing.changedMemberships != 0 {
+		t.Fatalf("unchanged refresh: count=%d timing=%+v error=%v", count, timing, err)
+	}
+	if !reflect.DeepEqual(identities(), originalIDs) {
+		t.Fatal("unchanged refresh replaced fact identities")
+	}
+	parity()
+	// Source writes can finish while preparation holds a read snapshot. A
+	// stale preparation must not publish its old inputs or consume the queue.
+	execTx(t, c.DB, `INSERT INTO message_label_facts_dirty VALUES('facts-a')`)
+	func() {
+		conn, err := c.DB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		read, err := conn.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer read.Rollback()
+		build, err := prepareMessageLabelFacts(ctx, read, messageLabelFactsMessages)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if err := c.writeTransaction(writeCtx, "labels during query preparation", func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(writeCtx, "UPDATE message_labels SET labeled_at='2026-01-02' WHERE message_id='facts-a1'")
+			return err
+		}); err != nil {
+			t.Fatalf("preparing query facts blocked a source writer: %v", err)
+		}
+		if err := read.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		tx, finish, err := c.beginTrackedWriteUsing(ctx, "stale label facts", conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer finish()
+		defer tx.Rollback()
+		if err := publishMessageLabelFacts(ctx, tx, build, &messageLabelFactsTiming{}); !errors.Is(err, errMessageLabelFactsStale) {
+			t.Fatalf("stale preparation: %v", err)
+		}
+	}()
+	if scalar("SELECT count(*) FROM message_label_facts_dirty") != 1 {
+		t.Fatal("stale preparation consumed its invalidation")
+	}
+	flush()
+	parity()
+	if !reflect.DeepEqual(identities(), originalIDs) {
+		t.Fatal("label metadata update replaced fact identities")
+	}
 	// One metadata change touches only one conversation; pending data still
 	// agrees with the live projection before the maintenance batch runs.
 	before := scalar("SELECT value FROM query_cache_generation WHERE id=1")
@@ -1120,8 +1397,14 @@ func TestMessageLabelFacts(t *testing.T) {
 		t.Fatal("unrelated conversations invalidated")
 	}
 	parity()
+	if count, timing, err := c.refreshMessageLabelFactsBudget(ctx, messageLabelFactsMessages); err != nil || count != 1 || timing.changedFacts != 1 || timing.changedMemberships != 0 {
+		t.Fatalf("metadata refresh rewrote unrelated rows: count=%d timing=%+v error=%v", count, timing, err)
+	}
 	flush()
 	parity()
+	if !reflect.DeepEqual(identities(), originalIDs) {
+		t.Fatal("conversation metadata update replaced fact identities")
+	}
 	if scalar("SELECT value FROM query_cache_generation WHERE id=1") <= before {
 		t.Fatal("facts publication did not invalidate query cache")
 	}
@@ -1142,6 +1425,31 @@ func TestMessageLabelFacts(t *testing.T) {
 	flush()
 	parity()
 	execTx(t, c.DB, `UPDATE message_authorship SET typed_words=0 WHERE message_id='facts-a2'`)
+	parity()
+	flush()
+	parity()
+	// A failure after updating facts rolls the entire publication back,
+	// including its queue removal and any membership changes.
+	var beforeFailure sql.NullString
+	if err := c.DB.QueryRow("SELECT labeled_at FROM message_label_facts WHERE message_id='facts-a1'").Scan(&beforeFailure); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE message_labels SET labels=48,labeled_at='2026-01-03' WHERE message_id='facts-a1';
+ DELETE FROM message_labels_dirty WHERE conversation_id='facts-a';
+ CREATE TRIGGER fail_label_membership BEFORE INSERT ON message_label_memberships BEGIN SELECT RAISE(ABORT,'test membership failure'); END`)
+	if _, err := c.refreshMessageLabelFacts(ctx); err == nil || !strings.Contains(err.Error(), "test membership failure") {
+		t.Fatalf("publication failure: %v", err)
+	}
+	if scalar("SELECT count(*) FROM message_label_facts_dirty") != 1 || !reflect.DeepEqual(identities(), originalIDs) {
+		t.Fatal("failed publication changed identities or consumed its queue")
+	}
+	execTx(t, c.DB, "DROP TRIGGER fail_label_membership")
+	// The old physical projection is still intact; the live fallback already
+	// exposes the changed source while maintenance retries.
+	var labeledAt sql.NullString
+	if err := c.DB.QueryRow("SELECT labeled_at FROM message_label_facts WHERE message_id='facts-a1'").Scan(&labeledAt); err != nil || labeledAt != beforeFailure {
+		t.Fatalf("failed publication changed stored facts: %v %v (prior value %v)", labeledAt, err, beforeFailure)
+	}
 	parity()
 	flush()
 	parity()
@@ -1175,6 +1483,9 @@ func TestMessageLabelFacts(t *testing.T) {
 	}
 	flush()
 	parity()
+	if identities()["facts-a2"] != originalIDs["facts-a2"] {
+		t.Fatal("moving a message replaced its fact identity")
+	}
 	execTx(t, c.DB, `DELETE FROM messages WHERE id='facts-a1'`)
 	parity()
 	flush()
@@ -1226,8 +1537,90 @@ func TestMessageLabelFacts(t *testing.T) {
 	}
 	defer readonly.Close()
 	stored, _ := readonly.sqlDatasetFor("message_labels")
-	rows, err := queryMapsContext(ctx, readonly.reader(), stored.v2Source(PharosMessageLabelsSchema()))
+	rows, err := queryMapsContext(ctx, readonly.reader(), stored.querySourceSQL(PharosMessageLabelsSchema()))
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("read-only stored labels: %v %v", rows, err)
+	}
+}
+
+func TestMessageLabelFactsBudget(t *testing.T) {
+	c, _ := testCatalog(t)
+	ctx := t.Context()
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,location,title,indexed_at) VALUES('budget-work','test','test','budget-work','/test','Budget','2026-01-01');
+ INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage,model) VALUES
+ ('budget-a','budget-work','codex','test','a','complete','old'),('budget-b','budget-work','codex','test','b','complete','old'),
+ ('budget-c','budget-work','codex','test','c','complete','old'),('budget-d','budget-work','codex','test','d','complete','old');
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES
+ ('budget-a1','budget-a','a1','assistant','message','a','a'),('budget-a2','budget-a','a2','assistant','message','b','b'),
+ ('budget-a3','budget-a','a3','assistant','message','c','c'),('budget-b1','budget-b','b1','assistant','message','d','d'),
+ ('budget-c1','budget-c','c1','tool','tool_result','tool output','tool'),('budget-d1','budget-d','d1','assistant','message','e','e')`)
+	// Hold the gate until the read preparation has finished, then simulate a
+	// source commit from another process. Refresh must retry with the new data.
+	release, err := c.acquireWriteGate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			release()
+		}
+	}()
+	type result struct {
+		count int
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		count, _, err := c.refreshMessageLabelFactsBudget(ctx, 2)
+		done <- result{count, err}
+	}()
+	waitUntil(t, 5*time.Second, "prepared label facts to wait for publication", c.writersWaiting)
+	execTx(t, c.DB, "UPDATE conversations SET model='new' WHERE id='budget-a'")
+	release()
+	released = true
+	select {
+	case got := <-done:
+		if got.err != nil || got.count != 1 {
+			t.Fatalf("oversized conversation did not finish atomically: %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not retry its stale preparation")
+	}
+	var rows, current int
+	if err := c.DB.QueryRow("SELECT count(*),sum(model='new') FROM message_label_facts").Scan(&rows, &current); err != nil || rows != 3 || current != 3 {
+		t.Fatalf("partial or stale conversation facts: rows=%d current=%d error=%v", rows, current, err)
+	}
+	// Tool-only conversations cost no eligible-message budget. The remaining
+	// two prose messages and the empty projection fit in the next transaction.
+	if count, _, err := c.refreshMessageLabelFactsBudget(ctx, 2); err != nil || count != 3 {
+		t.Fatalf("bounded continuation: count=%d error=%v", count, err)
+	}
+	if count, err := c.refreshMessageLabelFacts(ctx); err != nil || count != 0 {
+		t.Fatalf("budgeted refresh did not drain: count=%d error=%v", count, err)
+	}
+	if next := messageLabelFactsNextBudget(100, messageLabelFactsTarget*2); next < 1 || next >= 100 {
+		t.Fatalf("slow publication did not reduce its budget: %d", next)
+	}
+	if next := messageLabelFactsNextBudget(100, messageLabelFactsTarget/2); next <= 100 || next > messageLabelFactsMessages*4 {
+		t.Fatalf("fast publication did not grow its bounded budget: %d", next)
+	}
+}
+
+func TestLabelerBackendSettings(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("PHAROS_ORT_LIBRARY", "")
+	t.Setenv("PHAROS_MLX_LIBRARY", "/environment/libpharos_mlx.dylib")
+	defaults := labelerSettingsFrom(nil, base)
+	if defaults.Backend != "auto" || defaults.MLXRuntime != "/environment/libpharos_mlx.dylib" {
+		t.Fatalf("defaults: %+v", defaults)
+	}
+	configured := labelerSettingsFrom(map[string]any{"labels_backend": "mlx", "labels_mlx_runtime": "native/engine.dylib", "labels_runtime": "native/ort.dylib"}, base)
+	if configured.Backend != "mlx" || configured.MLXRuntime != filepath.Join(base, "native/engine.dylib") {
+		t.Fatalf("configured: %+v", configured)
+	}
+	want := []string{"--runtime", filepath.Join(base, "native/ort.dylib"), "--backend", "mlx", "--mlx-runtime", filepath.Join(base, "native/engine.dylib")}
+	if got := runtimeArgs(configured); !slices.Equal(got, want) {
+		t.Fatalf("worker arguments: %v", got)
 	}
 }

@@ -7,7 +7,7 @@ import * as core from "@pythia-software/query-table-core";
 export const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
 // As the service advertises them: calendar cycles and group keys, and
 // minimums over distinct values and sums.
-export const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, calendarCycles: true, calendarGroupKeys: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000,
+export const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, calendarCycles: true, calendarGroupKeys: true, computedSourceFilters: true, regex: false, regexSourceFilters: true, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000,
   metricFilters: true, metricMinCount: true, metricMinCountMeasures: true };
 export const metricCapabilities = { version: 2, expressions: true, distributions: true, filters: true, minCount: true, minCountMeasures: true };
 export const capabilities = () => ({ metricCapabilities, computedExecution: execution, queryCapabilities });
@@ -46,8 +46,16 @@ export function serverQuery(request, rows, schema) {
   const prepared = state.grouping ? core.prepareGrouping(rows, schema, state.grouping, { now: request.now }) : undefined;
   const projected = prepared?.schema ?? schema, page = core.applyQuery(rows, state, schema, { now: request.now });
   const metrics = core.evaluateMetrics(rows, state, schema, { now: request.now, shownRows: page.rows });
-  return { version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? rows.length, rows: request.rows ? page.rows : [], total: page.total, metrics: metrics.metrics, execution,
+  const result = { version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? rows.length, rows: request.rows ? page.rows : [], total: page.total, metrics: metrics.metrics, execution,
     schema: { name: projected.name, idField: projected.idField, fields: projected.fields.map(({ name, type }) => ({ name, type })) } };
+  if (request.distinct) {
+    const selected=core.applyQuery(rows,{...core.EMPTY_QUERY,where:request.source.where,limit:Math.max(1,rows.length)},schema,{now:request.now}).rows;
+    const counts=new Map();let hasNull=false;
+    for(const row of selected){const value=row[request.distinct.field];if(value==null||Array.isArray(value)&&!value.length){hasNull=true;continue;}for(const item of Array.isArray(value)?value:[value]){const text=String(item);if(text.toLowerCase().includes(request.distinct.search.toLowerCase()))counts.set(text,(counts.get(text)??0)+1);}}
+    const values=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(([value])=>value);
+    result.distinct={values:values.slice(0,request.distinct.limit),hasMore:values.length>request.distinct.limit,hasNull};
+  }
+  return result;
 }
 
 // Answers any Query Table operation on one dataset ("rows" is the legacy
