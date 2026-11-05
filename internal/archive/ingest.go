@@ -879,6 +879,10 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			}
 		}
 	}
+	heldUsage, err := claimClaudeUsage(tx, &record, workspaceID)
+	if err != nil {
+		return 0, 0, err
+	}
 	messageCount, conversationCount := 0, 0
 	conversationIDs := make([]string, len(record.Conversations))
 	merged := map[string]bool{}
@@ -1107,6 +1111,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		return 0, 0, err
 	}
 	if err := recordCopyVersions(tx, host, workspaceID, conversationIDs, record, !authority.older); err != nil {
+		return 0, 0, err
+	}
+	if err := settleClaudeUsage(ctx, tx, record, workspaceID, conversationIDs, heldUsage); err != nil {
 		return 0, 0, err
 	}
 	if err := refreshWorkspaceNames(tx, []string{workspaceID}); err != nil {

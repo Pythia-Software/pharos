@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const usageAttributionVersion = "3"
+const usageAttributionVersion = "4"
 
 func claudeChildren(conversations []ConversationRecord, root ConversationRecord) []ConversationRecord {
 	if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -156,45 +156,12 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			return index, err
 		}
 		workspaceID := firstString(row["id"])
-		items, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,parent_id,provider,model,effort,agent_depth,started_at FROM conversations
-			WHERE workspace_id=? ORDER BY agent_depth,native_id`, workspaceID)
-		if err != nil {
-			return index, err
-		}
-		conversations, ids := make([]ConversationRecord, 0, len(items)), make([]string, 0, len(items))
-		nativeIDs := map[string]string{}
-		for _, item := range items {
-			nativeIDs[firstString(item["id"])] = firstString(item["native_id"])
-		}
-		for _, item := range items {
-			messages, err := storedMessages(ctx, c.DB, item["id"])
-			if err != nil {
-				return index, err
-			}
-			ids = append(ids, firstString(item["id"]))
-			nativeID := firstString(item["native_id"])
-			parentNativeID := nativeIDs[firstString(item["parent_id"])]
-			if before, _, ok := strings.Cut(nativeID, ":subagent:"); ok && parentNativeID == "" {
-				parentNativeID = before
-			}
-			conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})
-		}
-		err = c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
-			for j, conversation := range conversations {
-				if err := replaceAgentSessions(tx, workspaceID, ids[j], conversation); err != nil {
-					return err
-				}
-			}
-			if err := applyClaudeGroupUsage(tx, workspaceID, conversations, ids, nil); err != nil {
+		err := c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
+			if err := repairClaudeUsageCopies(ctx, tx, workspaceID); err != nil {
 				return err
 			}
-			if metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: conversations}); len(metrics) > 0 {
-				if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
-					return err
-				}
-				if err := replaceMetrics(tx, workspaceID, metrics); err != nil {
-					return err
-				}
+			if err := rebuildWorkspaceUsage(ctx, tx, workspaceID); err != nil {
+				return err
 			}
 			_, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
 				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion)

@@ -412,6 +412,18 @@ CREATE TABLE IF NOT EXISTS usage_attribution_state (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   version TEXT NOT NULL
 );
+-- Each Claude conversation's replies, by account, message ID and request ID.
+-- Claude Code copies a reply into a resumed or forked session; of the
+-- conversations holding one, the first to start counts it
+-- (claude_usage_copies.go).
+CREATE TABLE IF NOT EXISTS claude_usage_copies (
+  usage_key TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  PRIMARY KEY(usage_key, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS claude_usage_copies_workspace_idx ON claude_usage_copies(workspace_id);
+CREATE INDEX IF NOT EXISTS claude_usage_copies_conversation_idx ON claude_usage_copies(conversation_id);
 
 -- API price history. Rows are imported from the checked-in pricing file
 -- (pricing/cost_changes.json); only 'confirmed' rows are used for cost.
