@@ -3,8 +3,10 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -250,7 +252,7 @@ func TestCursorComposerKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 		t.Fatalf("times %+v %+v", prompt, byID["o5:error"])
 	}
 	if call, result := byID["o3:call"], byID["o3:result"]; call.CallID != "toolu_1" || call.Text != `{"input":{"command":"make","is_background":false},"tool":"run_terminal_cmd"}` ||
-		result.Text != `{"content":{"exitCode":2,"output":"make: *** No rule","rejected":false},"details":{"exit_code":2},"is_error":false,"tool":"run_terminal_cmd"}` {
+		result.Text != `{"content":"make: *** No rule","details":{"exit_code":2},"is_error":false,"tool":"run_terminal_cmd"}` {
 		t.Fatalf("call %+v result %+v", call, result)
 	}
 	if usage := byID["o4:usage"]; usage.Text != `{"type":"token_usage","usage":{"input_tokens":4000,"output_tokens":300},"usage_message_id":"o4"}` || usage.RawText != "" {
@@ -274,7 +276,7 @@ func TestCursorComposerKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	}
 	command := cursorPrompt + "/t:call-1\nfc_1"
 	if call, result := byID[command+":call"], byID[command+":result"]; call.CallID != "call-1\nfc_1" || call.Text != `{"input":{"command":"python3 -m pytest -q","cwd":"/work/app"},"tool":"run_terminal_command_v2"}` ||
-		result.Text != `{"content":{"exitCodeV2":0,"notInterrupted":true,"output":"3 passed"},"details":{"duration_ms":250,"exit_code":0},"is_error":false,"tool":"run_terminal_command_v2"}` || result.CreatedAt != "2026-11-03T16:08:23.250Z" {
+		result.Text != `{"content":"3 passed","details":{"duration_ms":250,"exit_code":0},"is_error":false,"tool":"run_terminal_command_v2"}` || result.CreatedAt != "2026-11-03T16:08:23.250Z" {
 		t.Fatalf("command %+v result %+v", call, result)
 	}
 	if result := byID[cursorPrompt+"/t:call-3\nfc_3:result"]; result.Text != `{"content":"Editing this file is blocked by globalIgnore","details":{"error":"Editing this file is blocked by globalIgnore"},"is_error":true,"tool":"edit_file_v2"}` {
@@ -565,6 +567,96 @@ func TestCursorForkOfAForkDropsWhatItCopied(t *testing.T) {
 		if conversation.NativeID == nested && (conversation.AgentDepth != 2 || cursorKinds(conversation.Messages) != "assistant:message" || conversation.Coverage != "complete") {
 			t.Fatalf("fork of a fork = %+v", conversation)
 		}
+	}
+}
+
+// The ledger reads what Cursor's commands printed, a cancelled or declined
+// call as not run to completion, and Cursor's file arguments; an older
+// composer's messages in conversationMap are read.
+func TestCursorToolResultsAndLegacyComposers(t *testing.T) {
+	root := cursorFixture(t)
+	const legacy = "c0000000-0000-4000-8000-00000000000b"
+	tool := func(name, call, status, params, result string) map[string]any {
+		return map[string]any{"tool": "15", "name": name, "toolCallId": call, "status": status, "params": params, "result": result, "additionalData": map[string]any{}}
+	}
+	cursorWrite(t, root, func(db *sql.DB) error {
+		cursorPut(t, db, cursorRow{"composerData:" + legacy, map[string]any{"_v": 2, "composerId": legacy, "name": "Legacy", "createdAt": 1793721000000, "lastUpdatedAt": 1793721005000,
+			"fullConversationHeadersOnly": []any{map[string]any{"bubbleId": "l1", "type": 1}, map[string]any{"bubbleId": "l2", "type": 2}, map[string]any{"bubbleId": "l3", "type": 2},
+				map[string]any{"bubbleId": "l4", "type": 2}, map[string]any{"bubbleId": "l5", "type": 2}, map[string]any{"bubbleId": "l6", "type": 2}},
+			"conversationMap": map[string]any{
+				"l1": map[string]any{"type": 1, "text": "Read main.py and test it"},
+				"l2": map[string]any{"type": 2, "capabilityType": 15, "toolFormerData": tool("read_file_v2", "lc1", "completed", `{"targetFile":"/work/app/main.py"}`, "")},
+				"l3": map[string]any{"type": 2, "capabilityType": 15, "toolFormerData": tool("run_terminal_command_v2", "lc2", "cancelled", `{"command":"sleep 100"}`, "")},
+				"l4": map[string]any{"type": 2, "capabilityType": 15, "toolFormerData": tool("run_terminal_command_v2", "lc3", "completed", `{"command":"python3 -m pytest -q"}`,
+					`{"output":"F.\n1 failed, 1 passed","exitCodeV2":0,"notInterrupted":true}`)},
+				"l5": map[string]any{"type": 2, "capabilityType": 15, "toolFormerData": tool("run_terminal_command_v2", "lc4", "completed", `{"command":"rm -rf build"}`, `{"output":"","rejected":true}`)},
+				"l6": map[string]any{"type": 2, "capabilityType": 15, "toolFormerData": tool("run_terminal_command_v2", "lc5", "completed", `{"command":"npm run dev"}`, `{"output":"ready","notInterrupted":false}`)}}}})
+		return nil
+	})
+	if conversation := cursorRecords(t, root)[legacy].Conversations[0]; conversation.Coverage != "complete" || conversation.Messages[0].Text != "Read main.py and test it" {
+		t.Fatalf("legacy composer = %+v", conversation)
+	}
+	c, _ := testCatalog(t)
+	ingestSource(t, c, SourceConfig{Name: "cursor", Kind: "cursor", Path: root, Account: "local", Enabled: true})
+	rows, err := c.DB.Query(`SELECT call_id, status, interrupted, test_failure, COALESCE(file_path,''), result_bytes > 0 FROM tool_calls WHERE provider='cursor' AND call_id IN ('lc1','lc2','lc3','lc4','lc5','call-1'||char(10)||'fc_1','call-3'||char(10)||'fc_3') ORDER BY call_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := []string{}
+	for rows.Next() {
+		var id, status, path string
+		var interrupted, failure, output bool
+		if err := rows.Scan(&id, &status, &interrupted, &failure, &path, &output); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s=%s:%v:%v:%s:%v", strings.ReplaceAll(id, "\n", "|"), status, interrupted, failure, path, output))
+	}
+	if want := "call-1|fc_1=ok:false:false::true call-3|fc_3=error:false:false:.env:true lc1=ok:false:false:/work/app/main.py:false lc2=error:true:false::false lc3=ok:false:true::true lc4=error:false:false::false lc5=error:true:false::true"; strings.Join(got, " ") != want {
+		t.Fatalf("calls\n got %v\nwant %s", strings.Join(got, " "), want)
+	}
+}
+
+// A chunk of a fork's headers that is lost or damaged leaves the rest of
+// its group read, and the fork's own messages its own: what it copied can
+// no longer be told by position.
+func TestCursorLostHeaderChunkLeavesTheGroup(t *testing.T) {
+	for name, damage := range map[string]string{"lost": `DELETE FROM cursorDiskKV WHERE key=?`, "damaged": `UPDATE cursorDiskKV SET value='[{"bubbleId":' WHERE key=?`} {
+		t.Run(name, func(t *testing.T) {
+			root := cursorFixture(t)
+			cursorWrite(t, root, func(db *sql.DB) error {
+				// The fork's headers in two chunks, the first lost or damaged,
+				// and its parent deleted.
+				var headers string
+				if err := db.QueryRow(`SELECT value FROM cursorDiskKV WHERE key=?`, "composerConvHeaders:"+cursorFork+":000000").Scan(&headers); err != nil {
+					return err
+				}
+				var list []any
+				if err := json.Unmarshal([]byte(headers), &list); err != nil {
+					return err
+				}
+				cursorPut(t, db, cursorRow{"composerConvHeaders:" + cursorFork + ":000000", list[:2]}, cursorRow{"composerConvHeaders:" + cursorFork + ":000001", list[2:]})
+				if _, err := db.Exec(`UPDATE cursorDiskKV SET value=replace(value, '"chunkCount":1', '"chunkCount":2') WHERE key=?`, "composerData:"+cursorFork); err != nil {
+					return err
+				}
+				if _, err := db.Exec(damage, "composerConvHeaders:"+cursorFork+":000000"); err != nil {
+					return err
+				}
+				_, err := db.Exec(`DELETE FROM cursorDiskKV WHERE key GLOB ? OR key=?`, "*:"+cursorNew+":*", "composerData:"+cursorNew)
+				return err
+			})
+			conversations := map[string]ConversationRecord{}
+			for _, conversation := range cursorRecords(t, root)[cursorNew].Conversations {
+				conversations[conversation.NativeID] = conversation
+			}
+			fork := conversations[cursorFork]
+			if fork.Coverage != "partial" || !slices.ContainsFunc(fork.Messages, func(message MessageRecord) bool { return message.Text == "Still fine." }) {
+				t.Fatalf("fork = %s %+v", fork.Coverage, fork.Messages)
+			}
+			if _, ok := conversations[cursorSide]; !ok {
+				t.Fatalf("the rest of the group = %v", slices.Collect(maps.Keys(conversations)))
+			}
+		})
 	}
 }
 

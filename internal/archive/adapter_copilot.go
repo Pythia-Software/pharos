@@ -325,6 +325,8 @@ type copilotAgent struct {
 	conversation ConversationRecord
 	model        string
 	effort       string
+	// parent is the agent whose call started this one: "" for the session.
+	parent string
 }
 
 func (a *copilotAdapter) record(session copilotSession, events []map[string]any, workspace map[string]string) *WorkspaceRecord {
@@ -345,12 +347,18 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 	// A receipt comes before the assistant message it paid for, and shares
 	// its apiCallId; naming the receipt after the message links the
 	// message's tool calls to it.
-	paidFor := map[string]string{}
+	// A response split into messages (chunkIndex) shares one apiCallId: the
+	// receipt is named after its last, and the others name it too.
+	paidFor, chunks := map[string]string{}, map[string][]string{}
 	for _, event := range events {
 		if firstString(event["type"]) == "assistant.message" {
 			data := mapValueDefault(event["data"])
 			if api, id := firstString(data["apiCallId"]), firstString(data["messageId"]); api != "" && id != "" {
-				paidFor[firstString(event["agentId"])+"\x00"+api] = id
+				key := firstString(event["agentId"]) + "\x00" + api
+				paidFor[key] = id
+				if !slices.Contains(chunks[key], id) {
+					chunks[key] = append(chunks[key], id)
+				}
 			}
 		}
 	}
@@ -358,10 +366,14 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 	// request reported again updates its one record, as token accounting
 	// reads it. A receipt is totalled once a shutdown follows it.
 	type receipt struct {
-		agent    *copilotAgent
-		index    int
-		model    string
-		request  string
+		agent   *copilotAgent
+		agentID string
+		index   int
+		model   string
+		request string
+		// The effort a report last gave explicitly, and which report.
+		effort   string
+		efforted int
 		usage    map[string]any
 		totalled bool
 		// The report that last gave each field, and the last to name the model.
@@ -405,6 +417,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		switch kind {
 		case "session.start":
 			sessionID = defaultString(data["sessionId"], sessionID)
+			agent.effort = updatedEffort(agent.effort, data)
 			context := mapValueDefault(data["context"])
 			cwd = firstString(cwd, context["cwd"])
 			branch = firstString(branch, context["branch"])
@@ -414,7 +427,18 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			cwd = firstString(cwd, context["cwd"])
 			branch = firstString(branch, context["branch"])
 			agent.effort = updatedEffort(agent.effort, data)
+		case "session.model_change":
+			// The effort after the change; null resets it.
+			agent.effort = updatedEffort(agent.effort, data)
 		case "subagent.started":
+			// The agent whose call started this one, which is the session's
+			// for a subagent the session started.
+			if c := calls[firstString(data["toolCallId"])]; c != nil && c.agent != agentID {
+				agent.parent = c.agent
+				if parent := agents[c.agent]; parent != nil && c.agent != "" {
+					agent.conversation.AgentDepth = parent.conversation.AgentDepth + 1
+				}
+			}
 			agent.conversation.AgentNickname = firstString(data["agentDisplayName"], data["agentName"])
 			agent.conversation.AgentPath = firstString(data["agentName"], data["agentType"])
 			agent.model = firstString(data["model"], agent.model)
@@ -431,11 +455,31 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			if agentID != "" {
 				item.Role = agentRole
 			}
-			if source := firstString(data["source"]); strings.HasPrefix(source, "agent-") {
+			source := firstString(data["source"])
+			if strings.HasPrefix(source, "agent-") {
 				item.Sender = "agent:" + strings.TrimPrefix(source, "agent-")
 			}
-			if strings.TrimSpace(item.Text) != "" {
+			if data["isAutopilotContinuation"] == true {
+				item.Sender = "automation:copilot-autopilot"
+			}
+			switch {
+			case strings.HasPrefix(source, "skill-"):
+				// A skill's hidden input, not what the person wrote.
+				add(injectedContext(item, "copilot_"+source, item.Text))
+			case strings.TrimSpace(item.Text) != "":
 				add(item)
+			}
+			// What the person attached: a selection holds the text selected.
+			attachments, _ := data["attachments"].([]any)
+			for index, raw := range attachments {
+				attachment := mapValue(raw)
+				if attachment == nil {
+					continue
+				}
+				extra := item
+				extra.NativeID, extra.Kind = fmt.Sprintf("%s:attachment:%d", item.NativeID, index), "attachment"
+				extra.Text = jsonText(map[string]any{"type": attachment["type"], "path": firstString(attachment["filePath"], attachment["path"]), "name": attachment["displayName"], "text": attachment["text"], "selection": attachment["selection"]})
+				add(extra)
 			}
 		case "system.message":
 			// The system prompt Copilot sends with each request.
@@ -479,6 +523,24 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				}
 				item.Text = jsonText(map[string]any{"tool": name, "input": request["arguments"]})
 				calls[callID] = &call{tool: name, delegated: delegated, index: add(item), agent: agentID}
+			}
+		case "tool.user_requested":
+			// A tool the person ran themselves, which no assistant message requests.
+			callID := firstString(data["toolCallId"])
+			if callID != "" && calls[callID] == nil {
+				name := defaultString(data["toolName"], "tool")
+				item := base
+				item.NativeID, item.CallID, item.Role, item.Kind = callID+":user", callID, "user", "tool_call"
+				item.Text = jsonText(map[string]any{"tool": name, "input": data["arguments"]})
+				calls[callID] = &call{tool: name, index: add(item), agent: agentID}
+			}
+		case "session.compaction_complete":
+			// The boundary token accounting resets carried context at.
+			if data["success"] != false {
+				item := base
+				item.Role, item.Kind = "system", "metadata"
+				item.Text = jsonText(map[string]any{"type": "compaction", "summary": data["summaryContent"]})
+				add(item)
 			}
 		case "tool.execution_start":
 			// The call's own start, which its result's time is measured from.
@@ -556,6 +618,9 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				if later.named > first.named {
 					first.model, first.named = later.model, later.named
 				}
+				if later.efforted > first.efforted {
+					first.effort, first.efforted = later.effort, later.efforted
+				}
 				first.request, first.totalled = firstString(first.request, later.request), first.totalled || later.totalled
 				if merged[agent] == nil {
 					merged[agent] = map[int]bool{}
@@ -573,7 +638,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				item := base
 				item.RawText, item.Role, item.Kind = "", "system", "metadata"
 				item.Model, item.Effort = agent.model, agent.effort
-				r = &receipt{agent: agent, index: add(item), model: agent.model, usage: map[string]any{}, reported: map[string]int{}}
+				r = &receipt{agent: agent, agentID: agentID, index: add(item), model: agent.model, usage: map[string]any{}, reported: map[string]int{}}
 				receipts = append(receipts, r)
 			}
 			for _, key := range keys {
@@ -591,6 +656,12 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				r.model, r.named = model, reports
 			}
 			stored.Model = r.model
+			if effort, found := effortSetting(usage); found {
+				r.effort, r.efforted = effort, reports
+			}
+			if r.efforted > 0 {
+				stored.Effort = r.effort
+			}
 			for key, value := range copilotTokenUsage(usage) {
 				r.usage[key], r.reported[key] = value, reports
 			}
@@ -607,11 +678,32 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			add(item)
 		}
 	}
-	for agent, indexes := range merged {
-		messages := agent.conversation.Messages[:0]
+	// Each other message of a split response names its receipt too, as the
+	// same request, so its tool calls are the request's.
+	aliases := map[*copilotAgent]map[int][]MessageRecord{}
+	for _, r := range receipts {
+		key := r.agentID + "\x00" + r.request
+		for _, id := range chunks[key] {
+			if id == paidFor[key] {
+				continue
+			}
+			alias := r.agent.conversation.Messages[r.index]
+			alias.NativeID = id + ":usage"
+			if aliases[r.agent] == nil {
+				aliases[r.agent] = map[int][]MessageRecord{}
+			}
+			aliases[r.agent][r.index] = append(aliases[r.agent][r.index], alias)
+		}
+	}
+	for _, agent := range agents {
+		if merged[agent] == nil && aliases[agent] == nil {
+			continue
+		}
+		messages := []MessageRecord{}
 		for index, message := range agent.conversation.Messages {
-			if !indexes[index] {
+			if !merged[agent][index] {
 				messages = append(messages, message)
+				messages = append(messages, aliases[agent][index]...)
 			}
 		}
 		agent.conversation.Messages = messages
@@ -689,7 +781,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 		if id == "" {
 			conversation.NativeID = sessionID
 		} else {
-			conversation.ParentNativeID = sessionID
+			conversation.ParentNativeID = defaultString(agent.parent, sessionID)
 		}
 		conversation.StartedAt, conversation.EndedAt = conversation.Messages[0].CreatedAt, conversation.Messages[len(conversation.Messages)-1].CreatedAt
 		record.Conversations = append(record.Conversations, conversation)

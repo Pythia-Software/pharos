@@ -380,13 +380,15 @@ func TestCopilotRenameIsReadWithoutANewTurn(t *testing.T) {
 	}
 }
 
-// Copilot is offered to a Mac set up before Pharos read it, chosen in
-// guided setup, and followed by automatic updates.
+// Copilot is offered to a Mac set up before Pharos read it, also where
+// COPILOT_HOME moves it, chosen in guided setup, and followed by automatic
+// updates.
 func TestCopilotIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
 	home := probeHome(t)
 	useHost(t, "host-a")
 	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
-	writeSourceFile(t, filepath.Join(home, ".copilot", "session-state", "sess-1", "events.jsonl"), copilotSessionEvents)
+	t.Setenv("COPILOT_HOME", filepath.Join(home, "copilot"))
+	writeSourceFile(t, filepath.Join(home, "copilot", "session-state", "sess-1", "events.jsonl"), copilotSessionEvents)
 	path := probeLibrary(t, "")
 	server := probeServer(t, path)
 	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"accept":["claude"]}`); code != 200 {
@@ -472,5 +474,108 @@ func TestCopilotSessionsAreCapturedIndexedElsewhereAndFollowed(t *testing.T) {
 	parsed := ingestSource(t, c, source).Parsed
 	if got := messages(c); got != live+1 || parsed != 3 {
 		t.Fatalf("after the append: %d messages (was %d), %d files parsed", got, live, parsed)
+	}
+}
+
+// copilotNewerEvents is a session in the shapes newer releases write: effort
+// set at the start and reset by a model change; a selection attached to a
+// prompt; a skill's hidden input and autopilot's continuation; one response
+// split into two messages; a subagent that starts another; a compaction; a
+// tool the person ran; and a request whose effort a later report corrects.
+const copilotNewerEvents = `{"type":"session.start","data":{"sessionId":"sess-n","copilotVersion":"1.0.105","reasoningEffort":"high","context":{"cwd":"/work/n"}},"id":"n1","timestamp":"2026-11-04T10:00:00.000Z"}
+{"type":"user.message","data":{"content":"Inspect this","messageId":"u1","attachments":[{"type":"selection","displayName":"q.sql","filePath":"/work/n/q.sql","text":"SELECT secret_column FROM t","selection":{"start":{"line":0,"character":0},"end":{"line":0,"character":27}}}]},"id":"n2","timestamp":"2026-11-04T10:00:01.000Z"}
+{"type":"user.message","data":{"content":"Use the PDF tools as follows.","messageId":"u-skill","source":"skill-pdf"},"id":"n3","timestamp":"2026-11-04T10:00:01.500Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":100,"outputTokens":60,"apiCallId":"api-1"}},"id":"n4","timestamp":"2026-11-04T10:00:02.000Z"}
+{"type":"assistant.message","data":{"messageId":"m1","apiCallId":"api-1","chunkIndex":0,"chunkCount":2,"model":"gpt-6-luna","content":"First,","toolRequests":[{"toolCallId":"c1","name":"bash","arguments":{"command":"ls"}}]},"id":"n5","timestamp":"2026-11-04T10:00:02.100Z"}
+{"type":"assistant.message","data":{"messageId":"m2","apiCallId":"api-1","chunkIndex":1,"chunkCount":2,"model":"gpt-6-luna","content":"then","toolRequests":[{"toolCallId":"c2","name":"bash","arguments":{"command":"pwd"}}]},"id":"n6","timestamp":"2026-11-04T10:00:02.200Z"}
+{"type":"tool.execution_complete","data":{"toolCallId":"c1","success":true,"result":{"content":"q.sql"}},"id":"n7","timestamp":"2026-11-04T10:00:03.000Z"}
+{"type":"tool.execution_complete","data":{"toolCallId":"c2","success":true,"result":{"content":"/work/n"}},"id":"n8","timestamp":"2026-11-04T10:00:03.100Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":200,"outputTokens":10,"apiCallId":"api-2"}},"id":"n9","timestamp":"2026-11-04T10:00:04.000Z"}
+{"type":"assistant.message","data":{"messageId":"m3","apiCallId":"api-2","model":"gpt-6-luna","content":"","toolRequests":[{"toolCallId":"c3","name":"task","arguments":{"prompt":"Check q.sql"}}]},"id":"n10","timestamp":"2026-11-04T10:00:04.100Z"}
+{"type":"subagent.started","data":{"toolCallId":"c3","agentName":"explore"},"agentId":"outer","id":"n11","timestamp":"2026-11-04T10:00:04.200Z"}
+{"type":"user.message","data":{"content":"Check q.sql","messageId":"o1","source":"agent-sess-n"},"agentId":"outer","id":"n12","timestamp":"2026-11-04T10:00:04.300Z"}
+{"type":"assistant.message","data":{"messageId":"m4","model":"gpt-6-luna","content":"","toolRequests":[{"toolCallId":"c4","name":"task","arguments":{"prompt":"Read the schema"}}]},"agentId":"outer","id":"n13","timestamp":"2026-11-04T10:00:05.000Z"}
+{"type":"subagent.started","data":{"toolCallId":"c4","agentName":"explore"},"agentId":"inner","id":"n14","timestamp":"2026-11-04T10:00:05.100Z"}
+{"type":"user.message","data":{"content":"Read the schema","messageId":"i1","source":"agent-outer"},"agentId":"inner","id":"n15","timestamp":"2026-11-04T10:00:05.200Z"}
+{"type":"assistant.message","data":{"messageId":"m5","model":"gpt-6-luna","content":"One table."},"agentId":"inner","id":"n16","timestamp":"2026-11-04T10:00:06.000Z"}
+{"type":"session.compaction_complete","data":{"success":true,"summaryContent":"Inspected q.sql."},"id":"n17","timestamp":"2026-11-04T10:00:07.000Z"}
+{"type":"user.message","data":{"content":"Continue with the task.","messageId":"u2","isAutopilotContinuation":true},"id":"n18","timestamp":"2026-11-04T10:00:08.000Z"}
+{"type":"tool.user_requested","data":{"toolCallId":"c5","toolName":"bash","arguments":{"command":"git status"}},"id":"n19","timestamp":"2026-11-04T10:00:09.000Z"}
+{"type":"tool.execution_start","data":{"toolCallId":"c5","toolName":"bash"},"id":"n20","timestamp":"2026-11-04T10:00:09.100Z"}
+{"type":"tool.execution_complete","data":{"toolCallId":"c5","success":true,"result":{"content":"clean"},"isUserRequested":true},"id":"n21","timestamp":"2026-11-04T10:00:09.600Z"}
+{"type":"session.model_change","data":{"newModel":"gpt-6-sol","reasoningEffort":null},"id":"n22","timestamp":"2026-11-04T10:00:10.000Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":300,"outputTokens":20,"apiCallId":"api-5"}},"id":"n23","timestamp":"2026-11-04T10:00:11.000Z"}
+{"type":"assistant.message","data":{"messageId":"m6","apiCallId":"api-5","model":"gpt-6-sol","content":"Reset."},"id":"n24","timestamp":"2026-11-04T10:00:11.100Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":20,"reasoningEffort":"low","apiCallId":"api-6"}},"id":"n25","timestamp":"2026-11-04T10:00:12.000Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":30,"reasoningEffort":"high","apiCallId":"api-6"}},"id":"n26","timestamp":"2026-11-04T10:00:12.500Z"}
+{"type":"assistant.message","data":{"messageId":"m7","apiCallId":"api-6","model":"gpt-6-sol","content":"Done."},"id":"n27","timestamp":"2026-11-04T10:00:13.000Z"}
+`
+
+func TestCopilotNewerEventShapes(t *testing.T) {
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "session-state", "sess-n", "events.jsonl"), copilotNewerEvents)
+	session := discoverCopilot(t, root)["sess-n"]
+	conversations := map[string]ConversationRecord{}
+	for _, conversation := range session.Conversations {
+		conversations[conversation.NativeID] = conversation
+	}
+	main := conversations["sess-n"]
+	byID := map[string]MessageRecord{}
+	for _, conversation := range session.Conversations {
+		for _, message := range conversation.Messages {
+			byID[message.NativeID] = message
+		}
+	}
+	// What the person wrote, with what they selected; not the skill's or
+	// autopilot's input.
+	if session.Purpose != "Inspect this" || !strings.Contains(byID["u1:attachment:0"].Text, "SELECT secret_column FROM t") || byID["u1:attachment:0"].Kind != "attachment" {
+		t.Fatalf("purpose %q, selection %+v", session.Purpose, byID["u1:attachment:0"])
+	}
+	if skill := byID["u-skill"]; skill.Kind != "context" || skill.Role != "system" {
+		t.Fatalf("skill input = %+v", skill)
+	}
+	if continuation := byID["u2"]; continuation.Role != "user" || continuation.Sender != "automation:copilot-autopilot" {
+		t.Fatalf("autopilot continuation = %+v", continuation)
+	}
+	// Effort from the start, until a model change resets it; a request's
+	// effort as last reported.
+	if byID["m1"].Effort != "high" || byID["m6"].Effort != "" {
+		t.Fatalf("efforts: m1 %q m6 %q", byID["m1"].Effort, byID["m6"].Effort)
+	}
+	if receipt := byID["m7:usage"]; receipt.Effort != "high" {
+		t.Fatalf("corrected receipt = %+v", receipt)
+	}
+	// The inner subagent belongs to the one that started it.
+	if inner, outer := conversations["inner"], conversations["outer"]; inner.ParentNativeID != "outer" || inner.AgentDepth != 2 || outer.ParentNativeID != "sess-n" || outer.AgentDepth != 1 {
+		t.Fatalf("inner %s/%d, outer %s/%d", inner.ParentNativeID, inner.AgentDepth, outer.ParentNativeID, outer.AgentDepth)
+	}
+	// One request's two messages share its output; a compaction is marked;
+	// the person's own tool run is a call.
+	requests, calls := buildToolLedger(main.Messages, main.Model)
+	cost := map[string]float64{}
+	for _, call := range calls {
+		cost[call.CallID] = call.OutputTokens
+	}
+	if _, ran := cost["c5"]; cost["c1"] != 30 || cost["c2"] != 30 || !ran {
+		t.Fatalf("tool costs %v", cost)
+	}
+	if compaction := byID["n17"]; !isCompactionMarker(compaction) || !strings.Contains(compaction.Text, "Inspected q.sql.") {
+		t.Fatalf("compaction = %+v", compaction)
+	}
+	if call := byID["c5:user"]; call.Kind != "tool_call" || call.CallID != "c5" || !strings.Contains(call.Text, "git status") {
+		t.Fatalf("user-requested call = %+v", call)
+	}
+	total := 0.0
+	for _, request := range requests {
+		total += request.Counts["output_tokens"]
+	}
+	if total != 60+10+20+30 {
+		t.Fatalf("requests' output tokens = %v (%+v)", total, requests)
+	}
+	// Indexed, the split response is counted once.
+	c, _ := testCatalog(t)
+	ingestSource(t, c, SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true})
+	if tokens := countRows(t, c, "SELECT CAST(COALESCE(SUM(total_tokens),0) AS INTEGER) FROM agent_session_usage"); tokens != 160+210+320+430 {
+		t.Fatalf("indexed tokens = %d", tokens)
 	}
 }
