@@ -352,6 +352,41 @@ can:
   reason, and `switchView` leaves the state unchanged. A breakdown carries
   across; a component breakdown becomes `none` in the other views.
 
+### Population
+
+A catalog with `population: true` (Session Shape) shows its population in the
+controls, as a Population field before Range (`dashboard-population.ts`,
+`dashboard-population-control.tsx`):
+
+- **Chips.** Each `analyze_filters` term other than the range is a removable
+  chip. A term on a single-field breakdown's field that the legend could have
+  written reads as that breakdown's values ("Harness is not antigravity-cli",
+  "Archetype is one of Deep or Marathon"); any other reads as the query
+  editor reads it ("Active time (s) is not empty"). With none it reads "All
+  sessions". A measure's own population (`where`) and a unit's are not
+  chips: they belong to the measure, not to the dashboard.
+- **The legend adds terms.** A trend legend value's menu has "Count only this
+  value" and "Leave this value out" below its selection items. They write
+  ordinary Query Table terms on the breakdown's field (`withPopulationGroup`):
+  `{field, op: "=", value}`, or `{any: [{field, op: "!=", value}, {field,
+  op: "is_null"}]}` so sessions without the field stay counted; a missing
+  value left out is `is_not_null`. Count only replaces the field's slice;
+  Leave out narrows an inclusion or adds an exclusion. A combined breakdown's
+  group is one more term (`selectionWhere`). The term outlives the
+  breakdown: switch to another and it still counts.
+- **A selection can become the population.** Where a selection's note shows
+  "Show every group", "Make this the population" moves it into the filters
+  and clears it (`selectionPopulation`).
+- **Edit** opens the same filter editor as a query (`SearchFilters`): any
+  field, operator, OR group or negation, as a draft applied whole.
+- **Partial populations are named.** The chart's title takes a suffix
+  ("· excluding antigravity-cli; only Root agent") on every view, and
+  Create card keeps the filters, so a card says what it leaves out.
+
+There is no other parameter: site_link's `filters` are these terms, and the
+site map's `filters` option says so for such dashboards
+(`testdata/site-map-cases.json`, `population`).
+
 ### Selections and links
 
 `where` (`analyze_filters`) is the population and nothing else. A legend

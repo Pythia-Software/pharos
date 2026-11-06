@@ -15,6 +15,8 @@ import { orderedUsageQuery } from "./usage-query-order";
 import { toolMetricPresentation } from "./tools-dashboard-model";
 import { useOriginMetadata } from "./origin-dimensions";
 import { CreateDashboardCard } from "./create-dashboard-card";
+import { PopulationControl, usePopulation } from "./dashboard-population-control";
+import { selectionPopulation } from "./dashboard-population";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
@@ -48,9 +50,10 @@ export function AnalysisViewControl({ catalog, state, onChange }: { catalog: Ana
 // One control bar for every view: each view shows only the controls it uses,
 // and the ones views share (View, Metric, Breakdown, Range, Scale) are the
 // same controls. Changes go through set, which normalizes them.
-export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }: {
+// The population control, where the catalog has one, sits before Range.
+export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, population }: {
   catalog: AnalysisCatalog; view: ResolvedAnalysis; set: (change: Partial<AnalysisState>) => void; onView?: (view: AnalysisView) => void;
-  bounds: TimeBounds; onRange: (from?: Date, to?: Date, preset?: ChartRange | "all") => void;
+  bounds: TimeBounds; onRange: (from?: Date, to?: Date, preset?: ChartRange | "all") => void; population?: React.ReactNode;
 }) {
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
@@ -86,6 +89,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
     {!adjustable ? null : trend ? view.display === "heatmap" ? null : <ScaleControl value={view.scale!} percent={view.share} onChange={scale => set({ scale })} />
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
     {view.view === "scatter" && adjustable ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
+    {population}
     <RangeControl bounds={bounds} onPresetChange={trend ? (range, oldest) => set(presetPeriod(range, oldest)) : undefined} onChange={onRange} />
     {trend ? <PeriodControl view={view} disabled={Object.fromEntries((["hour", "hours", "day", "days", "week", "month"] as const).map(period => [period, limits.period(period) ?? (period === "hours" || period === "days" ? limits.multiple : undefined)]))} onChange={set} /> : null}
     {trend ? <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => set({ rollingPeriods })}
@@ -157,7 +161,10 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
 
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
   const tall = (clause.display?.kind === "box" || clause.display?.kind === "bar-horizontal") && (entry?.buckets.length ?? 0) > 16;
-  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
+  const population = usePopulation(catalog, schema, where);
+  if (population.suffix) clause = { ...clause, label: `${clause.label ?? ""}${population.suffix}` };
+  const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
+    population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={subjects} onFilter={onFilter} /> : undefined} />;
 
   return <section className="usage-analysis-dashboard" aria-label="Dashboard analysis" aria-busy={result.loading}>
     {controls}
@@ -169,7 +176,12 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
-      {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}</p> : null}
+      {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}
+      {analysis.selection && catalog.population ? <> <button type="button" className="usage-preset-clear" onClick={() => {
+        // The selection becomes the population, so every other view and breakdown counts it too.
+        onFilter(current => selectionPopulation(catalog, current, view.split, view.selection!));
+        set({ selection: { values: [], excluded: false } });
+      }}>Make this the population</button></> : null}</p> : null}
     {children}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>

@@ -4106,6 +4106,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "32cadca8241ea727:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => filter(\"keep\")}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
       "key": "dd11cf44075d571a:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
@@ -4113,6 +4122,15 @@
       "control": "onClick={() => choose(\"exclude\")}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "ef1a8d29a62b9643:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => filter(\"drop\")}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
     },
     {
       "key": "f1cb74ebedc04532:0",
@@ -4615,6 +4633,24 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "054ed3275e7646fc:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "DashboardAnalysis",
+      "tag": "button",
+      "control": "onClick={() => { // The selection becomes the population, so every other view and breakdown counts it too. onFilter(current => selectionPopulation(catalog, current, view.split, view.selection!)); set({ selection: { values: [], excluded: false } }); }}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
+      "key": "d837395f82219be5:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "DashboardAnalysis",
+      "tag": "PopulationControl",
+      "control": "onFilter={onFilter}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
       "key": "e3a5f7148f92dae8:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "DashboardAnalysis",
@@ -4622,6 +4658,61 @@
       "control": "onClick={() => set({ selection: { values: [], excluded: false } })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "17e7dc8b6e37bfc1:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationControl",
+      "tag": "button",
+      "control": "onClick={() => setEditing(open => !open)}",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
+      "key": "3c7713579039ca71:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationControl",
+      "tag": "PopulationEditor",
+      "control": "id={id} onApply={next => { set(next); setEditing(false); }} onCancel={() => setEditing(false)}",
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
+      "key": "e3238faab5ed3c52:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationControl",
+      "tag": "button",
+      "control": "aria-label={`Remove ${item.chip}`} onClick={() => set(population.filter(term => term !== item.term))}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
+      "key": "0d766f19bc7f48bf:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationEditor",
+      "tag": "SearchFilters",
+      "control": "onChange={setDraft}",
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
+      "key": "e0bba9776e6237eb:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationEditor",
+      "tag": "button",
+      "control": "onClick={() => onApply(draft)}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
+      "key": "f4161cd83bbcab4f:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationEditor",
+      "tag": "button",
+      "control": "onClick={onCancel}",
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
     },
     {
       "key": "94c6e0900334d288:0",
@@ -4633,13 +4724,22 @@
       "reason": "Native select delegates value and changes to its dashboard caller; the hidden selected label only determines width."
     },
     {
-      "key": "20587237f8206bd5:0",
+      "key": "2407248069379e3c:0",
       "file": "web/src/dashboard-trend.tsx",
       "owner": "AnalysisTrend",
       "tag": "StackedColumns",
-      "control": "onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
+      "control": "onSelect={select} onSelectGroup={selectGroup} onPopulation={populate} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
       "contract": "dashboard",
-      "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings."
+      "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings. analyze_filters carries the population: the legend's population actions write its terms."
+    },
+    {
+      "key": "bc20970451912500:0",
+      "file": "web/src/dashboard-trend.tsx",
+      "owner": "AnalysisTrend",
+      "tag": "PopulationControl",
+      "control": "onFilter={onFilter}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
     },
     {
       "key": "14a033ebe0d2b22e:0",

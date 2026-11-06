@@ -31,6 +31,13 @@ type siteCases struct {
 		URL     string                  `json:"url"`
 		Decoded map[string]qt.LinkQuery `json:"decoded"`
 	} `json:"example"`
+	Population struct {
+		Page    string         `json:"page"`
+		Chart   map[string]any `json:"chart"`
+		Filters []qt.WhereTerm `json:"filters"`
+		Days    int            `json:"days"`
+		URL     string         `json:"url"`
+	} `json:"population"`
 	Analyze map[string][]struct {
 		Chart   map[string]any `json:"chart"`
 		Verdict string         `json:"verdict"`
@@ -218,6 +225,29 @@ func linkArgs(t *testing.T, text string) map[string]any {
 		t.Fatal(err)
 	}
 	return args
+}
+
+// A dashboard's population is its filters other than the range: an agent
+// writes the legend's exclusion and an inclusion as site_link filters and
+// gets the page's link, and the link reads back as the same terms.
+func TestSiteLinkBuildsAPartialPopulation(t *testing.T) {
+	site, cases := testSiteMap(t), readSiteCases(t)
+	example := cases.Population
+	args := linkArgs(t, `{"page": "analyze/session_shape", "days": 30,
+		"filters": [{"any": [{"field": "harness", "op": "!=", "value": "antigravity-cli"}, {"field": "harness", "op": "is_null", "value": ""}]}, {"field": "agent_kind", "op": "=", "value": "root"}]}`)
+	args["options"] = linkArgs(t, compactJSON(example.Chart))
+	result, err := site.linkTool(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLink(t, "population", result["url"].(string), example.URL)
+	read := roundTrip(t, site, "population", example.URL)
+	if compactJSON(read.Filters) != compactJSON(example.Filters) || read.Days != example.Days {
+		t.Errorf("population read filters %s days %d", compactJSON(read.Filters), read.Days)
+	}
+	if summary, _ := result["summary"].(string); !strings.Contains(summary, "antigravity-cli") || !strings.Contains(summary, "root") {
+		t.Errorf("summary %q does not name the population", summary)
+	}
 }
 
 func TestSiteLinkBuildsTheMotivatingExample(t *testing.T) {

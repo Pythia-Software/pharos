@@ -152,6 +152,9 @@ export type AnalysisCatalog = {
   // (the tools rollup counts whole days).
   rangeNote?: string;
   scatter: [string, string];
+  // Whether the controls show the population (the filters other than the
+  // range) and the legend can change it (dashboard-population.ts).
+  population?: boolean;
   // A catalog that chooses each chart itself: for the view, measure and
   // breakdown asked for, how it is drawn. The choice overrides the state, and
   // the controls for what it sets are not shown.
