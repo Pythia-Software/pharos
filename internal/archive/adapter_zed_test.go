@@ -266,6 +266,20 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	if got := cursorKinds(older.Messages); got != "user:message assistant:tool_call tool:tool_result assistant:message" || !strings.Contains(older.Messages[2].Text, "package a") {
 		t.Fatalf("0.1.0 thread = %s: %+v", got, older.Messages)
 	}
+	// A provider can give two calls the same ID: each result is its own
+	// message's, and a call left without one has none.
+	read := func(id int, path, content string) map[string]any {
+		message := map[string]any{"id": id, "role": "assistant", "segments": []any{}, "tool_uses": []any{map[string]any{"id": "call_1", "name": "read_file", "input": map[string]any{"path": path}}}}
+		if content != "" {
+			message["tool_results"] = []any{map[string]any{"tool_use_id": "call_1", "is_error": false, "content": content}}
+		}
+		return message
+	}
+	reused := (&zedAdapter{}).conversation("zed", "reused", map[string]any{}, map[string]any{"version": "0.2.0", "messages": []any{read(0, "a.go", "package a"), read(1, "b.go", ""), read(2, "c.go", "package c")}})
+	if got := cursorKinds(reused.Messages); got != "assistant:tool_call tool:tool_result assistant:tool_call assistant:tool_call tool:tool_result" ||
+		!strings.Contains(reused.Messages[1].Text, "package a") || !strings.Contains(reused.Messages[4].Text, "package c") {
+		t.Fatalf("reused IDs = %s: %+v", got, reused.Messages)
+	}
 	// A command's result that isn't text says nothing of how it ended.
 	var unread MessageRecord
 	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message })
@@ -290,8 +304,11 @@ func TestZedTerminalOutcomeIsZedsHeader(t *testing.T) {
 		{"failed with a note", "Note: this command ran WITHOUT an OS sandbox.\n\nCommand \"make\" failed with exit code 1.", "error", "", 1, nil},
 		{"output quoting a failure", "```\nCommand \"make\" failed with exit code 2.\n```", "ok", "", 0, nil},
 		{"output after a note", "Note: this command ran WITHOUT an OS sandbox because one could not be created (setup timed out. bwrap failed with exit code 1.).\n\n```\nCommand \"make\" failed with exit code 2.\n```", "ok", "", 0, nil},
+		{"a fence in the command", "Command \"cat <<'EOF'\n```\nEOF\nexit 7\" failed with exit code 7.\n\n```\n```\n```", "error", "", 7, map[string]any{"command": "cat <<'EOF'\n```\nEOF\nexit 7"}},
+		{"failed, its command unknown", "Command \"make\" failed with exit code 2.\n\n```\nmain.go:3: error\n```", "error", "", 2, map[string]any{}},
+		{"timed out, its command unknown", "Command \"make\" timed out. No output was captured.", "error", "timeout", -1, map[string]any{}},
 		{"no output", "Command executed successfully.", "ok", "", 0, nil},
-		{"timed out", "Command \"sleep 9\" timed out. Output captured before timeout:\n\n```\nwaiting: permission denied\n```", "error", "timeout", -1, nil},
+		{"timed out", "Command \"sleep 9\" timed out. Output captured before timeout:\n\n```\nwaiting: permission denied\n```", "error", "timeout", -1, map[string]any{"command": "sleep 9", "timeout_ms": 9000}},
 		{"timed out without a limit", "Command \"sleep 9\" timed out. No output was captured.", "error", "timeout", -1, map[string]any{"command": "sleep 9"}},
 		{"stopped after a note", "Note: this command ran WITHOUT an OS sandbox.\n\nThe user stopped this command. No output was captured before stopping.", "error", "interrupted", -1, nil},
 		{"stopped", "The user stopped this command. No output was captured before stopping.\n\nSince the user intentionally interrupted this command, ask them what they would like to do next.", "error", "interrupted", -1, nil},

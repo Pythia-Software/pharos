@@ -796,8 +796,52 @@ func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
 	cursorCLIStore(t, dir, func(db *sql.DB) error {
 		return cursorCLISetLatest(db, latest, prompt, reply, call, thinking, edit, closing, fixed, trailing, turn, orphan)
 	})
+	// Two turns each end with the reply "Done.", only the second's timed and
+	// led to by thinking it kept as text; its reply holds two reasoning
+	// parts. An older root lists the first turn as it was before its last
+	// step, and a second turn since rewound, which also replied "Done.".
+	const repeated = "a0000000-0000-4000-8000-00000000000e"
+	signed := map[string]any{"type": "reasoning", "text": "", "signature": "sig"}
+	done := map[string]any{"type": "text", "text": "Done."}
+	again := cursorCLIChatSpec{agent: repeated, folder: "/work/app",
+		messages: []any{
+			map[string]any{"role": "user", "content": "<user_query>Tidy</user_query>"},
+			map[string]any{"role": "assistant", "content": []any{signed, done}},
+			map[string]any{"role": "user", "content": "<user_query>Tidy again</user_query>"},
+			map[string]any{"role": "assistant", "content": []any{signed, signed, done}},
+			map[string]any{"role": "assistant", "id": "rewound", "content": []any{done}},
+		},
+		roots: [][]int{{0, 1, 2, 4}, {0, 1, 2, 3}},
+		meta:  map[string]any{"agentId": repeated, "name": "Tidy", "createdAt": "1793809020000"},
+	}
+	againDir := cursorCLIWriteChat(t, root, again)
+	tidy, tidyAgain, tidyRewound := cursorCLIProto(1, "Tidy", 2, "p1"), cursorCLIProto(1, "Tidy again", 2, "p2"), cursorCLIProto(1, "Tidy again", 2, "p3")
+	firstDone := cursorCLIProto(1, cursorCLIProto(1, "Done."))
+	firstEnd := cursorCLIProto(3, cursorCLIProto(1, "That is all."))
+	secondThought := cursorCLIProto(3, cursorCLIProto(1, "Tidy the rest.", 3, ms("2026-11-04T16:21:00Z")))
+	secondDone := cursorCLIProto(1, cursorCLIProto(1, "Done.", 2, ms("2026-11-04T16:21:30Z")))
+	rewoundDone := cursorCLIProto(1, cursorCLIProto(1, "Done.", 2, ms("2026-11-04T16:20:30Z")))
+	first := cursorCLIProto(1, cursorCLIProto(1, id(tidy), 2, id(firstDone), 2, id(firstEnd)))
+	firstBefore := cursorCLIProto(1, cursorCLIProto(1, id(tidy), 2, id(firstDone)))
+	second := cursorCLIProto(1, cursorCLIProto(1, id(tidyAgain), 2, id(secondThought), 2, id(secondDone)))
+	rewoundTurn := cursorCLIProto(1, cursorCLIProto(1, id(tidyRewound), 2, id(rewoundDone)))
+	againLatest := append(cursorCLIRootBlob(cursorCLIRootIDs(again, 1), "/work/app"), append(cursorCLIProto(8, id(first)), cursorCLIProto(8, id(second))...)...)
+	againOlder := append(cursorCLIRootBlob(cursorCLIRootIDs(again, 0), "/work/app"), append(cursorCLIProto(8, id(firstBefore)), cursorCLIProto(8, id(rewoundTurn))...)...)
+	cursorCLIStore(t, againDir, func(db *sql.DB) error {
+		return cursorCLISetLatest(db, againLatest, againOlder, tidy, tidyAgain, tidyRewound, firstDone, firstEnd, secondThought, secondDone, rewoundDone, first, firstBefore, second, rewoundTurn)
+	})
 
 	records := cursorCLIRecords(t, root)
+	// Each reply sent again takes its own step's time and thinking, the
+	// thinking placed once, and what was rewound its own.
+	tidied := records[repeated].Conversations[0].Messages
+	if got, want := cursorKinds(tidied), "user:message assistant:metadata assistant:message user:message assistant:reasoning assistant:metadata assistant:message assistant:message"; got != want {
+		t.Fatalf("kinds = %s, want %s", got, want)
+	}
+	if tidied[2].CreatedAt != "2026-11-04T16:17:00.000Z" || tidied[4].Text != "Tidy the rest." || tidied[4].CreatedAt != "2026-11-04T16:21:00.000Z" ||
+		tidied[6].CreatedAt != "2026-11-04T16:21:30.000Z" || tidied[7].Selected || tidied[7].CreatedAt != "2026-11-04T16:20:30.000Z" {
+		t.Fatalf("replies sent again = %+v", tidied)
+	}
 	// What the turns give no time for follows the last time they do; what
 	// was rewound keeps its own.
 	timed := map[string]string{}

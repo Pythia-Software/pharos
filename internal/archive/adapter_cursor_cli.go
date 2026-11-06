@@ -326,55 +326,67 @@ func cursorCLIParseRoot(data []byte) *cursorCLIRoot {
 	return root
 }
 
-// cursorCLITimes are when a chat's turns record their parts happened: each
-// prompt and reply by its text, in order for a text sent again, and each
-// call's start and end by its ID. thoughts is the readable thinking the turns
-// keep, by what follows it (cursorCLIAnchor).
+// cursorCLITimes are what a chat's turns record of its parts: when each
+// prompt was sent, by its text, in order for a text sent again; and each
+// reply step, by its text in the same way, and each call, by its ID.
 type cursorCLITimes struct {
-	prompts, replies map[string][]string
-	calls            map[string][2]string
-	thoughts         map[string][]cursorCLIThought
+	prompts map[string][]string
+	replies map[string][]*cursorCLIStep
+	calls   map[string]*cursorCLIStep
+}
+
+// cursorCLIStep is what a turn records of a reply or a call: when it began
+// and, for a call, ended, and the thinking that led to it, if any.
+type cursorCLIStep struct {
+	at, end string
+	thought *cursorCLIThought
 }
 
 // cursorCLIThought is a thinking step's text and when it began.
 type cursorCLIThought struct{ text, at string }
 
-// cursorCLIAnchor is what a thinking step leads to, so where its text goes:
-// the call it is followed by, by its ID, else the reply, by its text.
-func cursorCLIAnchor(call, reply string) string {
-	if call != "" {
-		return "call:" + call
+// reply is the step of the next reply with text not yet placed, which it
+// takes; nil when the turns record none.
+func (t cursorCLITimes) reply(text string) *cursorCLIStep {
+	key := strings.TrimSpace(text)
+	list := t.replies[key]
+	if len(list) == 0 {
+		return nil
 	}
-	return "reply:" + strings.TrimSpace(reply)
+	t.replies[key] = list[1:]
+	return list[0]
 }
 
-// thought is the thinking the turns keep for the reasoning part that
-// parts, a reply's content, holds at index: that of the step followed by
-// the reply's next text or call, the first not yet taken for it. A part
-// followed by neither has none.
-func (t cursorCLITimes) thought(parts []any, index int) (cursorCLIThought, bool) {
+// thought takes the thinking that led to the reasoning part parts, a
+// reply's content, holds at index: that of the step of the reply's next
+// text or call, which is the next of its text to be placed. A part followed
+// by neither has none, nor one whose step no thinking led to.
+func (t cursorCLITimes) thought(parts []any, index int) *cursorCLIThought {
 	for _, part := range parts[index+1:] {
 		part := mapValueDefault(part)
-		anchor := ""
+		var step *cursorCLIStep
 		switch firstString(part["type"]) {
 		case "tool-call":
-			anchor = cursorCLIAnchor(firstString(part["toolCallId"]), "")
+			step = t.calls[firstString(part["toolCallId"])]
 		case "text":
-			if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
-				anchor = cursorCLIAnchor("", text)
+			text := strings.TrimSpace(firstString(part["text"]))
+			if text == "" {
+				continue
 			}
-		}
-		if anchor == "" {
+			if list := t.replies[text]; len(list) > 0 {
+				step = list[0]
+			}
+		default:
 			continue
 		}
-		list := t.thoughts[anchor]
-		if len(list) == 0 {
-			return cursorCLIThought{}, false
+		if step == nil {
+			return nil
 		}
-		t.thoughts[anchor] = list[1:]
-		return list[0], true
+		thought := step.thought
+		step.thought = nil
+		return thought
 	}
-	return cursorCLIThought{}, false
+	return nil
 }
 
 // cursorCLITurnBlobs are the blob IDs a turn (field 1, an agent's turn)
@@ -412,14 +424,17 @@ func (t cursorCLITimes) next(queue map[string][]string, text string) string {
 // kept by the step that follows it; one followed by more thinking, or ending
 // the turn, cannot be told apart from its neighbour's and is not kept.
 func cursorCLITurnTimes(blobs map[string][]byte, roots []*cursorCLIRoot) cursorCLITimes {
-	times := cursorCLITimes{prompts: map[string][]string{}, replies: map[string][]string{}, calls: map[string][2]string{}, thoughts: map[string][]cursorCLIThought{}}
+	times := cursorCLITimes{prompts: map[string][]string{}, replies: map[string][]*cursorCLIStep{}, calls: map[string]*cursorCLIStep{}}
 	at := func(values []any) string {
 		if ms, ok := protoLast(values).(uint64); ok && ms > 0 {
 			return cursorCLITime(int64(ms))
 		}
 		return ""
 	}
-	seen := map[string]bool{}
+	// Each turn is written again as it grows, and an older root lists what it
+	// held then: the same prompt and the first of the same steps. A step is
+	// read once for its prompt, so no reply is listed twice.
+	seen, read := map[string]bool{}, map[[2]string]bool{}
 	for _, root := range roots {
 		for _, id := range root.turns {
 			if seen[id] {
@@ -433,28 +448,26 @@ func cursorCLITurnTimes(blobs map[string][]byte, roots []*cursorCLIRoot) cursorC
 			}
 			var thought *cursorCLIThought
 			for _, stepID := range steps {
-				step, anchor := protoFields(blobs[stepID]), ""
+				if read[[2]string{promptID, stepID}] {
+					continue
+				}
+				read[[2]string{promptID, stepID}] = true
+				step := protoFields(blobs[stepID])
+				// Every reply step is listed, timed or not, so a reply sent
+				// again takes its own step's time and thinking.
 				if reply := protoFields(protoBytes(step[1])); len(reply) > 0 {
-					text := strings.TrimSpace(string(protoBytes(reply[1])))
-					if started := at(reply[2]); text != "" && started != "" {
-						times.replies[text] = append(times.replies[text], started)
-					}
-					if text != "" {
-						anchor = cursorCLIAnchor("", text)
+					if text := strings.TrimSpace(string(protoBytes(reply[1]))); text != "" {
+						times.replies[text] = append(times.replies[text], &cursorCLIStep{at: at(reply[2]), thought: thought})
 					}
 				} else if call := protoFields(protoBytes(step[2])); len(call) > 0 {
 					if id := string(protoBytes(call[57])); id != "" {
-						times.calls[id] = [2]string{at(call[59]), at(call[60])}
-						anchor = cursorCLIAnchor(id, "")
+						times.calls[id] = &cursorCLIStep{at: at(call[59]), end: at(call[60]), thought: thought}
 					}
 				} else if thinking := protoFields(protoBytes(step[3])); len(thinking) > 0 {
 					if text := string(protoBytes(thinking[1])); strings.TrimSpace(text) != "" {
 						thought = &cursorCLIThought{text: text, at: at(thinking[3])}
 						continue
 					}
-				}
-				if thought != nil && anchor != "" {
-					times.thoughts[anchor] = append(times.thoughts[anchor], *thought)
 				}
 				thought = nil
 			}
@@ -743,10 +756,10 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				case "reasoning":
 					// The thinking is kept as text in the turn's steps; the
 					// reply holds it only encrypted.
-					thought, found := times.thought(parts, index)
+					thought := times.thought(parts, index)
 					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
 						add(reasoningRecord(item, text, "text", ""))
-					} else if found {
+					} else if thought != nil {
 						item.CreatedAt = defaultString(thought.at, item.CreatedAt)
 						add(reasoningRecord(item, thought.text, "text", ""))
 					} else if firstString(part["signature"]) != "" {
@@ -755,13 +768,17 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				case "text":
 					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
 						item.Role, item.Kind, item.Text = "assistant", "message", text
-						item.CreatedAt = defaultString(times.next(times.replies, text), item.CreatedAt)
+						if step := times.reply(text); step != nil {
+							item.CreatedAt = defaultString(step.at, item.CreatedAt)
+						}
 						add(item)
 					}
 				case "tool-call":
 					name := firstString(part["toolName"])
 					item.CallID, item.Role, item.Kind = firstString(part["toolCallId"]), "assistant", "tool_call"
-					item.CreatedAt = defaultString(times.calls[item.CallID][0], item.CreatedAt)
+					if step := times.calls[item.CallID]; step != nil {
+						item.CreatedAt = defaultString(step.at, item.CreatedAt)
+					}
 					if matchesFold(name, "task") {
 						item.Kind = "delegation"
 					}
@@ -780,7 +797,9 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				name := firstString(part["toolName"])
 				item := base
 				item.NativeID, item.CallID, item.Role, item.Kind = message.id+":"+strconv.Itoa(index), firstString(part["toolCallId"]), "tool", "tool_result"
-				item.CreatedAt = defaultString(times.calls[item.CallID][1], item.CreatedAt)
+				if step := times.calls[item.CallID]; step != nil {
+					item.CreatedAt = defaultString(step.end, item.CreatedAt)
+				}
 				if matchesFold(name, "task") {
 					item.Kind = "delegation_result"
 				}
