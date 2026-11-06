@@ -179,6 +179,11 @@ INSERT INTO session_message VALUES('r5','ses_more','shell',5,1793722000400,17937
 INSERT INTO session_message VALUES('r6','ses_more','assistant',6,1793722000500,1793722001000,'{"model":{"id":"big-pickle"},"content":[],"tokens":{"input":200,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
 INSERT INTO session_part VALUES('r6','ses_more',0,'text',NULL,1793722000900,1793722000900,'{"type":"text","text":"Done."}');
 INSERT INTO session_message VALUES('r7','ses_more','compaction',7,1793722002000,1793722002000,'{"summary":"Tidied the repo."}');
+-- A subagent's session, where a command run from its prompt is still the person's.
+INSERT INTO session_v2 VALUES('ses_more_sub','p1',NULL,'ses_more',NULL,'more-sub','/work/app','Check','2.2.5',0.0,'{}',
+  30,20,0,0,0,'explore','{"id":"big-pickle","providerID":"opencode"}',1793722003000,1793722004000);
+INSERT INTO session_message VALUES('k1','ses_more_sub','shell',8,1793722003000,1793722003000,'{"command":"go vet","status":"completed","exit":0,"output":""}');
+INSERT INTO session_message VALUES('k2','ses_more_sub','assistant',9,1793722003500,1793722004000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Vetted."}],"tokens":{"input":30,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
 -- The fork's totals count only its own request.
 INSERT INTO session_v2 VALUES('ses_fork','p1',NULL,NULL,'ses_parts','fork','/work/app','Parts fork','2.2.5',0.0,'{}',
   50,5,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793723000000,1793723001000);
@@ -224,6 +229,15 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 	if more[6].Text != "Done." || !isCompactionMarker(more[8]) {
 		t.Fatalf("parts %+v compaction %+v", more[6], more[8])
 	}
+	for _, conversation := range records["ses_more"].Conversations {
+		if conversation.NativeID != "ses_more_sub" {
+			continue
+		}
+		_, calls := buildToolLedger(conversation.Messages, conversation.Model)
+		if len(calls) != 1 || calls[0].CallID != "k1:shell" || calls[0].OutputTokens != 0 || conversation.Messages[0].Role != "user" {
+			t.Fatalf("the subagent's command %+v, calls %+v", conversation.Messages[0], calls)
+		}
+	}
 	fork := records["ses_fork"]
 	if got := kinds(fork.Conversations[0].Messages); got != "user:message assistant:message system:metadata" || fork.Metadata["forked_from"] != "ses_parts" {
 		t.Fatalf("fork %s %+v", got, fork.Metadata)
@@ -248,6 +262,56 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 	}
 	if n := countRows(t, c, `SELECT COUNT(*) FROM tool_calls WHERE provider='opencode' AND call_id='r5:shell'`); n != 1 {
 		t.Fatalf("%d calls for the command the person ran", n)
+	}
+}
+
+// A fork's copy of a message its source no longer holds, by an undo or
+// with the source deleted, is the fork's own history, read again though the
+// fork is unchanged; its usage stays the source's.
+func TestOpenCodeForkKeepsWhatItsSourceLost(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode.db")
+	opencodeDatabase(t, path, opencodeRows+opencodeMoreRows)
+	c, _ := testCatalog(t)
+	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true}
+	copies := func() string {
+		rows, err := queryMaps(c.DB, `SELECT m.native_id FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='ses_fork' AND m.native_id LIKE 'evt_ab_%' ORDER BY m.native_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, row := range rows {
+			ids = append(ids, firstString(row["native_id"]))
+		}
+		return strings.Join(ids, " ")
+	}
+	change := func(statements string) {
+		db, err := sql.Open("sqlite", path)
+		if err == nil {
+			_, err = db.Exec(statements)
+			db.Close()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ingestSource(t, c, source)
+	if got := copies(); got != "" {
+		t.Fatalf("copies the source holds: %q", got)
+	}
+	// An undo deletes the source's reply.
+	change(`DELETE FROM session_part WHERE message_id='q2'; DELETE FROM session_message WHERE id='q2'`)
+	ingestSource(t, c, source)
+	if got := copies(); got != "evt_ab_2:block:0" {
+		t.Fatalf("after the undo, copies %q", got)
+	}
+	change(`DELETE FROM session_message WHERE session_id='ses_parts'; DELETE FROM session_v2 WHERE id='ses_parts'`)
+	ingestSource(t, c, source)
+	if got := copies(); got != "evt_ab_1 evt_ab_2:block:0" {
+		t.Fatalf("with the source deleted, copies %q", got)
+	}
+	if got := countRows(t, c, `SELECT COALESCE(SUM(u.total_tokens),0) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN conversations v ON v.id=a.conversation_id WHERE v.native_id='ses_fork'`); got != 55 {
+		t.Fatalf("fork usage %d, want its own request's 55", got)
 	}
 }
 
