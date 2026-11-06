@@ -573,11 +573,15 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	// model is the conversation's, from what is selected; current is the
 	// one each reply ran on, unknown again where what was rewound begins.
 	// floor is the latest time placed so far, so a part the turns record no
-	// time for is never placed before one they do.
+	// time for is never placed before one they do. at is the latest selected
+	// message's, which the chat ends no earlier than.
 	at, model, current, floor := started, "", "", ""
 	add := func(item MessageRecord) {
 		item.CreatedAt = max(item.CreatedAt, floor)
 		floor = item.CreatedAt
+		if item.Selected {
+			at = max(at, item.CreatedAt)
+		}
 		conversation.Messages = append(conversation.Messages, item)
 	}
 	for n, message := range messages {
