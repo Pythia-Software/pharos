@@ -30,7 +30,7 @@ var vscodeJournal = []string{
 	`{"kind":2,"k":["requests"],"v":[{"requestId":"request_a","timestamp":1793718001000,"modelId":"copilot/auto","agent":{"extensionVersion":"0.51.0"},"message":{"text":"Count the words"},"response":[{"kind":"progressMessage","content":{"value":"Working"}}]}]}`,
 	`{"kind":2,"k":["requests"],"i":0,"v":[{"requestId":"request_a","timestamp":1793718001000,"modelId":"copilot/auto","agent":{"extensionVersion":"0.51.0"},"message":{"text":"Count the words"},"response":[]}]}`,
 	`{"kind":1,"k":["customTitle"],"v":"Word counter"}`,
-	`{"kind":2,"k":["requests",0,"response"],"v":[{"value":"Looking at "},{"kind":"inlineReference","name":"words.py","inlineReference":{"path":"/work/app/words.py"}},{"value":" first."},` +
+	`{"kind":2,"k":["requests",0,"response"],"v":[{"value":"Looking at "},{"kind":"inlineReference","inlineReference":{"uri":{"$mid":1,"scheme":"file","path":"/work/app/words.py"},"range":{"startLineNumber":1,"startColumn":1,"endLineNumber":1,"endColumn":1}}},{"value":" first."},` +
 		`{"kind":"thinking","value":"Plan: ","id":"t1"},{"kind":"thinking","value":"run wc.","id":"t1"},{"kind":"thinking","value":""},` +
 		`{"kind":"toolInvocationSerialized","toolCallId":"c1","toolId":"run_in_terminal","isComplete":false,"toolSpecificData":{"kind":"terminal","commandLine":{"original":"wc -w words.py"}}}]}`,
 	`{"kind":2,"k":["requests",0,"response"],"i":6,"v":[` +
@@ -53,7 +53,7 @@ var vscodeJournal = []string{
 		`{"kind":"toolInvocationSerialized","toolCallId":"s1","toolId":"runSubagent","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Explore","description":"Review","prompt":"Review words.py","result":"{\"usage\":{\"input_tokens\":2000000,\"output_tokens\":7}}"}},` +
 		`{"kind":"toolInvocationSerialized","toolCallId":"s2","toolId":"copilot_readFile","subAgentInvocationId":"s1","isComplete":true,"pastTenseMessage":{"value":"Read words.py"}},` +
 		`{"value":"{\"usage\":{\"input_tokens\":1000000,\"output_tokens\":100}}"}],"completionTokens":50,` +
-		`"modelTotals":{"claude-sonnet-4.5":{"inputTokens":3000,"cachedTokens":2000,"outputTokens":40},"gpt-5-mini":{"inputTokens":500,"cachedTokens":0,"outputTokens":10}},` +
+		`"modelTotals":[{"model":"gpt-5-mini","inputTokens":500,"cachedTokens":0,"outputTokens":10},{"model":"claude-sonnet-4.5","inputTokens":3000,"cachedTokens":2000,"outputTokens":40}],` +
 		`"result":{"metadata":{"resolvedModel":"claude-sonnet-4.5","promptTokens":2200,"outputTokens":25}}}]}`,
 }
 
@@ -449,5 +449,53 @@ func TestVSCodeCopilotLiveAndRetainedReadsAgree(t *testing.T) {
 		if n := countRows(t, c, `SELECT COUNT(*) FROM workspaces WHERE location='`+folder+`'`); n != 1 {
 			t.Fatalf("read %d (retained %v): workspaces at %s: %d", index, retained, folder, n)
 		}
+	}
+}
+
+// vscodeNestedSession is a session whose subagent, on another model, started
+// its own, which called an MCP tool the rounds do not name; its reply names
+// a symbol and a Location.
+const vscodeNestedSession = `{"version":3,"sessionId":"nested-1","creationDate":1793718300000,"requests":[{"requestId":"request_n","timestamp":1793718300000,"modelId":"copilot/gpt-5-mini",
+"message":{"text":"Check the weather tool"},"response":[
+{"value":"See "},{"kind":"inlineReference","inlineReference":{"name":"countWords","kind":12,"location":{"uri":{"scheme":"file","path":"/work/app/words.py"}}}},
+{"value":" and "},{"kind":"inlineReference","inlineReference":{"uri":{"scheme":"file","path":"/work/app/main.go"},"range":{"startLineNumber":3}}},{"value":"."},
+{"kind":"toolInvocationSerialized","toolCallId":"n1","toolId":"runSubagent","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Explore","prompt":"Look around","result":"Found it","modelName":"Claude Haiku 4.5"}},
+{"kind":"toolInvocationSerialized","toolCallId":"n2","toolId":"runSubagent","subAgentInvocationId":"n1","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Deep","prompt":"Look deeper","result":"Deeper"}},
+{"kind":"toolInvocationSerialized","toolCallId":"n3","toolId":"mcp_weather_lookup","subAgentInvocationId":"n2","isComplete":true,"pastTenseMessage":{"value":"Ran weather lookup"},
+  "toolSpecificData":{"kind":"input","rawInput":{"city":"Paris","units":"metric"}},"resultDetails":{"input":"{\"city\":\"Paris\"}","output":[{"type":"embed","isText":true,"value":"Service unavailable"}],"isError":true}}],
+"result":{"metadata":{"resolvedModel":"gpt-5-mini"}}}]}`
+
+// A subagent another started is that one's child, on the model it ran on;
+// an MCP call keeps its saved input, output and failure; references to a
+// symbol or a Location are named in the reply.
+func TestVSCodeCopilotNestedSubagentsAndSavedToolData(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Code", "User")
+	writeSourceFile(t, filepath.Join(root, "globalStorage", "emptyWindowChatSessions", "nested-1.json"), vscodeNestedSession)
+	session := vscodeRecords(t, root)["nested-1"]
+	if len(session.Conversations) != 3 {
+		t.Fatalf("conversations = %+v", session.Conversations)
+	}
+	main, outer, inner := session.Conversations[0], session.Conversations[1], session.Conversations[2]
+	if reply := main.Messages[1]; reply.Text != "See `countWords` and `main.go`." {
+		t.Fatalf("reply = %q", reply.Text)
+	}
+	if outer.NativeID != "n1" || outer.ParentNativeID != "nested-1" || outer.AgentDepth != 1 || outer.Model != "claude-haiku-4.5" {
+		t.Fatalf("outer = %+v", outer)
+	}
+	if inner.NativeID != "n2" || inner.ParentNativeID != "n1" || inner.AgentDepth != 2 || inner.Messages[0].Sender != "agent:n1" {
+		t.Fatalf("inner = %+v", inner)
+	}
+	for _, message := range outer.Messages {
+		if message.Model != "claude-haiku-4.5" {
+			t.Fatalf("the subagent's %s is %q", message.NativeID, message.Model)
+		}
+	}
+	byID := map[string]MessageRecord{}
+	for _, message := range inner.Messages {
+		byID[message.NativeID] = message
+	}
+	if call, result := byID["request_n:block:7"], byID["request_n:block:7:result"]; call.Text != `{"input":{"city":"Paris","units":"metric"},"tool":"mcp_weather_lookup"}` ||
+		result.Text != `{"content":"Service unavailable","is_error":true,"tool":"mcp_weather_lookup"}` {
+		t.Fatalf("MCP call %+v result %+v", call, result)
 	}
 }

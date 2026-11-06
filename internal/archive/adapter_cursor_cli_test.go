@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -346,10 +347,34 @@ func TestCursorCLIMissingMessageStaysIndexed(t *testing.T) {
 		}
 	}
 
-	// A prompt sent twice, then rewound to before the second.
+	// An older root deleted outright, then a turn written as usual: the
+	// rewound reply only that root listed is kept.
 	c, _ = testCatalog(t)
 	root = filepath.Join(t.TempDir(), ".cursor")
 	chat := cursorCLIConversation()
+	dir = cursorCLIWriteChat(t, root, chat)
+	source = cursorCLISource(root)
+	ingestSource(t, c, source)
+	cursorCLIStore(t, dir, func(db *sql.DB) error {
+		if _, err := db.Exec(`DELETE FROM blobs WHERE id=?`, cursorCLIBlobID(cursorCLIRootBlob(cursorCLIRootIDs(chat, 0), "/work/app"))); err != nil {
+			return err
+		}
+		next := []byte(jsonText(map[string]any{"role": "user", "content": "<user_query>And the docs</user_query>"}))
+		latest := cursorCLIRootBlob(append(cursorCLIRootIDs(chat, 2), cursorCLIBlobID(next)), "/work/app")
+		return cursorCLISetLatest(db, latest, next)
+	})
+	if record := cursorCLIRecords(t, root)[cursorCLIChatA].Conversations[0]; record.Coverage != "partial" {
+		t.Fatalf("without an older root: coverage %s", record.Coverage)
+	}
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM messages WHERE text='Abandoned reply.'`); n != 1 {
+		t.Fatalf("without an older root: %d rewound replies", n)
+	}
+
+	// A prompt sent twice, then rewound to before the second.
+	c, _ = testCatalog(t)
+	root = filepath.Join(t.TempDir(), ".cursor")
+	chat = cursorCLIConversation()
 	chat.roots = [][]int{{0, 1, 2, 3, 2}, {0, 1, 2, 3}}
 	cursorCLIWriteChat(t, root, chat)
 	source = cursorCLISource(root)
@@ -652,5 +677,130 @@ func TestCursorCLIUnreadableFolderLeavesTheOthers(t *testing.T) {
 	err = adapter.Discover(func(record WorkspaceRecord) error { records[record.SourceID] = true; return nil })
 	if err == nil || !records[cursorCLIChatA] {
 		t.Fatalf("with a chat's folder unreadable: read %v, error %v", records, err)
+	}
+}
+
+// cursorCLISetLatest writes blobs and makes the first the chat's latest root.
+func cursorCLISetLatest(db *sql.DB, latest []byte, blobs ...[]byte) error {
+	for _, data := range append([][]byte{latest}, blobs...) {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO blobs VALUES(?, ?)`, cursorCLIBlobID(data), data); err != nil {
+			return err
+		}
+	}
+	var value string
+	if err := db.QueryRow(`SELECT value FROM meta`).Scan(&value); err != nil {
+		return err
+	}
+	raw, _ := hex.DecodeString(value)
+	meta := mapValueDefault(parseJSONValue(string(raw)))
+	meta["latestRootBlobId"] = cursorCLIBlobID(latest)
+	_, err := db.Exec(`UPDATE meta SET value=?`, hex.EncodeToString([]byte(jsonText(meta))))
+	return err
+}
+
+// cursorCLIProto encodes protobuf fields, in order: number, then a
+// uint64, a string or bytes.
+func cursorCLIProto(fields ...any) []byte {
+	var out []byte
+	for index := 0; index+1 < len(fields); index += 2 {
+		number := uint64(fields[index].(int))
+		switch value := fields[index+1].(type) {
+		case uint64:
+			out = binary.AppendUvarint(binary.AppendUvarint(out, number<<3), value)
+		case string:
+			out = append(binary.AppendUvarint(binary.AppendUvarint(out, number<<3|2), uint64(len(value))), value...)
+		case []byte:
+			out = append(binary.AppendUvarint(binary.AppendUvarint(out, number<<3|2), uint64(len(value))), value...)
+		}
+	}
+	return out
+}
+
+// A Task subagent's chat is its parent's child, its prompt the parent's; a
+// compaction's summary is a boundary, not a prompt; a call failed by its
+// flags fails; and each turn's recorded times place its prompt, replies and
+// calls.
+func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".cursor")
+	chat := cursorCLIConversation()
+	dir := cursorCLIWriteChat(t, root, chat)
+	const child = "a0000000-0000-4000-8000-00000000000c"
+	high := func(fields map[string]any) map[string]any {
+		return map[string]any{"cursor": map[string]any{"highLevelToolCallResult": fields}}
+	}
+	result := func(call, name string, fields map[string]any) map[string]any {
+		part := map[string]any{"type": "tool-result", "toolCallId": call, "toolName": name, "result": "no match"}
+		for key, value := range fields {
+			part[key] = value
+		}
+		return part
+	}
+	cursorCLIWriteChat(t, root, cursorCLIChatSpec{agent: child, folder: "/work/app",
+		messages: []any{
+			map[string]any{"role": "user", "content": "Earlier: the build was fixed.", "providerOptions": map[string]any{"cursor": map[string]any{"isSummary": true}}},
+			map[string]any{"role": "user", "content": "<user_query>Review main.go</user_query>"},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool-call", "toolCallId": "e1", "toolName": "StrReplace", "args": map[string]any{"path": "main.go"}}}},
+			map[string]any{"role": "tool", "content": []any{result("e1", "StrReplace", map[string]any{"isError": true})}},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool-call", "toolCallId": "e2", "toolName": "StrReplace", "args": map[string]any{"path": "main.go"}}}},
+			map[string]any{"role": "tool", "content": []any{result("e2", "StrReplace", nil)}, "providerOptions": high(map[string]any{"isError": true, "output": map[string]any{}})},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool-call", "toolCallId": "e3", "toolName": "StrReplace", "args": map[string]any{"path": "main.go"}}}},
+			map[string]any{"role": "tool", "content": []any{result("e3", "StrReplace", nil)}, "providerOptions": high(map[string]any{"output": map[string]any{"error": map[string]any{"message": "no match"}}})},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "Reviewed."}}},
+		},
+		roots: [][]int{{0, 1, 2, 3, 4, 5, 6, 7, 8}},
+		meta: map[string]any{"agentId": child, "name": "Review", "createdAt": "1793809030000", "blobEncryptionKey": cursorCLISecret,
+			"subagentInfo": map[string]any{"parentAgentId": cursorCLIChatA, "rootParentAgentId": cursorCLIChatA, "toolCallId": "call9", "typeName": "explore"}},
+	})
+	const grandchild = "a0000000-0000-4000-8000-00000000000d"
+	cursorCLIWriteChat(t, root, cursorCLIChatSpec{agent: grandchild, folder: "/work/app",
+		messages: []any{map[string]any{"role": "user", "content": "<user_query>Look closer</user_query>"}, map[string]any{"role": "assistant", "content": "Closer."}},
+		roots:    [][]int{{0, 1}},
+		meta: map[string]any{"agentId": grandchild, "name": "Closer", "createdAt": "1793809040000",
+			"subagentInfo": map[string]any{"parentAgentId": child, "rootParentAgentId": cursorCLIChatA, "toolCallId": "call10", "typeName": "explore"}},
+	})
+	// The latest root's turn: the prompt sent at 16:18:30.250, the reply
+	// begun at 16:19:05 and the shell call run from 16:19:06 to 16:19:07.
+	ms := func(at string) uint64 {
+		parsed, _ := time.Parse(time.RFC3339Nano, at)
+		return uint64(parsed.UnixMilli())
+	}
+	prompt := cursorCLIProto(1, "Fix the build", 25, ms("2026-11-04T16:18:30.250Z"))
+	reply := cursorCLIProto(1, cursorCLIProto(1, "Running make.", 2, ms("2026-11-04T16:19:05Z")))
+	call := cursorCLIProto(2, cursorCLIProto(57, "call1", 59, ms("2026-11-04T16:19:06Z"), 60, ms("2026-11-04T16:19:07Z")))
+	id := func(data []byte) []byte { raw, _ := hex.DecodeString(cursorCLIBlobID(data)); return raw }
+	turn := cursorCLIProto(1, cursorCLIProto(1, id(prompt), 2, id(reply), 2, id(call)))
+	latest := append(cursorCLIRootBlob(cursorCLIRootIDs(chat, 2), "/work/app"), cursorCLIProto(8, id(turn))...)
+	cursorCLIStore(t, dir, func(db *sql.DB) error { return cursorCLISetLatest(db, latest, prompt, reply, call, turn) })
+
+	records := cursorCLIRecords(t, root)
+	// What the turns give no time for follows the last time they do; what
+	// was rewound keeps its own.
+	timed := map[string]string{}
+	for _, message := range records[cursorCLIChatA].Conversations[0].Messages {
+		timed[message.Kind+":"+defaultString(message.CallID, message.Text)] = message.CreatedAt
+	}
+	if timed["message:Fix the build"] != "2026-11-04T16:18:30.250Z" || timed["message:Running make."] != "2026-11-04T16:19:05.000Z" ||
+		timed["tool_call:call1"] != "2026-11-04T16:19:06.000Z" || timed["tool_result:call1"] != "2026-11-04T16:19:07.000Z" ||
+		timed["message:Fixed."] != "2026-11-04T16:19:07.000Z" || timed["message:Abandoned reply."] != "2026-11-04T16:18:00.000Z" {
+		t.Fatalf("times = %v", timed)
+	}
+	record := records[child]
+	subagent := record.Conversations[0]
+	if subagent.ParentNativeID != cursorCLIChatA || subagent.AgentDepth != 1 || subagent.AgentPath != "explore" || record.Purpose != "Review main.go" {
+		t.Fatalf("subagent = %+v, purpose %q", subagent, record.Purpose)
+	}
+	if got, want := cursorKinds(subagent.Messages), "system:metadata agent:message assistant:tool_call tool:tool_result assistant:tool_call tool:tool_result assistant:tool_call tool:tool_result assistant:message"; got != want {
+		t.Fatalf("kinds = %s, want %s", got, want)
+	}
+	if summary, prompt := subagent.Messages[0], subagent.Messages[1]; !isCompactionMarker(summary) || prompt.Sender != "agent:"+cursorCLIChatA {
+		t.Fatalf("summary %+v prompt %+v", summary, prompt)
+	}
+	if nested := records[grandchild].Conversations[0]; nested.ParentNativeID != child || nested.AgentDepth != 2 {
+		t.Fatalf("a subagent's subagent = %+v", nested)
+	}
+	for _, index := range []int{3, 5, 7} {
+		if mapValueDefault(parseJSONValue(subagent.Messages[index].Text))["is_error"] != true {
+			t.Fatalf("result %d = %s", index, subagent.Messages[index].Text)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,7 +40,9 @@ func (a *opencodeAdapter) partExtractor() string { return opencodeExtractor }
 // credentials, accounts and settings in the same database. The 1.x schema's
 // session, message and part are kept too: a capture of such a database is
 // reported as unread, as it is live, and holds its sessions for a reader.
-var opencodeCaptureTables = map[string]bool{"session_v2": true, "session_message": true, "session_part": true, "project": true, "session": true, "message": true, "part": true}
+// blob and blob_ref hold the media a part names as media:<hash>.
+var opencodeCaptureTables = map[string]bool{"session_v2": true, "session_message": true, "session_part": true, "blob": true, "blob_ref": true,
+	"project": true, "session": true, "message": true, "part": true}
 
 // databases lists OpenCode's databases: the source itself when it is one,
 // otherwise each opencode*.db in it.
@@ -368,16 +371,15 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 		return nil, nil, err
 	}
 	type row struct {
-		id, kind string
-		created  int64
-		data     map[string]any
+		id, kind     string
+		seq, created int64
+		data         map[string]any
 	}
 	messages := []row{}
 	for rows.Next() {
 		var r row
-		var seq int64
 		var data string
-		if err := rows.Scan(&r.id, &r.kind, &seq, &r.created, &data); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.seq, &r.created, &data); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -392,6 +394,19 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 		return nil, nil, err
 	}
 	locator := func(message string) string { return fmt.Sprintf("%s#%s:%s", origin, id, message) }
+	// A fork starts with a copy of its source's messages up to the cut, each
+	// with the source's data, usage included, under the ID <fork event>_<seq>.
+	// The copies stay, as the fork's history, but their requests are the
+	// source's, which counts them; the fork's totals start at zero.
+	inherited := ""
+	if firstString(session["fork_session_id"]) != "" {
+		for _, message := range messages {
+			if suffix := "_" + strconv.FormatInt(message.seq, 10); strings.HasSuffix(message.id, suffix) && len(message.id) > len(suffix) {
+				inherited = strings.TrimSuffix(message.id, suffix)
+				break
+			}
+		}
+	}
 	// What the session totals beyond its messages: requests whose messages
 	// an undo deleted, and title generation, which no message records.
 	sums := map[string]float64{}
@@ -403,6 +418,14 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 		base := MessageRecord{NativeID: message.id, Model: conversation.Model, CreatedAt: created, EvidenceLocator: locator(message.id), Selected: true,
 			RawText: jsonText(map[string]any{"type": message.kind, "id": message.id})}
 		add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
+		text := func(fields ...string) string {
+			for _, field := range fields {
+				if value := firstString(data[field]); strings.TrimSpace(value) != "" {
+					return value
+				}
+			}
+			return ""
+		}
 		switch message.kind {
 		case "user":
 			item := base
@@ -415,13 +438,54 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				attachment.NativeID, attachment.Role, attachment.Kind, attachment.Text = message.id+":files", "user", "attachment", jsonText(files)
 				add(attachment)
 			}
+		case "synthetic", "system", "skill":
+			// Text OpenCode added to the prompt: a synthetic message, a system
+			// note, or a skill's instructions.
+			if body := text("text", "description"); body != "" {
+				source := "opencode_" + message.kind
+				if name := firstString(data["skill"], data["name"]); message.kind == "skill" && name != "" {
+					source += ":" + name
+				}
+				add(injectedContext(base, source, body))
+			}
+		case "shell":
+			// A command the person ran from the prompt, which no request asked
+			// for, and what it printed.
+			callID := message.id + ":shell"
+			call := base
+			call.CallID, call.Role, call.Kind = callID, "user", "tool_call"
+			call.Text = jsonText(map[string]any{"tool": "shell", "input": map[string]any{"command": data["command"]}})
+			add(call)
+			if status := firstString(data["status"]); status != "running" && status != "pending" {
+				result := base
+				result.NativeID, result.CallID, result.Role, result.Kind = "result:"+callID, callID, "tool", "tool_result"
+				exit, exited := number(data["exit"])
+				payload := map[string]any{"tool": "shell", "content": data["output"], "is_error": status == "error" || (exited && exit != 0)}
+				if exited {
+					payload["details"] = map[string]any{"exit_code": exit}
+				}
+				result.Text = jsonText(payload)
+				add(result)
+			}
+		case "compaction":
+			// The boundary token accounting resets carried context at.
+			item := base
+			item.Role, item.Kind = "system", "metadata"
+			item.Text = jsonText(map[string]any{"type": "compaction", "summary": firstNonNil(data["summary"], mapValueDefault(data["native"])["messages"])})
+			add(item)
 		case "assistant":
 			model := mapValueDefault(data["model"])
 			base.Model = defaultString(firstString(model["id"]), conversation.Model)
+			// A message whose parts are in session_part holds them there,
+			// whatever its own content says, an empty list included.
 			content, _ := data["content"].([]any)
-			if content == nil && tables["session_part"] {
-				if content, err = opencodeParts(tx, a, message.id); err != nil {
+			if tables["session_part"] {
+				parts, err := opencodeParts(tx, a, message.id)
+				if err != nil {
 					return nil, nil, err
+				}
+				if len(parts) > 0 {
+					content = parts
 				}
 			}
 			for index, raw := range content {
@@ -451,7 +515,7 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				item.Text = firstString(mapValueDefault(failure["data"])["message"], failure["message"], failure["name"], jsonText(failure))
 				add(item)
 			}
-			if tokens := mapValue(data["tokens"]); tokens != nil {
+			if tokens := mapValue(data["tokens"]); tokens != nil && (inherited == "" || message.id != inherited+"_"+strconv.FormatInt(message.seq, 10)) {
 				usage := opencodeTokenUsage(tokens)
 				for key, value := range usage {
 					sums[key] += value

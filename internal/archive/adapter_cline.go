@@ -250,6 +250,16 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 		if text, _ := message["content"].(string); text != "" {
 			blocks = []any{map[string]any{"type": "text", "text": text}}
 		}
+		metadata := mapValueDefault(message["metadata"])
+		injected := ""
+		if role == "user" {
+			injected = clineInjectedSource(metadata, blocks)
+		}
+		// Tools the provider ran (web search, say) are kept beside the
+		// message, not in its content; Cline shows them before it.
+		if role == "assistant" {
+			messages = append(messages, clineModelToolActivities(base, id, len(blocks), metadata["modelToolActivities"], blocks)...)
+		}
 		texts := 0
 		for blockIndex, rawBlock := range blocks {
 			block := mapValue(rawBlock)
@@ -264,6 +274,16 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 			switch kind := firstString(block["type"]); kind {
 			case "text":
 				text := firstString(block["text"])
+				if injected != "" {
+					if strings.TrimSpace(text) != "" {
+						if texts == 0 {
+							item.NativeID = id
+						}
+						messages = append(messages, injectedContext(item, injected, text))
+						texts++
+					}
+					continue
+				}
 				if role == "user" {
 					var notices []string
 					text, notices = clineUserText(text)
@@ -302,7 +322,8 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 				if delegated[callID] {
 					item.Kind = "delegation_result"
 				}
-				item.Text = jsonText(map[string]any{"tool": defaultString(toolNames[callID], firstString(block["name"])), "content": block["content"], "is_error": block["is_error"] == true})
+				content, failed := clineToolResult(block["content"])
+				item.Text = jsonText(map[string]any{"tool": defaultString(toolNames[callID], firstString(block["name"])), "content": content, "is_error": block["is_error"] == true || failed})
 				messages = append(messages, item)
 			case "image", "document", "file":
 				item.Kind, item.Text = "attachment", jsonText(map[string]any{"type": kind})
@@ -374,6 +395,147 @@ func clineUserText(text string) (string, []string) {
 }
 
 // clineToolInput is a tool call's input, which Cline keeps as JSON text.
+// clineSyntheticKinds are the metadata kinds of user-role messages Cline
+// writes itself (user-run-messages.ts).
+var clineSyntheticKinds = map[string]bool{"auto_compaction": true, "compaction_budget_emergency": true, "completion_reminder": true, "loop_detection_notice": true,
+	"manual_compaction": true, "mistake_stop_notice": true, "recovery_notice": true, "compaction": true, "compaction_summary": true}
+
+// clineInjectedSource names what wrote a user-role message that no person
+// typed, or returns "": hook context and notices Cline shows as system
+// (displayRole), its own synthetic kinds, a message it records as no run of
+// the person's (userRunSpan 0) that has text, and its continuation prompts.
+func clineInjectedSource(metadata map[string]any, blocks []any) string {
+	if kind := firstString(metadata["kind"]); clineSyntheticKinds[kind] {
+		return "cline_" + kind
+	}
+	switch strings.ToLower(strings.TrimSpace(firstString(metadata["displayRole"]))) {
+	case "system", "status", "error":
+		return "cline_hook_context"
+	}
+	texts := []string{}
+	for _, raw := range blocks {
+		block := mapValueDefault(raw)
+		switch firstString(block["type"]) {
+		case "text":
+			texts = append(texts, firstString(block["text"]))
+		case "tool_result", "tool-result", "image", "file", "document":
+			return ""
+		}
+	}
+	text := strings.Join(texts, "\n")
+	if span, ok := number(metadata["userRunSpan"]); ok && span == 0 && strings.TrimSpace(text) != "" {
+		return "cline_injected"
+	}
+	if inner, _ := clineUserText(text); strings.HasPrefix(strings.TrimSpace(inner), "[TASK RESUMPTION]") ||
+		strings.TrimSpace(inner) == "The user approved switching to act mode. Continue with the approved plan now." {
+		return "cline_continuation"
+	}
+	return ""
+}
+
+// clineModelToolActivities are the calls and results of tools the provider
+// ran for an assistant message, numbered after its content blocks so each
+// call is linked to the message's request.
+func clineModelToolActivities(base MessageRecord, id string, after int, value any, blocks []any) []MessageRecord {
+	list, _ := value.([]any)
+	if len(list) == 0 {
+		return nil
+	}
+	used := map[string]bool{}
+	for _, raw := range blocks {
+		if block := mapValueDefault(raw); firstString(block["type"]) == "tool_use" {
+			used[firstString(block["id"])] = true
+		}
+	}
+	out := []MessageRecord{}
+	for index, raw := range list {
+		activity := mapValueDefault(raw)
+		callID, name := strings.TrimSpace(firstString(activity["toolCallId"])), strings.TrimSpace(firstString(activity["toolName"]))
+		if callID == "" || name == "" || used[callID] {
+			continue
+		}
+		call := base
+		call.NativeID, call.RawText = fmt.Sprintf("%s:block:%d", id, after+index), jsonText(activity)
+		call.Role, call.Kind, call.CallID = "assistant", "tool_call", callID
+		call.Text = jsonText(map[string]any{"tool": name, "input": activity["input"]})
+		out = append(out, call)
+		_, hasOutput := activity["output"]
+		_, hasError := activity["isError"]
+		if !hasOutput && !hasError {
+			continue
+		}
+		result := base
+		result.NativeID, result.RawText = fmt.Sprintf("%s:activity-result:%d", id, index), jsonText(activity)
+		result.Role, result.Kind, result.CallID = "tool", "tool_result", callID
+		result.Text = jsonText(map[string]any{"tool": name, "content": activity["output"], "is_error": activity["isError"] == true})
+		out = append(out, result)
+	}
+	return out
+}
+
+// clineToolResult reads Cline's operation results: each operation of a
+// call (a command, a file, a query) is {query, result, error, success},
+// as a list or as JSON text. The text is each operation's result, then its
+// error; any failed operation fails the call. Other content is as written.
+func clineToolResult(content any) (any, bool) {
+	if text, ok := content.(string); ok {
+		var decoded any
+		if json.Unmarshal([]byte(text), &decoded) != nil {
+			return content, false
+		}
+		if _, isMap := decoded.(map[string]any); !isMap {
+			if _, isList := decoded.([]any); !isList {
+				return content, false
+			}
+		}
+		if normalized, failed, ok := clineOperations(decoded); ok {
+			return normalized, failed
+		}
+		return content, false
+	}
+	if normalized, failed, ok := clineOperations(content); ok {
+		return normalized, failed
+	}
+	return content, false
+}
+
+func clineOperations(value any) (string, bool, bool) {
+	list, isList := value.([]any)
+	if !isList {
+		list = []any{value}
+	}
+	if len(list) == 0 {
+		return "", false, false
+	}
+	parts, failed := []string{}, false
+	for _, raw := range list {
+		operation := mapValue(raw)
+		if operation == nil {
+			return "", false, false
+		}
+		for key := range operation {
+			if key != "query" && key != "result" && key != "error" && key != "success" {
+				return "", false, false
+			}
+		}
+		_, hasResult := operation["result"]
+		_, hasError := operation["error"]
+		_, hasSuccess := operation["success"]
+		if !hasResult && !hasError && !hasSuccess {
+			return "", false, false
+		}
+		result, failure := asString(operation["result"]), firstString(operation["error"])
+		if result != "" {
+			parts = append(parts, result)
+		}
+		if failure != "" && !strings.Contains(result, failure) {
+			parts = append(parts, failure)
+		}
+		failed = failed || operation["success"] == false || (failure != "" && operation["success"] != true)
+	}
+	return strings.Join(parts, "\n"), failed, true
+}
+
 func clineToolInput(input any) any {
 	if text, ok := input.(string); ok {
 		var value any
