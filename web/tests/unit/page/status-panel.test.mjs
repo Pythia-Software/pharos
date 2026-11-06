@@ -44,12 +44,32 @@ test("each top-level operation is one line: label, step N of M, its measured amo
   assert.deepEqual(plain(panel.operationLine(operation("d", { state: "blocked", state_label: "Label d" }))).primary, []);
 });
 
-test("Now shows concurrent background work alongside foreground work, foreground first", () => {
-  const busy = model(view({ operations: [operation("b", { priority: "background" }), operation("a"), operation("old", { state: "succeeded" })] }));
-  assert.deepEqual(busy.lines.map(line => line.id), ["a", "b"]);
-  const background = model(view({ operations: [operation("b", { priority: "background" }), operation("c", { priority: "background" })] }));
-  assert.deepEqual(background.lines.map(line => line.id), ["b", "c"]);
+test("Now keeps concurrent work in start order across snapshots and child stages", () => {
+  const first = operation("first", { priority: "background", started_at: "2026-11-05T12:00:00Z" });
+  const second = operation("second", { started_at: "2026-11-05T12:01:00Z" });
+  const app = operation("app", { started_at: "2026-11-05T12:02:00Z" });
+  const old = operation("old", { state: "succeeded", started_at: "2026-11-05T11:00:00Z" });
+  const initial = view({ operations: [second, first, old] }, { appOperations: [app] });
+  assert.deepEqual(model(initial).lines.map(line => line.id), ["first", "second", "app"]);
+  assert.deepEqual(initial.library.operations.map(entry => entry.id), ["second", "first", "old"], "rendering leaves the snapshot unchanged");
+  const newest = operation("newest", { started_at: "2026-11-05T12:03:00Z" });
+  const advanced = {...first, children: [operation("child", { started_at: "2026-11-05T12:04:00Z" })]};
+  const refreshed = view({ operations: [newest, advanced, second, old] }, { appOperations: [app] });
+  assert.deepEqual(model(refreshed).lines.map(line => line.id), ["first", "second", "app", "newest"]);
+  assert.deepEqual(model(view({ operations: [newest, second] }, { appOperations: [app] })).lines.map(line => line.id), ["second", "app", "newest"]);
+  assert.deepEqual(model({ library: null, appOperations: [newest, app] }).lines.map(line => line.id), ["app", "newest"]);
   assert.equal(model(view()).lines.length, 0);
+});
+
+test("Now resolves equal or unknown start times consistently across snapshot orders", () => {
+  const operations = [
+    operation("b", { started_at: "2026-11-05T12:00:00Z" }),
+    operation("a", { started_at: "2026-11-05T07:00:00-05:00" }),
+    operation("missing"), operation("invalid", { started_at: "unknown" }),
+  ];
+  const ids = entries => model(view({ operations: entries })).lines.map(line => line.id);
+  assert.deepEqual(ids(operations), ["a", "b", "invalid", "missing"]);
+  assert.deepEqual(ids(operations.slice().reverse()), ids(operations));
 });
 
 test("unknown totals retain completed counts, a current phase, and elapsed time", () => {
@@ -377,9 +397,10 @@ test("other libraries are only counted in the library line; an app operation tou
 });
 
 test("non-background work says what started it", () => {
-  const origin = changes => plain(panel.operationLine(operation("a", changes))).secondary[0];
-  assert.equal(origin({ trigger: "user" }), "Started by you");
-  assert.equal(origin({ trigger: "chained" }), "Follows other work");
+  const secondary = changes => plain(panel.operationLine(operation("a", changes))).secondary;
+  assert.equal(secondary({ trigger: "user" })[0], "Started by you");
+  assert.equal(secondary({ trigger: "schedule" })[0], "Scheduled");
+  assert.deepEqual(secondary({ trigger: "chained" }), secondary({}));
 });
 
 test("a background pass leads with the current task and its planned position", () => {

@@ -98,6 +98,9 @@ import agentEventMessagesDocument from "../../schemas/agent_event_messages.schem
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { SafetySelectionBar, SafetyTableContext } from "./safety";
+import { FixesSelectionBar, FixesTableContext } from "./fixes";
+import { fixDetailURL } from "./fixes-route";
+import fixesDocument from "../../schemas/fixes.schema.json";
 import { createQueryHistory } from "./query-history";
 import { Icon } from "./icons";
 import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
@@ -136,7 +139,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -160,7 +163,8 @@ function datasetIsVisible(dataset: Dataset) {
     return workspace.mode !== "dashboards" && workspace.dataset === dataset;
   }
   if (dataset === "library") return path === "/library";
-  return (dataset === "findings" || dataset === "safety") && path === "/findings" && params.get("view") === "table" && (params.get("optimize_area") === "safety") === (dataset === "safety");
+  const area = params.get("optimize_area");
+  return (dataset === "findings" || dataset === "safety" || dataset === "fixes") && path === "/findings" && params.get("view") === "table" && (dataset === "findings" ? area !== "safety" && area !== "fixes" : area === dataset);
 }
 
 function updateURI(name: string, value: string) {
@@ -205,6 +209,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   rhythm: loadSchema<Row>(rhythmDocument),
   findings: loadSchema<Row>(findingsDocument),
   safety: loadSchema<Row>(safetyDocument),
+  fixes: loadSchema<Row>(fixesDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
 };
@@ -385,6 +390,7 @@ const emptyMessages: Record<Dataset, string> = {
   rhythm: "No activity matches this query.",
   findings: "No findings match this query.",
   safety: "No risky action notices match this query.",
+  fixes: "No fixes match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No agent messages read for events match this query.",
 };
@@ -1549,7 +1555,8 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
-  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} safetyTable={<QuerySurface dataset="safety" queryHistory presets={api => <SafetyTableContext query={api.query} total={api.total} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />}
+    fixesTable={<QuerySurface dataset="fixes" queryHistory presets={api => <FixesTableContext query={api.query} total={api.total} />} selectionBar={api => <FixesSelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={fixDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open fix</a>} />} />],
 ];
 
 // Mount a page on its first visit. Hidden pages used to load capabilities,

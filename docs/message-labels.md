@@ -45,16 +45,18 @@ redirect to the dashboard, preserving compatible population and chart filters.
 Sender functions use cool cyan, blue, green and violet hues; Receiver functions
 use warm yellow, orange, coral and magenta hues. Difficulty is red; Challenge and
 Reject sit near red. Deepest accepted labels supply the individual stripes.
-Uncategorized evidence stays neutral and translucent. Color does not encode
-model scores.
+Processed messages with no matching label are fully transparent; messages not
+yet processed (including pending or stale labels) stay light grey. Color does
+not encode model scores.
 
 Each message contributes one unit to a fingerprint column. A message with both
 roots allocates half to each; deepest labels within a root divide its weight
 equally. Ancestors receive their children's sums. Parent-only matches appear as
-Other, including Generic root matches. Uncategorized distinguishes Not labeled
-from Labeled / no match. The hover hierarchy and stripe heights use the same
-weights, so every parent's children add to its value. These additive fingerprint
-shares differ from the dashboard's overlapping distinct-message frequencies.
+Other, including Generic root matches. Uncategorized distinguishes Not yet
+processed from Processed / no match. The hover hierarchy and stripe heights use
+the same weights, so every parent's children add to its value. These additive
+fingerprint shares differ from the dashboard's overlapping distinct-message
+frequencies.
 
 Centered diagonal hatching widens smoothly with extra overlapping recorded
 branches, remains distinguishable above three branches, and disappears with no
@@ -62,6 +64,16 @@ overlap. Overlap uses recorded session envelopes, not CPU activity. Width
 compresses message volume rather than duration. Fingerprints have square
 intrinsic corners; containing cards may clip them. Hover is viewport-bounded,
 scrollable, keyboard-accessible and retains the complete observed hierarchy.
+Click a column, or press Enter or Space while it is focused, to pin its key.
+The pinned key adds **Show in conversation**, which reveals the message at
+the clicked point, including within a compressed column or workspace ribbon.
+
+Conversation and workspace fingerprints also show the timeline's agent event
+markers and arcs to earlier text. Hover or focus a marker to inspect it; pin
+its details to open the event and its target in the source conversation.
+**Settings → App preferences → Agent events in fingerprints** controls this
+overlay everywhere and is on by default. The setting is saved with the library
+and takes effect immediately; it does not change event detection or the timeline.
 
 ## Conversation timelines
 

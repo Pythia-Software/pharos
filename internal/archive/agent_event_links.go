@@ -432,13 +432,26 @@ func agentEventTargetJSON(t *agentEventTarget, texts map[string]string) map[stri
 // the text of earlier messages is read only when the conversation has a
 // two-sided event, and only the first agentEventLinkTextLimit bytes of each.
 func (c *Catalog) agentEventLinks(ctx context.Context, conversationID string) ([]map[string]any, error) {
+	return c.agentEventLinksForMessages(ctx, conversationID, nil)
+}
+
+// A fingerprint requests only events on its bounded sample of messages.
+// Targets are still resolved against the source conversation's earlier text.
+// Nil messageIDs retains the full conversation behavior for timeline callers.
+func (c *Catalog) agentEventLinksForMessages(ctx context.Context, conversationID string, messageIDs []string) ([]map[string]any, error) {
 	var tables int
 	if err := c.reader().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='agent_events'").Scan(&tables); err != nil || tables == 0 {
 		return nil, err
 	}
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT 'e'||e.id id,e.message_id,e.family,e.probability,e.source,e.sentence,e.subject,e.response,e.sentence_start,e.sentence_end,
+	query := `SELECT 'e'||e.id id,e.message_id,e.family,e.probability,e.source,e.sentence,e.subject,e.response,e.sentence_start,e.sentence_end,
 		(SELECT length(CAST(m.text AS BLOB)) FROM messages m WHERE m.id=e.message_id) message_bytes
-		FROM agent_events e WHERE e.conversation_id=? AND e.probability>=? ORDER BY e.message_id,e.sentence_start,e.probability DESC`, conversationID, agentEventThreshold)
+		FROM agent_events e WHERE e.conversation_id=? AND e.probability>=?`
+	args := []any{conversationID, agentEventThreshold}
+	if messageIDs != nil {
+		query += ` AND e.message_id IN (SELECT value FROM json_each(?))`
+		args = append(args, jsonText(messageIDs))
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), query+` ORDER BY e.message_id,e.sentence_start,e.probability DESC`, args...)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}

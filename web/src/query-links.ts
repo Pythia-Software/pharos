@@ -6,7 +6,7 @@ import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
 import { concurrencyWindowRange } from "./concurrency-settings";
 import { windowedChart } from "./card-windows";
 
-export const queryDatasets = ["compactions","message_labels","model_requests", "library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "rhythm", "findings", "safety", "agent_events", "agent_event_messages"] as const;
+export const queryDatasets = ["compactions","message_labels","model_requests", "library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "rhythm", "findings", "safety", "fixes", "agent_events", "agent_event_messages"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" | "today"; untilField?: string; timezone?: string };
 const defaultTimeFields: Partial<Record<QueryDataset, string[]>> = {
@@ -125,8 +125,8 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
     params.set("analyze_mode", "query");
     params.set("analyze_topic", usageDatasetTopics[dataset as UsageDataset]);
     params.set("analyze_data", dataset);
-  } else if (dataset === "findings" || dataset === "safety") {
-    path = "/findings"; params.set("view", "table"); if (dataset === "safety") params.set("optimize_area", "safety");
+  } else if (dataset === "findings" || dataset === "safety" || dataset === "fixes") {
+    path = "/findings"; params.set("view", "table"); if (dataset !== "findings") params.set("optimize_area", dataset);
   }
   if (window) {
     if (window.mode === "relative" || window.mode === "today") params.set("window_mode", window.mode);
@@ -152,7 +152,7 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
     // selected tab decide the dataset, rather than the first q_* parameter.
     const dataset: QueryDataset | undefined = workspace ? workspace.mode === "dashboards" ? cardSourceDataset(params) : workspace.dataset
       : path === "/library" || path === "/" ? "library"
-      : path === "/findings" ? params.get("view") === "table" ? params.get("optimize_area") === "safety" ? "safety" : "findings" : undefined
+      : path === "/findings" ? params.get("view") === "table" ? params.get("optimize_area") === "safety" ? "safety" : params.get("optimize_area") === "fixes" ? "fixes" : "findings" : undefined
       : path === "/mcp" ? "mcp_calls" : undefined;
     if (dataset) {
       const token = params.get(`q_${dataset}`);

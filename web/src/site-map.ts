@@ -30,7 +30,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
+import { appSections, findingsPages, fixesPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -727,6 +727,12 @@ export function buildSiteMap(inputs: SiteInputs) {
           ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
         safety.children!.push(node.path);
       }
+      const fixes = child({ path: "findings/fixes", title: "Fixes", description: "Recurring problems agents run into that a change to guidance, environment, tools, setup or docs could prevent, grouped from agent events, with where each fix belongs, prompt baskets per place and handoff history.", route: "/findings", fixed: { optimize_area: "fixes" }, children: [] });
+      for (const page of fixesPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view },
+          ...view === "table" ? { dataset: "fixes", builder: "queryURL", options: [whereOption("q_fixes", "fixes")] } : {} }).path);
+      }
     }
     if (section.path === "work") {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer.";
@@ -737,7 +743,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions. Legacy explorer=parallel links open Timeline." },
         { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Sessions as a hierarchy, or ranked by one metric." },
         { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, requires: [needs("mode", "rank")], description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
-        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], requires: [needs("mode", "rank")], description: "In rank mode, the session's own metric (self) or with everything below it (all)." },
+        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], description: "The hierarchy and ranking show the session's own metrics (self) or with everything below it (all)." },
         { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], requires: [needs("mode", "rank")], description: "In rank mode." },
         { name: "collapsed", param: "delegation_collapsed", kind: "text", description: "Comma-separated session ids to collapse, sorted." },
         { name: "session", param: "delegation_session", kind: "text", description: "The selected session id." },

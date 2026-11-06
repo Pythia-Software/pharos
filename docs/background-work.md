@@ -1830,15 +1830,15 @@ the same schedule from one declaration (`backgroundItems`):
   task, shows its cadence beside it, and marks its place among the planned
   tasks. The marker is a task position, not an elapsed-time percentage; a
   measured step has a separate accessible progress bar. All active operations
-  are shown, foreground first, including concurrent maintenance. Each line
-  uses its active child's current phase and counts, without inheriting a
+  are shown in start order, oldest first, including concurrent maintenance.
+  Each line uses its active child's current phase and counts, without inheriting a
   previous stage's percentage. A wait or stop on any ancestor remains visible
   alongside those child counts; stopping takes precedence over waiting, and
   waiting suppresses the running countdown. Unknown totals keep completed counts and use
   an indeterminate bar; elapsed time and actual query/writer wait reasons
-  remain visible. Other running lines say who
-  started them (`trigger`); this describes provenance, not a wait. An alert's title and action share a line, its detail
-  below.
+  remain visible. Other running lines identify user or scheduled starts
+  (`trigger`); chained work adds no provenance label. An alert's title and
+  action share a line, its detail below.
 
 ## Known hazards this contract must not hide
 

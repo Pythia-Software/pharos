@@ -103,7 +103,7 @@
   {
    "id": "agent-experience",
    "label": "What agents run into",
-   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages"],
+   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages","findings/fixes","findings/fixes/table","findings/fixes/settings"],
    "signals": ["agent.friction","agent.reactions"]
   },
   {
@@ -464,7 +464,7 @@
  "excluded": {
   "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
   "settings/layout": "Header and navigation layout preferences.",
-  "settings/preferences": "Display preferences.",
+  "settings/preferences": "Display preferences, including agent event markers and arcs in fingerprints.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted."
  }
 }

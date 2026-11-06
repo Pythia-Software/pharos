@@ -8,6 +8,13 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+Main agent: delegate broad repository exploration to one read-only subagent
+(Claude Code: Explore; Codex: spawn_agent) when available. Request a short
+summary of relevant files, symbols, tests, and suggested edit points, then
+implement from it; reread only what editing or verification needs. Keep small
+lookups local; if delegation is unavailable, use targeted searches.
+Prefer a subagent with the same model and effort level as the main agent.
+
 Split long tasks. Past a few hundred requests, write a short handoff in
 `.context/` (what's done, what's next, where things are) and continue in a
 fresh session.

@@ -846,6 +846,10 @@ func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, gene
 		err = c.refreshSafety(ctx)
 	}
 	if err == nil && full {
+		c.setFindingsPhase("grouping fixes")
+		err = c.refreshFixes(ctx, false)
+	}
+	if err == nil && full {
 		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
 			for key, value := range map[string]string{"findings_generation": generation, "findings_built_at": formatTime(c.clock()),
 				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds()), "findings_inputs_generation": inputs} {

@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS repository_retirements (
 `
 
 func (c *Catalog) ensureFindingsSchema() error {
-	_, err := c.DB.Exec(findingsSchemaSQL + safetySchemaSQL)
+	_, err := c.DB.Exec(findingsSchemaSQL + safetySchemaSQL + fixesSchemaSQL)
 	return err
 }
 

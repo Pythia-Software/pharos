@@ -347,7 +347,7 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
-  const progress = panel.getByRole('progressbar').first();
+  const progress = panel.getByRole('progressbar', { name: 'Index changes progress', exact: true });
   assert.notEqual(await progress.getAttribute('aria-valuenow'), null);
   push('/api/status/stream', {...snapshot, revision: 4, operations: snapshot.operations.map(operation => operation.id === 'op-index'
     ? {...operation, step: {...operation.step, total: null, fraction: null}} : operation)});
@@ -853,6 +853,28 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   const sheet = page.locator('[role="dialog"][aria-label="Workspace sessions"]');
   await sheet.waitFor();
   await holdsFocus(page, sheet, show);
+  await press(show);
+  await press(sheet.getByRole('button', { name: 'Hide workspace sessions', exact: true }));
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+});
+
+test("the workspace sidebar returns focus when collapsed and preserves the reader when reopened", { skip }, async t => {
+  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn" });
+  const reader = page.getByRole('region', { name: 'Conversation viewer', exact: true });
+  const hide = page.getByRole('button', { name: 'Hide workspace sessions', exact: true });
+  const show = page.getByRole('button', { name: 'Show workspace sessions', exact: true });
+  await page.locator('.turn').nth(6).evaluate(turn => turn.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await settled();
+  const scroll = await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop);
+  await press(hide);
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+  assert.equal(await reader.isVisible(), true);
+  assert.equal(await hide.evaluate(el => { el.focus(); return el === document.activeElement; }), false, 'collapsed sessions cannot receive keyboard focus');
+  await press(show);
+  await page.waitForFunction(() => document.activeElement?.closest('.workspace-overview'));
+  assert.equal(await page.getByRole('region', { name: 'Workspace overview', exact: true }).isVisible(), true);
+  assert.equal(await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop), scroll);
+  assert.equal(new URL(page.url()).searchParams.get('conversation'), 'conv-root');
 });
 
 test("conversation navigation focuses the requested reader unless focus moved while it loaded", { skip }, async t => {
@@ -878,7 +900,7 @@ test("conversation navigation focuses the requested reader unless focus moved wh
     const target = moveFocus ? control : page.locator(".conversation-panel");
     await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
   }
-  await press(page.locator(".workspace-reader-workspace"));
+  await press(page.getByRole('button', { name: 'Open workspace overview', exact: true }));
   await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });

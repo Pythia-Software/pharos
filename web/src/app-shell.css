@@ -24,10 +24,8 @@
 .app-shell .app-location-separator{opacity:.6}
 .app-shell .app-location-switcher{display:flex;align-items:center;gap:12px;min-height:var(--app-control-height);padding:6px 8px;max-width:100%;color:var(--mast-ink)}
 .app-shell .app-location-switcher:hover{background:var(--mast-field)}
-.app-sidebar-toggle{position:fixed;z-index:11;top:calc(var(--app-header-height) + 24px);left:calc(var(--app-rail-width) - 48px);display:grid;place-items:center;padding:0;width:36px;height:36px;color:var(--muted);border:1px solid transparent;background:transparent;border-radius:5px}
-.app-sidebar-toggle:hover{color:var(--ink);background:var(--panel);border-color:var(--line)}
-.app-sidebar-toggle .app-icon{width:18px;height:18px}
-.app-sidebar-toggle[aria-expanded=false]{left:12px;background:var(--panel);border-color:var(--line)}
+.app-sidebar-toggle{position:fixed;z-index:11;top:calc(var(--app-header-height) + 24px);left:calc(var(--app-rail-width) - 48px)}
+.app-sidebar-toggle[aria-expanded=false]{left:12px}
 .app-shell .app-icon{flex:none}.app-shell #appLocation .app-icon,.app-shell .app-navigation-list .app-icon,.app-shell .app-navigation-dialog .app-icon{width:16px;height:16px}
 .app-shell main{margin-left:0}
 /* focusPageContent moves focus to the landmark; ringing the whole page would

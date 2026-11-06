@@ -31,6 +31,10 @@ func (s *Server) getFindings(w http.ResponseWriter, r *http.Request) {
 		s.getSafety(w, r)
 		return
 	}
+	if r.URL.Path == "/api/findings/fixes" || strings.HasPrefix(r.URL.Path, "/api/findings/fixes/") {
+		s.getFixes(w, r)
+		return
+	}
 	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/findings"), "/")
 	if path == "" {
 		value, err := s.Catalog.FindingsOverview(r.Context(), r.URL.Query().Get("state"))
@@ -51,6 +55,10 @@ func (s *Server) getFindings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	if strings.HasPrefix(r.URL.Path, "/api/findings/safety/") {
 		s.postSafety(w, r, body)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/findings/fixes/") {
+		s.postFixes(w, r, body)
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/findings/")
