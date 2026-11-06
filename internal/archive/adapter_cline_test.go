@@ -98,8 +98,8 @@ func TestClineSessionKeepsItsTurnsToolsAndUsage(t *testing.T) {
 		kinds = append(kinds, message.Role+":"+message.Kind)
 		byID[message.NativeID] = message
 	}
-	if got, want := strings.Join(kinds, " "), "system:context system:context user:message assistant:reasoning assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result " +
-		"assistant:tool_call assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result tool:tool_result " +
+	if got, want := strings.Join(kinds, " "), "system:context system:context user:message assistant:reasoning assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result "+
+		"assistant:tool_call assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result tool:tool_result "+
 		"assistant:tool_call tool:tool_result assistant:message system:metadata system:context system:context user:message assistant:message system:metadata"; got != want {
 		t.Fatalf("messages\n got %s\nwant %s", got, want)
 	}
