@@ -39,6 +39,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:system",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -55,6 +57,8 @@
               "PreviousNativeID": "system",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:instructions",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -71,6 +75,8 @@
               "PreviousNativeID": "instructions",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -87,6 +93,8 @@
               "PreviousNativeID": "instructions",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask:part:0",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"asset_pointer\":\"file-service://file-abc\",\"content_type\":\"image_asset_pointer\",\"height\":480,\"width\":640}",
               "SourceOrder": 0,
               "Selected": true
@@ -103,6 +111,8 @@
               "PreviousNativeID": "instructions",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask:part:1",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"audio_asset_pointer\":{\"asset_pointer\":\"sediment://file-voice\",\"content_type\":\"audio_asset_pointer\"},\"content_type\":\"real_time_user_audio_video_asset_pointer\",\"frames_asset_pointers\":[]}",
               "SourceOrder": 0,
               "Selected": true
@@ -119,6 +129,8 @@
               "PreviousNativeID": "ask",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:first",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": false
@@ -135,6 +147,8 @@
               "PreviousNativeID": "ask",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:thoughts",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true,
@@ -152,6 +166,8 @@
               "PreviousNativeID": "thoughts",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:recap",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -168,6 +184,8 @@
               "PreviousNativeID": "recap",
               "CallID": "call",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:call",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -184,6 +202,8 @@
               "PreviousNativeID": "call",
               "CallID": "call",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:output",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -200,6 +220,8 @@
               "PreviousNativeID": "output",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:answer",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -252,6 +274,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -268,6 +292,8 @@
               "PreviousNativeID": "ask",
               "CallID": "search",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:search",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -284,6 +310,8 @@
               "PreviousNativeID": "search",
               "CallID": "search",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:results",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -300,6 +328,8 @@
               "PreviousNativeID": "results",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:older",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": false
@@ -316,6 +346,8 @@
               "PreviousNativeID": "results",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:newer",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -332,6 +364,8 @@
               "PreviousNativeID": "ask",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:blank",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": false

@@ -1,5 +1,5 @@
 {
-  "index_version": "conductor-v13-origins+sender+reasoning-v1",
+  "index_version": "conductor-v14-inference-speed+sender+reasoning-v1",
   "records": [
     {
       "SourceID": "session-1",
@@ -61,6 +61,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:0",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -77,6 +79,8 @@
               "PreviousNativeID": "",
               "CallID": "task-call",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:1",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -93,6 +97,8 @@
               "PreviousNativeID": "",
               "CallID": "edit-call",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:2",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -109,6 +115,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:3",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -125,6 +133,8 @@
               "PreviousNativeID": "",
               "CallID": "task-call",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:4",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -141,6 +151,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:5",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -157,6 +169,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:6",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Check the formatter first.\",\"type\":\"thinking\"},{\"text\":\"Checking.\",\"type\":\"text\"}],\"id\":\"msg-think\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":300,\"output_tokens\":40}},\"type\":\"assistant\"}",
               "SourceOrder": 0,
               "Selected": true,
@@ -174,12 +188,14 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:6",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
             }
           ],
-          "Extractor": "conductor-v13-origins"
+          "Extractor": "conductor-v14-inference-speed"
         }
       ],
       "WorkItems": null,

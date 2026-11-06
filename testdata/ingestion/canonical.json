@@ -1,5 +1,5 @@
 {
-  "index_version": "token-events-v5-origin",
+  "index_version": "token-events-v6-inference-speed",
   "records": [
     {
       "SourceID": "export-work",
@@ -43,6 +43,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/export/export.json:0:0",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -59,6 +61,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/export/export.json:0:1",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -75,6 +79,8 @@
               "PreviousNativeID": "",
               "CallID": "c1",
               "EvidenceLocator": "$ROOT/002/export/export.json:0:2",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -91,6 +97,8 @@
               "PreviousNativeID": "",
               "CallID": "c1",
               "EvidenceLocator": "$ROOT/002/export/export.json:0:3",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -107,6 +115,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/export/export.json:0:4",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"created_at\":\"2026-09-01T10:00:04Z\",\"id\":\"m5\",\"kind\":\"message\",\"message\":{\"id\":\"req-1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20}},\"role\":\"assistant\",\"text\":\"README.md has 74 words.\"}",
               "SourceOrder": 0,
               "Selected": true
@@ -141,6 +151,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/export/export.json:1:0",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"created_at\":\"2026-09-01T10:00:05Z\",\"id\":\"a1\",\"kind\":\"message\",\"message\":{\"id\":\"req-2\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20}},\"role\":\"assistant\",\"text\":\"74 words.\"}",
               "SourceOrder": 0,
               "Selected": true

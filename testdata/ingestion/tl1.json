@@ -255,6 +255,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/transcripts/task-claude/1-codex.jsonl:3",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true

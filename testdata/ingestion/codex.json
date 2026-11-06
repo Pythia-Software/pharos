@@ -1,5 +1,5 @@
 {
-  "index_version": "codex:message-model-v18-codex-continuations",
+  "index_version": "codex:message-model-v19-codex-continuations",
   "records": [
     {
       "SourceID": "0199a000-0000-7000-8000-000000000001",
@@ -61,6 +61,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl:3",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -77,6 +79,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl:4",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"_line\":4,\"payload\":{\"encrypted_content\":\"gAAAA\",\"id\":\"rs_1\",\"summary\":[{\"text\":\"Read the file first.\",\"type\":\"summary_text\"}],\"type\":\"reasoning\"},\"timestamp\":\"2026-09-01T10:00:03.000Z\",\"type\":\"response_item\"}",
               "SourceOrder": 0,
               "Selected": true,
@@ -94,6 +98,8 @@
               "PreviousNativeID": "",
               "CallID": "call_1",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl:5",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -110,6 +116,8 @@
               "PreviousNativeID": "",
               "CallID": "call_1",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl:6",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -126,6 +134,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl:7",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "{\"_line\":7,\"payload\":{\"info\":{\"last_token_usage\":{\"cached_input_tokens\":1500,\"input_tokens\":2000,\"output_tokens\":40,\"reasoning_output_tokens\":10,\"total_tokens\":2040},\"total_token_usage\":{\"cached_input_tokens\":1500,\"input_tokens\":2000,\"output_tokens\":40,\"reasoning_output_tokens\":10,\"total_tokens\":2040}},\"type\":\"token_count\"},\"timestamp\":\"2026-09-01T10:00:06.000Z\",\"type\":\"event_msg\"}",
               "SourceOrder": 0,
               "Selected": true
@@ -142,6 +152,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl:8",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
@@ -273,6 +285,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/.codex/sessions/2026/09/01/rollout-2026-09-01T10-00-08-0199a000-0000-7000-8000-000000000002.jsonl:3",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true

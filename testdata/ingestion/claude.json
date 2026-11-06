@@ -1,5 +1,5 @@
 {
-  "index_version": "claude:message-model-v18-codex-continuations+claude-v2-active-branch",
+  "index_version": "claude:message-model-v19-codex-continuations+claude-v2-active-branch",
   "records": [
     {
       "SourceID": "claude-session",
