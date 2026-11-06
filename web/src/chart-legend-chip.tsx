@@ -60,7 +60,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
   const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
   return <span className={`usage-legend-chip${category ? " is-category" : ""}`}>
     <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
-      title={`Filter ${item.label}`} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
+      title="Filter this series" onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
         event.preventDefault();
         firstFocus.current = event.key === "ArrowUp" ? -1 : 0;
@@ -77,7 +77,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
       entries[next]?.focus();
     }}>
-      <div className="usage-legend-menu-heading" title={item.label}>{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
+      <div className="usage-legend-menu-heading" data-overflow-title="">{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>Replace the current selection</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>

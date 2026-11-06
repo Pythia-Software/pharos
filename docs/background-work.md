@@ -1614,13 +1614,16 @@ library entry's own as `libraries[].resources`):
 `role` is `service`, `broker` or the lease's process (`cli:ingest`).
 `label` and `text` are the server's words. The panel's Load row shows CPU
 (% of one core), GPU, RAM and Disk (per second) in one row, each with its icon,
-for the machine in the app and the library otherwise, with `label` and the
-processes' `text` in its tooltip. The panel's Load row is
+for the machine in the app and the library otherwise. The panel's Load row is
 CPU | GPU | RAM | I/O | Storage, with a WAL cell only when the known size
 exceeds 1,000,000,000 bytes (one decimal GB). GPU is a percentage from
-0–100 with a tooltip identifying its process scope and warming clients;
-an unavailable reading is a dash. Services without a GPU field omit that
-cell. All metrics remain on one line, including when WAL is shown.
+0–100; an unavailable reading is a dash. Services without a GPU field omit that
+cell. All metrics remain on one line, including when WAL is shown. The row has
+no summary tooltip; resource labels and values are already visible. Partial
+CPU, GPU and I/O rates carry a visible `≥` qualifier and a per-metric warning
+that processes or clients awaiting another sample may cause undercounting. An
+unmeasured rate remains a dash. Per-process
+`text` remains available in the status API.
 I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it
 keeps on its drive, from the last drive check, which Health refreshes;
@@ -1809,6 +1812,10 @@ the same schedule from one declaration (`backgroundItems`):
   carries `typical`, the middle of its recent runs ("Typically 2–3 h",
   between the runs a quarter of the way in from each end), which leads its
   line in Settings.
+  For labels and agent events, `as_of` uses the newer of the last successful
+  background pass and deferred-stage completion. A bounded pass
+  updates Last run and starts the cadence's clock even while its backlog
+  remains pending; pending generations still determine whether work remains.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled

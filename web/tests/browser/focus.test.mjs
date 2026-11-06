@@ -9,9 +9,30 @@ import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
-  const {page, settled, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
+  let background = structuredClone(defaultApi['GET /api/background']);
+  const {page, settled, shot} = await open(t, {url:'/settings/sync',viewport:{width:1920,height:1050},ready:'#backgroundSchedule .bg-col', api: {
+    'GET /api/background': () => background,
+    'POST /api/labels/settings': ({body}) => {
+      if ('enabled' in body) {
+        background.labels.enabled = body.enabled;
+        const step = background.view.items.find(item => item.id === 'labels');
+        Object.assign(step, {state: body.enabled ? 'queued' : 'disabled', state_label: body.enabled ? 'Up next' : 'Off', cadence: body.enabled ? 'hourly' : 'manual'});
+        background.view.unscheduled = background.view.items.filter(item => item.cadence === 'manual').map(item => item.id);
+        background.view.cadences.find(row => row.id === 'hourly').items = background.view.items.filter(item => item.cadence === 'hourly').map(item => item.id);
+      }
+      if ('agent_events_threads' in body) background.agent_events.threads = body.agent_events_threads;
+      return background;
+    },
+  }});
+  const refreshFocused = async control => {
+    await control.focus();
+    await page.evaluate(() => window.pharosBackground.refresh(true));
+    await settled();
+    assert.ok(await control.evaluate(element => document.activeElement === element), 'refreshing an idle model switch keeps keyboard focus');
+  };
+  await page.locator('[data-view-key="background:labels"]').click();
   const labels = page.getByRole('switch', {name:'Message labels',exact:true});
-  await labels.focus();
+  await refreshFocused(labels);
   for (const enabled of [true, false]) {
     const saved = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
     await page.keyboard.press('Space');
@@ -20,8 +41,12 @@ test('Settings switches keep keyboard focus and their saved state across Setting
       const toggle = document.getElementById('labelsEnabled');
       return toggle?.getAttribute('aria-checked') === String(enabled) && !toggle.disabled && document.activeElement === toggle;
     }, enabled);
+    assert.equal(await labels.evaluate(element => element.closest('[data-cadence]').dataset.cadence), enabled ? 'hourly' : 'manual');
+    await refreshFocused(labels);
     if (enabled) await shot('enabled');
   }
+  await page.locator('[data-view-key="background:agent_events"]').click();
+  await refreshFocused(page.getByRole('switch', {name:'Agent events (preview)',exact:true}));
   const threads = page.getByRole('combobox', {name:'Agent events (preview) CPU threads', exact:true});
   await threads.focus();
   const savedThreads = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');

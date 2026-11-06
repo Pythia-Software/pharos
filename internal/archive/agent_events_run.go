@@ -425,13 +425,19 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		}
 		return nil
 	}
+	workers := labelerPreparationWorkers(labels, opts.Limit, false)
+	builders := make([]*labelsItemBuilder, workers)
 	pipeline := agentEventsPipeline{
-		opts: opts, stats: stats, progress: progress, status: status,
-		build: func(job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+		workers: workers,
+		opts:    opts, stats: stats, progress: progress, status: status,
+		build: func(ctx context.Context, worker int, job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+			if builders[worker] == nil {
+				builders[worker] = builder.fork(ctx)
+			}
 			// IO priority is per thread, so each pipeline goroutine applies
 			// the operation's policy to its own database work.
 			opFrom(ctx).RunIO(func() {
-				conversation, err = c.agentEventsConversation(ctx, builder, verifier, job, opts.Since)
+				conversation, err = c.agentEventsConversation(ctx, builders[worker], verifier, job, opts.Since)
 			})
 			return conversation, err
 		},

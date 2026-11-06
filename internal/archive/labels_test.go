@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1643,5 +1644,105 @@ func TestLabelerBackendSettings(t *testing.T) {
 	want := []string{"--runtime", filepath.Join(base, "native/ort.dylib"), "--backend", "mlx", "--mlx-runtime", filepath.Join(base, "native/engine.dylib")}
 	if got := runtimeArgs(configured); !slices.Equal(got, want) {
 		t.Fatalf("worker arguments: %v", got)
+	}
+}
+
+// Preparation overlaps across conversations, but neither an out-of-order
+// result nor a blocked consumer may grow the preparation window.
+func TestLabelsPreparationScheduling(t *testing.T) {
+	for _, mode := range []string{"complete", "stop", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				started := make(chan int, 3)
+				releaseFirst, consuming, releaseConsumer := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				var active, total atomic.Int32
+				var order []int
+				done := make(chan error, 1)
+				go func() {
+					done <- prepareConversations(ctx, 12, 3, func(ctx context.Context, worker, index int) int {
+						active.Add(1)
+						defer active.Add(-1)
+						total.Add(1)
+						if index < 3 {
+							started <- index
+						}
+						if index == 0 {
+							select {
+							case <-releaseFirst:
+							case <-ctx.Done():
+							}
+						}
+						return index
+					}, func(index, value int) bool {
+						order = append(order, value)
+						if index == 0 {
+							close(consuming)
+							<-releaseConsumer
+						}
+						return mode != "stop"
+					})
+				}()
+				for range 3 {
+					<-started // All three start while the first is still blocked.
+				}
+				synctest.Wait()
+				if total.Load() != 3 {
+					t.Fatal("preparation ran beyond its reorder window")
+				}
+				if mode == "cancel" {
+					cancel()
+				} else {
+					close(releaseFirst)
+					<-consuming
+					synctest.Wait()
+					if total.Load() != 3 {
+						t.Fatal("a blocked consumer did not stop preparation")
+					}
+					close(releaseConsumer)
+				}
+				err := <-done
+				if mode == "cancel" && !errors.Is(err, context.Canceled) || mode != "cancel" && err != nil {
+					t.Fatalf("%s: %v", mode, err)
+				}
+				want := 12
+				if mode == "stop" {
+					want = 1
+				} else if mode == "cancel" {
+					want = 0
+				}
+				if len(order) != want || active.Load() != 0 {
+					t.Fatalf("delivered %v; active workers %d", order, active.Load())
+				}
+				for index, value := range order {
+					if value != index {
+						t.Fatalf("delivery order %v", order)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestLabelsParallelPreparationMatchesSerial(t *testing.T) {
+	settings := labelsTestSettings(t, "ok")
+	var want []map[string]any
+	for _, threads := range []int{1, 4} {
+		catalog := labeledCatalog(t)
+		settings.Threads = threads
+		stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+		if err != nil || !stats.Complete || stats.MessagesFailed != 0 || stats.ConversationsFailed != 0 {
+			t.Fatalf("threads=%d: %+v %v", threads, stats, err)
+		}
+		rows, err := queryMaps(catalog.DB, `SELECT message_id,conversation_id,segment,labels,hex(probs) probs,chunks,tokens,input_hash FROM message_labels ORDER BY message_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if threads == 1 {
+			want = rows
+		} else if len(rows) == 0 || !reflect.DeepEqual(rows, want) {
+			t.Fatalf("parallel preparation changed stored labels: %v, want %v", rows, want)
+		}
 	}
 }

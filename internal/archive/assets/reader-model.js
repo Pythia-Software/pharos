@@ -466,11 +466,6 @@ function messageLabelView(message,taxonomy=[]){
   const segment=message.labels.segment||'';
   return{family:labels.find(label=>label.family)?.family||'',segment,segmentName:LABEL_SEGMENTS[segment]||segment,labels};
 }
-// The text a message's labels describe: a person's typed pieces when the
-// classification finds them, otherwise all of it. Typed text stays '1'
-// (human-written); the rest is '2'.
-function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
-
 // Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
 // message where something happened (an obstacle, a discovery, a workaround),
 // with what it was about (subject) and what the agent did (response). Ranges
@@ -624,7 +619,7 @@ function eventLinkEnd(links,id,from){
 const READER_HIGHLIGHTS=[
   {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
   {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
-  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Each message in the hue of what it does (message classifier). Hover highlighted text for its labels.'}];
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
 // each has anything to show (available, else why not in title), a note on
 // its coverage, and a legend of the hues it uses here (label families or

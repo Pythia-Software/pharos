@@ -2,7 +2,7 @@ import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pyt
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
-import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
+import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, analysisResult, analysisLabels, analysisFields } from "./dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
@@ -94,7 +94,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const catalog = analysisCatalogFor(topic, {
     parallelism: parallelism.counting,
     carbon: calculator && settings ? { settings, factors: factors as CarbonFactors, estimate: (factors, period) => calculator.estimate(factors, period, settings) } : undefined,
-  });
+  },state);
   if (!catalog) throw new Error("This dashboard card is unavailable.");
   const fields = catalog.breakdowns[state.split]?.fields ?? [];
   if (fields.some(isOriginDimension)) await loadOriginMetadata();
@@ -120,9 +120,9 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   }
   const analysis = analysisQuery(catalog, state, where, { now, zone });
   if (analysis.problem) throw new Error(analysis.problem);
-  const result = (await run(analysis.query))[0];
+  const result = analysisResult(analysis, await run(analysis.query));
   if (!result) throw new Error("The dashboard returned no chart result.");
-  let clause = counted ? { ...analysis.clause, display: { ...analysis.clause.display!, maxGroups: groups } } : analysis.clause, entry = selectGroups(result, analysis.selection);
+  let clause = counted ? { ...analysis.clause, display: { ...analysis.clause.display!, maxGroups: groups } } : analysis.clause, entry = result;
   if (entry.error) throw new Error(entry.error);
   if (state.view === "cycle") {
     if (analysis.native) nativeCycleResult(analysis, entry);
@@ -132,10 +132,10 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
       clause = folded.clause; entry = folded.result;
     }
   }
-  const presented = toolMetricPresentation(entry, clause.groupBy, catalog.labels).metric as AggregationResultEntry;
-  const ready = entry.buckets.some(bucket => bucket.distribution?.kind === "box" ? Boolean(bucket.distribution.summary) : bucket.distribution?.kind === "histogram" ? bucket.distribution.n > 0 : bucket.value !== null);
+  const presented = toolMetricPresentation(entry, clause.groupBy, analysisLabels(catalog, state)).metric as AggregationResultEntry;
+  const ready = Boolean(analysis.components && Number(entry.other?.value) > 0) || entry.buckets.some(bucket => analysis.components ? Number(bucket.value) > 0 : bucket.distribution?.kind === "box" ? Boolean(bucket.distribution.summary) : bucket.distribution?.kind === "histogram" ? bucket.distribution.n > 0 : bucket.value !== null);
   return { state: ready ? "ready" : "empty", total: entry.processedRows ?? entry.buckets.length, summary: clause.label ?? "Dashboard chart", action: DASHBOARD_CARD_ACTION,
     emptyLabel: analysisEmptyLabel(catalog, state), note: analysisNote(catalog, state), metrics: [{ clause, result: presented }], coverMetricId: clause.id, preserveScale: true,
     groupLabels: state.view === "cycle" && analysis.native ? Object.fromEntries(entry.buckets.map(bucket => [JSON.stringify(bucket.keys), state.cycle === "hour" ? hoursOfDay[Number(bucket.keys[0])] : weekdays[Number(bucket.keys[0]) - 1]])) : undefined,
-    fields: [...schema.fields, { name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "derived" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "derived" } }] };
+    fields: [...analysisFields(catalog, state, schema), { name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "derived" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "derived" } }] };
 }

@@ -83,7 +83,7 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
-	// requiresLabels items exist only where labels_enabled is on;
+	// requiresLabels items run only where labels_enabled is on;
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool
@@ -627,17 +627,21 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			plan.Pending = true
 			standaloneNext(&plan, settings, quiet, at)
 		case len(item.Stages) > 0:
-			plan.LastDone = time.Time{}
+			completed := time.Time{}
 			first := true
 			for _, stage := range item.Stages {
 				row := in.deferred[stage]
 				plan.Pending = plan.Pending || row.generation > row.completed
 				done, _ := parseTime(row.completedAt)
-				if first || done.Before(plan.LastDone) {
-					plan.LastDone = done
+				if first || done.Before(completed) {
+					completed = done
 				}
 				first = false
 			}
+			// A bounded pass can succeed while its backlog stays deferred.
+			// Keep that run's time for Last run and the cadence's clock;
+			// Pending still follows the deferred generations.
+			plan.LastDone = maxTime(plan.LastDone, completed)
 			switch {
 			case !plan.Pending:
 				if plan.Cadence == cadenceDaily {

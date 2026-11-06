@@ -48,6 +48,21 @@ func newLabelsItemBuilder(ctx context.Context, db labelingReader) (*labelsItemBu
 	return &labelsItemBuilder{p: p, sessions: byConversation}, nil
 }
 
+// fork shares only the catalog-wide read-only inputs. Conversation caches,
+// counters and callbacks belong to this worker; a shallow copy of p would race
+// on fork history, authorship and rendering bookkeeping.
+func (b *labelsItemBuilder) fork(ctx context.Context) *labelsItemBuilder {
+	p := newLabelingPass(b.p.tx, b.p.reasoningStore)
+	p.itemsOnly = true
+	p.conversations, p.representative = b.p.conversations, b.p.representative
+	p.mainSession, p.sessionKind, p.current = b.p.mainSession, b.p.sessionKind, b.p.current
+	p.lineage = b.p.lineage
+	p.loadAuthorship = func(id string) (*authorResult, error) {
+		return loadStoredAuthorship(ctx, p.tx, `SELECT m.id,m.conversation_id,m.text,a.spans_json,a.total_chars FROM message_authorship a JOIN messages m ON m.id=a.message_id WHERE a.message_id=?`, id)
+	}
+	return &labelsItemBuilder{p: p, sessions: b.sessions}
+}
+
 // conversation returns the units of one conversation, in transcript order:
 // none for a mirrored work's or a conversation no longer in the catalog.
 func (b *labelsItemBuilder) conversation(ctx context.Context, id string) ([]*labelingUnit, error) {

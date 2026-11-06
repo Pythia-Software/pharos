@@ -13,7 +13,7 @@
   {
    "id": "message-labels",
    "label": "Conversation functions",
-   "pages": ["analyze/labels","analyze/query/message_labels"],
+   "pages": ["analyze/labels","analyze/query/message_labels","analyze/query/people_message_labels"],
    "signals": ["labels.coverage"]
   },
   {

@@ -203,6 +203,33 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	if got := plan(settings(), stage("authorship", pending(15*time.Minute, 30*time.Minute)), "writing"); got.Due || !got.Next.Equal(at.Add(30*time.Minute)) {
 		t.Fatalf("hourly work runs at most once an hour: %+v", got)
 	}
+	// A bounded stage can finish a pass while its deferred generation stays
+	// pending. Its recent successful run still starts the cadence's clock.
+	for _, id := range []string{"labels", "agent_events", "repositories"} {
+		item, _ := backgroundItemByID(id)
+		in := backgroundInputs{labels: true, agentEvents: true, deferred: map[string]deferredRow{}}
+		for _, name := range item.Stages {
+			in.deferred[name] = pending(15*time.Minute, 48*time.Hour)
+		}
+		for _, cadence := range []string{cadenceHourly, cadenceDaily} {
+			setting := settings()
+			setting.Overrides[id] = cadence
+			in.runs = map[string]backgroundRunRow{id: {succeeded: ago(5 * time.Minute)}}
+			got := plan(setting, in, id)
+			if !got.LastDone.Equal(at.Add(-5*time.Minute)) || !got.Pending || got.Due || !got.Next.After(at) || got.Missed || got.Overdue {
+				t.Fatalf("%s on %s lost its recent pass with work pending: %+v", id, cadence, got)
+			}
+		}
+		// A chain run outside the schedule can be newer than its record.
+		in.runs[id] = backgroundRunRow{succeeded: ago(72 * time.Hour)}
+		if got := plan(settings(), in, id); !got.LastDone.Equal(at.Add(-48 * time.Hour)) {
+			t.Fatalf("%s ignored the newer deferred completion: %+v", id, got)
+		}
+		in.runs[id] = backgroundRunRow{finished: ago(time.Minute), err: "boom"}
+		if got := plan(settings(), in, id); !got.Failed || !got.LastDone.Equal(at.Add(-48*time.Hour)) {
+			t.Fatalf("%s counted a failed pass as a success: %+v", id, got)
+		}
+	}
 
 	daily := func(succeeded time.Duration) backgroundInputs {
 		return backgroundInputs{runs: map[string]backgroundRunRow{"preserve": {succeeded: ago(succeeded), finished: ago(succeeded)}}}
@@ -649,6 +676,54 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	server.auto.mu.Unlock()
 }
 
+func TestBackgroundLabelRunTimesWhileDeferred(t *testing.T) {
+	useSupportDir(t)
+	catalog, config := testCatalog(t)
+	// No worker: both stages leave their generation pending, as they do
+	// after handing remaining work to a backlog worker.
+	config.Labels = LabelerSettings{Enabled: true}
+	config.AgentEvents = AgentEventSettings{Enabled: true}
+	server := testServer(t, config, catalog)
+	ctx := t.Context()
+	old := formatTime(time.Now().Add(-72 * time.Hour))
+	execTx(t, catalog.DB, "DELETE FROM sync_deferred",
+		"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('labels',2,1,"+sqlQuote(old)+","+sqlQuote(old)+"),('agent_events',2,1,"+sqlQuote(old)+","+sqlQuote(old)+")",
+		"INSERT INTO background_settings(host_id,overrides_json) VALUES("+sqlQuote(currentHost().ID)+",'{\"labels\":\"manual\",\"agent_events\":\"manual\"}')")
+	server.requestBackground("labels", "agent_events")
+	if !server.backgroundPass(ctx, time.Now()) {
+		t.Fatal("Run now did not run the requested stages")
+	}
+	runs := catalog.backgroundRuns(ctx)
+	deferred, err := catalog.freshnessDeferred(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := apiCall(t, server, config.APIToken, http.MethodGet, "/api/background", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("read background: %d %s", response.Code, response.Body.String())
+	}
+	type itemStatus struct {
+		ID, State string
+		AsOf      string `json:"as_of"`
+	}
+	var document struct {
+		View struct{ Items []itemStatus }
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"labels", "agent_events"} {
+		run, row := runs[id], deferred[id]
+		if run.succeeded == "" || run.err != "" || row.generation <= row.completed || row.completedAt != old {
+			t.Fatalf("%s should have a successful pass with deferred work: run=%+v deferred=%+v", id, run, row)
+		}
+		index := slices.IndexFunc(document.View.Items, func(item itemStatus) bool { return item.ID == id })
+		if index < 0 || document.View.Items[index].State != "manual" || document.View.Items[index].AsOf != run.succeeded {
+			t.Fatalf("%s last run should be %s despite deferred work: %+v", id, run.succeeded, document.View.Items)
+		}
+	}
+}
+
 // The settings API: modes, the daily time, the interval, overrides within
 // the allowed choices, and Run now; the status snapshot carries the
 // schedule.
@@ -675,9 +750,28 @@ func TestMessageLabelsSettings(t *testing.T) {
 	if labels := read()["labels"].(map[string]any); labels["enabled"] != false || labels["can_change"] != true {
 		t.Fatalf("disabled settings must remain visible: %v", labels)
 	}
-	// Agent events sit beside labels; their switch is a preference.
+	// Agent events have their own step; their switch is a preference.
 	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
 		t.Fatalf("agent events settings must remain visible while off: %v", events)
+	}
+	for _, id := range []string{"labels", "agent_events"} {
+		view := read()["view"].(map[string]any)
+		found := false
+		for _, value := range view["items"].([]any) {
+			item := value.(map[string]any)
+			if item["id"] == id {
+				found = true
+				if item["state"] != "disabled" || item["cadence"] != cadenceManual || item["next_at"] != nil {
+					t.Fatalf("disabled model must be accessible without being scheduled: %v", item)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("disabled model %s has no step for its settings", id)
+		}
+		if !slices.ContainsFunc(view["unscheduled"].([]any), func(value any) bool { return value == id }) {
+			t.Fatalf("disabled model %s is not reachable in the unscheduled column", id)
+		}
 	}
 	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/preferences", map[string]any{"set": map[string]any{agentEventsFlag: true}}); response.Code != http.StatusOK {
 		t.Fatalf("turn agent events on: %d %s", response.Code, response.Body.String())
@@ -710,12 +804,14 @@ func TestMessageLabelsSettings(t *testing.T) {
 		if enabled && (!strings.Contains(firstString(labels["status"]), "download") || !strings.Contains(firstString(labels["status"]), "worker")) {
 			t.Fatalf("missing runtime assets are not explained: %v", labels)
 		}
-		listed := false
+		var step map[string]any
 		for _, item := range document["view"].(map[string]any)["items"].([]any) {
-			listed = listed || item.(map[string]any)["id"] == "labels"
+			if item.(map[string]any)["id"] == "labels" {
+				step = item.(map[string]any)
+			}
 		}
-		if listed != enabled {
-			t.Fatalf("scheduled labels listed = %t, enabled = %t", listed, enabled)
+		if step == nil || (step["state"] != "disabled") != enabled {
+			t.Fatalf("labels step must remain reachable and reflect enabled = %t: %v", enabled, step)
 		}
 	}
 	// Each model's threads: saved to the configuration and read back, and

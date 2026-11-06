@@ -280,7 +280,9 @@ const ROUTES = [
   })),
   // The unified activity panel, idle and busy, in the browser and in the app
   // (other libraries).
-  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
+  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true],
+    ['partial rates', {...busyStatus, resources: {...busyStatus.resources, cpu_partial: true, disk_partial: true, gpu: {...busyStatus.resources.gpu, partial: true}}}, false],
+  ].map(([state, snapshot, managed]) => ({
     name: `Unified activity panel ${state}`, url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
     managedLibrary: managed ? {id: 'local', name: 'Pending history', config: '/Users/test/Libraries/Pending/library.toml'} : null,
     api: managed ? {'GET /api/app/status/stream': eventStream(managedStatus(snapshot)), 'GET /api/app/status': managedStatus(snapshot)}
@@ -296,6 +298,13 @@ const ROUTES = [
         return cells.every(cell => Math.abs(cell.top - cells[0].top) < 1) && row.scrollWidth <= row.clientWidth;
       });
       assert.ok(oneLine, 'the resource metrics fit on one line');
+      if (state === 'partial rates') {
+        for (const id of ['cpu', 'gpu', 'io']) {
+          const cell = page.locator(`#pharosStatusPanel [data-key="load:${id}"]`);
+          assert.match(await cell.innerText(), /≥/, 'the undercount qualifier is visible');
+          assert.match(await cell.getAttribute('title'), /may undercount/, 'hover explains partial measurements');
+        }
+      }
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
@@ -389,6 +398,7 @@ const ROUTES = [
   {name:'Message label conversation cards',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels',ready:'.message-label-result-card'},
   {name:'Message label conversation rows',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels&label_results=table',ready:'.qt-row'},
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  { name: "Human Words component shares", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "compare", metric: "words", split: "category", compareAs: "share" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations' },
   // One route per chart kind and dashboard component; the numbers each
   // topic draws are covered by the dashboard parity and analysis unit tests.
   {
@@ -525,13 +535,16 @@ const ROUTES = [
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
   { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#agentEventsEnabled", api: {
+  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
       status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker.",
       notice: `The configured labeling worker /Applications/${'LongApplicationName'.repeat(12)}/Contents/MacOS/pharos-labeler-ort is missing. Reinstall Pharos.`,
       execution: {device:'unavailable', status:'GPU unavailable', detail:`Cannot load /Applications/${'LongApplicationName'.repeat(12)}/Contents/MacOS/mlx/libpharos_mlx.dylib`, confirmed:false} },
       agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled).", notice:"Enabled in this library's configuration." } },
-  } },
+  }, open: async page => {
+    await page.locator('[data-view-key="background:labels"]').click();
+    await page.locator('[data-view-key="background:agent_events"]').click();
+  }, shown: '#background-detail-labels:not([hidden])' },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
@@ -878,9 +891,15 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
 
 test("Background Processing items drag between all four columns for a week", { skip }, async t => {
   let document = structuredClone(defaultApi['GET /api/background']);
+  let heldRead = null, heldSave = null;
   const { page, calls } = await open(t, { url: '/settings/sync', viewport: { width: 1800, height: 1800 }, ready: '#backgroundSchedule .bg-col', api: {
-    'GET /api/background': () => document,
-    'POST /api/background/settings': ({ body }) => {
+    'GET /api/background': () => {
+      if (!heldRead) return document;
+      heldRead.started.resolve();
+      return heldRead.reply.promise;
+    },
+    'POST /api/background/settings': async ({ body }) => {
+      if (heldSave) await heldSave.promise;
       for (const [id, cadence] of Object.entries(body.temporary_cadences)) {
         const item = document.view.items.find(item => item.id === id);
         item.cadence = cadence || item.usual_cadence;
@@ -894,11 +913,36 @@ test("Background Processing items drag between all four columns for a week", { s
     },
   } });
   const schedule = page.locator('#backgroundSchedule');
-  // Empty the fourth column first: it must remain a destination for every item.
+  // A poll already in flight must not undo a move, even when it finishes
+  // after the save. Hold responses by condition, without timing assumptions.
+  const stale = structuredClone(document);
+  heldRead = {started: Promise.withResolvers(), reply: Promise.withResolvers()};
+  await page.evaluate(() => { window.scheduleRefresh = window.pharosBackground.refresh(true); });
+  await heldRead.started.promise;
+  heldSave = Promise.withResolvers();
+  // Move the backup out first; the fourth column remains a destination for enabled work.
   const backup = schedule.locator('.bg-item[data-item="backup"]');
   await backup.locator('.bg-grip').dragTo(schedule.locator('.bg-col[data-cadence="daily"]'));
   await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
-  for (const id of document.view.items.map(item => item.id)) {
+  assert.ok(document.view.unscheduled.includes('backup'), 'the task moves before the server answers');
+  // Cadence runs resolve membership on the server, which still has the old
+  // schedule. Task runs use an explicit ID and can remain available.
+  const cadenceRuns = schedule.locator('.bg-col-head .bg-run');
+  for (const run of await cadenceRuns.all()) assert.ok(await run.isDisabled());
+  assert.ok(await schedule.getByRole('button', {name: 'Run Update writing estimates now', exact: true}).isEnabled());
+  await cadenceRuns.evaluateAll(buttons => buttons.forEach(button => button.click()));
+  assert.ok(!calls.some(call => call.method === 'POST' && call.path === '/api/background/run'), 'no cadence runs before the move is saved');
+  const saved = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/background/settings'));
+  heldSave.resolve();
+  heldSave = null;
+  await saved;
+  await page.waitForFunction(() => !document.querySelector('#backgroundSchedule [data-item="backup"] .bg-state').textContent.includes('Saving'));
+  assert.ok(await schedule.locator('.bg-col[data-cadence="daily"] .bg-col-head .bg-run').isEnabled(), 'cadence runs resume after saving');
+  heldRead.reply.resolve(stale);
+  await page.evaluate(() => window.scheduleRefresh);
+  heldRead = null;
+  await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
+  for (const id of document.view.items.filter(item => item.state !== 'disabled').map(item => item.id)) {
     for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
       const item = schedule.locator(`.bg-item[data-item="${id}"]`);
       await item.locator('.bg-grip').dragTo(schedule.locator(`.bg-col[data-cadence="${cadence}"]`));
@@ -1157,6 +1201,55 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
   assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
 });
 
+
+test("clipped labels reveal hidden text and stop repeating it when they fit", { skip }, async t => {
+  const names = ["repository/shared-prefix-branch-name/feature-one", "repository/shared-prefix-branch-name/feature-two"];
+  const {page} = await open(t, {url: "/cards?cards=library&card_search=human-repository-words-trend", ready: ".query-chart-legend",
+    api: {"* /api/query/:dataset/:operation": call => {
+      const response = defaultApi["* /api/query/:dataset/:operation"](call);
+      if (!response?.metrics) return response;
+      return {...response, metrics: response.metrics.map(metric => {
+        const clause = call.body?.metrics?.find(clause => clause.id === metric.id);
+        if (!clause?.groupBy?.includes("repository_name") || !clause.groupBy.includes("day")) return metric;
+        const days = [...new Set(metric.buckets.map(bucket => bucket.keys[clause.groupBy.indexOf("day")]))];
+        const buckets = days.flatMap(day => names.map(name => ({keys: clause.groupBy.map(field => field === "day" ? day : name), value: 42, count: 1})));
+        return {...metric, buckets, groupCount: buckets.length};
+      })};
+    }},
+  });
+  const legend = page.locator(".query-chart-legend").first();
+  await legend.evaluate(element => {element.closest('.query-card').style.transform = 'rotate(2deg)';});
+  await legend.evaluate(element => {element.style.width = "160px";});
+  for (const name of names) {
+    const item = legend.locator("[data-chart-tooltip-label]").filter({hasText: name});
+    await item.hover();
+    await page.waitForFunction(name => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(name), name);
+  }
+  await legend.evaluate(element => {element.style.width = "100%";element.style.gridTemplateColumns = "1fr";});
+  await legend.locator("[data-chart-tooltip-label]").first().hover();
+  await page.waitForFunction(() => !document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])'));
+
+  // Classic labels, session names and inline work-preview parts use the same
+  // opt-in runtime; exercise single-line, ancestor and multiline clipping.
+  await page.evaluate(() => {
+    const host = document.createElement("div");host.id = "overflow-fixture";
+    host.style.cssText = "position:fixed;top:120px;left:10px;width:90px;z-index:20000;background:white";
+    host.innerHTML = '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span data-overflow-title>Repository with a hidden branch suffix</span></div><div data-overflow-title style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">A session title that wraps across several lines and has a hidden final suffix</div>';
+    document.body.append(host);
+  });
+  const labels = page.locator("#overflow-fixture [data-overflow-title]");
+  for (const label of await labels.all()) {
+    await label.hover({position: {x: 4, y: 4}});
+    assert.equal(await label.getAttribute("title"), await label.textContent(), "clipped text is available on hover");
+  }
+  // Resize while still hovered: the last label now fits, so help disappears.
+  await page.locator("#overflow-fixture").evaluate(element => {element.style.width = "1200px";});
+  await page.waitForFunction(() => !document.querySelector("#overflow-fixture > [data-overflow-title]").hasAttribute("title"));
+  for (const label of await labels.all()) {
+    await label.hover({position: {x: 4, y: 4}});
+    assert.equal(await label.getAttribute("title"), null);
+  }
+});
 
 test("Card Library timeline ticks fit full dollar amounts", { skip }, async t => {
   let suppliedLargeCosts = false;

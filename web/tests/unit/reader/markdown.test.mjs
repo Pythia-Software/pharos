@@ -174,7 +174,7 @@ test("human writing projects escaped JSON text and survives message normalizatio
   assert.equal(reader.humanWritingMask(ambiguous, display), '', 'ambiguous source text must not invent attribution');
 });
 
-test("local labels name a message's most specific labels and mark the text they describe", () => {
+test("local labels describe the whole message while writing and event marks keep their own spans", () => {
   const taxonomy = [{ id: 'P.control', name: 'Steer ongoing work' }, { id: 'P.control.continue', name: 'Continue', definition: 'Keep going.' },
     { id: 'P.request.work', name: 'Request work' }];
   const typed = 'Sync to main, then **continue**.', source = '<context>Pasted notes</context>\n' + typed;
@@ -185,17 +185,13 @@ test("local labels name a message's most specific labels and mark the text they 
   assert.equal(view.family, 'P.control', 'the likeliest specific label picks the hue');
   assert.deepEqual(plain(view.labels.map(label => [label.id, label.title, label.prob])), [['P.control.continue', 'Control · Continue', 0.98], ['P.request.work', 'Request work', 0.37]]);
   assert.equal(view.segmentName, 'Typed text');
-  // A person's typed pieces carry the labels; pasted context does not.
-  assert.equal(reader.labelMask(message, source), reader.humanWritingMask(message, source));
-  // An agent's message is labeled as a whole, through its formatting.
+  // Labels are card metadata; they do not create text-level marks.
+  assert.equal(reader.humanWritingMask(message, source).includes('1'), true);
   const reply = { role: 'assistant', kind: 'message', text: 'All **checks** pass.', labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} } };
-  const marked = elements(reader.markdownTree(reply.text, 0, reader.labelMask(reply, reply.text))).filter(item => item.tag === 'mark');
-  assert.ok(marked.length && marked.every(item => item.className === 'labeled-text'));
-  assert.equal(marked.map(text).join(''), 'All checks pass.');
+  assert.equal(reader.humanWritingMask(reply, reply.text), '');
   assert.equal(reader.messageLabelView(reply).labels[0].title, 'Report · C.report.completion', 'unnamed labels fall back to their ids, prefixed by family');
   // Unlabeled messages mark nothing; a root alone has no family.
   assert.equal(reader.messageLabelView({ role: 'assistant', text: 'Done.' }), null);
-  assert.equal(reader.labelMask({ role: 'assistant', text: 'Done.' }, 'Done.'), '');
   const root = reader.messageLabelView({ labels: { ids: ['C'], probs: {} } });
   assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
 });
