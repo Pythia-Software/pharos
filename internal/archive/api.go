@@ -428,6 +428,37 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, value, http.StatusOK)
 		}
+	case path == "/api/file-changes":
+		// A file's edits as diffs read from their calls (file_changes.go).
+		q := r.URL.Query()
+		value, err := s.Catalog.FileChanges(r.Context(), FileChangesOptions{Project: q.Get("project"), Path: q.Get("path"), Offset: queryInt(r, "offset", 0)})
+		writeFileResult(w, value, err)
+	case path == "/api/file-find":
+		q := r.URL.Query()
+		value, err := s.Catalog.FileFind(r.Context(), q.Get("project"), q.Get("q"))
+		writeFileResult(w, value, err)
+	case path == "/api/file-content" || path == "/api/file-blame" || path == "/api/file-diff" || path == "/api/file-commit-git" || path == "/api/file-last-commits":
+		// Read from the repository's chosen checkout when asked
+		// (file_git.go): the only requests that run Git.
+		q := r.URL.Query()
+		options := FileGitOptions{Project: q.Get("project"), Path: q.Get("path"), Commit: q.Get("commit")}
+		read := map[string]func(context.Context, FileGitOptions) (map[string]any, error){
+			"/api/file-content": s.Catalog.FileContent, "/api/file-blame": s.Catalog.FileBlame,
+			"/api/file-diff": s.Catalog.FileDiff, "/api/file-commit-git": s.Catalog.CommitDetail, "/api/file-last-commits": s.Catalog.LastCommits,
+		}[path]
+		value, err := read(r.Context(), options)
+		writeFileResult(w, value, err)
+	case path == "/api/file-log":
+		q := r.URL.Query()
+		value, err := s.Catalog.FileLog(r.Context(), FileLogOptions{Project: q.Get("project"), Path: q.Get("path"), Commit: q.Get("commit"), Offset: queryInt(r, "offset", 0)})
+		writeFileResult(w, value, err)
+	case strings.HasPrefix(path, "/api/repositories/") && strings.HasSuffix(path, "/checkout"):
+		value, err := s.Catalog.RepositoryCheckout(r.Context(), strings.TrimSuffix(strings.TrimPrefix(path, "/api/repositories/"), "/checkout"))
+		if err == nil && value == nil {
+			writeJSON(w, map[string]any{"error": "no such repository"}, http.StatusNotFound)
+			return
+		}
+		writeFileResult(w, value, err)
 	case path == "/api/library/find":
 		q := r.URL.Query()
 		options, err := textOptionsFromValues(q, "")
@@ -734,6 +765,18 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/api/markdown-link":
 		s.markdownLink(w, r)
+	case strings.HasPrefix(path, "/api/repositories/") && strings.HasSuffix(path, "/checkout"):
+		// Choose or forget a repository's checkout on this Mac
+		// (repository_checkout.go).
+		repository := strings.TrimSuffix(strings.TrimPrefix(path, "/api/repositories/"), "/checkout")
+		var value map[string]any
+		var err error
+		if clear, _ := body["clear"].(bool); clear {
+			value, err = s.Catalog.ClearRepositoryCheckout(r.Context(), repository)
+		} else {
+			value, err = s.Catalog.SetRepositoryCheckout(r.Context(), repository, firstString(body["path"]))
+		}
+		writeFileResult(w, value, err)
 	case path == "/api/search/text" || path == "/api/search/text/validate":
 		if r.Method != "POST" {
 			writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
@@ -1329,4 +1372,14 @@ func writeHTML(w http.ResponseWriter, value string) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self' blob:; child-src 'self' blob:")
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(value))
+}
+
+// writeFileResult answers a Files request: its value, or the error as a
+// bad request.
+func writeFileResult(w http.ResponseWriter, value map[string]any, err error) {
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+	} else {
+		writeJSON(w, value, http.StatusOK)
+	}
 }

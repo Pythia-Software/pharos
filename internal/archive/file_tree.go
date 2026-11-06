@@ -208,6 +208,9 @@ type fileTreeEntry struct {
 	Commits          int64
 	LastAt           string
 	InTree           bool
+	// LastSession is the session that edited it last, LastSessionAt when;
+	// LastCommit is the newest commit that changed it.
+	LastSession, LastSessionAt, LastCommit, LastCommitAt string
 }
 
 // FileTree lists one directory of a project: its files and directories, each
@@ -246,6 +249,7 @@ func (c *Catalog) FileTree(ctx context.Context, options FileTreeOptions) (map[st
 		}
 	}
 	list := make([]map[string]any, 0, len(entries))
+	sessions := []string{}
 	for _, entry := range slices.SortedFunc(func(yield func(*fileTreeEntry) bool) {
 		for _, entry := range entries {
 			if !yield(entry) {
@@ -258,8 +262,19 @@ func (c *Catalog) FileTree(ctx context.Context, options FileTreeOptions) (map[st
 		}
 		return strings.Compare(a.Name, b.Name)
 	}) {
-		list = append(list, map[string]any{"name": entry.Name, "path": entry.Path, "kind": entry.Kind, "sessions": entry.Sessions, "commits": entry.Commits,
-			"last_at": nilIfEmpty(entry.LastAt), "in_tree": entry.InTree})
+		value := map[string]any{"name": entry.Name, "path": entry.Path, "kind": entry.Kind, "sessions": entry.Sessions, "commits": entry.Commits,
+			"last_at": nilIfEmpty(entry.LastAt), "in_tree": entry.InTree, "last_session": nil, "last_commit": nil}
+		if entry.LastSession != "" {
+			value["last_session"] = map[string]any{"workspace_id": entry.LastSession, "at": entry.LastSessionAt, "url": "/work/" + url.PathEscape(entry.LastSession)}
+			sessions = append(sessions, entry.LastSession)
+		}
+		if entry.LastCommit != "" {
+			value["last_commit"] = map[string]any{"hash": entry.LastCommit, "author_at": entry.LastCommitAt, "url": filePageURL(project.Ref, "", "", entry.LastCommit)}
+		}
+		list = append(list, value)
+	}
+	if err := c.addSessionTitles(ctx, list, sessions); err != nil {
+		return nil, err
 	}
 	result["entries"] = list
 	if options.Activity {
@@ -352,7 +367,8 @@ func (c *Catalog) repositoryTreeEntries(ctx context.Context, repository, dir str
 	}
 	keyPrefix := "repository:" + repository + ":"
 	keyLow, keyHigh := prefixRange(keyPrefix + prefix)
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT `+fmt.Sprintf(childSQL, "p")+`,COUNT(DISTINCT workspace_id) sessions,MAX(last_edit_at) last_at
+	// With one MAX, SQLite takes a bare column from the row holding it.
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT `+fmt.Sprintf(childSQL, "p")+`,COUNT(DISTINCT workspace_id) sessions,MAX(COALESCE(last_edit_at,'')) last_at,workspace_id
 		FROM (SELECT substr(file_key,?) p,workspace_id,last_edit_at FROM session_files WHERE file_key>=? AND file_key<?
 			AND workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)) GROUP BY child`,
 		append(childArgs(start), len(keyPrefix)+1, keyLow, keyHigh)...)
@@ -362,9 +378,10 @@ func (c *Catalog) repositoryTreeEntries(ctx context.Context, repository, dir str
 	for _, row := range rows {
 		if found := entry(row); found != nil {
 			found.Sessions, found.LastAt = integer(row["sessions"]), firstString(row["last_at"])
+			found.LastSession, found.LastSessionAt = firstString(row["workspace_id"]), found.LastAt
 		}
 	}
-	rows, err = queryMapsContext(ctx, c.reader(), `SELECT `+fmt.Sprintf(childSQL, "f.path")+`,COUNT(DISTINCT f.hash) commits,MAX(g.author_at) last_at
+	rows, err = queryMapsContext(ctx, c.reader(), `SELECT `+fmt.Sprintf(childSQL, "f.path")+`,COUNT(DISTINCT f.hash) commits,MAX(COALESCE(g.author_at,'')) last_at,f.hash
 		FROM git_commit_files f JOIN git_commits g ON g.repository_id=f.repository_id AND g.hash=f.hash
 		WHERE f.repository_id=? AND f.path>=? AND f.path<? GROUP BY child`, append(childArgs(start), repository, low, high)...)
 	if err != nil {
@@ -373,6 +390,7 @@ func (c *Catalog) repositoryTreeEntries(ctx context.Context, repository, dir str
 	for _, row := range rows {
 		if found := entry(row); found != nil {
 			found.Commits = integer(row["commits"])
+			found.LastCommit, found.LastCommitAt = firstString(row["hash"]), firstString(row["last_at"])
 			if last := firstString(row["last_at"]); laterThan(last, found.LastAt) {
 				found.LastAt = last
 			}
@@ -407,7 +425,7 @@ func folderRelative(folder, path string) string {
 // sessions edited, under the folder as relative paths and elsewhere by their
 // own folder paths (~/… or absolute).
 func (c *Catalog) folderTreeEntries(ctx context.Context, folder, dir string) (map[string]*fileTreeEntry, error) {
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT sf.path,COUNT(DISTINCT sf.workspace_id) sessions,MAX(sf.last_edit_at) last_at
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT sf.path,COUNT(DISTINCT sf.workspace_id) sessions,MAX(COALESCE(sf.last_edit_at,'')) last_at,sf.workspace_id
 		FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id
 		WHERE w.project_folder=? AND w.repository_id IS NULL AND w.folder_repository_id IS NULL AND sf.repository_id IS NULL
 		AND sf.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces) GROUP BY sf.path`, folder)
@@ -442,11 +460,123 @@ func (c *Catalog) folderTreeEntries(ctx context.Context, folder, dir string) (ma
 			entries[name] = entry
 		}
 		entry.Sessions += integer(row["sessions"])
-		if last := firstString(row["last_at"]); laterThan(last, entry.LastAt) {
-			entry.LastAt = last
+		if last := firstString(row["last_at"]); laterThan(last, entry.LastAt) || entry.LastSession == "" {
+			entry.LastAt, entry.LastSession, entry.LastSessionAt = last, firstString(row["workspace_id"]), last
 		}
 	}
 	return entries, nil
+}
+
+// addSessionTitles names each entry's last session.
+func (c *Catalog) addSessionTitles(ctx context.Context, entries []map[string]any, sessions []string) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	slices.Sort(sessions)
+	sessions = slices.Compact(sessions)
+	titles := map[string]any{}
+	for start := 0; start < len(sessions); start += 500 {
+		batch := sessions[start:min(start+500, len(sessions))]
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT id,title FROM workspaces WHERE id IN (`+placeholders(len(batch))+`)`, anySlice(batch)...)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			titles[firstString(row["id"])] = row["title"]
+		}
+	}
+	for _, entry := range entries {
+		if session, ok := entry["last_session"].(map[string]any); ok {
+			session["title"] = titles[firstString(session["workspace_id"])]
+		}
+	}
+	return nil
+}
+
+func anySlice[T any](values []T) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = value
+	}
+	return result
+}
+
+// fileFindLimit bounds the paths Go to file lists.
+var fileFindLimit = 50
+
+// FileFind is a project's files whose paths hold every word of a query,
+// those whose names hold them first, then shorter paths: the tree's files
+// and those sessions edited or commits changed for a repository, those
+// sessions edited for a folder.
+func (c *Catalog) FileFind(ctx context.Context, projectValue, query string) (map[string]any, error) {
+	projects, err := c.fileProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	project, choices, err := projects.choose(ctx, projectValue)
+	if err != nil || choices != nil {
+		return map[string]any{"choices": choices}, err
+	}
+	words := strings.Fields(strings.ToLower(query))
+	result := map[string]any{"project": project.value(), "query": query, "files": []map[string]any{}}
+	if len(words) == 0 {
+		return result, nil
+	}
+	like, args := "", []any{}
+	for _, word := range words {
+		like += ` AND lower(p) LIKE ? ESCAPE '\'`
+		args = append(args, likePattern(word, "%", "%"))
+	}
+	var statement string
+	if project.Kind == "repository" {
+		keyPrefix := "repository:" + project.RepositoryID + ":"
+		statement = `SELECT p,MAX(t) in_tree FROM (SELECT path p,1 t FROM git_tree_files WHERE repository_id=?
+			UNION ALL SELECT substr(file_key,?) p,0 t FROM session_files WHERE file_key>=? AND file_key<?
+			UNION ALL SELECT path p,0 t FROM git_commit_files WHERE repository_id=?) WHERE 1` + like + ` GROUP BY p`
+		low, high := prefixRange(keyPrefix)
+		args = append([]any{project.RepositoryID, len(keyPrefix) + 1, low, high, project.RepositoryID}, args...)
+	} else {
+		statement = `SELECT p,0 in_tree FROM (SELECT DISTINCT sf.path p FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id
+			WHERE w.project_folder=? AND w.repository_id IS NULL AND w.folder_repository_id IS NULL AND sf.repository_id IS NULL) WHERE 1` + like
+		args = append([]any{project.Folder}, args...)
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), statement+` LIMIT 5000`, args...)
+	if err != nil {
+		return nil, err
+	}
+	type found struct {
+		path   string
+		inTree bool
+		named  bool
+	}
+	matches := make([]found, 0, len(rows))
+	for _, row := range rows {
+		relative := firstString(row["p"])
+		if project.Kind != "repository" {
+			relative = folderRelative(project.Folder, relative)
+		}
+		name := strings.ToLower(path.Base(relative))
+		named := true
+		for _, word := range words {
+			named = named && strings.Contains(name, word)
+		}
+		matches = append(matches, found{path: relative, inTree: integer(row["in_tree"]) != 0, named: named})
+	}
+	slices.SortFunc(matches, func(a, b found) int {
+		if a.named != b.named {
+			return map[bool]int{true: -1, false: 1}[a.named]
+		}
+		if len(a.path) != len(b.path) {
+			return len(a.path) - len(b.path)
+		}
+		return strings.Compare(a.path, b.path)
+	})
+	files := make([]map[string]any, 0, min(len(matches), fileFindLimit))
+	for _, match := range matches[:min(len(matches), fileFindLimit)] {
+		files = append(files, map[string]any{"path": match.path, "in_tree": match.inTree, "url": filePageURL(project.Ref, match.path, "", "")})
+	}
+	result["files"], result["more"] = files, len(matches) > fileFindLimit
+	return result, nil
 }
 
 // directoryActivity is a directory's latest sessions, by their last edit
@@ -515,20 +645,38 @@ func nullableBool(value any) any {
 }
 
 // commitSessions are the sessions linked to a commit, each with how, how
-// sure, and the place in its transcript that printed or made the commit.
+// sure, and the place in its transcript that printed or made the commit. A
+// squash on mainline is also linked to the sessions whose commits it took in
+// (their mainline evidence names it), as "landed", each once at its surest.
 func (c *Catalog) commitSessions(ctx context.Context, repository, hash string) ([]map[string]any, error) {
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT l.workspace_id,l.method,l.confidence,l.evidence_json,w.title FROM session_commit_links l
-		LEFT JOIN workspaces w ON w.id=l.workspace_id WHERE l.repository_id=? AND l.hash=? ORDER BY l.confidence DESC,l.workspace_id`, repository, hash)
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT * FROM (SELECT l.workspace_id,l.method,l.confidence,l.evidence_json,w.title,'' via FROM session_commit_links l
+		LEFT JOIN workspaces w ON w.id=l.workspace_id WHERE l.repository_id=? AND l.hash=?
+		UNION ALL SELECT l.workspace_id,'landed',l.confidence,l.evidence_json,w.title,g.hash via FROM git_commits g
+		JOIN session_commit_links l ON l.repository_id=g.repository_id AND l.hash=g.hash LEFT JOIN workspaces w ON w.id=l.workspace_id
+		WHERE g.repository_id=? AND length(?)>=12 AND g.mainline_evidence LIKE '% '||substr(?,1,12)||' on %')
+		ORDER BY confidence DESC,via<>'',workspace_id`, repository, hash, repository, hash, hash)
 	if err != nil {
 		return nil, err
 	}
-	links := make([]map[string]any, len(rows))
-	for index, row := range rows {
+	links := make([]map[string]any, 0, len(rows))
+	seen := map[string]bool{}
+	for _, row := range rows {
+		workspace := firstString(row["workspace_id"])
+		if seen[workspace] {
+			continue
+		}
+		seen[workspace] = true
 		evidence := map[string]any{}
 		_ = json.Unmarshal([]byte(firstString(row["evidence_json"])), &evidence)
-		workspace := firstString(row["workspace_id"])
-		links[index] = map[string]any{"workspace_id": workspace, "title": row["title"], "method": row["method"], "confidence": row["confidence"],
-			"counted": floatOr(row["confidence"]) >= outcomeGitCounted, "evidence": evidence, "url": placeURL(workspace, evidencePlace(evidence))}
+		if via := firstString(row["via"]); via != "" {
+			evidence = map[string]any{"of": via, "by": firstString(row["method"]), "place": evidence}
+		}
+		place := evidencePlace(evidence)
+		if nested, ok := evidence["place"].(map[string]any); ok {
+			place = evidencePlace(nested)
+		}
+		links = append(links, map[string]any{"workspace_id": workspace, "title": row["title"], "method": row["method"], "confidence": row["confidence"],
+			"counted": floatOr(row["confidence"]) >= outcomeGitCounted, "evidence": evidence, "url": placeURL(workspace, place)})
 	}
 	return links, nil
 }

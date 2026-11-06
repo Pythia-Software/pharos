@@ -1154,6 +1154,12 @@ CREATE TABLE IF NOT EXISTS background_settings (
   hold_when_busy INTEGER NOT NULL DEFAULT 1, overrides_json TEXT NOT NULL DEFAULT '{}',
   placements_json TEXT NOT NULL DEFAULT '{}', battery_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT
 );
+-- The checkout of a repository the person chose on a Mac for the Files
+-- page to read contents, blame and diffs from (repository_checkout.go).
+CREATE TABLE IF NOT EXISTS repository_checkouts (
+  repository_id TEXT NOT NULL, host_id TEXT NOT NULL, path TEXT NOT NULL, set_at TEXT NOT NULL,
+  PRIMARY KEY(repository_id,host_id)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)

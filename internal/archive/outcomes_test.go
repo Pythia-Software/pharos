@@ -429,6 +429,57 @@ func TestReadEditChanges(t *testing.T) {
 		edits[0].Path != "/a.go" || edits[1].Path != "/b.go" || edits[0].Change.Added != nil {
 		t.Fatalf("a change without its lines: %+v", edits)
 	}
+
+	// The same inputs read as each file's diff, for the Files page: a
+	// replacement keeps the lines it shares, a patch keeps its hunks and a
+	// write adds every line.
+	diff := func(input any, path string) string {
+		t.Helper()
+		text, _ := json.Marshal(map[string]any{"input": input})
+		found := readEditDiffs(string(text), path)
+		if found == nil {
+			return "none"
+		}
+		parts := []string{found.Kind}
+		for _, hunk := range found.Hunks {
+			lines := []string{}
+			for _, line := range hunk.Lines {
+				lines = append(lines, string(line.Kind)+line.Text)
+			}
+			parts = append(parts, hunk.Header+"|"+strings.Join(lines, "|"))
+		}
+		return strings.Join(parts, " ; ")
+	}
+	for name, test := range map[string]struct {
+		input any
+		path  string
+		want  string
+	}{
+		"edit": {map[string]any{"file_path": "/a.go", "old_string": "\tif done {\n\t\treturn total\n\t}", "new_string": "\tif done {\n\t\treturn total + 1\n\t\t// counted twice\n\t}"}, "/a.go",
+			"replace ; | \tif done {|-\t\treturn total|+\t\treturn total + 1|+\t\t// counted twice| \t}"},
+		"interleaved": {map[string]any{"old_string": "a\nb\nc\nd", "new_string": "a\nx\nc\ny"}, "/a.go", "replace ; | a|-b|+x| c|-d|+y"},
+		"multi-edit": {map[string]any{"edits": []any{map[string]any{"old_string": "one", "new_string": "two"}, map[string]any{"old_string": "", "new_string": "three"}}}, "/a.go",
+			"replace ; |-one|+two ; |+three"},
+		"antigravity": {map[string]any{"TargetContent": "old", "ReplacementContent": "new"}, "/a.go", "replace ; |-old|+new"},
+		"write":       {map[string]any{"file_path": "/a.go", "content": "package main\nfunc main() {}\n"}, "/a.go", "write ; |+package main|+func main() {}"},
+		"patch":       {patch, "/repo/src/a.go", "patch ; |-old line of a|+new line of a|+second line of a"},
+		"patch added": {map[string]any{"patch": patch}, "/repo/src/b.go", "patch ; |+a line of file b"},
+		"patch moved": {patch, "/repo/src/c.go", "patch ; |-the line c had"},
+		"deleted":     {patch, "/repo/src/e.go", "delete"},
+		"not in it":   {patch, "/repo/src/z.go", "none"},
+		"listed":      {map[string]any{"changes": []any{map[string]any{"path": "/a.go"}}}, "/a.go", "listed"},
+		"code mode":   {"text(await tools.apply_patch(" + fmt.Sprintf("%q", "*** Begin Patch\n*** Update File: /a.go\n@@ func f\n context\n-x\n+y\n*** End Patch") + "))", "/a.go", "patch ; func f| context|-x|+y"},
+	} {
+		if got := diff(test.input, test.path); got != test.want {
+			t.Errorf("%s diff: %q, want %q", name, got, test.want)
+		}
+	}
+	// A diff too large to compare in full removes the old lines and adds the
+	// new, around the lines both ends share.
+	override(t, &fileChangeDiffBudget, 1)
+	if got := diff(map[string]any{"old_string": "keep\na\nb\nend", "new_string": "keep\nb\na\nend"}, "/a.go"); got != "replace ; | keep|-a|-b|+b|+a| end" {
+		t.Errorf("past the budget: %q", got)
+	}
 }
 
 func TestSessionOutcomesReadCommitsFromToolOutput(t *testing.T) {
