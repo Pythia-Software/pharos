@@ -1,14 +1,188 @@
-/* File history: a file's sessions and commits, newest first. */
+/* Files: a project's tree in a sidebar beside a file, directory or commit.
+   A file has tabs for its code, blame, history, its sessions' edits as
+   diffs, and the sessions themselves. */
 .file-history-page { min-width: 0; }
-.file-history-page code { font: var(--fs-sm)/1.45 ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
+.file-history-page code, .files-lines, .files-gutter, .files-diff { font: var(--fs-sm)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.file-history-page code { overflow-wrap: anywhere; }
 .file-history-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 16px; }
 .file-history-form input { flex: 1 1 260px; min-width: 0; }
-.file-history-file { margin: 0 0 26px; }
-.file-history-file h2 { margin: 0 0 8px; overflow-wrap: anywhere; }
-.file-history-file h3 { margin: 14px 0 6px; font-size: var(--fs-md); }
+
+/* With a project, the page fills the window: the tree is a full-height
+   sidebar that scrolls on its own, beside the pane. */
+main > #files.view.active:has(.files-with-tree) { max-width: none; padding: 0; height: 100%; }
+#fileHistoryPage:has(.files-with-tree) { height: 100%; }
+.files-with-tree { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); height: 100%; min-height: 0; }
+.files-with-tree.files-tree-collapsed { grid-template-columns: minmax(0, 1fr); }
+.files-sidebar { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; overflow: auto; padding: 14px 12px 40px 16px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 55%, var(--bg)); }
+.files-main { min-width: 0; min-height: 0; overflow: auto; padding: 18px 28px 80px; }
+@media (max-width: 860px) {
+  main > #files.view.active:has(.files-with-tree) { height: auto; padding: 0 0 40px; }
+  .files-with-tree, .files-with-tree.files-tree-collapsed { display: block; height: auto; }
+  .files-sidebar { max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .files-main { overflow: visible; padding: 14px 14px 40px; }
+}
+
+.files-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.files-sidebar-project { min-width: 0; font-weight: 700; overflow-wrap: anywhere; text-decoration: none; color: var(--ink); }
+.files-sidebar-project:hover { color: var(--accent); }
+.files-sidebar-ref { margin: 0; font-size: var(--fs-xs); }
+.files-find { width: 100%; min-width: 0; box-sizing: border-box; height: 30px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); }
+.files-find-results { margin: 0; padding: 0; list-style: none; }
+.files-find-results a { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; border-radius: 4px; text-decoration: none; overflow-wrap: anywhere; font-size: var(--fs-sm); }
+.files-find-results a:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.files-icon { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; color: var(--muted); }
+.files-icon-dir { color: color-mix(in srgb, var(--accent) 70%, var(--muted)); }
+.files-icon-button { display: grid; place-items: center; flex: none; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.files-icon-button:hover { border-color: var(--accent); }
+.files-tree-show { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+
+.file-tree-list { margin: 0; padding: 0 0 0 14px; list-style: none; }
+.files-sidebar > .file-tree-list { padding-left: 0; }
+.file-tree-list > li { min-width: 0; }
+.file-tree-dir > summary { display: flex; align-items: center; min-width: 0; cursor: pointer; list-style-position: outside; }
+.file-tree-dir > summary::marker { color: var(--muted); }
+.file-tree-entry { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 2px 6px; border-radius: 4px; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; font-size: var(--fs-sm); }
+.file-tree-entry:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.file-tree-entry[aria-current="page"] { background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 650; }
+.file-tree-gone, .file-tree-gone a, a.file-tree-gone { color: var(--muted); font-style: italic; }
+
+/* The pane's header: the path from the project's root, and its actions. */
+.files-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 0 0 12px; }
+.files-path { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; margin: 0; font: 600 var(--fs-xl)/1.3 var(--sans); overflow-wrap: anywhere; }
+.files-path a { text-decoration: none; }
+.files-path a:hover { text-decoration: underline; }
+.files-path-sep { color: var(--muted); font-weight: 400; }
+.files-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.files-ref { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.files-button { min-height: 28px; padding: 3px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: var(--fs-sm); }
+.files-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.files-link-button { padding: 0; min-height: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.files-link-button:hover { text-decoration: underline; }
+.files-summary { margin: 0 0 10px; overflow-wrap: anywhere; }
+.files-subheading { margin: 18px 0 8px; font-size: var(--fs-md); }
+
+/* The newest commit under a file or directory, as a bar above it. */
+.files-latest { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 14px; margin: 0 0 10px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.files-latest-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; overflow-wrap: anywhere; }
+.files-latest-author { font-weight: 650; }
+.files-latest-subject { color: var(--ink); text-decoration: none; }
+.files-latest-subject:hover { color: var(--accent); text-decoration: underline; }
+.files-latest-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: var(--fs-sm); }
+
+.files-checkout-line { margin: 0 0 10px; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.files-checkout { margin: 0 0 16px; padding: 16px 18px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.files-checkout h2 { margin: 0 0 6px; font-size: var(--fs-lg); }
+.files-checkout p { margin: 0 0 10px; }
+.files-checkout-candidates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; }
+.files-checkout-candidates button { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+.files-checkout-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.files-checkout-form input { flex: 1 1 240px; min-width: 0; height: 30px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: var(--fs-sm) ui-monospace, SFMono-Regular, monospace; }
+
+.files-tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; margin: 0 0 14px; border-bottom: 1px solid var(--line); }
+.files-tabs a { margin-bottom: -1px; padding: 7px 12px; border-bottom: 2px solid transparent; color: var(--muted); text-decoration: none; font-size: var(--fs-sm); font-weight: 600; }
+.files-tabs a:hover { color: var(--ink); border-bottom-color: var(--line); }
+.files-tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+/* Code and blame: line numbers beside the lines, which scroll sideways in
+   their box rather than widening the page. */
+.files-blob { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; }
+.files-blob-head { padding: 7px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 50%, var(--panel)); font-size: var(--fs-sm); }
+.files-code { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+.files-gutter, .files-lines { margin: 0; padding: 8px 0; white-space: pre; }
+.files-gutter { padding: 8px 12px 8px 16px; color: var(--muted); text-align: right; user-select: none; border-right: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.files-lines { padding-left: 14px; padding-right: 14px; overflow-x: auto; tab-size: 4; }
+.files-blame-row { display: grid; grid-template-columns: minmax(160px, 300px) auto minmax(0, 1fr); border-top: 1px solid var(--line); border-left: 3px solid transparent; }
+.files-blame-row:first-child { border-top: 0; }
+.files-blame-session { border-left-color: var(--accent); }
+.files-blame-meta { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 2px 8px; min-width: 0; padding: 6px 10px; border-right: 1px solid color-mix(in srgb, var(--line) 60%, transparent); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.files-blame-when { color: var(--muted); white-space: nowrap; }
+.files-blame-subject { min-width: 0; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.files-blame-subject:hover { color: var(--accent); text-decoration: underline; }
+.files-blame-row .files-gutter, .files-blame-row .files-lines { padding-top: 6px; padding-bottom: 6px; }
+@media (max-width: 720px) {
+  .files-blame-row { grid-template-columns: auto minmax(0, 1fr); }
+  .files-blame-meta { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+}
+
+/* History: commits by day. */
+.files-day .files-subheading { margin-top: 14px; color: var(--muted); font-weight: 600; }
+.files-commits { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.files-commits > li { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 14px; min-width: 0; padding: 9px 14px; border-top: 1px solid var(--line); border-left: 3px solid transparent; }
+.files-commits > li:first-child { border-top: 0; }
+.files-commits > li.files-commit-session { border-left-color: var(--accent); }
+.files-commit-main { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.files-commit-subject { color: var(--ink); font-weight: 600; text-decoration: none; }
+.files-commit-subject:hover { color: var(--accent); text-decoration: underline; }
+.files-commit-sessions { font-size: var(--fs-sm); }
+.files-hash { flex: none; padding: 1px 7px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; }
+.files-more { margin: 12px 0; }
+
+/* Diffs: an edit's lines as its call made them, or a commit's from Git. */
+.files-change { margin: 0 0 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; }
+.files-change-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 50%, var(--panel)); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.files-change-session { font-weight: 650; }
+.files-change-open { margin-left: auto; }
+.files-change-note { margin: 0; padding: 8px 14px; }
+.files-diff { min-width: 0; overflow-x: auto; padding: 4px 0; tab-size: 4; }
+.files-diff-line { display: grid; grid-template-columns: 3.5em 3.5em 1.5em max-content; min-width: 100%; width: max-content; white-space: pre; }
+.files-diff-plain .files-diff-line { grid-template-columns: 1.8em max-content; }
+.files-diff-num { padding: 0 8px; color: var(--muted); text-align: right; user-select: none; }
+.files-diff-sign { padding-left: 6px; color: var(--muted); user-select: none; }
+.files-diff-text { padding-right: 14px; }
+.files-diff-line.add { background: color-mix(in srgb, var(--good, #2f8f46) 14%, transparent); }
+.files-diff-line.del { background: color-mix(in srgb, var(--bad, #c0392b) 13%, transparent); }
+.files-diff-line.note { color: var(--muted); font-style: italic; }
+.files-diff-hunk { padding: 3px 14px; background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--muted); white-space: pre; }
+.files-diff-gap { height: 1px; margin: 4px 0; background: var(--line); }
+
+/* A directory's entries with their last change. */
+.files-table { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); table-layout: fixed; }
+.files-table th { padding: 7px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 50%, var(--panel)); color: var(--muted); font-size: var(--fs-sm); font-weight: 600; text-align: left; }
+.files-table td { padding: 6px 14px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); font-size: var(--fs-sm); overflow-wrap: anywhere; vertical-align: top; }
+.files-table tbody tr:first-child td { border-top: 0; }
+.files-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.files-table th:first-child { width: 34%; }
+.files-table-when { width: 8.5em; text-align: right; white-space: nowrap; }
+th.files-table-when { text-align: right; }
+.files-table-name a { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--ink); text-decoration: none; }
+.files-table-name a:hover { color: var(--accent); text-decoration: underline; }
+.files-table-change a { color: var(--muted); text-decoration: none; }
+.files-table-change a:hover { color: var(--accent); text-decoration: underline; }
+@media (max-width: 560px) {
+  .files-table th:nth-child(2), .files-table td.files-table-change { display: none; }
+  .files-table th:first-child { width: auto; }
+}
+
+/* A commit: its message, state and sessions, then each file's diff. */
+.files-commit-box { margin: 0 0 14px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.files-commit-title { margin: 0 0 6px; font-size: var(--fs-xl); overflow-wrap: anywhere; }
+.files-commit-body { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-sm)/1.5 ui-monospace, SFMono-Regular, monospace; }
+.files-commit-meta, .files-commit-state { margin: 0 0 6px; overflow-wrap: anywhere; }
+.files-commit-sessions-box .files-subheading { margin-top: 10px; }
+.files-commit-session-list { margin: 0; padding-left: 18px; }
+.files-commit-files { display: grid; gap: 10px; }
+.files-commit-diff { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; }
+.files-commit-diff > summary { padding: 8px 14px; cursor: pointer; background: color-mix(in srgb, var(--bg) 50%, var(--panel)); }
+.files-commit-diff[open] > summary { border-bottom: 1px solid var(--line); }
+.files-commit-file { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; overflow-wrap: anywhere; }
+.files-commit-file-row { padding: 8px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+
+/* Lists shared with the projects, sessions and matches. */
+.files-choices ul { margin: 6px 0; }
+.files-projects h2, .files-matches h2 { margin: 0 0 8px; }
 .file-history-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .file-history-list > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .file-history-list > li:first-child { border-top: 0; }
+.file-history-list > li > .files-icon { align-self: center; }
+.file-history-list > li.file-session { display: grid; gap: 4px; }
+.file-session-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.file-session p { margin: 0; }
+.file-places { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.file-place { padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: var(--fs-xs); white-space: nowrap; text-decoration: none; }
+.file-place:hover { border-color: var(--accent); }
+.file-rework { font-size: var(--fs-sm); }
 .file-history-when { flex: none; min-width: 7em; color: var(--muted); }
-.file-history-outcome { margin-left: auto; white-space: nowrap; }
+.file-history-outcome { min-width: 0; overflow-wrap: anywhere; }
+.file-history-list > li > .file-history-outcome { margin-left: auto; }
+.file-history-list > li.file-session > .file-history-outcome { margin-left: 0; }
 .file-history-error { color: var(--bad); }

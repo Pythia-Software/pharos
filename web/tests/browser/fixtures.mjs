@@ -631,6 +631,48 @@ const askSuggestionTexts = [
 // A seeded rotation, as the service varies its slate for Refresh.
 const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
 
+// A repository's tree for the Files page: the root, a directory, and the
+// projects to choose from without one.
+const filesProject = { ref: "pharos", name: "pharos", kind: "repository", repository_id: "repo-pharos" };
+function fileTree(query) {
+  if (!query.get("project")) return { projects: [filesProject, { ref: "~/notes", name: "~/notes", kind: "folder", folder: "~/notes", sessions: 3, files: 4, last_at: iso(3 * day) }].map(project => ({ sessions: 12, files: 40, last_at: iso(day), ...project })) };
+  const dir = query.get("dir") ?? "";
+  const git = { status: "checked", reason: null, checked_at: iso(day), commits_since: iso(30 * day), tree_ref: "origin/master", tree_commit: "0123456789abcdef0123456789abcdef01234567" };
+  const entries = dir === "" ? [
+    { name: "internal", path: "internal", kind: "dir", sessions: 12, commits: 30, last_at: iso(day), in_tree: true,
+      last_commit: { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(day), url: "/files?file_commit=0123456789abcdef0123456789abcdef01234567&file_project=pharos" } },
+    { name: "web", path: "web", kind: "dir", sessions: 8, commits: 21, last_at: iso(2 * day), in_tree: true },
+    { name: "README.md", path: "README.md", kind: "file", sessions: 1, commits: 2, last_at: iso(9 * day), in_tree: true },
+    { name: "notes-from-a-session-that-were-never-committed-with-a-long-name.md", path: "notes-from-a-session-that-were-never-committed-with-a-long-name.md", kind: "file", sessions: 1, commits: 0, last_at: iso(4 * day), in_tree: false,
+      last_session: { workspace_id: "workspace-2", title: "A session whose notes were never committed, with a title long enough to wrap", at: iso(4 * day), url: "/work/workspace-2" } },
+  ] : [
+    { name: dir === "internal" ? "archive" : "src", path: `${dir}/${dir === "internal" ? "archive" : "src"}`, kind: "dir", sessions: 6, commits: 12, last_at: iso(day), in_tree: true },
+    { name: "api.go", path: `${dir}/api.go`, kind: "file", sessions: 2, commits: 2, last_at: iso(2 * day), in_tree: true,
+      last_commit: { hash: "89abcdef0123456789abcdef0123456789abcdef", author_at: iso(5 * day), url: "/files?file_commit=89abcdef0123456789abcdef0123456789abcdef&file_project=pharos" },
+      last_session: { workspace_id: "workspace-1", title: "Add the file history endpoint", at: iso(2 * day), url: "/work/workspace-1" } },
+  ];
+  const tree = { project: filesProject, git, dir, entries };
+  if (query.get("activity") !== "1") return tree;
+  return { ...tree,
+    sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", files: 4, edits: 9, last_edit_at: iso(day), outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", url: "/work/workspace-1" }],
+    commits: [{ hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), files: 3, lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null,
+      sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", method: "transcript", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" }] }],
+  };
+}
+
+// What Git reads from the chosen checkout for the Files page's code, blame,
+// history and diffs; a long line checks that code scrolls in its box.
+const filesHash = "0123456789abcdef0123456789abcdef01234567", filesOlder = "89abcdef0123456789abcdef0123456789abcdef";
+const filesCheckout = { checkout: { path: "/Users/me/pharos", status: "set", reason: null }, project: filesProject, commit: filesHash };
+const filesCode = ["package archive", "", "// ServeHTTP answers the service's API, a line long enough to scroll sideways in its box rather than widen the page at any width: " + "x".repeat(160), "func (s *Server) ServeHTTP() {", "\treturn", "}"];
+const filesLink = { workspace_id: "workspace-1", title: "Add the file history endpoint", method: "transcript", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" };
+const filesLog = [
+  { hash: filesHash, parents: [filesOlder], author: "Pharos Test", author_at: iso(2 * day), committed_at: iso(2 * day), subject: "Add the file history endpoint, with a subject long enough to wrap at narrow widths", read: true, on_mainline: true, reverted_by: null, sessions: [filesLink], url: `/files?file_commit=${filesHash}&file_project=pharos` },
+  { hash: filesOlder, parents: ["fedcba9876543210fedcba9876543210fedcba98"], author: "Someone Else", author_at: iso(5 * day), committed_at: iso(5 * day), subject: "Fix a typo by hand", read: false, sessions: [], url: `/files?file_commit=${filesOlder}&file_project=pharos` },
+];
+const filesDiff = ["diff --git a/internal/archive/api.go b/internal/archive/api.go", "index 1111111..2222222 100644", "--- a/internal/archive/api.go", "+++ b/internal/archive/api.go",
+  "@@ -1,4 +1,5 @@ package archive", " package archive", " ", "-// ServeHTTP answers.", "+" + filesCode[2], "+func (s *Server) ServeHTTP() {", " \treturn", ""].join("\n");
+
 export const defaultApi = {
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
@@ -711,19 +753,62 @@ export const defaultApi = {
   "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
-  // File history: one repository file, with a linked and an unlinked commit.
+  // Files: one repository's tree, one file with a linked and an unlinked
+  // commit and rework between its sessions, a directory and a commit.
   "GET /api/file-history": ({ query }) => ({ path: query.get("path"), note: "Sessions are those that edited the file through their tool calls, newest first.", files: [{
-    file_key: "repository:repo-pharos:internal/archive/api.go", repository_id: "repo-pharos", path: "internal/archive/api.go", project: "pharos", project_kind: "repository", sessions_truncated: false,
+    file_key: "repository:repo-pharos:internal/archive/api.go", repository_id: "repo-pharos", path: "internal/archive/api.go", project: "pharos", project_kind: "repository", project_ref: "pharos",
+    relative_path: "internal/archive/api.go", url: "/files?file=internal%2Farchive%2Fapi.go&file_project=pharos", in_tree: true, sessions_truncated: false,
     sessions: [
-      { workspace_id: "workspace-1", title: "Add the file history endpoint with a title long enough to wrap at narrow widths", source: "claude", last_edit_at: iso(2 * day), edits: 3, lines_added: 42, lines_removed: 7, rewrote: false, outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", url: "/work/workspace-1?conversation=conversation-1&message=message-1" },
-      { workspace_id: "workspace-2", title: "Codex session", source: "codex", last_edit_at: iso(9 * day), edits: 1, lines_added: null, lines_removed: null, rewrote: true, outcome_label: "reworked", outcome_why: "Later sessions removed most of its lines (transcript).", url: "/work/workspace-2" },
+      { workspace_id: "workspace-1", title: "Add the file history endpoint with a title long enough to wrap at narrow widths", source: "claude", last_edit_at: iso(2 * day), edits: 3, lines_added: 42, lines_removed: 7, rewrote: false, outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", url: "/work/workspace-1?conversation=conversation-1&message=message-1",
+        places: [1, 2, 3].map(index => ({ at: iso((2 + index / 24) * day), path: "/Users/me/pharos/internal/archive/api.go", lines_added: 14, lines_removed: index, conversation_id: "conversation-1", message_id: `message-${index}`, url: `/work/workspace-1?conversation=conversation-1&message=message-${index}` })),
+        reworked_by: [], reworked: [{ workspace_id: "workspace-2", title: "Codex session", removed_lines: 12, url: "/work/workspace-2" }] },
+      { workspace_id: "workspace-2", title: "Codex session", source: "codex", last_edit_at: iso(9 * day), edits: 1, lines_added: null, lines_removed: null, rewrote: true, outcome_label: "reworked", outcome_why: "Later sessions removed most of its lines (transcript).", url: "/work/workspace-2",
+        places: [{ at: iso(9 * day), path: "internal/archive/api.go", lines_added: null, lines_removed: null, url: "/work/workspace-2" }],
+        reworked_by: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", removed_lines: 12, url: "/work/workspace-1?conversation=conversation-1&message=message-1" }], reworked: [] },
     ],
-    git: { status: "checked", reason: null, checked_at: iso(day), commits_since: iso(30 * day), commits_truncated: false },
+    git: { status: "checked", reason: null, checked_at: iso(day), commits_since: iso(30 * day), commits_truncated: false, tree_ref: "origin/master", tree_commit: "0123456789abcdef0123456789abcdef01234567" },
     commits: [
-      { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null, sessions: [{ workspace_id: "workspace-1", method: "transcript", confidence: 1, counted: true }] },
+      { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null, url: "/files?file_commit=0123456789abcdef0123456789abcdef01234567&file_project=pharos",
+        sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", method: "transcript", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" }] },
       { hash: "89abcdef0123456789abcdef0123456789abcdef", author_at: iso(5 * day), lines_added: 3, lines_removed: 1, on_mainline: true, reverted_by: null, sessions: [] },
     ],
   }] }),
+  "GET /api/file-tree": ({ query }) => fileTree(query),
+  "GET /api/file-find": ({ query }) => ({ project: filesProject, files: [
+    { path: "internal/archive/api.go", in_tree: true, url: "/files?file=internal%2Farchive%2Fapi.go&file_project=pharos" },
+    { path: "internal/archive/a-very-long-directory-name-that-wraps/api_test_with_a_long_name.go", in_tree: false, url: "/files?file=x&file_project=pharos" },
+  ].filter(file => file.path.includes(query.get("q") ?? "")), more: false }),
+  "GET /api/repositories/:id/checkout": ({ params }) => ({ repository_id: params.id, name: "pharos", path: "/Users/me/pharos", status: "set", reason: null, candidates: ["/Users/me/pharos", "/Users/me/conductor/workspaces/pharos/a-workspace-with-a-long-name"] }),
+  "GET /api/file-content": ({ query }) => ({ ...filesCheckout, path: query.get("path"), size: filesCode.join("\n").length, text: filesCode.join("\n") + "\n", truncated: false }),
+  "GET /api/file-blame": ({ query }) => ({ ...filesCheckout, path: query.get("path"), lines: filesCode,
+    groups: [{ hash: filesOlder, start: 1, count: 2 }, { hash: filesHash, start: 3, count: 2 }, { hash: filesOlder, start: 5, count: 2 }],
+    commits: { [filesHash]: { author: "Pharos Test", author_at: iso(2 * day), summary: filesLog[0].subject, sessions: [filesLink], read: true }, [filesOlder]: { author: "Someone Else", author_at: iso(5 * day), summary: "Fix a typo by hand", sessions: [], read: false } } }),
+  "GET /api/file-log": ({ query }) => ({ ...filesCheckout, path: query.get("path") ?? "", offset: 0, more: true, commits: filesLog }),
+  "GET /api/file-diff": ({ query }) => ({ ...filesCheckout, path: query.get("path"), diff: filesDiff, truncated: false }),
+  "GET /api/file-commit-git": () => ({ ...filesCheckout, commit: { ...filesLog[0], body: "Pages read stored facts; the tree comes from local Git.\n\nCo-Authored-By: Someone <someone@example.com>",
+    files: [{ path: "internal/archive/api.go", lines_added: 38, lines_removed: 7, binary: false }, { path: "internal/archive/assets/logo.png", binary: true }], files_truncated: false } }),
+  "GET /api/file-last-commits": ({ query }) => ({ ...filesCheckout, path: query.get("path") ?? "", truncated: false, entries: Object.fromEntries(fileTree(new URLSearchParams({ project: "pharos", dir: query.get("path") ?? "" })).entries
+    .filter(entry => entry.in_tree).map((entry, index) => [entry.name, filesLog[index % 2]])) }),
+  "GET /api/file-changes": ({ query }) => ({ project: filesProject, path: query.get("path"), offset: 0, more: false, changes: [
+    { workspace_id: "workspace-1", title: "Add the file history endpoint", outcome_label: "landed", at: iso(2 * day), tool_name: "Edit", lines_added: 2, lines_removed: 1, url: "/work/workspace-1?conversation=conversation-1&message=message-1", session_url: "/work/workspace-1",
+      kind: "replace", hunks: [{ lines: [[" ", "package archive"], ["-", "// ServeHTTP answers."], ["+", filesCode[2]], ["+", "func (s *Server) ServeHTTP() {"]] }], truncated: false },
+    { workspace_id: "workspace-2", title: "Codex session", outcome_label: "reworked", at: iso(9 * day), tool_name: "apply_patch", lines_added: null, lines_removed: null, url: "/work/workspace-2", session_url: "/work/workspace-2", kind: "listed", hunks: [] },
+  ] }),
+  "GET /api/file-commit": ({ query }) => ({
+    project: filesProject, git: fileTree(new URLSearchParams()).git,
+    commit: { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), committed_at: iso(day), parents: 1, lines_added: 40, lines_removed: 7, on_mainline: true, mainline_evidence: "reachable from origin/master", reverted_by: null, revert_evidence: null,
+      files: [{ path: "internal/archive/api.go", lines_added: 38, lines_removed: 7, in_tree: true, sessions: 2 }, { path: "internal/archive/a-very-long-directory-name-that-wraps/removed_since_then_with_a_long_name.go", lines_added: 2, lines_removed: 0, in_tree: false, sessions: 0 }],
+      sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", method: query.get("commit") ? "transcript" : "window", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" }] },
+  }),
+  "GET /api/work/:id/files": ({ params }) => ({
+    workspace_id: params.id, outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", git: { status: "checked", reason: null },
+    files: [{ file_key: "repository:repo-pharos:internal/archive/api.go", path: "internal/archive/api.go", project: "pharos", project_ref: "pharos", relative_path: "internal/archive/api.go", url: "/files?file=internal%2Farchive%2Fapi.go&file_project=pharos",
+      first_edit_at: iso(2 * day), last_edit_at: iso(2 * day), edits: 2, lines_added: 20, lines_removed: 3, rewrote: false, other_sessions: 1,
+      places: [{ at: iso(2 * day), lines_added: 18, lines_removed: 3, conversation_id: "conversation-1", message_id: "message-1", url: `/work/${params.id}?conversation=conversation-1&message=message-1` }],
+      reworked_by: [], reworked: [] }],
+    commits: [{ hash: "0123456789abcdef0123456789abcdef01234567", repository_id: "repo-pharos", project: "pharos", project_ref: "pharos", workspace_id: params.id, method: "transcript", confidence: 1, counted: true,
+      author_at: iso(2 * day), files: 1, lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null, url: "/files?file_commit=0123456789abcdef0123456789abcdef01234567&file_project=pharos", place_url: `/work/${params.id}?conversation=conversation-1&message=message-1` }],
+  }),
 
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },

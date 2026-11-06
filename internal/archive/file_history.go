@@ -2,9 +2,9 @@ package archive
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
+	pathpkg "path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,16 +17,22 @@ import (
 // commits that changed it (git_commit_files), each with the sessions linked
 // to it. Requests read only stored facts; Git is never run for them.
 
-// fileHistoryLimit bounds the sessions and commits listed per file.
+// fileHistoryLimit bounds the sessions and commits listed per file, and
+// fileHistoryPlaces the edits listed per session.
 var fileHistoryLimit = 200
+var fileHistoryPlaces = 50
 
 type FileHistoryOptions struct {
 	// Path is a repository-relative path, a folder path (~/… or absolute),
 	// or an absolute path inside a checkout this Mac recorded.
 	Path string
-	// Project narrows to one project by name, when several hold the path.
+	// Project narrows to one project: a file_project ref (a name, remote,
+	// folder or repository:<id>). Naming exactly one project, Path is
+	// that project's file, found though no session touched it.
 	Project string
 	Limit   int
+	// Places bounds the edits listed per session; 0 is fileHistoryPlaces.
+	Places int
 }
 
 // FileHistory finds the files Path names and returns each one's timeline,
@@ -40,34 +46,97 @@ func (c *Catalog) FileHistory(ctx context.Context, options FileHistoryOptions) (
 	if limit <= 0 || limit > fileHistoryLimit {
 		limit = fileHistoryLimit
 	}
-	keys, err := c.fileHistoryKeys(ctx, query)
+	places := options.Places
+	if places <= 0 || places > fileHistoryPlaces {
+		places = fileHistoryPlaces
+	}
+	projects, err := c.fileProjects(ctx)
 	if err != nil {
 		return nil, err
 	}
-	files := []map[string]any{}
-	for _, key := range keys {
-		if options.Project != "" {
-			// The project filter takes what every project filter takes: a
-			// name, a remote, a folder key or path (projectPredicate).
-			repository, path, _ := repositoryFileKey(key)
-			in, err := queryMapsContext(ctx, c.reader(), `SELECT 1 FROM workspaces w`+projectJoin("w")+`
-				WHERE w.id IN (SELECT workspace_id FROM session_files WHERE file_key=?
-					UNION SELECT l.workspace_id FROM git_commit_files f JOIN session_commit_links l ON l.repository_id=f.repository_id AND l.hash=f.hash
-					WHERE f.repository_id=? AND f.path=?) AND `+projectPredicate("w")+` LIMIT 1`, append([]any{key, repository, path}, projectArgs(options.Project)...)...)
-			if err != nil {
+	var keys []string
+	if options.Project != "" {
+		if found, err := projects.resolve(ctx, options.Project); err != nil {
+			return nil, err
+		} else if len(found) == 1 {
+			if key, err := c.projectFileKey(ctx, found[0], query); err != nil {
 				return nil, err
-			}
-			if len(in) == 0 {
-				continue
+			} else if key != "" {
+				keys = []string{key}
 			}
 		}
-		file, err := c.fileTimeline(ctx, key, limit)
+	}
+	if keys == nil {
+		if keys, err = c.fileHistoryKeys(ctx, query); err != nil {
+			return nil, err
+		}
+		if options.Project != "" {
+			if keys, err = c.keysInProject(ctx, keys, options.Project); err != nil {
+				return nil, err
+			}
+		}
+	}
+	files := []map[string]any{}
+	for _, key := range keys {
+		file, err := c.fileTimeline(ctx, projects, key, limit, places)
 		if err != nil {
 			return nil, err
 		}
 		files = append(files, file)
 	}
 	return map[string]any{"path": query, "files": files, "note": fileHistoryNote(files)}, nil
+}
+
+// keysInProject keeps the files a project's sessions edited or its linked
+// commits changed. The project filter takes what every project filter takes:
+// a name, a remote, a folder key or path (projectPredicate).
+func (c *Catalog) keysInProject(ctx context.Context, keys []string, project string) ([]string, error) {
+	kept := []string{}
+	for _, key := range keys {
+		repository, path, _ := repositoryFileKey(key)
+		in, err := queryMapsContext(ctx, c.reader(), `SELECT 1 FROM workspaces w`+projectJoin("w")+`
+			WHERE w.id IN (SELECT workspace_id FROM session_files WHERE file_key=?
+				UNION SELECT l.workspace_id FROM git_commit_files f JOIN session_commit_links l ON l.repository_id=f.repository_id AND l.hash=f.hash
+				WHERE f.repository_id=? AND f.path=?) AND `+projectPredicate("w")+` LIMIT 1`, append([]any{key, repository, path}, projectArgs(project)...)...)
+		if err != nil {
+			return nil, err
+		}
+		if len(in) > 0 {
+			kept = append(kept, key)
+		}
+	}
+	return kept, nil
+}
+
+// projectFileKey is the key of a project's file at path, "" when nothing
+// in the library knows it: a repository file in the tree local Git read, or
+// one a session edited or a commit changed; a folder file a session edited.
+func (c *Catalog) projectFileKey(ctx context.Context, project fileProject, path string) (string, error) {
+	path = filepath.ToSlash(path)
+	if project.Kind == "repository" {
+		relative := strings.Trim(pathpkg.Clean("/"+path), "/")
+		if filepath.IsAbs(path) || relative == "" {
+			return "", nil
+		}
+		key := "repository:" + project.RepositoryID + ":" + relative
+		var found int
+		err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_files WHERE file_key=?)
+			OR EXISTS(SELECT 1 FROM git_tree_files WHERE repository_id=? AND path=?)
+			OR EXISTS(SELECT 1 FROM git_commit_files WHERE repository_id=? AND path=?)`, key, project.RepositoryID, relative, project.RepositoryID, relative).Scan(&found)
+		if err != nil || found == 0 {
+			return "", err
+		}
+		return key, nil
+	}
+	recorded := folderPath(project.Folder, path)
+	if key := folderKey(recorded); key != "" {
+		recorded = key
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT file_key FROM session_files WHERE path=? AND repository_id IS NULL ORDER BY last_edit_at DESC LIMIT 1`, recorded)
+	if err != nil || len(rows) == 0 {
+		return "", err
+	}
+	return firstString(rows[0]["file_key"]), nil
 }
 
 // fileHistoryNote says what the timeline covers, for a person or an agent
@@ -181,51 +250,75 @@ func repositoryFileKey(key string) (repository, path string, ok bool) {
 	return "", "", false
 }
 
-// fileTimeline is one file's sessions and commits.
-func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[string]any, error) {
-	sessions, err := queryMapsContext(ctx, c.reader(), `SELECT sf.workspace_id,sf.path,sf.repository_id,sf.first_edit_at,sf.last_edit_at,sf.edits,sf.lines_added,sf.lines_removed,sf.rewrote,
-		w.title,w.source_kind,`+projectNameSQL("w")+` project,`+projectKindSQL("w")+` project_kind,
-		`+outcomeLabelSQL("w")+` outcome_label,`+outcomeWhySQL("w")+` outcome_why,
-		`+firstEditCallSQL("sf", "t.conversation_id||char(31)||COALESCE(t.call_message_id,'')||char(31)||COALESCE(t.call_id,'')")+` edit
-		FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id`+projectJoin("w")+`
+// fileTimeline is one file's sessions and commits. Each session lists its
+// edits of the file, each a place in its transcript, and the rework between
+// it and other sessions: whose lines it removed, and who removed its own.
+func (c *Catalog) fileTimeline(ctx context.Context, projects *fileProjects, key string, limit, places int) (map[string]any, error) {
+	sessions, err := queryMapsContext(ctx, c.reader(), `SELECT sf.workspace_id,sf.first_edit_at,sf.last_edit_at,sf.edits,sf.lines_added,sf.lines_removed,sf.rewrote,
+		w.title,w.source_kind,w.project_folder,w.repository_id IS NULL AND w.folder_repository_id IS NULL in_folder,
+		`+outcomeLabelSQL("w")+` outcome_label,`+outcomeWhySQL("w")+` outcome_why
+		FROM session_files sf JOIN workspaces w ON w.id=sf.workspace_id
 		WHERE sf.file_key=? AND sf.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
 		ORDER BY COALESCE(sf.last_edit_at,'') DESC,sf.workspace_id LIMIT ?`, key, limit+1)
 	if err != nil {
 		return nil, err
 	}
 	file := map[string]any{"file_key": key}
+	var project *fileProject
 	if repository, path, ok := repositoryFileKey(key); ok {
 		file["repository_id"], file["path"] = repository, path
+		found, err := projects.repository(ctx, repository)
+		if err != nil {
+			return nil, err
+		}
+		project = &found
+		var inTree bool
+		if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM git_tree_files WHERE repository_id=? AND path=?)`, repository, path).Scan(&inTree); err != nil {
+			return nil, err
+		}
+		file["in_tree"] = inTree
 	} else {
 		file["path"] = folderKey(strings.TrimPrefix(key, "path:"))
+		// A folder file belongs to the folder project of its latest session,
+		// when that session is in a folder rather than a repository.
+		if len(sessions) > 0 && integer(sessions[0]["in_folder"]) != 0 && firstString(sessions[0]["project_folder"]) != "" {
+			found := folderProject(firstString(sessions[0]["project_folder"]))
+			project = &found
+		}
+	}
+	if project != nil {
+		relative := firstString(file["path"])
+		if project.Kind == "folder" {
+			relative = folderRelative(project.Folder, relative)
+		}
+		file["project"], file["project_kind"], file["project_ref"], file["relative_path"] = project.Name, project.Kind, project.Ref, relative
+		file["url"] = filePageURL(project.Ref, relative, "", "")
+	} else {
+		file["url"] = "/files?" + url.Values{"file": {firstString(file["path"])}}.Encode()
 	}
 	file["sessions_truncated"] = len(sessions) > limit
 	if len(sessions) > limit {
 		sessions = sessions[:limit]
 	}
 	items := make([]map[string]any, 0, len(sessions))
-	for index, row := range sessions {
-		if index == 0 {
-			file["project"], file["project_kind"] = row["project"], row["project_kind"]
-		}
+	for _, row := range sessions {
+		workspace := firstString(row["workspace_id"])
 		item := map[string]any{
-			"workspace_id": row["workspace_id"], "title": row["title"], "source": row["source_kind"],
+			"workspace_id": workspace, "title": row["title"], "source": row["source_kind"],
 			"first_edit_at": row["first_edit_at"], "last_edit_at": row["last_edit_at"], "edits": row["edits"],
 			"lines_added": row["lines_added"], "lines_removed": row["lines_removed"], "rewrote": integer(row["rewrote"]) != 0,
-			"outcome_label": row["outcome_label"], "outcome_why": row["outcome_why"],
-			"url": "/work/" + url.PathEscape(firstString(row["workspace_id"])),
+			"outcome_label": row["outcome_label"], "outcome_why": row["outcome_why"], "url": placeURL(workspace, transcriptPlace{}),
 		}
-		if parts := strings.Split(firstString(row["edit"]), "\x1f"); len(parts) == 3 && parts[0] != "" {
-			item["conversation_id"] = parts[0]
-			params := url.Values{"conversation": {parts[0]}}
-			if parts[1] != "" {
-				item["message_id"] = parts[1]
-				params.Set("message", parts[1])
-				if parts[2] != "" {
-					params.Set("call", parts[2])
-				}
-			}
-			item["url"] = firstString(item["url"]) + "?" + params.Encode()
+		edits, truncated, err := c.sessionFileEdits(ctx, workspace, key, places)
+		if err != nil {
+			return nil, err
+		}
+		item["places"], item["places_truncated"] = edits, truncated
+		if len(edits) > 0 {
+			item["url"] = edits[0]["url"]
+		}
+		if item["reworked_by"], item["reworked"], err = c.sessionFileRework(ctx, workspace, key); err != nil {
+			return nil, err
 		}
 		items = append(items, item)
 	}
@@ -238,30 +331,75 @@ func (c *Catalog) fileTimeline(ctx context.Context, key string, limit int) (map[
 	return file, nil
 }
 
+// sessionFileEdits are a session's edits of a file, in order, each a place
+// in its transcript.
+func (c *Catalog) sessionFileEdits(ctx context.Context, workspace, key string, limit int) ([]map[string]any, bool, error) {
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT conversation_id,message_id,call_id,edited_at,lines_added,lines_removed,path FROM session_file_edits
+		WHERE workspace_id=? AND file_key=? ORDER BY seq LIMIT ?`, workspace, key, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
+	}
+	edits := make([]map[string]any, len(rows))
+	for index, row := range rows {
+		place := transcriptPlace{Conversation: firstString(row["conversation_id"]), Message: firstString(row["message_id"]), Call: firstString(row["call_id"])}
+		edits[index] = map[string]any{"at": row["edited_at"], "path": row["path"], "lines_added": row["lines_added"], "lines_removed": row["lines_removed"],
+			"conversation_id": nilIfEmpty(place.Conversation), "message_id": nilIfEmpty(place.Message), "call_id": nilIfEmpty(place.Call), "url": placeURL(workspace, place)}
+	}
+	return edits, truncated, nil
+}
+
+// sessionFileRework is the rework judged between a session and others on a
+// file (session_file_rework): the later sessions that removed lines it
+// added, and the earlier sessions whose added lines it removed. Each opens
+// at the other session's first edit of the file.
+func (c *Catalog) sessionFileRework(ctx context.Context, workspace, key string) ([]map[string]any, []map[string]any, error) {
+	read := func(statement string) ([]map[string]any, error) {
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT r.other workspace_id,r.removed_lines,w.title,
+			(SELECT e.conversation_id||char(31)||COALESCE(e.message_id,'')||char(31)||COALESCE(e.call_id,'') FROM session_file_edits e
+				WHERE e.workspace_id=r.other AND e.file_key=r.file_key ORDER BY e.seq LIMIT 1) place
+			FROM (`+statement+`) r LEFT JOIN workspaces w ON w.id=r.other ORDER BY r.removed_lines DESC,r.other`, workspace, key)
+		if err != nil {
+			return nil, err
+		}
+		found := make([]map[string]any, len(rows))
+		for index, row := range rows {
+			other := firstString(row["workspace_id"])
+			place := transcriptPlace{}
+			if parts := strings.Split(firstString(row["place"]), "\x1f"); len(parts) == 3 {
+				place = transcriptPlace{Conversation: parts[0], Message: parts[1], Call: parts[2]}
+			}
+			found[index] = map[string]any{"workspace_id": other, "title": row["title"], "removed_lines": row["removed_lines"], "url": placeURL(other, place)}
+		}
+		return found, nil
+	}
+	by, err := read(`SELECT later_workspace_id other,file_key,removed_lines FROM session_file_rework WHERE workspace_id=? AND file_key=?`)
+	if err != nil {
+		return nil, nil, err
+	}
+	of, err := read(`SELECT workspace_id other,file_key,removed_lines FROM session_file_rework WHERE later_workspace_id=? AND file_key=?`)
+	return by, of, err
+}
+
 // fileCommits are the commits that changed a repository file, each with the
-// sessions linked to it, and the state of local Git for it: checked, not
-// checked with the reason, or not applicable outside a repository.
+// sessions linked to it and where in their transcripts, and the state of
+// local Git for it: checked, not checked with the reason, or not applicable
+// outside a repository.
 func (c *Catalog) fileCommits(ctx context.Context, file map[string]any, limit int) ([]map[string]any, map[string]any, error) {
 	repository := firstString(file["repository_id"])
 	if repository == "" {
 		return []map[string]any{}, map[string]any{"status": "not_applicable", "reason": "This file is in a folder, not a Git repository; its history comes from transcripts."}, nil
 	}
-	scans, err := queryMapsContext(ctx, c.reader(), `SELECT status,reason,scanned_at,history_since FROM git_repository_scans WHERE repository_id=? AND host_id=?`, repository, currentHost().ID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(scans) == 0 {
-		return []map[string]any{}, map[string]any{"status": "not_checked", "reason": "Local Git has not checked this repository on this Mac yet."}, nil
-	}
 	// The scan reads history from its sessions' first edit, so commits
 	// cover only the time since (commits_since), not the file's whole life.
-	git := map[string]any{"status": scans[0]["status"], "reason": scans[0]["reason"], "checked_at": scans[0]["scanned_at"], "commits_since": scans[0]["history_since"]}
-	if scans[0]["status"] != "checked" {
-		git["reason"] = defaultString(scans[0]["reason"], "Local Git could not check this repository.")
+	git, err := c.fileGitState(ctx, repository)
+	if err != nil || git["status"] == "not_checked" && git["checked_at"] == nil {
+		return []map[string]any{}, git, err
 	}
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT f.hash,f.lines_added,f.lines_removed,g.author_at,g.on_mainline,g.reverted_by,
-		(SELECT json_group_array(json_object('workspace_id',l.workspace_id,'method',l.method,'confidence',l.confidence))
-			FROM session_commit_links l WHERE l.repository_id=f.repository_id AND l.hash=f.hash) links
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT f.hash,f.lines_added,f.lines_removed,g.author_at,g.on_mainline,g.reverted_by
 		FROM git_commit_files f JOIN git_commits g ON g.repository_id=f.repository_id AND g.hash=f.hash
 		WHERE f.repository_id=? AND f.path=? ORDER BY g.author_at DESC,f.hash LIMIT ?`, repository, file["path"], limit+1)
 	if err != nil {
@@ -273,18 +411,17 @@ func (c *Catalog) fileCommits(ctx context.Context, file map[string]any, limit in
 	}
 	commits := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		links := []map[string]any{}
-		_ = json.Unmarshal([]byte(firstString(row["links"])), &links)
-		for _, link := range links {
-			// Below outcomeGitCounted a link is a candidate, not counted.
-			link["counted"] = floatOr(link["confidence"]) >= outcomeGitCounted
+		hash := firstString(row["hash"])
+		links, err := c.commitSessions(ctx, repository, hash)
+		if err != nil {
+			return nil, nil, err
 		}
-		var mainline any
-		if row["on_mainline"] != nil {
-			mainline = integer(row["on_mainline"]) != 0
+		commit := map[string]any{"hash": hash, "author_at": row["author_at"], "lines_added": row["lines_added"], "lines_removed": row["lines_removed"],
+			"on_mainline": nullableBool(row["on_mainline"]), "reverted_by": row["reverted_by"], "sessions": links}
+		if ref := firstString(file["project_ref"]); ref != "" {
+			commit["url"] = filePageURL(ref, "", "", hash)
 		}
-		commits = append(commits, map[string]any{"hash": row["hash"], "author_at": row["author_at"], "lines_added": row["lines_added"], "lines_removed": row["lines_removed"],
-			"on_mainline": mainline, "reverted_by": row["reverted_by"], "sessions": links})
+		commits = append(commits, commit)
 	}
 	return commits, git, nil
 }

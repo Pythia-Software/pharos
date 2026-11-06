@@ -16,7 +16,7 @@ export const siteSections = [
   { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
   { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action notices, in separate prompt baskets." },
-  { path: "files", route: "/files", description: "File history: every session that edited a file, with its lines and outcome and a link to its edit, and in a Git repository the commits that changed the file. Set file (and file_project)." },
+  { path: "files", route: "/files", description: "Files: a project's tree (in a Git repository, every file at the mainline tip; in a folder, the files sessions edited) beside one file, directory or commit. A file lists every session that edited it, each edit linked to its call in the transcript, the rework between sessions, and the commits that changed it with their linked sessions. Set file_project and file, file_dir or file_commit; file alone finds the file in every project." },
   { path: "ask", route: "/ask", description: "Ask Pharos full screen: a new chat on its own page, without the rest of the app." },
   { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },

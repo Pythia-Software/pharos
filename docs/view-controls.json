@@ -96,6 +96,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/file-history.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/label-session-ribbon.tsx",
       "field": "disclosures"
     },
@@ -117,11 +121,31 @@
     },
     {
       "file": "web/src/file-history.tsx",
+      "field": "file_commit"
+    },
+    {
+      "file": "web/src/file-history.tsx",
+      "field": "file_dir_view"
+    },
+    {
+      "file": "web/src/file-history.tsx",
       "field": "file_history_path"
     },
     {
       "file": "web/src/file-history.tsx",
       "field": "file_history_project"
+    },
+    {
+      "file": "web/src/file-history.tsx",
+      "field": "file_tree_dir"
+    },
+    {
+      "file": "web/src/file-history.tsx",
+      "field": "file_view"
+    },
+    {
+      "file": "web/src/file-history.tsx",
+      "field": "files_tree_collapsed"
     },
     {
       "file": "web/src/page-find.ts",
@@ -5188,22 +5212,164 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "01ec055d8656a6ab:0",
+      "key": "38480f2220f86997:0",
       "file": "web/src/file-history.tsx",
-      "owner": "FileHistoryPage",
-      "tag": "input",
-      "control": "id=\"fileHistoryPath\" value={draft} onChange={event => setDraft(event.target.value)}",
-      "contract": "editing",
-      "reason": "File History path draft; applying it writes the registered file view field (file_history_path), so the draft itself is excluded."
+      "owner": "ChangesPage",
+      "tag": "button",
+      "control": "onClick={onMore}",
+      "contract": "transient",
+      "reason": "Appends the next page of older edits below those shown, like scrolling further; the file's Changes tab (file_view=changes) is the canonical view and always opens at its newest edits."
     },
     {
-      "key": "0e54f0f4e4d63e89:0",
+      "key": "0e6ab8883050b497:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutLine",
+      "tag": "button",
+      "control": "onClick={() => setChanging(value => !value)}",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Opens the repository checkout editor in place. The checkout is a per-Mac setting stored in the catalog (repository_checkouts), not view state; the editor closes once it saves."
+    },
+    {
+      "key": "31d56ca856f13a7d:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "button",
+      "control": "",
+      "contract": "settings",
+      "reason": "Saves the typed folder as the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
+    },
+    {
+      "key": "8061597aab085cb1:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "button",
+      "control": "onClick={() => void post({ path })}",
+      "contract": "settings",
+      "reason": "Chooses a recorded checkout as the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
+    },
+    {
+      "key": "b07b1cc95273027b:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "input",
+      "control": "id={`checkout-${checkout.repository_id}`} value={draft} onChange={event => setDraft(event.target.value)}",
+      "contract": "editing",
+      "reason": "Draft folder for the repository's checkout; saving it writes the per-Mac setting, so the draft itself is excluded."
+    },
+    {
+      "key": "bfc9caedfc77a5be:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "button",
+      "control": "onClick={() => void post({ clear: true })}",
+      "contract": "settings",
+      "reason": "Forgets the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
+    },
+    {
+      "key": "8672278ecbeb7404:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CommitFile",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey} defaultOpen={open}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "3ced87552c45a7e9:0",
       "file": "web/src/file-history.tsx",
       "owner": "FileHistoryPage",
       "tag": "button",
+      "control": "data-view-field=\"files_tree_collapsed\" onClick={() => setCollapsed(false)} aria-label=\"Show the file tree\"",
+      "binding": "files_tree_collapsed",
+      "contract": "view.files_tree_collapsed",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "859c0afb2af2eb42:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FilesHeader",
+      "tag": "button",
+      "control": "onClick={() => { void navigator.clipboard?.writeText(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}",
+      "contract": "action",
+      "reason": "Copies the file or directory path to the clipboard; changes no view state."
+    },
+    {
+      "key": "e708c1f4049e224c:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FilesLink",
+      "tag": "a",
+      "control": "onClick={event => { props.onClick?.(event); const local = localPageNavigation(href, location.href, { ...event, target: event.currentTarget.target }); if (!local || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate(keepFilesView(local, location.search)); }}",
+      "contract": "navigation",
+      "reason": "Canonical Files page URLs (file_project with file, file_dir or file_commit) through the shared app router; it carries the open tree directories (disclosures) to the next address."
+    },
+    {
+      "key": "aedaa8481ea5de6d:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FilesSidebar",
+      "tag": "input",
+      "control": "value={find} aria-label=\"Go to file\" onChange={event => setFind(event.target.value)} onKeyDown={event => { if (event.key === \"Escape\") setFind(\"\"); }}",
+      "contract": "transient",
+      "reason": "Go to file is a transient file picker over the project's paths; choosing a result navigates to that file's canonical Files URL (file_project, file)."
+    },
+    {
+      "key": "bc7ac1e4ad331797:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FilesSidebar",
+      "tag": "button",
+      "control": "data-view-field=\"files_tree_collapsed\" onClick={onCollapse} aria-label=\"Hide the file tree\"",
+      "binding": "files_tree_collapsed",
+      "contract": "view.files_tree_collapsed",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "5af553199d10c42c:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "FindResults",
+      "tag": "FilesLink",
+      "control": "onClick={onChosen}",
+      "contract": "navigation",
+      "reason": "A Go to file result: a canonical Files URL (file_project, file) through FilesLink; its click also closes the transient picker."
+    },
+    {
+      "key": "395b94e0bdcf4aac:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "LogPage",
+      "tag": "button",
+      "control": "onClick={onMore}",
+      "contract": "transient",
+      "reason": "Appends the next page of older commits below those shown, like scrolling further; the History and Commits tabs (file_view=history, file_dir_view=commits) are the canonical views and always open at the newest commits."
+    },
+    {
+      "key": "63ebbf8eb4d931ff:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "PathForm",
+      "tag": "button",
       "control": "",
       "contract": "action",
-      "reason": "Applies the File History path draft to the file view field; the applied path is the linked view state."
+      "reason": "Applies the Files path draft to the file view field (file_history_path); the applied path is the linked view state."
+    },
+    {
+      "key": "e3370fd4dda9d20d:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "PathForm",
+      "tag": "input",
+      "control": "id=\"fileHistoryPath\" value={draft} onChange={event => setDraft(event.target.value)}",
+      "contract": "editing",
+      "reason": "Files path draft; applying it writes the registered file view field (file_history_path), so the draft itself is excluded."
+    },
+    {
+      "key": "dea6549b2f73b0e5:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "TreeDirectory",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey} defaultOpen={open.has(path)}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "7287b211b199422d:0",

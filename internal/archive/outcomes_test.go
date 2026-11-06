@@ -13,11 +13,15 @@ import (
 func lines(value int64) *int64 { return &value }
 
 func TestDeriveSessionFacts(t *testing.T) {
+	// Each call's place in its transcript is named for its time.
+	place := func(at string) transcriptPlace {
+		return transcriptPlace{Conversation: "conversation", Message: "message " + at, Call: "call " + at}
+	}
 	edit := func(path, repoPath, repository, at string, added, removed *int64) outcomeCall {
-		return outcomeCall{Category: "edit", Status: "ok", Path: path, RepoPath: repoPath, RepositoryID: repository, Scope: "repo", StartedAt: at, LinesAdded: added, LinesRemoved: removed}
+		return outcomeCall{Category: "edit", Status: "ok", Path: path, RepoPath: repoPath, RepositoryID: repository, Scope: "repo", StartedAt: at, LinesAdded: added, LinesRemoved: removed, Place: place(at)}
 	}
 	command := func(category, status, text, result, at string) outcomeCall {
-		return outcomeCall{Category: "command", Status: status, CommandCategory: category, Command: text, Result: result, StartedAt: at}
+		return outcomeCall{Category: "command", Status: status, CommandCategory: category, Command: text, Result: result, StartedAt: at, Place: place(at)}
 	}
 	facts := deriveSessionFacts([]outcomeCall{
 		command("test", "ok", "go test ./...", "", "2026-09-01T00:00:00Z"),
@@ -44,6 +48,11 @@ func TestDeriveSessionFacts(t *testing.T) {
 	if *facts.Files[1].Added != 13 || facts.Files[0].Added != nil || *facts.Added != 13 || *facts.Removed != 3 {
 		t.Fatalf("lines: %+v %v %v", facts.Files, *facts.Added, *facts.Removed)
 	}
+	// Each edit keeps its place, the path as its call wrote it and its lines.
+	if places := facts.Files[1].Places; len(places) != 2 || places[0].transcriptPlace != place("2026-09-01T00:01:00Z") || places[0].Path != "/src/app/main.go" ||
+		*places[0].Added != 10 || places[1].Path != "/src/app-worktree/main.go" || *places[1].Removed != 1 {
+		t.Fatalf("edit places: %+v", places)
+	}
 	if facts.FirstEdit != "2026-09-01T00:01:00Z" || facts.LastEdit != "2026-09-01T00:03:00Z" {
 		t.Fatalf("edit times: %s %s", facts.FirstEdit, facts.LastEdit)
 	}
@@ -52,7 +61,7 @@ func TestDeriveSessionFacts(t *testing.T) {
 	if facts.Verification != "passed" || facts.VerifiedBy != "test" {
 		t.Fatalf("verification: %s by %s", facts.Verification, facts.VerifiedBy)
 	}
-	if len(facts.Commits) != 2 || facts.Commits[0] != (outcomeCommit{"1a2b3c4", "feature/login", "2026-09-01T00:07:00Z"}) || facts.Commits[1].Branch != "" {
+	if len(facts.Commits) != 2 || facts.Commits[0] != (outcomeCommit{Hash: "1a2b3c4", Branch: "feature/login", At: "2026-09-01T00:07:00Z", transcriptPlace: place("2026-09-01T00:07:00Z")}) || facts.Commits[1].Branch != "" {
 		t.Fatalf("commits: %+v", facts.Commits)
 	}
 	if !facts.Pushed || len(facts.PullRequests) != 1 || facts.PullRequests[0] != "https://github.com/acme/app/pull/42" {
@@ -267,6 +276,12 @@ func TestSessionOutcomeLabels(t *testing.T) {
 	if labels["light"][2] != "1" || labels["continued"][2] != "0" {
 		t.Errorf("reworked files: %v %v", labels["light"], labels["continued"])
 	}
+	// Each removal is kept by file and by the session that made it.
+	var rework string
+	if err := f.catalog.DB.QueryRow(`SELECT group_concat(workspace_id||'>'||later_workspace_id||':'||removed_lines,' ') FROM (SELECT * FROM session_file_rework ORDER BY workspace_id,file_key)`).Scan(&rework); err != nil ||
+		rework != "deleted>deleter:10 light>light-later:5 reworked>reworker:8 rewritten>rewriter:8 tree-a>tree-b:9" {
+		t.Errorf("rework by file: %q %v", rework, err)
+	}
 	var patched string
 	if err := f.catalog.DB.QueryRow("SELECT group_concat(path||':'||lines_added,' ') FROM (SELECT path,lines_added FROM session_files WHERE workspace_id='patched' ORDER BY path)").Scan(&patched); err != nil ||
 		patched != "/notes/p/one.md:3 /notes/p/two.md:1" {
@@ -297,7 +312,7 @@ func TestSessionOutcomesJudgeAgainWhenSessionsChange(t *testing.T) {
 	// Removing the later session undoes its rework.
 	execTx(t, f.catalog.DB, `DELETE FROM workspaces WHERE id='second'`)
 	f.refresh()
-	if label := f.labels()["first"][0]; label != "changed_kept" {
+	if label := f.labels()["first"][0]; label != "changed_kept" || countRows(t, f.catalog, `SELECT COUNT(*) FROM session_file_rework`) != 0 {
 		t.Fatalf("after removing it: %s", label)
 	}
 	var files int
@@ -414,6 +429,57 @@ func TestReadEditChanges(t *testing.T) {
 		edits[0].Path != "/a.go" || edits[1].Path != "/b.go" || edits[0].Change.Added != nil {
 		t.Fatalf("a change without its lines: %+v", edits)
 	}
+
+	// The same inputs read as each file's diff, for the Files page: a
+	// replacement keeps the lines it shares, a patch keeps its hunks and a
+	// write adds every line.
+	diff := func(input any, path string) string {
+		t.Helper()
+		text, _ := json.Marshal(map[string]any{"input": input})
+		found := readEditDiffs(string(text), path)
+		if found == nil {
+			return "none"
+		}
+		parts := []string{found.Kind}
+		for _, hunk := range found.Hunks {
+			lines := []string{}
+			for _, line := range hunk.Lines {
+				lines = append(lines, string(line.Kind)+line.Text)
+			}
+			parts = append(parts, hunk.Header+"|"+strings.Join(lines, "|"))
+		}
+		return strings.Join(parts, " ; ")
+	}
+	for name, test := range map[string]struct {
+		input any
+		path  string
+		want  string
+	}{
+		"edit": {map[string]any{"file_path": "/a.go", "old_string": "\tif done {\n\t\treturn total\n\t}", "new_string": "\tif done {\n\t\treturn total + 1\n\t\t// counted twice\n\t}"}, "/a.go",
+			"replace ; | \tif done {|-\t\treturn total|+\t\treturn total + 1|+\t\t// counted twice| \t}"},
+		"interleaved": {map[string]any{"old_string": "a\nb\nc\nd", "new_string": "a\nx\nc\ny"}, "/a.go", "replace ; | a|-b|+x| c|-d|+y"},
+		"multi-edit": {map[string]any{"edits": []any{map[string]any{"old_string": "one", "new_string": "two"}, map[string]any{"old_string": "", "new_string": "three"}}}, "/a.go",
+			"replace ; |-one|+two ; |+three"},
+		"antigravity": {map[string]any{"TargetContent": "old", "ReplacementContent": "new"}, "/a.go", "replace ; |-old|+new"},
+		"write":       {map[string]any{"file_path": "/a.go", "content": "package main\nfunc main() {}\n"}, "/a.go", "write ; |+package main|+func main() {}"},
+		"patch":       {patch, "/repo/src/a.go", "patch ; |-old line of a|+new line of a|+second line of a"},
+		"patch added": {map[string]any{"patch": patch}, "/repo/src/b.go", "patch ; |+a line of file b"},
+		"patch moved": {patch, "/repo/src/c.go", "patch ; |-the line c had"},
+		"deleted":     {patch, "/repo/src/e.go", "delete"},
+		"not in it":   {patch, "/repo/src/z.go", "none"},
+		"listed":      {map[string]any{"changes": []any{map[string]any{"path": "/a.go"}}}, "/a.go", "listed"},
+		"code mode":   {"text(await tools.apply_patch(" + fmt.Sprintf("%q", "*** Begin Patch\n*** Update File: /a.go\n@@ func f\n context\n-x\n+y\n*** End Patch") + "))", "/a.go", "patch ; func f| context|-x|+y"},
+	} {
+		if got := diff(test.input, test.path); got != test.want {
+			t.Errorf("%s diff: %q, want %q", name, got, test.want)
+		}
+	}
+	// A diff too large to compare in full removes the old lines and adds the
+	// new, around the lines both ends share.
+	override(t, &fileChangeDiffBudget, 1)
+	if got := diff(map[string]any{"old_string": "keep\na\nb\nend", "new_string": "keep\nb\na\nend"}, "/a.go"); got != "replace ; | keep|-a|-b|+b|+a| end" {
+		t.Errorf("past the budget: %q", got)
+	}
 }
 
 func TestSessionOutcomesReadCommitsFromToolOutput(t *testing.T) {
@@ -436,7 +502,8 @@ func TestSessionOutcomesReadCommitsFromToolOutput(t *testing.T) {
 	if err := f.catalog.DB.QueryRow("SELECT commits_json,verification,pushed FROM session_outcomes WHERE workspace_id='work'").Scan(&commits, &verification, &pushed); err != nil {
 		t.Fatal(err)
 	}
-	if commits != `[{"hash":"0123abc","branch":"main","at":"`+at+`"}]` || verification.String != "not_run" || pushed != 1 {
+	// The commit keeps the place of the call that printed it.
+	if commits != `[{"hash":"0123abc","branch":"main","at":"`+at+`","conversation":"work-c"}]` || verification.String != "not_run" || pushed != 1 {
 		t.Fatalf("facts: %s %v %d", commits, verification, pushed)
 	}
 	// A commit recorded only in the transcript is a Tier 1 fact; the label

@@ -21,6 +21,7 @@ import "./uifeedback/pharos-client";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
+import { installWorkFiles } from "./work-files";
 import { ConversationFacts, ResultConversationBrowser, ResultMessage, conversationActivitySummary, openableProps, type ResultTarget } from "./conversation-results";
 import { TextSearchEditor } from "./text-search-editor";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
@@ -1707,7 +1708,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(<PageErrorBoundary><LazyPage host={element}>{component}</LazyPage></PageErrorBoundary>);
 }
-startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer();
+startFindingsChrome(); installWorkspaceInbox(); installWorkFiles(); installDelegationExplorer();
 if (concurrencyPrototypeEnabled) {
   const modalHost = document.createElement("div");
   modalHost.id = "parallelismModal";document.body.append(modalHost);
