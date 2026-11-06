@@ -616,11 +616,11 @@ func TestCursorToolResultsAndLegacyComposers(t *testing.T) {
 	}
 }
 
-// A chunk of a fork's headers that is lost or damaged leaves the rest of
+// A chunk of a fork's headers that is lost, damaged or null leaves the rest of
 // its group read, and the fork's own messages its own: what it copied can
 // no longer be told by position.
 func TestCursorLostHeaderChunkLeavesTheGroup(t *testing.T) {
-	for name, damage := range map[string]string{"lost": `DELETE FROM cursorDiskKV WHERE key=?`, "damaged": `UPDATE cursorDiskKV SET value='[{"bubbleId":' WHERE key=?`} {
+	for name, damage := range map[string]string{"lost": `DELETE FROM cursorDiskKV WHERE key=?`, "damaged": `UPDATE cursorDiskKV SET value='[{"bubbleId":' WHERE key=?`, "null": `UPDATE cursorDiskKV SET value='null' WHERE key=?`} {
 		t.Run(name, func(t *testing.T) {
 			root := cursorFixture(t)
 			cursorWrite(t, root, func(db *sql.DB) error {
