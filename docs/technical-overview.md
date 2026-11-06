@@ -111,7 +111,7 @@ Each kind of source is one entry in `providerRegistry` (`provider_registry.go`).
 
 Each spec also declares what its records hold (`Content`, `provider_capabilities.go`), for each of:
 - the folder and Git branch;
-- the model and effort;
+- the model, effort and speed (fast mode);
 - per-request token usage;
 - tool calls and results;
 - thinking;
