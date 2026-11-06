@@ -1324,7 +1324,7 @@ func writeFileDurably(file string, data []byte) error {
 	if err == nil {
 		// os.File.Sync is F_FULLFSYNC on macOS: it flushes the drive's cache,
 		// including every file fsynced earlier, before the rename commits.
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
@@ -1337,7 +1337,7 @@ func writeFileDurably(file string, data []byte) error {
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(file)); err == nil {
-		_ = dir.Sync()
+		_ = syncToDrive(dir)
 		dir.Close()
 	}
 	return nil

@@ -29,7 +29,7 @@ func TestLibraryQueryTableCombinesKeywordSearchWithFilters(t *testing.T) {
 	server := testServer(t, config, catalog)
 	request := func(method, path, body string) map[string]any {
 		t.Helper()
-		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request := queryFixtureHTTPRequest(method, path, strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
@@ -111,7 +111,7 @@ func TestLibraryFindFiltersBeforeGlobalCandidateLimit(t *testing.T) {
 		if strings.Contains(endpoint, "v2") {
 			body = `{"version":2,"profile":"qt-sqlite-v1",` + body[1:]
 		}
-		req := httptest.NewRequest(http.MethodPost, endpoint+"?find=parser&find_fuzzy=0", strings.NewReader(body))
+		req := queryFixtureHTTPRequest(http.MethodPost, endpoint+"?find=parser&find_fuzzy=0", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, req)
@@ -148,10 +148,10 @@ func TestLibraryFindLimitAppliesToSortedWorkspaces(t *testing.T) {
 		params, _ := url.ParseQuery(search + "&find_fuzzy=0")
 		for _, endpoint := range []string{"/api/query/library", "/api/query/library/rows-v2", "/api/query/library/query-v3"} {
 			for offset, want := range []string{"c", "b"} {
-				wire := qt.WireQuery{Select: []string{"title"}, OrderBy: qt.OrderBys{{Field: "title", Dir: "desc"}}, Limit: 1, Offset: offset}
+				wire := qt.WireQuery{Select: []string{"title"}, OrderBy: []qt.OrderBy{{Field: "title", Dir: "desc"}}, Limit: 1, Offset: offset}
 				var body any = wire
 				if strings.Contains(endpoint, "v2") {
-					body = qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: wire}
+					body = queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: wire}
 				} else if strings.Contains(endpoint, "v3") {
 					body = qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: wire}
 				}
@@ -188,13 +188,13 @@ func TestLibraryFindLimitAppliesToSortedWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range []int{2, 3} {
-		wire := qt.WireQuery{Select: []string{"title"}, OrderBy: qt.OrderBys{{Field: "@computed/title_copy", Dir: "desc"}}, Limit: 1}
+		wire := qt.WireQuery{Select: []string{"title"}, OrderBy: []qt.OrderBy{{Field: "@computed/title_copy", Dir: "desc"}}, Limit: 1}
 		wantTotal := 2
 		if version == 3 {
 			wire.Where = []qt.WhereTerm{{Field: "@computed/title_copy", Op: "=", Value: "Charlie"}}
 			wantTotal = 1
 		}
-		var body any = qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: wire, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
+		var body any = queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: wire, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
 		endpoint := "rows-v2"
 		if version == 3 {
 			body = qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: wire, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
@@ -412,9 +412,9 @@ func TestLibraryFindPricesMatchingWorkspaces(t *testing.T) {
 			selected = append(selected, "@computed/double_cost")
 			order = "@computed/double_cost"
 		}
-		wire := qt.WireQuery{Select: selected, OrderBy: qt.OrderBys{{Field: order, Dir: "desc"}}, Limit: 1}
+		wire := qt.WireQuery{Select: selected, OrderBy: []qt.OrderBy{{Field: order, Dir: "desc"}}, Limit: 1}
 		for _, version := range []int{2, 3} {
-			var body any = qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: wire, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
+			var body any = queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: wire, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
 			endpoint := "rows-v2"
 			if version == 3 {
 				body = qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: wire, ExpectedRevisions: map[string]string{column.ID: column.Revision}}

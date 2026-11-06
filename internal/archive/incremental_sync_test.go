@@ -87,6 +87,27 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 0 || catalog.ensureAuthorship() {
 		t.Fatal("manual no-op left analyses stale")
 	}
+	// Each stage acknowledges its starting generation, including changes from
+	// earlier stages, but must retain changes that arrive during its own work.
+	changed := false
+	ctx := withWorkProgress(t.Context(), func(work activityWork) {
+		if work.Phase == "reading findings inputs" && !changed {
+			changed = true
+			execSQL(t, catalog.DB, `UPDATE sync_deferred SET generation=generation+1 WHERE name='findings'`)
+		}
+	})
+	if err := server.finishDeferredStages(ctx, findingsForce, map[string]bool{"findings": true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !changed || countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE name='findings' AND generation>completed_generation") != 1 {
+		t.Fatal("findings acknowledged changes arriving during its pass")
+	}
+	if err := server.finishDeferredStages(t.Context(), findingsForce, map[string]bool{"findings": true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 0 {
+		t.Fatal("findings did not catch up on its next pass")
+	}
 }
 
 func TestSyncCheckStartsManualRun(t *testing.T) {
@@ -120,7 +141,7 @@ func TestManualSyncFailedAnalysisRetainsDirtyGeneration(t *testing.T) {
 	if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
 		t.Fatal("manual sync not admitted")
 	}
-	if server.runs[0].State != "failed" || !strings.Contains(firstString(server.runs[0].Error), "authorship rebuild did not complete") {
+	if server.runs[0].State != "failed" || !strings.Contains(firstString(server.runs[0].Error), "writing estimates did not start") {
 		t.Fatalf("analysis failure reported success: %+v", server.runs[0])
 	}
 	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE name IN ('authorship','findings') AND generation>completed_generation") != 2 {

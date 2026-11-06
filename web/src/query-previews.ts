@@ -1,7 +1,8 @@
+import { formatUSD } from "./currency";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type QueryRequestV3, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { chartBucketsWithHistory, foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
 import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
@@ -44,7 +45,7 @@ export type QueryPreview = {
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
-type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
+type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabilities: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
@@ -53,7 +54,7 @@ export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); inv
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
   if (unit === "percent") return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-  if (unit === "USD") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value >= 100 ? 0 : 2 });
+  if (unit === "USD") return formatUSD(value);
   if (unit === "ms") return value >= 3_600_000 ? `${(value / 3_600_000).toFixed(1)}h` : value >= 60_000 ? `${(value / 60_000).toFixed(1)}m` : value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }
@@ -375,15 +376,15 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     if (!pending) {
       pending = (async () => {
         const [handshake, definitions] = await Promise.all([
-          fetchPreview<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(`/api/query/${job.dataset}/capabilities`, signal),
+          fetchPreview<{ queryCapabilities: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(`/api/query/${job.dataset}/capabilities`, signal),
           fetchPreview<ComputedColumn[]>(`/api/query-computed-columns?dataset=${encodeURIComponent(job.schema.name)}`, signal).then(raw => { if (!Array.isArray(raw)) throw new Error("Invalid computed column catalogue."); return raw.map(validateComputedColumn); }),
         ]);
-        if (handshake.metricCapabilities?.version !== 2 || !handshake.computedExecution?.profile) throw new Error("This dataset does not support metric previews.");
+        if (handshake.queryCapabilities?.version !== 3 || !handshake.computedExecution?.profile) throw new Error("This dataset does not support metric previews.");
         const fields = definitions.flatMap(definition => {
           const name = `@computed/${definition.id}`, cap = handshake.computedExecution.fields[name];
           return cap ? [{ name, label: definition.label, type: cap.type, source: { kind: "backend" as const }, filter: { enabled: false }, sort: { enabled: cap.sort }, aggregate: { measure: cap.measure, groupable: cap.group } }] : [];
         });
-        return { schema: { ...job.schema, fields: [...job.schema.fields, ...fields] }, execution: handshake.computedExecution, capabilities: handshake.metricCapabilities, queryCapabilities: handshake.queryCapabilities };
+        return { schema: { ...job.schema, fields: [...job.schema.fields, ...fields] }, execution: handshake.computedExecution, queryCapabilities: handshake.queryCapabilities };
       })();
       contexts.set(job.dataset, pending);
     }
@@ -412,9 +413,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
           const ctx = await context(job);
           async function history(from: number, to: number): Promise<CostTimeBucket[]> {
             const query = apiCostTrendQuery(job.query.grouping!.source, from, to);
-            const request = toMetricQuery(query, ctx.schema, ctx.execution);
-            if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-            const body = await fetchPreview<AggregationResult>("/api/query/usage/metrics", signal, request);
+            const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
+            const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request);
             const facts = apiCostTrendFacts(body.metrics.find(metric => metric.id === "cost-history"));
             if (facts) return facts;
             // Partition only truncated timestamp reductions; exact half-open
@@ -438,9 +438,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
       const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
-        const request = toMetricQuery(query, ctx.schema, ctx.execution);
-        if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/metrics`, signal, request)).metrics;
+        const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
+        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request)).metrics;
       }));
       const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
       if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
@@ -508,50 +507,38 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     if (signal?.aborted) return;
     try {
       const ctx = await context(items[0].job);
-      const valid: { item: Item; request: MetricQuery }[] = [];
+      const valid: { item: Item; request: QueryRequestV3 }[] = [];
       for (const item of items) {
         try {
-          // A metric filter or minimum group size the executor does not run fails its card, never silently dropped.
-          // The service runs record keyword clauses only through query-v3.
-          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || /(^|[?&])record_search=/.test(item.search));
-          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount, minCountMeasures: ctx.queryCapabilities?.metricMinCountMeasures } : ctx.capabilities;
+          const support = { filters: ctx.queryCapabilities.metricFilters, minCount: ctx.queryCapabilities.metricMinCount, minCountMeasures: ctx.queryCapabilities.metricMinCountMeasures };
           const unsupported = item.query.aggregations?.map(metric => metricPopulationError(metric, support)).find(Boolean);
           if (unsupported) throw new Error(unsupported);
-          if (grouped) {
-            if (ctx.queryCapabilities?.version !== 3) throw new Error("Server grouping is unavailable. Refresh this view after updating the backend.");
-            const labels = Boolean(item.query.grouping && item.job.options?.recipe?.exploration?.labelFields);
-            const labelLimit = Math.max(12, ...(item.query.aggregations ?? []).map(metric => Math.max(metric.groupLimit ?? 0, metric.display?.maxGroups ?? 0)));
-            const query = labels ? { ...item.query, limit: labelLimit } : item.query.aggregations?.length ? item.query : { ...item.query, limit: Math.min(item.query.limit || 3, 3) };
-            const request = toQueryRequestV3(query, item.job.schema, ctx.queryCapabilities, ctx.execution, { now: item.now, rows: labels || !query.aggregations?.length });
-            if (request.diagnostics.length) throw new Error(request.diagnostics.join(" · "));
+          const labels = Boolean(item.query.grouping && item.job.options?.recipe?.exploration?.labelFields);
+          const labelLimit = Math.max(12, ...(item.query.aggregations ?? []).map(metric => Math.max(metric.groupLimit ?? 0, metric.display?.maxGroups ?? 0)));
+          const query = labels ? { ...item.query, limit: labelLimit } : item.query.aggregations?.length ? item.query : { ...item.query, limit: Math.min(item.query.limit || 3, 3) };
+          const request = toQueryRequestV3(query, sourceExecutionSchema(item.job.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { now: item.now, rows: labels || !query.aggregations?.length });
+          request.hostState = query.hostState;
+          if (query.grouping || request.rows || request.distinct) {
             const schema = query.grouping ? createGroupingModel(sourceExecutionSchema(item.job.schema, ctx.execution)).resultSchema(query.grouping.keys, query.grouping.summaries) : ctx.schema;
             const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request);
             validateQueryResultV3(result, request, schema);
             finish(item, result, schema);
-          } else if (item.query.aggregations?.length) {
-            const request = toMetricQuery(item.query, ctx.schema, ctx.execution);
-            if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-            valid.push({ item, request });
-          } else {
-            const request = toServerQueryV2({ ...item.query, limit: Math.min(item.query.limit || 3, 3) }, ctx.schema, ctx.execution);
-            if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-            finish(item, await fetchPreview<Payload>(`/api/query/${item.job.dataset}/rows-v2${item.search}`, signal, request), ctx.schema);
-          }
+          } else valid.push({ item, request });
         } catch (error) { item.fail(error); }
       }
       if (!valid.length || signal?.aborted) return;
       const request = { ...valid[0].request, expectedRevisions: Object.assign({}, ...valid.map(({ request }) => request.expectedRevisions)), metrics: valid.flatMap(({ request }, i) => request.metrics.map((metric, j) => ({ ...metric, id: `preview:${i}:${j}` }))) };
       try {
-        const body = await fetchPreview<AggregationResult & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/metrics${valid[0].item.search}`, signal, request);
+        const body = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/query-v3${valid[0].item.search}`, signal, request);
+        validateQueryResultV3(body, request, ctx.schema);
         valid.forEach(({ item, request }, i) => {
           const metrics = request.metrics.map((metric, j) => {
             const result = body.metrics.find(result => result.id === `preview:${i}:${j}`);
             return result ? { ...result, id: metric.id } : undefined;
           }).filter((result): result is AggregationResultEntry => Boolean(result));
-          finish(item, { metrics, find: body.find }, ctx.schema);
+          finish(item, { ...body, metrics }, ctx.schema);
         });
       } catch (error) {
-        // A server-rejected formula must not take healthy siblings down with it.
         if (valid.length > 1 && error instanceof PreviewHTTPError && [400, 409, 422].includes(error.status)) {
           for (const { item } of valid) await run([item]);
         } else throw error;

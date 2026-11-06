@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import React from "react";
 import type { ChartScale } from "./chart-scale";
 import { cumulativeBuckets, rollingAverageBuckets, shareBuckets, timelineGeometry, timelinePath, withoutZeroes, type ChartBucket, type ChartSeries, type ChartDisplay } from "./chart-series";
@@ -9,7 +10,7 @@ export function compactTimelineBuckets(source: ChartBucket[], { display, rolling
 }
 
 const tooltipValue = (value: number, unit: string) => unit === "USD"
-  ? value.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 })
+  ? formatUSD(value)
   : unit === "percent" ? value.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 2 })
   : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })}${unit ? ` ${unit}` : ""}`;
 
@@ -50,7 +51,7 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
   const dateLabel = (date: Date, detail = false) => date.toLocaleString(undefined, { month: "short", day: "numeric", ...detail ? { year: "numeric" as const } : {}, ...prepared && ["hour", "hours"].includes(xLabel) ? { hour: "numeric" as const, minute: "2-digit" as const } : {} });
   return <span className="query-cover-timeline" aria-hidden="true">
     <span className="query-timeline-plot">
-      <span className="query-timeline-ticks">{axis.map(value => <span key={value} style={{ bottom: `${y(value)}%` }}>{percentageValues ? tooltipValue(value, "percent") : `${unit === "USD" ? "$" : ""}${value.toLocaleString(undefined, { notation: "compact", maximumSignificantDigits: 3 })}`}</span>)}</span>
+      <span className="query-timeline-ticks">{axis.map(value => <span key={value} style={{ bottom: `${y(value)}%` }}>{percentageValues ? tooltipValue(value, "percent") : unit === "USD" ? formatUSD(value) : value.toLocaleString(undefined, { notation: "compact", maximumSignificantDigits: 3 })}</span>)}</span>
       <span className="query-cover-columns">{buckets.map(bucket => <span key={bucket.key} style={drawLines || grouped ? { position: "relative" } : undefined} data-chart-colors={JSON.stringify([null, ...series.map(item => item.color)])} data-chart-tooltip={[dateLabel(bucket.date, true), accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}d rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined, ...series.filter(item => !nonzero || bucket.values[item.key] !== undefined).map(item => `${item.label}: ${tooltipValue(bucket.values[item.key] ?? 0, percent ? "percent" : unit)}`), bucket.detail].filter(Boolean).join("\n")} title="">
         {drawLines ? series.filter(item => bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="query-timeline-point" style={{ bottom: `${y(bucket.values[item.key])}%`, background: item.color }} />) : <ColumnMarks bucket={bucket} series={series} scale={y} percent={percent} grouped={grouped} />}
       </span>)}
@@ -59,7 +60,7 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
       </span>
     </span>
     <span className="query-timeline-dates">{dates.map(index => <span key={index}>{dateLabel(buckets[index].date)}</span>)}</span>
-    <span className="query-chart-axis-labels"><span title={yLabel}>↑ {yLabel}</span><span title={xLabel}>→ {xLabel}</span></span>
+    <span className="query-chart-axis-labels"><span data-overflow-title="">↑ {yLabel}</span><span data-overflow-title="">→ {xLabel}</span></span>
     {showLegend ? <ChartLegend items={series} columns={legendColumns} /> : null}
   </span>;
 }

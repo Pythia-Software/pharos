@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 )
@@ -853,7 +854,10 @@ func tl1Percent(value any) string {
 }
 
 func tl1Dollars(value float64) string {
-	if value >= 100 {
+	if math.Abs(value) < 0.005 {
+		value = 0
+	}
+	if math.Abs(value) >= 99.995 {
 		return fmt.Sprintf("$%.0f", value)
 	}
 	return fmt.Sprintf("$%.2f", value)

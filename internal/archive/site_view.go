@@ -806,6 +806,32 @@ func validSearchDuration(duration string) bool {
 func validateViewShape(name string, value any) error {
 	object, _ := value.(map[string]any)
 	switch name {
+	case "timeline_visibility":
+		if object == nil {
+			return fmt.Errorf("needs timeline visibility selections by section")
+		}
+		for section, value := range object {
+			if !slices.Contains([]string{"modes", "events", "tools", "origins"}, section) {
+				return fmt.Errorf("unknown timeline visibility section %q", section)
+			}
+			selection, ok := value.(map[string]any)
+			if !ok || selection == nil {
+				return fmt.Errorf("%s needs a selection object", section)
+			}
+			if _, ok := selection["excluded"].(bool); !ok {
+				return fmt.Errorf("%s.excluded needs a boolean", section)
+			}
+			encoded, err := json.Marshal(selection["values"])
+			var values []any
+			if err != nil || json.Unmarshal(encoded, &values) != nil || values == nil || len(values) > 1000 {
+				return fmt.Errorf("%s.values needs an array of at most 1000 strings", section)
+			}
+			for _, value := range values {
+				if _, ok := value.(string); !ok {
+					return fmt.Errorf("%s.values needs strings", section)
+				}
+			}
+		}
 	case "thinking":
 		return validateThinkingView(object)
 	case "thinking_filters":

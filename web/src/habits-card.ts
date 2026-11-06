@@ -40,14 +40,15 @@ const actorLabel = (actor: StreakActor) => streakActors.find(item => item.id ===
 const viewLabel = (view: PunchcardView) => punchcardViews.find(([id]) => id === view)![1];
 const rangeLabel = (range: string) => range === "all" ? "All time" : range === "365" ? "Past year" : `Past ${range} days`;
 
-// Each is titled with its heading on the page and what its selectors chose.
+// Standalone names describe the chart without needing the Habits page around it.
+// The page, library and creation dialog share these readings of the controls.
 export function habitsCardTitle(target: HabitsCardTarget, view: HabitsCardView): string {
   switch (target) {
-    case "habits-streaks": return view.mode === "weekdays" ? "Your weekday streak" : "Your streak";
-    case "habits-calendar": return `Days: ${actorLabel(view.calendar).toLowerCase()}${view.weekends ? "" : ", weekdays"}`;
-    case "habits-punchcard": return `When: ${viewLabel(view.punchcard).toLowerCase()}`;
-    case "habits-days": return "Your days";
-    case "habits-pace": return "Your pace";
+    case "habits-streaks": return view.mode === "weekdays" ? "Your weekday activity streak" : "Your daily activity streak";
+    case "habits-calendar": return `${view.calendar === "you" ? "Your active days" : view.calendar === "agents" ? "Days with agents you started" : "Days with automatic agent runs"}${view.weekends ? "" : " · weekdays only"}`;
+    case "habits-punchcard": return view.punchcard === "you" ? "When you work" : view.punchcard === "agents" ? "When agents you started work" : view.punchcard === "unattended" ? "When agents work while you're away" : view.punchcard === "automated" ? "When automatic agents run" : "Agent time minus your engaged time by weekday and hour";
+    case "habits-days": return "Your daily work schedule";
+    case "habits-pace": return "Your work and rest patterns";
     case "habits-automations": return "Automatic agent runs";
   }
 }
@@ -55,11 +56,11 @@ export function habitsCardTitle(target: HabitsCardTarget, view: HabitsCardView):
 export function habitsCardDescription(target: HabitsCardTarget, view: HabitsCardView): string {
   switch (target) {
     case "habits-streaks": return `Days in a row with a message you typed${view.mode === "weekdays" ? ", counting weekdays only" : ""}; your longest run; and your engaged time yesterday and over the last seven days.`;
-    case "habits-calendar": return `Each square is a day of ${actorLabel(view.calendar).toLowerCase()}; darker is more time.`;
-    case "habits-punchcard": return `Minutes per week of ${viewLabel(view.punchcard).toLowerCase()} in each weekday hour, coloured by time of day.`;
+    case "habits-calendar": return `${habitsCardWindow(target, view)}${view.weekends ? "" : ", weekdays only"}. Each square shows ${view.calendar === "you" ? "your engaged time" : `time with ${actorLabel(view.calendar).toLowerCase()}`}; darker is more time.${view.weeks > cardCalendarWeeks ? ` Open the dashboard for all ${view.weeks} weeks.` : ""}`;
+    case "habits-punchcard": return `${rangeLabel(view.range)}. ${view.punchcard === "difference" ? "Agent time minus your engaged time" : `Time for ${view.punchcard === "you" ? "you" : viewLabel(view.punchcard).toLowerCase()}`} in each weekday hour, in minutes per week, coloured by time of day.`;
     case "habits-days": return `Each of the last ${view.shapeDays} days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.`;
     case "habits-pace": return "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.";
-    case "habits-automations": return "What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.";
+    case "habits-automations": return `${rangeLabel(view.range)}. What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.`;
   }
 }
 

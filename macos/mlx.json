@@ -1,0 +1,16 @@
+{
+  "version": "0.32.4",
+  "minimum_macos": "26.2",
+  "files": [
+    {
+      "package": "mlx",
+      "url": "https://files.pythonhosted.org/packages/af/44/90bbdc3cdd120e1181f7c4f617ff996530159f2ea3ba3c08b83b08314d21/mlx-0.32.4-cp312-cp312-macosx_26_0_arm64.whl",
+      "sha256": "7928869076db6267ab3ebdb253b2c80be1e738b3032c783170bd1d59d460c578"
+    },
+    {
+      "package": "mlx-metal",
+      "url": "https://files.pythonhosted.org/packages/2a/d6/4340ed6e184f71693d7f531c9ae55d677451351245760d71f8dd714dcbe5/mlx_metal-0.32.4-py3-none-macosx_26_0_arm64.whl",
+      "sha256": "514df92d41a286895d2564b4b18f4da45096bd7a4a0c47e1042f345ad5a7f936"
+    }
+  ]
+}

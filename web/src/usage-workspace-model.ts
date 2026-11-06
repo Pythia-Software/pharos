@@ -1,11 +1,16 @@
+import { fitQueryToScreen } from "./query-fit";
 import { retainPageView } from "./view-contract";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, predicatesOf, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisVersion } from "./dashboard-analysis-model";
+import { dashboardDefaults } from "./dashboard-defaults";
+import { peopleMessageLabelScope } from "./people-message-labels";
 
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
+  people_message_labels:{label:"People message labels",description:"Message classifications within People dashboard populations.",field:"label",searchLabel:"Message label"},
   message_labels:{label:"Message labels",description:"Stored message functions, coverage and matching conversations.",field:"text",searchLabel:"Labeled message text"},
+  compactions: { label: "Compactions", description: "Recorded context compaction boundaries and trigger evidence.", field: "model", searchLabel: "Compaction Model Names" },
   model_requests: { label: "Model requests", description: "Retained request usage and post-tool timing evidence.", field: "model", searchLabel: "Model request names" },
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
   conversation_activity: { label: "Conversation activity", description: "Human messages and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
@@ -24,6 +29,7 @@ export const usageDatasets = {
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
 export const engineUsageTopics = {
+  compaction: { label: "Compaction", description: "Count context compactions and compare human and machine triggers across services, models and repositories." },
   labels:{label:"Message Labels",description:"Explore conversation functions over time, compare labels and follow their matching conversations."},
   activity: { label: "Conversations", description: "How many conversations are you having, and how much do they produce? Explore conversations, your messages and model output across models and repositories." },
   human: { label: "Human Words", description: "How much are you contributing? Explore your writing over time." },
@@ -39,17 +45,17 @@ export const engineUsageTopics = {
   agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
 } as const;
 export const usageTopics = { ...engineUsageTopics,
-  "thinking-overview": {label:"Waiting and Compaction",description:"Understand observed model waits, context associations, compaction and timing evidence."},
+  "thinking-overview": {label:"Waiting",description:"Understand observed model waits, context associations and timing evidence."},
   "thinking-detail": {label:"Thinking",description:"Compare complete request distributions across models, effort, workloads and dates."},
 } as const;
 export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
-  message_labels:"labels",
-  model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
+  people_message_labels:"labels", message_labels:"labels",
+  compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
   tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
-  labels:"message_labels",
+  compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
   calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events",
 };
@@ -57,8 +63,8 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
 // predicates a link may translate it into (the tools rollup's text day).
 const timeFields: Record<UsageDataset, string[]> = {
-  message_labels:["occurred_at"],
-  model_requests: ["requested_at"],
+  people_message_labels:["sent_at"], message_labels:["occurred_at"],
+  compactions: ["occurred_at"], model_requests: ["requested_at"],
   tl1_attempts: ["started_at"],
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
@@ -91,13 +97,16 @@ function returnedWhere(current: URLSearchParams, edited: WhereTerm[], dataset: U
 }
 
 export function usageDashboardReturn(current: URLSearchParams) {
-  const state = readUsageWorkspace(current), dataset = usageTopicDatasets[state.topic];
+  const state = readUsageWorkspace(current), originalDataset = usageTopicDatasets[state.topic];
+  let chart = { ...dashboardDefaults[state.topic] };
+  try { chart = { ...chart, ...JSON.parse(current.get("analyze_chart") ?? "{}") }; } catch { /* An invalid chart retains the topic's ordinary source. */ }
+  const dataset = peopleMessageLabelScope(originalDataset, chart) ? "people_message_labels" : originalDataset;
   const keywords = current.has(`record_${state.dataset}`);
   let query: QueryState | undefined;
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
   const compatible = dataset === state.dataset && Boolean(query);
   const params = new URLSearchParams(current);
-  const returned = compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where, state.dataset) : { where: [], dates: false };
+  const returned = compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where, originalDataset) : { where: [], dates: false };
   // Settings a dataset's records are built with are not the dashboard's
   // filters: Parallelism's counting and gap follow the saved settings.
   const settings = builtWith[state.dataset] ?? [];
@@ -199,7 +208,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (mode !== "dashboards") {
     const query = change.query;
     if (query) {
-      params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
+      params.set(`q_${next.dataset}`, encodeQuery(fitQueryToScreen(query)));
       if (current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
     } else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);

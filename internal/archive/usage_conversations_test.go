@@ -1,12 +1,17 @@
 package archive
 
 import (
+	"encoding/json"
+	"math"
+	"net/http"
 	"testing"
 	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 func TestUsageWholeConversationOwnership(t *testing.T) {
-	catalog, _ := testCatalog(t)
+	catalog, config := testCatalog(t)
 	run := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := catalog.DB.Exec(sql, args...); err != nil {
@@ -84,6 +89,9 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 		if _, known := lineage.delegatedDepth[session.id]; known {
 			t.Fatalf("cyclic execution ancestry must have unavailable depth: %s", session.id)
 		}
+		if _, known := lineage.delegatedParents[session.id]; known {
+			t.Fatalf("cyclic execution ancestry must have unavailable parent: %s", session.id)
+		}
 	}
 	expectedDelegates := map[string]string{
 		"embedded": "agent:embedded", "s-child": "conversation:child", "s-child-continuation": "conversation:child",
@@ -93,6 +101,13 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 	expectedRoles := map[string]string{"s-root": "parent", "s-continuation": "parent", "s-child": "parent", "s-child-continuation": "parent", "s-independent": "singleton", "s-nested": "singleton", "s-handle-child": "singleton", "s-launched": "singleton", "embedded": "subagent", "embedded-child": "subagent"}
 	expectedRunRoles := map[string]string{"s-root": "parent", "s-continuation": "parent", "s-independent": "standalone", "s-child": "delegated", "s-child-continuation": "delegated", "s-nested": "delegated", "s-handle-child": "delegated", "s-launched": "delegated", "embedded": "delegated", "embedded-child": "delegated"}
 	expectedDepths := map[string]int64{"embedded": 1, "embedded-child": 2, "s-child": 1, "s-child-continuation": 1, "s-nested": 3, "s-handle-child": 2, "s-launched": 1}
+	expectedParents := map[string]string{
+		"embedded": "conversation:root", "s-child": "conversation:root", "s-child-continuation": "conversation:root", "s-launched": "conversation:root",
+		"embedded-child": "conversation:child", "s-nested": "agent:embedded-child", "s-handle-child": "conversation:child",
+	}
+	if lineage.delegatedParents["nested-handle"] != expectedParents["s-nested"] || lineage.delegatedParents["handle"] != expectedParents["s-handle-child"] {
+		t.Fatal("linked handles must share their child execution's direct parent")
+	}
 	for _, hourly := range []bool{false, true} {
 		rows, err := catalog.usageRowsByPeriod(time.UTC, hourly)
 		if err != nil {
@@ -110,6 +125,9 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 			allTokens += integer(row["total_tokens"])
 			if got, want := firstString(row["delegated_session_id"]), expectedDelegates[firstString(row["agent_session_id"])]; got != want {
 				t.Fatalf("wrong delegated run identity: got %q want %q for %#v", got, want, row)
+			}
+			if got, want := firstString(row["delegated_parent_session_id"]), expectedParents[firstString(row["agent_session_id"])]; got != want {
+				t.Fatalf("wrong direct parent execution: got %q want %q for %#v", got, want, row)
 			}
 			if got, want := firstString(row["session_role"]), expectedRoles[firstString(row["agent_session_id"])]; got != want {
 				t.Fatalf("wrong session role: got %q want %q for %#v", got, want, row)
@@ -139,6 +157,31 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 		if counts["root"] != 10 || tokens["root"] != 12100 || counts["independent"] != 1 || tokens["independent"] != 1000 || counts[""] != 4 || allTokens != 17100 {
 			t.Fatalf("whole conversation ownership must conserve facts once (hourly=%v): counts=%v tokens=%v total=%d", hourly, counts, tokens, allTokens)
 		}
+	}
+	// The real grouped query counts immediate children, not all descendants.
+	// Linked handles and continued child transcripts must not increase breadth.
+	query := groupRequest("delegated_parent_session_id", qt.SummaryColumn{ID: "children", Op: "count_distinct", Field: "delegated_session_id"})
+	query.Source.Where = []qt.WhereTerm{{Field: "delegated_parent_session_id", Op: "is_not_null"}}
+	server := testServer(t, config, catalog)
+	response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", query)
+	var grouped qt.QueryResultV3
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &grouped) != nil || len(grouped.Rows) != 3 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	for _, row := range grouped.Rows {
+		want := map[string]int64{"conversation:root": 3, "conversation:child": 2, "agent:embedded-child": 1}[firstString(row["delegated_parent_session_id"])]
+		if want == 0 || integer(row["children"]) != want {
+			t.Fatalf("wrong direct-child breadth: %#v", row)
+		}
+	}
+	query = groupRequest("week", qt.SummaryColumn{ID: "fanout", Op: "formula", Expression: "COUNT_DISTINCT([delegated_session_id])/NULLIF(COUNT_DISTINCT([delegated_parent_session_id]),0)"})
+	query.Source.Where = []qt.WhereTerm{{Field: "delegated_parent_session_id", Op: "is_not_null"}, {Field: "delegated_session_id", Op: "!=", Value: "agent:embedded"}}
+	response = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", query)
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &grouped) != nil || len(grouped.Rows) != 1 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if mean, ok := number(grouped.Rows[0]["fanout"]); !ok || math.Abs(mean-5.0/3.0) > 1e-12 {
+		t.Fatalf("weekly fan-out must retain fractional values and deduplicate continued children: %#v", grouped.Rows)
 	}
 }
 

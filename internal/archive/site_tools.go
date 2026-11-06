@@ -133,6 +133,11 @@ func (site *siteMap) browseTool(ctx context.Context, catalog *Catalog, args map[
 		return nil, err
 	}
 	items, listed := result["items"].([]map[string]any)
+	listKey := "items"
+	if !listed {
+		items, listed = result["columns"].([]map[string]any)
+		listKey = "columns"
+	}
 	if !listed {
 		if len(jsonText(result)) > budget*3 {
 			return nil, fmt.Errorf("max_output_tokens is too small for %s; increase the output budget", path)
@@ -154,13 +159,13 @@ func (site *siteMap) browseTool(ctx context.Context, catalog *Catalog, args map[
 	result["total"] = total
 	// Shed list items from the end until the answer fits the budget.
 	for {
-		result["items"] = items
+		result[listKey] = items
 		result["returned_count"] = len(items)
 		delete(result, "next_offset")
 		if offset+len(items) < total {
 			result["next_offset"] = offset + len(items)
 		}
-		if len(jsonText(result)) <= budget*3 {
+		if len(jsonText(result)) <= budget*3 && (len(items) > 0 || offset >= total) {
 			break
 		}
 		if len(items) == 0 {

@@ -30,10 +30,10 @@ func fillCompactFixture(t *testing.T, db *sql.DB) {
 	execTx(t, db,
 		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w1','claude','local','w1','One','x')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,origin) VALUES('c1','w1','claude','local','c1','/a/c1.jsonl')`,
-		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<300)
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<12)
 		 INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) SELECT 'm'||i,'c1','n'||i,'user','message','words '||hex(randomblob(200)),'h'||i FROM n`,
 		`DELETE FROM messages WHERE rowid%3=0`,
-		`CREATE TABLE filler(b)`, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200) INSERT INTO filler SELECT randomblob(4000) FROM n`, `DROP TABLE filler`)
+		`CREATE TABLE filler(b)`, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<16) INSERT INTO filler SELECT randomblob(4000) FROM n`, `DROP TABLE filler`)
 }
 
 func compactPragma(t *testing.T, path, pragma string) int64 {
@@ -79,7 +79,7 @@ func TestCompactLibraryGivesFreeSpaceBackAndKeepsEveryRow(t *testing.T) {
 	path := config.CatalogPath
 	rowids := messageRowids(t, path)
 	free := compactPragma(t, path, "freelist_count")
-	if free < 200 || len(rowids) != 200 {
+	if free < 16 || len(rowids) != 8 {
 		t.Fatalf("fixture: %d free pages, %d messages", free, len(rowids))
 	}
 	phases := []string{}
@@ -210,30 +210,35 @@ func TestCompactLibraryLeavesTheCatalogWhenItCannotFinish(t *testing.T) {
 		unchanged(t, config, free)
 	})
 	t.Run("stopped while writing the copy", func(t *testing.T) {
-		// Enough kept data that the copy is still being written when its
-		// size is first polled: the first report is the step's start, the
-		// next the poll's.
-		catalog, config := testCatalog(t)
-		execTx(t, catalog.DB, `CREATE TABLE kept(b)`, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<15000) INSERT INTO kept SELECT randomblob(4000) FROM n`)
-		fillCompactFixture(t, catalog.DB)
-		catalog.Close()
+		config := compactFixture(t)
 		free := compactPragma(t, config.CatalogPath, "freelist_count")
-		override(t, &compactProgressEvery, 100*time.Microsecond)
-		ctx, cancel := context.WithCancel(t.Context())
-		reports, interrupted := 0, false
-		_, err := CompactLibrary(ctx, config, func(phase string, done, total int64) {
-			if phase == "Writing the compacted catalog" {
-				if reports++; reports == 2 {
-					interrupted = true
-					cancel()
+		override(t, &compactProgressEvery, time.Millisecond)
+		override(t, &compactVacuum, func(ctx context.Context, _ *sql.DB, staging string) error {
+			// Hold both files a VACUUM can leave until a real size report
+			// cancels the operation. The small successful test runs SQLite's
+			// actual VACUUM; this case checks cancellation and cleanup.
+			for _, path := range []string{staging, staging + "-journal"} {
+				if err := os.WriteFile(path, []byte("partial copy"), 0o600); err != nil {
+					return err
 				}
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		interrupted := false
+		_, err := CompactLibrary(ctx, config, func(phase string, done, total int64) {
+			if phase == "Writing the compacted catalog" && done > 0 {
+				interrupted = true
+				cancel()
 			}
 		})
 		if !interrupted {
-			t.Fatal("the copy finished before its size was polled; enlarge the fixture")
+			t.Fatal("the partial copy was not reported")
 		}
-		if err == nil {
-			t.Fatal("a stopped compaction succeeded")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("a stopped compaction returned %v", err)
 		}
 		unchanged(t, config, free)
 	})

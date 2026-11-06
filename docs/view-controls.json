@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "0.9.9",
+      "version": "1.0.0",
       "status": "reviewed",
-      "reason": "Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed Query Table 1.0.0: all server transport operations use V3; native fit screen/content replaces fitToScreen. Grouping, filters, sorting, pagination, saved queries, item properties and JSON inspection remain owned by native query state. Native itemDetails.jsonInspections owns JSON search, mode, path sets, buckets, paging and selected match state in query URLs/Save/Share. The host returns the direct native renderer and registers semantic reveal. Table-cell display JSON and highlight-only/multiple semantic targets still require upstream APIs; see docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -30,6 +30,10 @@
     {
       "file": "web/src/card-library.tsx",
       "field": "card_window"
+    },
+    {
+      "file": "web/src/habits-chart-inspection.tsx",
+      "field": "chart_pins"
     },
     {
       "file": "web/src/usage-chart.tsx",
@@ -58,6 +62,10 @@
     {
       "file": "web/src/delegation.tsx",
       "field": "delegation_page"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "delegation_scope"
     },
     {
       "file": "web/src/delegation.tsx",
@@ -130,6 +138,30 @@
     {
       "file": "web/src/findings.tsx",
       "field": "findings_rank"
+    },
+    {
+      "file": "web/src/fixes.tsx",
+      "field": "fixes_hidden"
+    },
+    {
+      "file": "web/src/fixes.tsx",
+      "field": "fixes_item"
+    },
+    {
+      "file": "web/src/fixes.tsx",
+      "field": "fixes_kind"
+    },
+    {
+      "file": "web/src/fixes.tsx",
+      "field": "fixes_list"
+    },
+    {
+      "file": "web/src/fixes.tsx",
+      "field": "fixes_place"
+    },
+    {
+      "file": "web/src/fixes.tsx",
+      "field": "fixes_rank"
     },
     {
       "file": "web/src/data-taxonomy.tsx",
@@ -248,8 +280,16 @@
       "field": "query_layout"
     },
     {
+      "file": "web/src/sync-tables.tsx",
+      "field": "query_layout"
+    },
+    {
       "file": "internal/archive/assets/ui.py",
       "field": "reader_content"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
+      "field": "reader_event_link"
     },
     {
       "file": "internal/archive/assets/ui.py",
@@ -318,6 +358,14 @@
     {
       "file": "web/src/timeline-columns.tsx",
       "field": "timeline_columns"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_idle"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_visibility"
     }
   ],
   "controls": [
@@ -2271,15 +2319,13 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
-      "key": "html:6451dc20ca7284f0:0",
+      "key": "html:305cae4f2d4663e4:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
-      "tag": "details",
-      "control": "<details class=\"sync-separate\" data-view-key=\"sync:separate\" data-view-field=\"disclosures\">",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
+      "tag": "button",
+      "control": "<button id=\"fingerprintEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"fingerprintEventsTitle\" aria-describedby=\"fingerprintEventsDescription\" aria-checked=\"true\">",
+      "contract": "settings",
+      "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
     },
     {
       "key": "html:6f2936f3f335b6b5:0",
@@ -2379,16 +2425,6 @@
       "control": "<button id=\"quickStatsReset\" type=\"button\">",
       "contract": "settings",
       "reason": "Resets saved Quick Stats layout preferences; a settings action."
-    },
-    {
-      "key": "html:ffbaafa6f1041afb:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "summary",
-      "control": "<summary>",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Summary of sync:separate, bound to the shared disclosures map."
     },
     {
       "key": "html:02b02da5220640ae:0",
@@ -2945,6 +2981,25 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "60980fd60c4b63b2:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "attachMessageRaw",
+      "tag": "button",
+      "control": "'button', 'message-raw-button', icon('code')",
+      "contract": "reader",
+      "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
+    },
+    {
+      "key": "646b5551286d46a0:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "attachMessageRaw",
+      "tag": "aria-expanded",
+      "control": "button",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
+    },
+    {
       "key": "b9d31ba372bfa501:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "closePreview",
@@ -2998,6 +3053,15 @@
       "control": "'button', 'copy-value'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "0f1d2d3f55722167:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "decorateEventLinks",
+      "tag": "button",
+      "control": "'button', `event-link-n ${side==='target'?'is-target':'is-observation'} ${eventGroupClass(link.group)}`, String(link.n)",
+      "contract": "reader",
+      "reason": "An agent event's inline number reveals the other end of its pair and selects it; the selection is the reader_event_link field (bindEventLinks writes and restores it through window.pharosView). Reveal scrolls and highlights without moving keyboard focus."
     },
     {
       "key": "02fdb8dab79aa534:0",
@@ -3142,25 +3206,6 @@
       "owner": "mount",
       "tag": "select",
       "control": "'select', 'conversation-selector'",
-      "contract": "action",
-      "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
-    },
-    {
-      "key": "0f8141ea4b1c2254:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "narrativeEvent",
-      "tag": "aria-expanded",
-      "control": "button",
-      "disclosure": true,
-      "contract": "reader",
-      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
-    },
-    {
-      "key": "31ea544c956cc4d8:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "narrativeEvent",
-      "tag": "button",
-      "control": "'button', 'message-raw-button', icon('code')",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },
@@ -3900,15 +3945,6 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "f4e749782d73a9dc:0",
-      "file": "web/src/authored.tsx",
-      "owner": "MessageMix",
-      "tag": "button",
-      "control": "onClick={() => toggle(category.key)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
       "key": "2b58573583bda488:0",
       "file": "web/src/authored.tsx",
       "owner": "SpanTip",
@@ -4072,7 +4108,7 @@
       "control": "aria-label={name} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
       "disclosure": true,
       "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard owner and are persisted as analyze_chart.selection; opening or navigating the menu is not a durable disclosure."
+      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
     },
     {
       "key": "072b3e8bd51c0252:0",
@@ -4081,7 +4117,7 @@
       "tag": "div",
       "control": "id={menuId} aria-label={`Filter ${name}`} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
       "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard owner and are persisted as analyze_chart.selection; opening or navigating the menu is not a durable disclosure."
+      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
     },
     {
       "key": "0f737b763b98a950:0",
@@ -4090,7 +4126,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"toggle\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "1d7ed15ec5b22f13:0",
@@ -4099,7 +4135,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"only\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "dd11cf44075d571a:0",
@@ -4108,7 +4144,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"exclude\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "f1cb74ebedc04532:0",
@@ -4117,7 +4153,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"clear\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "f416fb38a053b52a:0",
@@ -4350,15 +4386,6 @@
       "reason": "Retries loading the selected conversation or resolving the retained turn identity; the retry counter is transient."
     },
     {
-      "key": "19871f71c3d02175:0",
-      "file": "web/src/create-dashboard-card.tsx",
-      "owner": "CreateDashboardCard",
-      "tag": "CardGroupsField",
-      "control": "value={draft.groups} onChange={groups => update({ groups })}",
-      "contract": "editing",
-      "reason": "How many chart groups the new card shows. An unapplied authoring draft saved only with the card, never a dashboard view parameter; the dashboard keeps its own count."
-    },
-    {
       "key": "2da290a1c01e8a10:0",
       "file": "web/src/create-dashboard-card.tsx",
       "owner": "CreateDashboardCard",
@@ -4393,6 +4420,15 @@
       "control": "onClick={() => dialog.current?.close()}",
       "contract": "editing",
       "reason": "Card creation saves the existing canonical dashboard URL as library collection data. Title/description are unapplied authoring drafts; dialog actions and Home navigation are transient actions."
+    },
+    {
+      "key": "4ff498fde464eaf4:0",
+      "file": "web/src/create-dashboard-card.tsx",
+      "owner": "CreateDashboardCard",
+      "tag": "CardGroupsField",
+      "control": "value={draft.groups} onChange={value => { const count = value.trim() ? Number(value) : undefined; update({ groups: value, description: draft.description === dashboardCardDescription(draft.url, draft.target, from.schema, groups) ? dashboardCardDescription(draft.url, draft.target, from.schema, validCardGroups(count) ? count : undefined) : draft.description }); }}",
+      "contract": "editing",
+      "reason": "New card group-count draft; also refreshes the unedited default description. Saved only with the card, while the dashboard retains its own group count."
     },
     {
       "key": "b4d31e6a92c6f43b:0",
@@ -4847,13 +4883,23 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "3fadb452ccf35c80:0",
+      "key": "32e691eb55fa82aa:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
       "tag": "button",
-      "control": "onClick={() => sortColumn(m.id, family)}",
+      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
       "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+      "reason": "Timeline navigation stores explorer, selected session, time range, page and one-level event disclosures in the URL."
+    },
+    {
+      "key": "4f3f7a77f415da74:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "select",
+      "control": "data-view-field=\"delegation_scope\" aria-label=\"Session metric scope\" value={scope} onChange={event => { setScope(event.target.value); resetPage(); }}",
+      "binding": "delegation_scope",
+      "contract": "view.delegation_scope",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "5e44639993755813:0",
@@ -4932,15 +4978,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "c26a1ddf974ec6cc:1",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "cbf5b8d632cafc7c:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -4950,6 +4987,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
+    },
+    {
+      "key": "f3d7994222b73250:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => sortColumn(m.id, scope)}",
+      "contract": "delegation",
+      "reason": "Sorts by delegation_sort and delegation_direction using the visible delegation_scope in hierarchy and ranking."
     },
     {
       "key": "ff29b2efe4cabcbf:0",
@@ -4982,40 +5028,13 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "8de83645e3ca7611:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "select",
-      "control": "aria-label=\"Session comparison metric\" value={`${family}:${spec.id}`} onChange={event => { const [scope, id] = event.target.value.split(\":\"); choose(id, scope); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "8f5f28f1365fa426:0",
+      "key": "91f945dc32916f3b:0",
       "file": "web/src/delegation.tsx",
       "owner": "InboxSessions",
       "tag": "button",
-      "control": "onClick={() => sortColumn(spec.id, family)} aria-label={`Sort ${spec.label}${ranked ? `, currently ${direction === \"desc\" ? \"descending\" : \"ascending\"}` : \"\"}`}",
+      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
       "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "e068e146ae91f3e0:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "e107c41cc7c05263:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={hierarchy}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+      "reason": "Opens the full-width session timeline from the compact navigator, preserving the selected session range and one-level event disclosures in its URL."
     },
     {
       "key": "3531eb64a70fc13d:0",
@@ -5034,6 +5053,16 @@
       "control": "aria-label={`${collapsed.has(n.id) ? \"Expand\" : \"Collapse\"} ${n.label}`} onClick={() => toggle(n)}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "7b1a9d77b035e6c8:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "ParallelActivity",
+      "tag": "TimelineLegend",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "Timeline Key actions update timeline_visibility with useViewState; filtering changes presentation after time attribution and keeps hidden entries available in the Key."
     },
     {
       "key": "7f941cc59b40ccf4:0",
@@ -5147,6 +5176,25 @@
       "control": "onClick={()=>{cancelDrag();change(full);}}",
       "contract": "delegation",
       "reason": "Reset cancels any transient drag and restores the whole canonical timeline range through the existing parent change callback."
+    },
+    {
+      "key": "e55561cdcf8c53a5:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_idle\" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}",
+      "binding": "timeline_idle",
+      "contract": "view.timeline_idle",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "5be3bc0bf7116573:0",
+      "file": "web/src/event-link-overlay.tsx",
+      "owner": "EventLinkCard",
+      "tag": "PageLink",
+      "control": "onClick={event=>{event.stopPropagation();close?.();}}",
+      "contract": "navigation",
+      "reason": "PageLink opens the conversation reader at the event with reader_events and reader_event_link set, through the shared app router."
     },
     {
       "key": "244adf80af72c046:0",
@@ -5564,6 +5612,15 @@
       "reason": "Finding/cart mutations, handoff drafts and menu openness are excluded."
     },
     {
+      "key": "63ee271bd01b7ccf:0",
+      "file": "web/src/findings.tsx",
+      "owner": "ReviewDialog",
+      "tag": "input",
+      "control": "name=\"fixesMode\" checked={mode === \"change\"} onChange={() => setMode(\"change\")}",
+      "contract": "editing",
+      "reason": "Finding/cart mutations, handoff drafts and menu openness are excluded."
+    },
+    {
       "key": "6bd0f767b4f1b2a8:0",
       "file": "web/src/findings.tsx",
       "owner": "ReviewDialog",
@@ -5587,6 +5644,15 @@
       "owner": "ReviewDialog",
       "tag": "input",
       "control": "name=\"findingsHandoff\" checked={handoff === \"pr\"} onChange={() => setHandoff(\"pr\")}",
+      "contract": "editing",
+      "reason": "Finding/cart mutations, handoff drafts and menu openness are excluded."
+    },
+    {
+      "key": "d106a77eb177b43f:0",
+      "file": "web/src/findings.tsx",
+      "owner": "ReviewDialog",
+      "tag": "input",
+      "control": "name=\"fixesMode\" checked={mode === \"propose\"} onChange={() => setMode(\"propose\")}",
       "contract": "editing",
       "reason": "Finding/cart mutations, handoff drafts and menu openness are excluded."
     },
@@ -5629,6 +5695,205 @@
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
     {
+      "key": "95f79986646546a6:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_add\" }, `Added to the prompt for ${card.target_label}.`)}",
+      "contract": "editing",
+      "reason": "Mutates a fix's persistent basket membership or triage state, or opens the transient prompt review; does not alter the current view."
+    },
+    {
+      "key": "9805d9d05563cb04:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
+      "contract": "editing",
+      "reason": "Mutates a fix's persistent basket membership or triage state, or opens the transient prompt review; does not alter the current view."
+    },
+    {
+      "key": "a03137e4715ab6d1:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "button",
+      "control": "data-view-field=\"fixes_item\" onClick={back}",
+      "binding": "fixes_item",
+      "contract": "view.fixes_item",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "b98a2a85156a7d2c:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Acknowledged and closed. You can bring it back at any time.\")}",
+      "contract": "editing",
+      "reason": "Mutates a fix's persistent basket membership or triage state, or opens the transient prompt review; does not alter the current view."
+    },
+    {
+      "key": "c5ab7ae7f878e64a:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_remove\" }, \"Removed from the prompt.\")}",
+      "contract": "editing",
+      "reason": "Mutates a fix's persistent basket membership or triage state, or opens the transient prompt review; does not alter the current view."
+    },
+    {
+      "key": "d011fd4061e221c1:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`fix:${detail.id}:members`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "f7de480e49359e31:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixDetailView",
+      "tag": "button",
+      "control": "onClick={() => onReview(card.cart!.target)}",
+      "contract": "editing",
+      "reason": "Mutates a fix's persistent basket membership or triage state, or opens the transient prompt review; does not alter the current view."
+    },
+    {
+      "key": "13289597cba6f436:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesKindFilter",
+      "tag": "select",
+      "control": "data-view-field=\"fixes_kind\" value={value} onChange={event => onChange(event.target.value)} aria-label=\"Kind of fix\"",
+      "binding": "fixes_kind",
+      "contract": "view.fixes_kind",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "0246202642633f0b:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"fixes:coverage\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "1820567e56bf668b:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"fixes:maybe\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "241bb0c61da68e12:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "FixesKindFilter",
+      "control": "value={kind} onChange={setKind}",
+      "contract": "view.fixes_kind",
+      "reason": "Dashboard view state is bound through useViewState; FixesKindFilter's select carries data-view-field=\"fixes_kind\"."
+    },
+    {
+      "key": "bcbd71f5ddb5c59a:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "button",
+      "control": "data-view-field=\"fixes_list\" onClick={() => setList(state)}",
+      "binding": "fixes_list",
+      "contract": "view.fixes_list",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "d909fb8b57d4d67f:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "button",
+      "control": "data-view-field=\"fixes_hidden\" onClick={() => setShowHidden(!showHidden)}",
+      "binding": "fixes_hidden",
+      "contract": "view.fixes_hidden",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "eef664813e6e0a34:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "OptimizePlaceFilter",
+      "control": "value={where} onChange={setWhere}",
+      "contract": "view.fixes_place",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without saving a preference."
+    },
+    {
+      "key": "fc1adb2aaa010892:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesPage",
+      "tag": "OptimizeRank",
+      "control": "value={rank} onChange={setRank}",
+      "contract": "view.fixes_rank",
+      "reason": "Dashboard view state is bound through useViewState; controls restore from the canonical URL without saving a preference."
+    },
+    {
+      "key": "2a91515b13ac702b:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesSettings",
+      "tag": "select",
+      "control": "id={ids.quiet} value={bounds.quiet_days} onChange={event => void save({ quiet_days: Number(event.target.value) }, \"Saved. Priorities use the new bound.\")}",
+      "contract": "settings",
+      "reason": "Saves library-wide Fixes bounds (finding_settings); they follow the library and are not view state."
+    },
+    {
+      "key": "6dcc1f67952fdf5a:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesSettings",
+      "tag": "select",
+      "control": "id={ids.hide} value={bounds.hide_days} onChange={event => void save({ hide_days: Number(event.target.value) }, \"Saved. Open uses the new bound.\")}",
+      "contract": "settings",
+      "reason": "Saves library-wide Fixes bounds (finding_settings); they follow the library and are not view state."
+    },
+    {
+      "key": "7768c508d84623c2:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesSettings",
+      "tag": "select",
+      "control": "id={ids.minimum} value={bounds.min_work_items} onChange={event => void save({ min_work_items: Number(event.target.value) }, \"Saved. Open uses the new bound.\")}",
+      "contract": "settings",
+      "reason": "Saves library-wide Fixes bounds (finding_settings); they follow the library and are not view state."
+    },
+    {
+      "key": "8a3ac457fd8e93ee:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesSettings",
+      "tag": "button",
+      "control": "onClick={() => void save({ reset: true }, \"Restored the defaults.\")}",
+      "contract": "settings",
+      "reason": "Restores the library-wide Fixes bounds to their defaults."
+    },
+    {
+      "key": "ea9fae7f3e562b13:0",
+      "file": "web/src/fixes.tsx",
+      "owner": "FixesSettings",
+      "tag": "button",
+      "control": "onClick={() => void refresh()}",
+      "contract": "editing",
+      "reason": "Requests an explicit background refresh; does not change view state."
+    },
+    {
+      "key": "6ce0e6095fce172c:0",
+      "file": "web/src/habits-charts.tsx",
+      "owner": "CalendarChart",
+      "tag": "HabitsChartInspection",
+      "control": "onSelect={key => { const day = points.find(point => point.key === key)?.selection; if (day && \"day\" in day) onSelect?.(day.day === selected ? \"\" : day.day); }}",
+      "contract": "view.habits_day",
+      "reason": "Calendar inspection pins the mark through HabitsChartInspection (chart_pins) and selects the vacation-day controls through the habits_day binding."
+    },
+    {
       "key": "09297a595a9c5edc:0",
       "file": "web/src/habits.tsx",
       "owner": "DayDetail",
@@ -5648,67 +5913,67 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "782e951cbf10c182:0",
+      "key": "00c6447476393db3:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "HabitsSettingsPanel",
-      "control": "onChange={update}",
-      "contract": "settings",
-      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
-    },
-    {
-      "key": "807c26364addf6f8:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "CalendarChart",
       "control": "onSelect={setSelected}",
       "contract": "view.habits_day",
       "reason": "Selects or clears the calendar day through habits_day."
     },
     {
-      "key": "a2a903535d89bfce:0",
+      "key": "26e0848933ff750e:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={calendar} onChange={setCalendar}",
-      "contract": "view.habits_calendar",
-      "reason": "Writes habits_calendar through useViewState."
-    },
-    {
-      "key": "afce7374875b6312:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={mode} onChange={setMode}",
-      "contract": "view.habits_streak",
-      "reason": "Writes habits_streak through useViewState."
-    },
-    {
-      "key": "bb9fd842bddd5bee:0",
-      "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
       "tag": "DayDetail",
       "control": "onSelect={setSelected} onVacation={() => day && update(toggleVacation(settings, day.day))}",
       "contract": "view.habits_day",
       "reason": "Selects the calendar day through habits_day; its vacation switch saves to the habit settings (pharos-habits-v1), not the view."
     },
     {
-      "key": "d73e684db4c89234:0",
+      "key": "384e3fe78886bc91:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
-      "tag": "ChartSelect",
-      "control": "value={weeks} onChange={setWeeks}",
-      "contract": "view.habits_weeks",
-      "reason": "Writes habits_weeks through useViewState."
+      "owner": "HabitsPanels",
+      "tag": "HabitsSettingsPanel",
+      "control": "onChange={update}",
+      "contract": "settings",
+      "reason": "Habit settings (pharos-habits-v1 in the library's preferences): which days count, the engaged gap, the day's start and late hour, and vacation days. Explicitly excluded from content view URLs."
     },
     {
-      "key": "dc058267a3b501a8:0",
+      "key": "399a2db4800b62d7:0",
       "file": "web/src/habits.tsx",
-      "owner": "HabitsPanel",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={calendar} onChange={setCalendar}",
+      "contract": "view.habits_calendar",
+      "reason": "Writes habits_calendar through useViewState."
+    },
+    {
+      "key": "62c663a43b279ae5:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
       "tag": "ChartSelect",
       "control": "value={weekends} onChange={setWeekends}",
       "contract": "view.habits_weekends",
       "reason": "Writes habits_weekends through useViewState."
+    },
+    {
+      "key": "a998566b759387ca:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={mode} onChange={setMode}",
+      "contract": "view.habits_streak",
+      "reason": "Writes habits_streak through useViewState."
+    },
+    {
+      "key": "d58768ff4d085138:0",
+      "file": "web/src/habits.tsx",
+      "owner": "HabitsPanels",
+      "tag": "ChartSelect",
+      "control": "value={weeks} onChange={setWeeks}",
+      "contract": "view.habits_weeks",
+      "reason": "Writes habits_weeks through useViewState."
     },
     {
       "key": "7d1a49d4d82e3d7d:0",
@@ -5782,7 +6047,7 @@
       "tag": "ChartSelect",
       "control": "value={String(days)} onChange={onDays}",
       "contract": "view.habits_shape_days",
-      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanel's useViewState binding."
+      "reason": "Writes habits_shape_days through the WorkdayShape selector and HabitsPanels' useViewState binding."
     },
     {
       "key": "0cc6b34321064cd2:0",
@@ -5873,6 +6138,15 @@
       "control": "onClick={event => { event.stopPropagation(); if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); void openConversation(id); }}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+    },
+    {
+      "key": "8700ea3e9c1ad4d9:0",
+      "file": "web/src/index.tsx",
+      "owner": "<module>",
+      "tag": "a",
+      "control": "onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(fixDetailURL(String(api.rowId(row)), new URL(location.href))); }}",
+      "contract": "view.fixes_item",
+      "reason": "Opens the fix by its stable item ID while retaining the source Fixes table query and route."
     },
     {
       "key": "9a9feb71ff48ebab:0",
@@ -5967,15 +6241,6 @@
       "owner": "FindMatchCell",
       "tag": "button",
       "control": "onClick={event => { event.stopPropagation(); openFindHit(hit); }}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "e89e5712f064fcca:0",
-      "file": "web/src/index.tsx",
-      "owner": "HumanUsageDashboard",
-      "tag": "MessageMix",
-      "control": "onFilter={onFilter}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
@@ -6108,13 +6373,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "4af7943147f725a8:0",
+      "key": "2ae56d618fbd40b1:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "button",
-      "control": "onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}",
+      "control": "onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}",
       "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
       "key": "4fe03021c57d9fcb:0",
@@ -6135,13 +6400,13 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "cc9d50ef6a6ff735:0",
+      "key": "9765fd6b72a02f3c:0",
       "file": "web/src/index.tsx",
       "owner": "QuerySurface",
       "tag": "MetricsPanel",
-      "control": "onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}",
+      "control": "onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }}",
       "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
+      "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
       "key": "6d045847d0c95152:0",
@@ -6189,6 +6454,33 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "324f4dc732c26954:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "CompactFingerprint",
+      "tag": "g",
+      "control": "aria-label={`Ribbon segment ${i+1}, ${ribbonMessageTitle(first,last,conversation.messages.length)}, extra overlapping branches ${token.parallelism}`} onFocus={event=>inspector.show(event.currentTarget,segmentCard(i))} onBlur={inspector.leave} onKeyDown={event=>{if(!['Enter',' '].includes(event.key))return;event.preventDefault();event.stopPropagation();inspector.pin(event.currentTarget,segmentCard(i,true),undefined,true);}}",
+      "contract": "transient",
+      "reason": "Keyboard pinning opens transient fingerprint inspection without changing the URL; the source message is revealed only through its navigation link."
+    },
+    {
+      "key": "913a5acc7dd39995:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "CompactFingerprint",
+      "tag": "g",
+      "control": "aria-label={`${placed.length} agent events. Arrow keys browse events; Enter pins details.`} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown}",
+      "contract": "transient",
+      "reason": "One tab stop for the fingerprint's agent events, through the ribbons' shared useRibbonPointer: arrow keys browse events, Enter pins the card with its link focused. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
+    },
+    {
+      "key": "890267854bf30643:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "SegmentCard",
+      "tag": "PageLink",
+      "control": "onClick={event=>{event.stopPropagation();close();}}",
+      "contract": "action",
+      "reason": "Navigate to the pinned fingerprint source using the canonical conversation, message, session and reveal parameters; closing the popover is transient."
+    },
+    {
       "key": "3a87ee725d738e75:0",
       "file": "web/src/label-ribbon-inspector.tsx",
       "owner": "useRibbonInspector",
@@ -6196,15 +6488,6 @@
       "control": "id={id} onPointerDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()} aria-label={card.pinned?'Ribbon segment details':undefined} onPointerEnter={keep} onPointerLeave={leave}",
       "contract": "transient",
       "reason": "The inspection popup owns only hover, focus and click-pinning. Its event boundary prevents source links from starting a brush or activating the containing row."
-    },
-    {
-      "key": "0a29a56c9ed06f02:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "RecursiveRibbonRow",
-      "tag": "button",
-      "control": "aria-label={`Open session ${fullName}`} onClick={event=>{event.preventDefault();event.stopPropagation();props.openSession?.();}}",
-      "contract": "delegation",
-      "reason": "Session identity opens or switches the canonical conversation and delegation_session via openNode, independently of the ViewDisclosure event tree. The outline is displayed on its metadata line; the accessible name retains the complete identity. Remains available in sidebar preview."
     },
     {
       "key": "487e42bdd4ef7739:0",
@@ -6218,23 +6501,14 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "8d7caea92cf9866c:0",
+      "key": "743453f66bfd77ad:0",
       "file": "web/src/label-session-ribbon.tsx",
       "owner": "RecursiveRibbonRow",
       "tag": "button",
-      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
+      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
       "binding": "delegation_event",
       "contract": "view.delegation_event",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "8a6e83114ee8f74f:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "SessionRibbon",
-      "tag": "svg",
-      "control": "aria-label={!disabled&&sourceHref&&node.children.length?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} onFocus={event=>{if(disabled)return;const item=candidates[cursor.current]??candidates[0];if(item)inspector.show(event.currentTarget,<ObservationCard items={[item]}/>);}} onBlur={inspector.leave} onKeyDown={event=>{if(disabled||!sourceHref||!['ArrowLeft','ArrowRight','Enter',' '].includes(event.key)||!candidates.length)return;event.preventDefault();event.stopPropagation();if(event.key==='ArrowLeft'||event.key==='ArrowRight'){cursor.current=(cursor.current+(event.key==='ArrowLeft'?-1:1)+candidates.length)%candidates.length;inspector.close();inspector.show(event.currentTarget,<ObservationCard items={[candidates[cursor.current]]}/>);}else pin(event.currentTarget,[candidates[cursor.current]??candidates[0]],undefined,true);}} onClick={event=>{if(disabled||!sourceHref)return;const hits=hitsAt(event);if(!hits.length)return;event.preventDefault();event.stopPropagation();pin(event.currentTarget,hits,event.clientX);}} onPointerMove={event=>{if(disabled)return;if(preview){inspector.close();return;}const hits=hitsAt(event);if(hits.length)inspector.show(event.currentTarget,<ObservationCard items={hits}/>,event.clientX);else inspector.leave();}}",
-      "contract": "transient",
-      "reason": "Pointer and keyboard segment inspection pins transient content in the full timeline; preview ribbons disable editing and inspection. Source links use the canonical message/call route."
     },
     {
       "key": "0af056f356d1207b:0",
@@ -6388,6 +6662,87 @@
       "reason": "Shared presentational control delegates to audited caller bindings: findings_rank, safety_rank, safety_place, or Efficiency native repo. All are canonical view inputs; no state is excluded."
     },
     {
+      "key": "f9fbb5852207ff40:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeCard",
+      "tag": "input",
+      "control": "checked={all} onChange={toggle} aria-label={label}",
+      "contract": "editing",
+      "reason": "Selects every item a card summarizes (a risky action check's notices, or one fix) for the shared selection actions; a selection is a draft for an action, like the table's row checkboxes, not a view input."
+    },
+    {
+      "key": "41f89a8a74776ca3:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeCart",
+      "tag": "button",
+      "control": "onClick={() => onReview(place.group)}",
+      "contract": "editing",
+      "reason": "Opens the transient prompt-review dialog for one place's basket before a handoff; the dialog is an action, not view state."
+    },
+    {
+      "key": "34ac5e76cb3c5153:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeCartItem",
+      "tag": "input",
+      "control": "checked={all} onChange={event => onTick(event.target.checked)}",
+      "contract": "editing",
+      "reason": "Edits a prompt basket (tick or remove an entry); prompt contents are drafts for a handoff, not view state."
+    },
+    {
+      "key": "a7087ab79ed1b9c8:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeCartItem",
+      "tag": "button",
+      "control": "aria-label={`Remove “${entry.title}” from this prompt`} onClick={onRemove}",
+      "contract": "editing",
+      "reason": "Edits a prompt basket (tick or remove an entry); prompt contents are drafts for a handoff, not view state."
+    },
+    {
+      "key": "1d1dd3bd459e9254:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeSelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void setState(\"restore\")}",
+      "contract": "editing",
+      "reason": "Applies an action to the selected notices or fixes (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "6939ff0c0103572c:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeSelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void review(item)}",
+      "contract": "editing",
+      "reason": "Applies an action to the selected notices or fixes (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "9aa7f983ffd5b2ee:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeSelectionBar",
+      "tag": "button",
+      "control": "onClick={copyPrompts}",
+      "contract": "editing",
+      "reason": "Applies an action to the selected notices or fixes (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "b6268391ae52c82b:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeSelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void setState(\"dismiss\")}",
+      "contract": "editing",
+      "reason": "Applies an action to the selected notices or fixes (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
+      "key": "e5718f40851f5d19:0",
+      "file": "web/src/optimize-shared.tsx",
+      "owner": "OptimizeSelectionBar",
+      "tag": "button",
+      "control": "onClick={() => void addToPrompts()}",
+      "contract": "editing",
+      "reason": "Applies an action to the selected notices or fixes (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
+    },
+    {
       "key": "2ea640480a8d3ed2:0",
       "file": "web/src/page-find.ts",
       "owner": "button",
@@ -6404,6 +6759,35 @@
       "control": "\"input\"",
       "contract": "view.find",
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
+      "key": "26f74b7cb0ed5e94:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"tokens.pricing-prompt\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "352f14ea9b260a3e:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "button",
+      "control": "onClick={() => void copyPrompt()}",
+      "contract": "action",
+      "reason": "Copies the generated pricing research prompt to the clipboard; does not change the content view or dismiss missing prices."
+    },
+    {
+      "key": "5613c684de087e62:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "textarea",
+      "control": "aria-label=\"Pricing refresh prompt\" value={pricing?.prompt ?? \"\"}",
+      "contract": "action",
+      "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
     },
     {
       "key": "502369976da84683:0",
@@ -6715,42 +7099,6 @@
       "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
     },
     {
-      "key": "8bf20d550a1a6e6b:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyCartCheck",
-      "tag": "input",
-      "control": "checked={all} onChange={event => onTick(event.target.checked)}",
-      "contract": "editing",
-      "reason": "Edits a risky action prompt basket (tick or remove every notice of one check); prompt contents are drafts for a handoff, not view state."
-    },
-    {
-      "key": "de7008472f395b64:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyCartCheck",
-      "tag": "button",
-      "control": "aria-label={`Remove “${check.title}” from this prompt`} onClick={onRemove}",
-      "contract": "editing",
-      "reason": "Edits a risky action prompt basket (tick or remove every notice of one check); prompt contents are drafts for a handoff, not view state."
-    },
-    {
-      "key": "4f0dde3a0577c82f:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyCheckCard",
-      "tag": "input",
-      "control": "checked={all} onChange={toggle} aria-label={`Select ${single ? \"the notice\" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`}",
-      "contract": "editing",
-      "reason": "Selects every notice a check card summarizes for the shared selection actions; a selection is a draft for an action, like the table's row checkboxes, not a view input."
-    },
-    {
-      "key": "06597ccc36d04224:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetyCheckCart",
-      "tag": "button",
-      "control": "onClick={() => onReview(group)}",
-      "contract": "editing",
-      "reason": "Opens the transient prompt-review dialog for one location's basket before a handoff; the dialog is an action, not view state."
-    },
-    {
       "key": "0b02d959799fef64:0",
       "file": "web/src/safety.tsx",
       "owner": "SafetyPage",
@@ -6809,51 +7157,6 @@
       "binding": "safety_list",
       "contract": "view.safety_list",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "28f05988e477e05e:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetySelectionBar",
-      "tag": "button",
-      "control": "onClick={copyPrompts}",
-      "contract": "editing",
-      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
-    },
-    {
-      "key": "432b22e7a189ce67:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetySelectionBar",
-      "tag": "button",
-      "control": "onClick={() => void review(item)}",
-      "contract": "editing",
-      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
-    },
-    {
-      "key": "c241e84a6ffc92c0:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetySelectionBar",
-      "tag": "button",
-      "control": "onClick={() => void setState(\"restore\")}",
-      "contract": "editing",
-      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
-    },
-    {
-      "key": "e5dea662dbe25224:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetySelectionBar",
-      "tag": "button",
-      "control": "onClick={() => void addToPrompts()}",
-      "contract": "editing",
-      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
-    },
-    {
-      "key": "fb34228103ff9d11:0",
-      "file": "web/src/safety.tsx",
-      "owner": "SafetySelectionBar",
-      "tag": "button",
-      "control": "onClick={() => void setState(\"dismiss\")}",
-      "contract": "editing",
-      "reason": "Applies a notice action to the table or check-card selection (dismiss, bring back, add to or copy a prompt); this is action state, not a view filter."
     },
     {
       "key": "2cdbc38b92746f90:0",
@@ -7127,6 +7430,15 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
+      "key": "99295ff8758bf7a1:0",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionIdentity",
+      "tag": "button",
+      "control": "aria-label={`Open session ${[outline, name].filter(Boolean).join(\" · \")}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "contract": "delegation",
+      "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
+    },
+    {
       "key": "85efc2b35d82ffac:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "Diagnostics",
@@ -7163,8 +7475,8 @@
       "owner": "SyncQueryTable",
       "tag": "MetricsPanel",
       "control": "onInspect={(bucket, clause) => { const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
       "key": "74c21543f498bd83:0",
@@ -7172,17 +7484,39 @@
       "owner": "SyncQueryTable",
       "tag": "DataTable",
       "control": "onQueryChange={api.setQuery}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
     },
     {
-      "key": "cf14e4c3c5c1cee0:0",
+      "key": "98a927a3547e1c1f:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "SyncQueryTable",
       "tag": "QueryBuilder",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "control": "onCollapsedChange={setCollapsed}",
+      "contract": "native-query",
+      "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
+    },
+    {
+      "key": "71595d876aafc489:0",
+      "file": "web/src/sync-tables.tsx",
+      "owner": "SyncTables",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"sync:history\" defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "b2abf8395c453635:0",
+      "file": "web/src/sync-tables.tsx",
+      "owner": "SyncTables",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"sync:sources\" defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "7c0248af1a26259f:0",
@@ -7617,15 +7951,6 @@
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
     },
     {
-      "key": "59b4e8b59a53da9e:0",
-      "file": "web/src/thinking-dashboard.tsx",
-      "owner": "ThinkingDashboard",
-      "tag": "ChartSelect",
-      "control": "value={state.groupBy} onChange={(groupBy) => change({ groupBy: groupBy as ThinkingState[\"groupBy\"] }) }",
-      "contract": "view.thinking",
-      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
-    },
-    {
       "key": "5d6904418ef58251:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -7709,6 +8034,15 @@
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
     },
     {
+      "key": "bd85a04f4d5b42a4:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={!detail && state.groupBy === \"none\" ? \"model\" : state.groupBy} onChange={(groupBy) => change({ groupBy: groupBy as ThinkingState[\"groupBy\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Breakdown on Waiting and Thinking writes thinking.groupBy through the shared useViewState binding; legacy none displays Waiting’s effective model default."
+    },
+    {
       "key": "c64385755bdd4887:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -7734,6 +8068,17 @@
       "control": "onClick={() => setRefresh((n) => n + 1)}",
       "contract": "editing",
       "reason": "Refresh retries a read without changing the applied view."
+    },
+    {
+      "key": "ff2a2d2e22b3d073:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:compaction-waits\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "d6018b26f8871d02:0",
@@ -8270,6 +8615,16 @@
       "disclosure": true,
       "contract": "view.sidebar_visible",
       "reason": "Workspace session pane visibility uses the shared sidebar_visible URL field."
+    },
+    {
+      "key": "12e75abb01435e45:0",
+      "file": "web/src/workspace-inbox.ts",
+      "owner": "update",
+      "tag": "aria-expanded",
+      "control": "close",
+      "disclosure": true,
+      "contract": "view.sidebar_visible",
+      "reason": "The sessions sidebar collapse control writes the shared sidebar_visible URL field, paired with the reopen control."
     },
     {
       "key": "d91066140391c046:0",

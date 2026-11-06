@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
@@ -49,7 +50,8 @@ const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
-  message_labels:[],
+  people_message_labels:[], message_labels:[],
+  compactions: [idea("compactions", "triggers", "Compare", "Compactions by trigger and service", "Recorded boundary events by trigger and service", ["trigger", "provider"], [count("idea_compactions", "Compactions")])],
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
   tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
@@ -130,7 +132,7 @@ export function queryIdeaPatch(idea: QueryIdea) {
   const patch = usageTablePresetPatch(idea);
   return { ...patch, id: idea.id, owns: [...patch.owns, "metrics" as const], query: { ...patch.query, aggregations: idea.metrics ?? [] } };
 }
-export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return { ...applyPatch(query, queryIdeaPatch(idea)), fitToScreen: true }; }
+export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return fitQueryToScreen(applyPatch(query, queryIdeaPatch(idea))); }
 export function queryIdeaMatches(query: QueryState, idea: QueryIdea): boolean {
   return Boolean(query.grouping && matchPatch({ ...query, where: [] }, { ...queryIdeaPatch(idea), owns: ["grouping"] }).status === "active");
 }

@@ -3,13 +3,17 @@ import carbonFactors from "../../carbon/co2_factors.json";
 import { defaultConcurrencySettings, concurrencyRangePresets } from "./concurrency-settings";
 import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-search-model";
 import { safetyRanks } from "./safety-dashboard-model";
+import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import {validTimelineVisibility} from "./timeline-visibility";
+import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
 export type ViewField = { param: string; pages: string[]; kind: "text" | "boolean" | "enum" | "json" | "strings"; description: string; values?: readonly string[]; default?: unknown; details?: Record<string,unknown>; captureEntries?: boolean };
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
   label_results: field("label_results",["analyze/query/message_labels"],"enum","Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.",["cards","table"],"cards"),
+  timeline_visibility: field("timeline_visibility",["work"],"json","Timeline Key visibility by section: modes (message label IDs, including ? for uncategorized), events (friction, learning, second-look, choices), tools (action categories or error), origins (caller text source IDs). Each optional section is {values:string[],excluded:boolean}; absent or empty values shows everything in that section. Selections only hide visualization elements, preserving the clock and underlying records.",undefined,{}),
   timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
   reader_view: field("reader_view",["work"],"enum","Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.",["conversation","timeline"],"conversation"),
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
@@ -20,19 +24,19 @@ export const viewFields: Record<string, ViewField> = {
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["compactions","model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety","fixes"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
   guide_entity: field("guide_entity", ["*"], "enum", "Selected Data Guide entity.", ["workspaces","conversations","agents","messages","tool_calls"]),
   guide_example: field("guide_example", ["*"], "enum", "Selected example conversation.", ["implementation","review"]),
   overlay: field("overlay", ["*"], "enum", "Open read-only header content.", ["none","history","bookmarks","usage","drive"]),
-  window_mode: field("window_mode", ["library","analyze/query/*","findings/table","findings/safety/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
-  window_days: field("window_days", ["library","analyze/query/*","findings/table","findings/safety/table"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
-  window_field: field("window_field", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Lower-bound timestamp field; preserve with the query."),
-  window_until_field: field("window_until_field", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Upper-bound timestamp field for interval overlap."),
-  window_dataset: field("window_dataset", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Dataset owning the time intent."),
-  window_timezone: field("window_timezone", ["library","analyze/query/*","findings/table","findings/safety/table"], "text", "Pinned IANA timezone for Today. Omit to follow the viewer."),
+  window_mode: field("window_mode", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "enum", "Native time intent companion for full queries.", ["relative","calendar","today"]),
+  window_days: field("window_days", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "enum", "Native time-window size.", ["1","7","30","90","180","365"]),
+  window_field: field("window_field", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Lower-bound timestamp field; preserve with the query."),
+  window_until_field: field("window_until_field", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Upper-bound timestamp field for interval overlap."),
+  window_dataset: field("window_dataset", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Dataset owning the time intent."),
+  window_timezone: field("window_timezone", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table"], "text", "Pinned IANA timezone for Today. Omit to follow the viewer."),
   query_dashboard_chart: field("analyze_chart", ["analyze/query/*"], "json", "Retained dashboard chart used when returning from its source query."),
   query_dashboard_filters: field("analyze_filters", ["analyze/query/*"], "text", "Retained dashboard population as a native query token."),
   query_dashboard_window: field("analyze_window", ["analyze/query/*"], "enum", "Retained moving dashboard time intent.", ["today"]),
@@ -41,33 +45,42 @@ export const viewFields: Record<string, ViewField> = {
   query_days: field("analyze_days", ["analyze/query/*"], "enum", "Retained dashboard window, in elapsed days.", ["1","7","30","90","180","365"]),
   query_report: field("analyze_report", ["analyze/query/*"], "text", "Retained analysis report identity."),
   query_search: field("analyze_search", ["analyze/query/*"], "enum", "Retained search-entry route hint.", ["1"]),
-  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table"], "json", "Query builder collapsed state by dataset ID."),
+  query_layout: field("query_layout", ["library","analyze/query/*","findings/table","findings/safety/table","findings/fixes/table","settings/sync"], "json", "Query builder collapsed state by dataset or background table schema ID."),
   reader_content: field("reader_content", ["work","library"], "json", "Expanded prose, turn summaries, file paths, action previews and deliberately loaded events by stable message/conversation identity."),
   search_cards: field("search_cards", ["library"], "json", "Conversation-result presentation keyed by work ID/browse, work ID/conversation, work ID/turn and work ID/message; browse is boolean, conversation is a stable session ID, turn is a stable message or outline entry ID, and message is the normalized message (native ID) a Search match opened within that turn."),
-  chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart title. Hover is transient."),
+  chart_pins: field("chart_pins", ["analyze/*"], "json", "Pinned chart bucket keys by chart identity (dashboard title or Habits section and automation identity). Hover is transient."),
   conveyor_paused: field("conveyor_paused", ["home"], "boolean", "Pause the Home suggestion carousel."),
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
   card_filters: field("card_filters", ["cards"], "boolean", "Show the card filters.", undefined, false),
   findings_rank: field("findings_rank", ["findings", "findings/table"], "enum", "Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.", ["", "usd", "tokens", "minutes", "failures"]),
-  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate, in separate prompts.", ["efficiency", "safety"], "efficiency"),
+  optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate; Fixes lists recurring agent problems a change to guidance, environment, tools or docs could prevent. Each has its own prompts.", ["efficiency", "safety", "fixes"], "efficiency"),
+  fixes_list: field("fixes_list", ["findings/fixes"], "enum", "Fix lifecycle. Copying a prompt moves selected fixes to handed_off, and one that recurs afterwards opens again; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
+  fixes_place: field("fixes_place", ["findings/fixes"], "text", "Filter fixes by where their prompt goes: global (the shared setup) or a stable repository target.", undefined, ""),
+  fixes_kind: field("fixes_kind", ["findings/fixes"], "enum", "Filter fixes by kind of fix; empty shows every kind.", ["", ...fixesKinds], ""),
+  fixes_rank: field("fixes_rank", ["findings/fixes"], "enum", "Order fix cards by priority (work items weighted down once quiet past the settings' bound, plus agent time lost), work items, latest occurrence, time lost, or repositories spanned.", fixesRanks, "priority"),
+  fixes_hidden: field("fixes_hidden", ["findings/fixes"], "boolean", "Also list open fixes the settings' bounds hide (quiet too long, or too few work items), marked as hidden. Default off.", undefined, false),
+  fixes_item: field("fixes_item", ["findings/fixes", "findings/fixes/table"], "text", "Open one fix by stable ID: its quotes with reader links, where the fix belongs, guidance matches and status.", undefined, ""),
   safety_list: field("safety_list", ["findings/safety"], "enum", "Risky action notice lifecycle. Copying a prompt moves selected notices to handed_off; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
   safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
   safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
   safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
+  delegation_scope: field("delegation_scope", ["work"], "enum", "Session metric scope in the hierarchy and ranking: self or self plus all children.", ["all", "self"], "all"),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
   delegation_tint: field("delegation_tint", ["work"], "enum", "Tint session metric cells.", ["all", "sort", "off"]),
   delegation_expanded: field("delegation_expanded", ["work"], "strings", "Session IDs with detailed parallel lanes expanded."),
   delegation_event: field("delegation_event", ["work"], "text", "Selected parallel-lane event ID."),
+  timeline_idle: field("timeline_idle", ["work"], "boolean", "Skip idle gaps on the session timeline: stretches of 15 minutes or more with nothing running in any session (no message, model request or tool call in flight) that end with the caller speaking. Each skipped gap is a bar marked with the time the session resumed; the overview, zoom, axis and agent event arcs use the same compressed clock. Default on; a checkbox beside the timeline's zoom controls.", undefined, true),
   reader_filter_level: field("reader_filter_level", ["work"], "enum", "Transcript Show preset or custom category selection.", ["all", "all-minus-usage", "thought", "primary", "custom"]),
   reader_filter: field("reader_filter", ["work"], "strings", "Visible transcript category IDs (reader-model TRANSCRIPT_CATEGORIES)."),
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
   reader_expanded: field("reader_expanded", ["work"], "strings", "Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."),
   reader_writing: field("reader_writing", ["work","library"], "boolean", "Highlight human-written text (typed or dictated, not pasted, quoted or templated) in the conversation reader and a library card's Browse. Default on; one of the reader's Highlight checkboxes.", undefined, true),
   reader_events: field("reader_events", ["work","library"], "boolean", "Highlight agent events (Agent Experience, the sentence classifier) in the conversation reader and a library card's Browse: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events. Default off; one of the reader's Highlight checkboxes."),
-  reader_labels: field("reader_labels", ["work","library"], "boolean", "Highlight message text by its local labels (Message labels, the message classifier) in the conversation reader and a library card's Browse; hovering highlighted text names the message's labels. Default off; one of the reader's Highlight checkboxes."),
+  reader_labels: field("reader_labels", ["work","library"], "boolean", "Tint whole message cards by their local labels (Message labels, the message classifier), including reasoning, in the conversation reader and a library card's Browse; hovering a card names its labels. Default off; one of the reader's Highlight checkboxes."),
+  reader_event_link: field("reader_event_link", ["work"], "text", "Selected two-sided agent event in the conversation reader, by event ID (e<number>): the observation and the earlier text it points back at are highlighted, joined in the gutter, and the observation is revealed. Set from the fingerprint, the session timeline or a click on either end; shown with the Agent events highlight."),
   sidebar_visible: field("sidebar_visible", ["work"], "boolean", "Show the workspace navigation sidebar."),
   sidebar_width: field("sidebar_width", ["work"], "text", "Workspace navigation sidebar width, 300–5000 pixels (site_link accepts a number or decimal string)."),
   search_state: field("text_builder", ["library"], "json", "Complete applied TextSearchDraft, including nested groups, syntax/literal/regex, match options and scope. Browse library/view/search_state for the template. Missing search fields are filled from that template by site_link."),
@@ -86,6 +99,9 @@ export const viewFields: Record<string, ViewField> = {
 // These maps have viewer-dependent initial choices. Capture effective entries
 // so an empty map cannot fall back to another browser's saved preference.
 viewFields.query_layout.captureEntries=true;
+for (const schema of Object.values(syncSchemas)) {
+  viewFields[schema.name] = field(`q_${schema.name}`, ["settings/sync"], "text", `Native Query Table definition for ${schema.name}: filters, sorting, columns, grouping, metrics and pagination over the retained snapshot.`);
+}
 
 // Structured examples are exported with each field so an agent can construct
 // the same object the UI owns, without guessing names from prose descriptions.
@@ -94,7 +110,7 @@ const searchTemplate = emptyTextSearch();
 viewFields.disclosures.details={
   example:{quickStatsSettings:true},
   layout_sections:["menuBarPreferences","headerSettings","quickStatsSettings"],
-  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time"},
+  sections:{"sync:history":"settings/sync", "sync:sources":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
   families:{"background:<item ID>":"settings/sync", "sync:forecast:<run ID>":"settings/sync", "cloud:schedule:<destination ID>":"settings/backups", "carbon:row:<tier>:<category>":"analyze/carbon", "status:cadence:<cadence ID>":"overlay=drive", "status:support":"overlay=drive", "library:activity:<activity ID>:<started_at>:details":"overlay=drive", "work:<work ID>:files":"work", "feedback:logs:<submission ID>":"feedback inbox"},
   defaults:"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.",
   note:"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences.",
@@ -121,6 +137,7 @@ viewFields.carbon.details={
   grid:"Key from the shared carbon factors grids, or custom with nonnegative customGrid in g CO2e/kWh.",
 };
 export const attentionTargets = [
+  { pattern: "fix:<id>", pages: ["findings/fixes", "findings/fixes/table"], description: "A fix's card on the dashboard, or its open detail, by stable ID. Reveal scrolls and highlights without focusing." },
   { pattern: "safety:<id>", pages: ["findings/safety"], description: "A risky action notice's open Details, by stable case ID. Reveal scrolls and highlights without focusing." },
   { pattern: "page", pages: ["*"], description: "Main page content." },
   { pattern: "control:<field>", pages: ["*"], description: "A registered view field or control wrapper." },
@@ -130,13 +147,13 @@ export const attentionTargets = [
   { pattern: "message:<id>", pages: ["work"], description: "Message ID; materializes the message and opens its ancestors." },
   { pattern: "call:<id>", pages: ["work"], description: "Tool-call ID; reveals its owning message." },
   { pattern: "session:<id>", pages: ["work"], description: "Conversation/session ID in the delegation explorer." },
-  { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
-  { pattern: "detail:<json>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table"], revealOnly: true, description: 'Reveal an exact record/property/JSONPath via Query Table: detail:{"rowId":"id","field":"arguments_json","path":"$[\\"events\\"][21]"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only.' },
+  { pattern: "row:<id>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table","findings/fixes/table"], description: "Stable record ID in the current query result. Does not broaden filters." },
+  { pattern: "detail:<json>", pages: ["library", "analyze/query/*", "findings/table","findings/safety/table","findings/fixes/table"], revealOnly: true, description: 'Reveal an exact record/property/JSONPath via Query Table: detail:{"rowId":"id","field":"arguments_json","path":"$[\\"events\\"][21]"}. field/path are optional; preserve numeric versus string IDs. The page selects the dataset. Loads exact details without changing filters or pagination; disabled/absent properties are unavailable. This family supports reveal only.' },
   { pattern: "text:<literal>", pages: ["*"], description: "Literal text search; an alias for view.find. Opens page Find, highlights matches and reveals the first. Several text targets become one escaped OR regex. No browser focus movement." }
 ];
 export const viewDependencyGaps = {
-  query_table_json_cells: {status:"blocked",version:"0.9.9",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
-  query_table_attention: {status:"partial",version:"0.9.9",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_json_cells: {status:"blocked",version:"1.0.0",owner:"@pythia-software/query-table-ui DataTable",reason:"Native property JSON is portable. JSON display cells created by DataTable still do not receive scoped controlled inspection state; requires a published upstream integration.",handoff:"docs/query-table-url-state-handoff.md"},
+  query_table_attention: {status:"partial",version:"1.0.0",owner:"@pythia-software/query-table-core AttentionRegistry",reason:"Exact record/property/JSONPath reveal is integrated. The public API does not support highlight-only, multiple persistent semantic targets, or clearing/replacing prior property marks. detail: is reveal-only; existing host highlights remain supported.",handoff:"docs/query-table-url-state-handoff.md"},
 };
 export const viewExclusions = {
   settings: "Settings values and their read-only diagnostics; section openness uses disclosures.",
@@ -167,6 +184,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
       const scope=restored.draft.scope;
       if(Object.entries(emptyTextSearch().scope).some(([key,value])=>Array.isArray(value)?scope[key as keyof typeof scope].length!==0:scope[key as keyof typeof scope]!==value))throw new Error("Record keywords cannot carry message scope filters.");
     }
+    if(field.param==="timeline_visibility"&&!validTimelineVisibility(value))throw new Error("Invalid timeline visibility state.");
     if(field.param==="thinking"&&!validateThinking(value))throw new Error("Invalid Thinking dashboard state.");
     return value;
   }
@@ -198,6 +216,7 @@ export const delegatedViewFields: Record<string,{file:string; symbol:string}> = 
   history_search:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
   overlay:{file:"internal/archive/assets/ui.py",symbol:"restoreViewOverlay"},
 };
+for (const schema of Object.values(syncSchemas)) delegatedViewFields[schema.name] = {file:"web/src/sync-tables.tsx",symbol:"useQueryTable"};
 
 for (const name of ["window_mode","window_days","window_field","window_until_field","window_dataset","window_timezone"]) delegatedViewFields[name]={file:"web/src/query-links.ts",symbol:"readRollingWindow"};
 for (const name of ["query_dashboard_chart","query_dashboard_filters","query_dashboard_window","query_opened","query_days","query_report","query_search"]) delegatedViewFields[name]={file:"web/src/usage-workspace-model.ts",symbol:"usageWorkspaceURL"};
@@ -215,6 +234,7 @@ export function retainPageView(params: URLSearchParams, page: string, nativePara
 export function viewPageForURL(url: URL): string {
   if(url.pathname.startsWith("/work/"))return "work";
   if(url.pathname==="/analyze")return url.searchParams.get("analyze_mode")==="query"?`analyze/query/${url.searchParams.get("analyze_data")||"usage"}`:`analyze/${url.searchParams.get("analyze_topic")||"tokens"}`;
+  if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="fixes")return ["table","settings"].includes(url.searchParams.get("view")||"") ? `findings/fixes/${url.searchParams.get("view")}` : "findings/fixes";
   if(url.pathname==="/findings"&&url.searchParams.get("optimize_area")==="safety")return ["table","settings"].includes(url.searchParams.get("view")||"") ? `findings/safety/${url.searchParams.get("view")}` : "findings/safety";
   if(url.pathname==="/findings"&&["table","settings"].includes(url.searchParams.get("view")||""))return `findings/${url.searchParams.get("view")}`;
   return url.pathname.replace(/^\//,"")||"home";

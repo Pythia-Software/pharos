@@ -92,6 +92,7 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 		pending bool
 	}
 	readers := map[string]labelReader{}
+	linksByConversation := map[string][]map[string]any{}
 	canonical := func(id string) string {
 		for seen := map[string]bool{}; snapshot.Aliases[id] != "" && !seen[id]; {
 			seen[id] = true
@@ -240,7 +241,26 @@ FROM json_each(?) p JOIN messages m ON m.id=json_extract(p.value,'$.message')`, 
 				}
 			}
 		}
-		lanes[id] = map[string]any{"messages": rows, "messages_truncated": truncated, "labels_pending": pending}
+		// Agent events said in this lane's messages, with their targets
+		// (agent_event_links.go), read once per conversation.
+		events, ok := linksByConversation[n.ConversationID]
+		if !ok {
+			if events, err = c.agentEventLinks(ctx, n.ConversationID); err != nil {
+				return nil, nil, err
+			}
+			linksByConversation[n.ConversationID] = events
+		}
+		inLane := map[string]bool{}
+		for _, row := range rows {
+			inLane[firstString(row["id"])] = true
+		}
+		laneEvents := []map[string]any{}
+		for _, event := range events {
+			if inLane[firstString(event["message_id"])] {
+				laneEvents = append(laneEvents, event)
+			}
+		}
+		lanes[id] = map[string]any{"messages": rows, "messages_truncated": truncated, "labels_pending": pending, "agent_events": laneEvents}
 	}
 	return lanes, taxonomy, nil
 }

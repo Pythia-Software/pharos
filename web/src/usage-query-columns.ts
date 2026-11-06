@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { EMPTY_QUERY, ITEM_DETAILS_COLUMN, groupKeyFields, type FieldDef, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { toolSummaryDimensions } from "./tools-dashboard-model";
 import type { UsageDataset } from "./usage-workspace-model";
@@ -7,7 +8,9 @@ type DrilldownColumn = { kind: UsageDrilldown; label: string; dependencies: stri
 const source = (dependencies: string[]): DrilldownColumn => ({ kind: "source", label: "Source", dependencies });
 const conversation = ["workspace_id", "conversation_id"];
 export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
+  people_message_labels:[source(["source_workspace_id","source_conversation_id","message_id"])],
   message_labels:[source([...conversation,"message_id"])],
+  compactions: [source([...conversation, "message_id"])],
   model_requests: [source([...conversation, "requested_at"])],
   tl1_attempts: [source(["workspace_id"])],
   usage: [source([...conversation, "first_usage_at"]), { kind: "calls", label: "Calls", dependencies: ["conversation_id"] }, { kind: "root", label: "Root", dependencies: ["conversation_id", "root_conversation_id"] }],
@@ -57,13 +60,13 @@ export function withGroupDetail(query: QueryState): QueryState {
 // A new Analyze table fits the screen at the dataset's page size. Restored
 // URLs, saves and last-used queries keep their own sizing choice.
 export function fittedDefaultQuery(schema: FieldSchema): QueryState {
-  return { ...EMPTY_QUERY, select: schema.defaultSelect ?? [], orderBy: schema.defaultSort ?? [], limit: schema.defaultLimit ?? EMPTY_QUERY.limit, fitToScreen: true };
+  return fitQueryToScreen({ ...EMPTY_QUERY, select: schema.defaultSelect ?? [], orderBy: schema.defaultSort ?? [], limit: schema.defaultLimit ?? EMPTY_QUERY.limit });
 }
 
 export function usageActionQuery(query: QueryState, schema: FieldSchema, dataset: UsageDataset): QueryState {
   if (query.grouping) return withGroupDetail(query);
   const actionFields = usageDrilldownColumns[dataset].map(column => usageDrilldownField(column.kind));
-  const select = query.select.length ? query.select : schema.defaultSelect ?? [];
+  const select = query.select.length ? query.select : query.fit ? (schema.defaultSelect ?? []).map(({ width: _width, ...column }) => column) : schema.defaultSelect ?? [];
   const data = select.filter(column => column.field !== ITEM_DETAILS_COLUMN && !actionFields.includes(column.field));
   const columns = [...data, ...actionFields.map(field => select.find(column => column.field === field) ?? { field }), select.find(column => column.field === ITEM_DETAILS_COLUMN) ?? { field: ITEM_DETAILS_COLUMN }];
   const modes = query.itemDetails?.modes.length ? query.itemDetails.modes : ["modal", "expand"] as const;

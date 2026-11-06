@@ -20,7 +20,7 @@ export function fixture(t, empty = false) {
   const prior = { fetch: global.fetch, window: global.window, location: global.location };
   const values = new Map(), requests = [];
   const populations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => [dataset, empty ? [] : population(schema, { now })]));
-  global.location = { origin: "http://parity.test" };
+  global.location = new URL("http://parity.test/");
   global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => values.get(key) ?? fallback, set: (key, value) => values.set(key, json(value)), remove: key => values.delete(key), keys: prefix => [...values.keys()].filter(key => key.startsWith(prefix)) } };
   t.mock.timers.enable({ apis: ["Date"], now });
   global.fetch = async (url, init = {}) => {

@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState, toMetricQuery } from '@pythia-software/query-table-core';
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState, toQueryRequestV3 } from '@pythia-software/query-table-core';
 import toolCalls from '../../../../schemas/tool_calls.schema.json';
 import writingMessages from '../../../../schemas/writing_messages.schema.json';
 import { refreshTodayHost, canonicalDraft, changeLibrarySearch, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, readLibraryHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
-import { hostQueryV3Transport } from '../../../src/host-query-transport';
 import { execution, queryCapabilities, answerQuery } from '../../support/query-server.mjs';
 import { freshRecordKeywordSearch } from '../../../src/record-keyword-model';
 import { withSearchDateWindow, chooseScope, emptyTextSearch, newGroup, newRule } from '../../../src/text-search-model';
@@ -175,38 +174,16 @@ test('Today host searches normalize stably and renew only at execution boundarie
 });
 
 
-test('record host transport runs standalone metrics through the same V3 source as rows', async () => {
+test('record host metrics and clearing the keyword keep the V3 definition', async () => {
  const state = normalized(host, withRecordKeyword('tool_calls', syntaxKeyword('cache')));
- const where = [{field:'status',op:'=',value:'error'}], calls=[];
- const rows=[{id:'a',status:'error',duration_ms:10},{id:'b',status:'ok',duration_ms:20}];
- const transport=hostQueryV3Transport({queryCapabilities,fetchRowsV2(){throw Error('wrong protocol');},fetchMetrics(){throw Error('wrong protocol');},async fetchQueryV3(request,signal){calls.push({request,signal});return answerQuery("query-v3",request,rows,schema);}},schema,execution);
+ const where=[{field:'status',op:'=',value:'error'}], rows=[{id:'a',status:'error'},{id:'b',status:'ok'}];
  const query={...EMPTY_QUERY,where,hostState:state,aggregations:[{id:'calls',op:'count',groupBy:[]}]};
- const request={...toMetricQuery(query,schema,execution),hostState:state},signal=new AbortController().signal;
- request.snapshot='frozen';
- const result=await transport.fetchMetrics(request,signal);
- assert.equal(result.metrics[0].buckets[0].value,1);
- assert.equal(transport.fetchRowsV2,undefined,'record hosts must negotiate V3 even for an ungrouped query');
- assert.equal(calls[0].request.rows,false);
- assert.deepEqual(calls[0].request.hostState,state);
- assert.deepEqual(calls[0].request.result.where,where);
- assert.equal(calls[0].request.snapshot,'frozen');assert.equal(calls[0].signal,signal);
- const unsupported=hostQueryV3Transport({},schema,execution);
- await assert.rejects(unsupported.fetchMetrics(request),/cannot run record keyword/);
- request.diagnostics=[{message:'unavailable field'}];
- await assert.rejects(transport.fetchMetrics(request),/unavailable field/);
- assert.equal(calls.length,1,'unsupported predicates must never be dropped');
-});
-
-
-test('clearing a record keyword restores ordinary indexed execution', async () => {
- let current=emptyHostState();const sent=[];
- const ordinary={queryCapabilities,fetchRowsV2:async request=>{sent.push('rows-v2');return {rows:[],total:0};},fetchMetrics:async request=>{sent.push('metrics');return {metrics:[]};}};
- const transport=hostQueryV3Transport(ordinary,schema,execution,state=>Boolean((state??current).params.record_tool_calls));
- await transport.fetchRowsV2({hostState:current});
- await transport.fetchMetrics({hostState:current});
- current=withRecordKeyword('tool_calls',syntaxKeyword('cache'));
- assert.equal(transport.fetchRowsV2,undefined);
- current=emptyHostState();
- await transport.fetchRowsV2({hostState:current});
- assert.deepEqual(sent,['rows-v2','metrics','rows-v2']);
+ const request={...toQueryRequestV3(query,schema,queryCapabilities,execution,{rows:false}),hostState:state};
+ assert.deepEqual(request.hostState,state);
+ assert.deepEqual(request.result.where,where);
+ assert.equal(answerQuery('query-v3',request,rows,schema).metrics[0].buckets[0].value,1);
+ const cleared={...toQueryRequestV3({...query,hostState:emptyHostState()},schema,queryCapabilities,execution,{rows:false}),hostState:emptyHostState()};
+ assert.deepEqual(cleared.hostState,emptyHostState());
+ assert.equal(cleared.version,3);
+ assert.throws(()=>toQueryRequestV3({...query,where:[{field:'missing',op:'=',value:'x'}]},schema,queryCapabilities,execution),error=>error.code==="residual_query");
 });

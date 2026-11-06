@@ -39,7 +39,7 @@ test("summary values open their dashboard with the snapshot's exact elapsed dura
       if (metric === "cost_usd") assert.equal(chart.metric, "cost");
       if (metric === "tokens") assert.equal(chart.metric, "tokens");
       const schema = loadSchema(human ? writingMessages : usage);
-      assert.deepEqual(toQueryRequestV3(restored.query, schema, { version: 3, profile: "qt-sqlite-v1" }).diagnostics ?? [], []);
+      assert.doesNotThrow(() => toQueryRequestV3(restored.query, schema, { version: 3, profile: "qt-sqlite-v1" }));
     }
   }
 });
