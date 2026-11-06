@@ -25,6 +25,7 @@ export const dataSources = {
   parallelism: { label: "Workspace Parallel Activity by Hour", entity: "workspaces", grain: "Active time for one workspace in one local hour, split when machine-wide or repository concurrency changes" },
   rhythm: { label: "Rhythm by Hour", entity: "conversations", grain: "Active time for one actor (you, or agents with you, unattended or automated) in one top-level conversation in one local hour" },
   safety: { label: "Risky Action Notices", entity: "tool_calls", grain: "One risky action notice about selected archived tool calls" },
+  fixes: { label: "Fixes for Recurring Agent Problems", entity: "messages", grain: "One recurring problem agents ran into, grouped from agent events across work items" },
   findings: { label: "Findings from Archived Work", entity: "workspaces", grain: "One finding" },
   tl1_attempts: { label: "Individual Agent Attempts (TL1)", entity: "agents", grain: "One TL1 attempt" },
   agent_events: { label: "Events in Agent Replies & Thinking", entity: "messages", grain: "One sentence judged to express one kind of event (experimental)" },

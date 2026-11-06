@@ -30,7 +30,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
+import { appSections, findingsPages, fixesPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -726,6 +726,12 @@ export function buildSiteMap(inputs: SiteInputs) {
         const node = add({ path: `findings/safety/${view}`, title: page.label, description: pageDescriptions[`findings/safety/${view}`], route: "/findings", fixed: { optimize_area: "safety", view },
           ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
         safety.children!.push(node.path);
+      }
+      const fixes = child({ path: "findings/fixes", title: "Fixes", description: "Recurring problems agents run into that a change to guidance, environment, tools, setup or docs could prevent, grouped from agent events, with where each fix belongs, prompt baskets per place and handoff history.", route: "/findings", fixed: { optimize_area: "fixes" }, children: [] });
+      for (const page of fixesPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view },
+          ...view === "table" ? { dataset: "fixes", builder: "queryURL", options: [whereOption("q_fixes", "fixes")] } : {} }).path);
       }
     }
     if (section.path === "work") {

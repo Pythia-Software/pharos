@@ -103,7 +103,7 @@
   {
    "id": "agent-experience",
    "label": "What agents run into",
-   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages"],
+   "pages": ["analyze/agent_experience","analyze/query/agent_events","analyze/query/agent_event_messages","findings/fixes","findings/fixes/table","findings/fixes/settings"],
    "signals": ["agent.friction","agent.reactions"]
   },
   {

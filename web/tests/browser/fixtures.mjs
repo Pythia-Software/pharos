@@ -225,6 +225,31 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
 
+// Synthetic fixes for layout; grouping, bounds and lifecycle are tested in Go and fixes-model.
+const fixStatus = { state: "recurring", label: "Still recurring", detail: "Seen in the last 3 days of the data.", first: iso(9 * day).slice(0, 10), last: iso(day).slice(0, 10), days_quiet: 1 };
+const fixCard = { id: "fix_sample", title: "trimesh isn't installed in this environment, so the mesh check falls back to a slower path", category: "env", category_label: "Environment or setup", source: "friction",
+  target: repoTarget, target_label: "explo", scope: "repo", scope_reason: "All but one event are in explo.", destination_kind: "Environment", destination: "explo's setup (requirements, setup script)",
+  terms: ["trimesh"], files: ["requirements.txt"], work_items: 6, events: 9, conversations: 7, repositories: [{ key: "explo", count: 8 }, { key: "No repository", count: 1 }], status: fixStatus, hours: 1.4, episodes: 3,
+  guidance_hit: { repository: "explo", file: "AGENTS.md", line: 2, term: "trimesh", text: "Install trimesh before running mesh checks." }, groups: 2, tentative: false, safeguards: 1,
+  state: "open", recurred: false, handed_at: null, cart: { target: repoTarget, target_label: "explo", ticked: true }, priority: 8.8, hidden: "", deprioritized: false };
+export const fixesFixtures = {
+  items: [fixCard,
+    { ...fixCard, id: "fix_global", title: "gh pr edit fails with a GraphQL error about Projects (classic)", category: "tool", category_label: "Tool or integration", target: "global", target_label: "Global setup", scope: "global", scope_reason: "Seen in 3 repositories; none holds more than 85%.", destination_kind: "Global guidance", destination: "~/.claude/CLAUDE.md", terms: ["gh pr edit"], files: [], repositories: [{ key: "explo", count: 2 }, { key: "tl1", count: 2 }, { key: "corpus", count: 1 }], guidance_hit: null, groups: 1, safeguards: 0, cart: null, work_items: 4, events: 5, hours: 0, priority: 4 },
+    { ...fixCard, id: "fix_rare", title: "The fixture loader expects UTC timestamps", category: "knowledge", category_label: "Codebase knowledge", tentative: true, work_items: 2, events: 2, hidden: "rare", cart: null, guidance_hit: null, groups: 1, safeguards: 0, priority: 2 },
+    { ...fixCard, id: "fix_handed", title: "The sandbox blocks writes to ~/.cache", category: "harness", category_label: "Harness and shell behaviour", state: "handed_off", handed_at: iso(2 * day), cart: null, groups: 1, status: { ...fixStatus, state: "quiet", label: "Quiet since handoff", days_quiet: 8 }, deprioritized: true }],
+  summary: { open: 2, handed_off: 1, dismissed: 0 }, hidden: { stale: 0, rare: 1, total: 1 },
+  bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 }, default_bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 },
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and propose, or make the change; you choose before copying.", items: [{ id: "fix_sample", title: fixCard.title, ticked: true, change_label: "Environment or setup", suggested_target: repoTarget }] }],
+  targets: [{ target: "global", label: "Global setup" }, { target: repoTarget, label: "explo" }], built_at: iso(3600000), end: iso(day).slice(0, 10), in_scope_events: "412", excluded_events: 37, safeguard_events: 3, prompt_limit: 12, version: "fixes-v1",
+  coverage: "Agent events from the last 90 days the events pass scanned, grouped by what they say.",
+};
+const fixQuote = { event_id: "e1", sentence: fixCard.title, about: "the mesh check", kind: "friction", kind_label: "Friction", repository: "explo", model: "claude-opus", day: iso(day).slice(0, 10), source: "reply", workspace_id: workID, conversation_id: rootConversation, message_id: "m-1" };
+export const fixDetailFixture = { ...fixCard, suggestion: "Add trimesh to the environment agents run in, pinned, so the check never falls back.", category_explanation: "Something agents need is missing, too slow or the wrong version where they run.",
+  quotes: [fixQuote, { ...fixQuote, event_id: "e2", source: "thinking", about: "" }], members: [fixQuote, { ...fixQuote, event_id: "e2" }, { ...fixQuote, event_id: "e3" }], member_count: 9,
+  guidance_hits: [fixCard.guidance_hit], tool_errors: [{ key: "ModuleNotFoundError: trimesh", count: 4 }], kinds: [{ key: "friction", label: "Friction", count: 7 }, { key: "workaround", label: "Workaround", count: 2 }], models: [{ key: "claude-opus", count: 9 }], thinking: 3,
+  cost: { episodes: 3, hours: 1.4, calls: 22, unresolved: 1 }, status: { ...fixStatus, messages_after: 40 } };
+export const fixesSettingsFixture = { bounds: fixesFixtures.bounds, default_bounds: fixesFixtures.default_bounds, open: 3, hidden_stale: 0, hidden_rare: 1, built_at: fixesFixtures.built_at, end: fixesFixtures.end, window_days: 90, version: "fixes-v1" };
+
 // Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
 const safetyCard = { id: "safety_sample", rule: "credentials", danger: "high", subject: "/Users/example/repo/.build/gcloud", title: "Credentials copied to another location", explanation: "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
 export const safetyFixtures = {
@@ -382,6 +407,9 @@ export const safetySettingsFixture = { rules: [
     "enabled": true
   }
 ], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v3" };
+datasets.fixes = fixesFixtures.items.map(item => ({ id: item.id, title: item.title, lead: item.title, state: item.state, shown: item.state === "open" && item.hidden ? item.hidden : "shown", category: item.category, status: item.status.state,
+  target: item.target, target_label: item.target_label, destination: item.destination, terms: item.terms.join(", "), check_name: null, work_items: item.work_items, events: item.events, conversations: item.conversations,
+  hours: item.hours, priority: item.priority, safeguards: item.safeguards, in_prompt: Boolean(item.cart), first_seen: item.status.first, last_seen: item.status.last, handed_at: item.handed_at, fix_count: 1 }));
 datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, danger_rank: card.danger === "high" ? 3 : 2, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
@@ -765,6 +793,14 @@ export const defaultApi = {
 
   // Findings and MCP.
   "GET /api/findings": findings,
+  "GET /api/findings/fixes": fixesFixtures,
+  "GET /api/findings/fixes/settings": fixesSettingsFixture,
+  "POST /api/findings/fixes/settings": ({ body }) => ({ ...fixesSettingsFixture, bounds: { ...fixesSettingsFixture.bounds, ...Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key in fixesSettingsFixture.bounds)) } }),
+  "GET /api/findings/fixes/:id": ({ params }) => ({ ...fixDetailFixture, ...fixesFixtures.items.find(item => item.id === params.id) }),
+  "POST /api/findings/fixes/bulk": ({ body }) => ({ ok: true, count: body?.ids?.length ?? 0 }),
+  "POST /api/findings/fixes/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Improve the guidance, setup and docs agents work with in explo.\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
+  "POST /api/findings/fixes/cart/copy": { ok: true },
+  "POST /api/findings/fixes/:id/action": { ok: true },
   "GET /api/findings/safety": safetyFixtures,
   "GET /api/findings/safety/settings": safetySettingsFixture,
   "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),
