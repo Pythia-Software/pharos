@@ -246,10 +246,13 @@ type captureRunRecord struct {
 
 // CaptureSourceResult is one source's progress and outcome.
 type CaptureSourceResult struct {
-	Name  string `json:"name"`
-	Kind  string `json:"kind"`
-	State string `json:"state"`
-	Dir   string `json:"dir,omitempty"`
+	// The successful observation, including an input already delivered. Kept
+	// private so broker progress receipts need no second manifest/source read.
+	inputFingerprint string
+	Name             string `json:"name"`
+	Kind             string `json:"kind"`
+	State            string `json:"state"`
+	Dir              string `json:"dir,omitempty"`
 	captureRunRecord
 }
 
@@ -530,6 +533,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 			return c.finish(err)
 		}
 		if delivered.Fingerprint == fingerprint {
+			c.result.inputFingerprint = fingerprint
 			c.result.Phase = "Already delivered; source is unchanged"
 			return c.finish(nil)
 		}
@@ -581,6 +585,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	}
 	err = c.commit(true)
 	if err == nil {
+		c.result.inputFingerprint = c.manifest.DeliveredFingerprint
 		c.removePruned(true)
 	}
 	return c.finish(err)
