@@ -26,7 +26,7 @@ and Parallelism link to Waiting.
 
 Detail has six views: distributions over time, comparison heatmap, histograms,
 positive reported reasoning boxes, wait boxes and time-of-day calendar. Controls
-include model, effort, ten breakdowns (including model + effort), share/count,
+include model, effort, thirteen breakdowns (including speed, model + speed and model + effort + speed), share/count,
 median/p95/volume ordering, range and custom time buckets. Range presets choose
 the same readable buckets as other dashboards (90 days uses days). Charts expand
 with the page so scrolling over them scrolls the page.
@@ -66,6 +66,21 @@ budget), and each card with a distribution is its own request, because Query
 Table evaluates each distribution in a separate pass. A 7-day preview takes
 about 1–2 seconds per card. Windows of 180 days or more are bound by Query
 Table's distribution executor.
+
+Speed breakdowns are available on both Waiting and Thinking, and saved cards
+retain the selected breakdown. Ingestion stores normalized `speed` (`fast` or
+`standard`), the original normalized `service_tier`, and `speed_source` on
+messages and model requests. Explicit `usage.speed` wins (including Claude fast
+mode with a standard service tier). Otherwise priority/fast tiers are fast, and
+all other, null or missing tiers count as standard. `speed_source` distinguishes
+`speed`, `service_tier`, and the `assumed_standard` fallback policy.
+
+Codex turn configuration is retained per message and resets each turn. ChatGPT
+metadata and canonical exports use the same normalization. Existing accounting
+and typed settings are replayed by the versioned tool ledger. Older discarded
+turn settings cannot be reconstructed; those requests follow the standard-speed
+fallback. Model Requests exposes all three fields for filters, grouping, counts,
+token sums and distributions, independent of these dashboard views.
 
 ## Data and execution
 

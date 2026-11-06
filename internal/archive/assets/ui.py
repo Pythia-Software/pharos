@@ -413,12 +413,6 @@ APP_HTML = r'''<!doctype html>
     <section id="syncSettings" class="settings-section" data-settings-route="/settings/sync" data-page-title="Background Processing" data-page-description="Pharos keeps your library current on its own. Each kind of work runs as often as its cost allows: quick work every few minutes, heavier work hourly, the heaviest overnight." aria-labelledby="settingsPageHeading" hidden><div id="syncDashboard">
       <div id="backgroundSchedule"></div>
       <div id="syncHistoryTables"></div>
-      <section id="syncOperations" class="sync-panel" aria-label="Capture and index now">
-        <div class="sync-section-head"><div><h3>Capture &amp; index</h3><p class="muted">Capture this Mac’s source files, index captures from every Mac, and finish any pending library upgrade.</p></div><div id="syncUpdateAction" class="sync-actions"></div></div>
-        <div id="syncActivity" role="status" aria-live="polite"></div>
-        <details class="sync-separate" data-view-key="sync:separate" data-view-field="disclosures"><summary>Capture or index separately</summary><p class="muted">Capture only copies enabled sources from this Mac. Index only makes captured files from every Mac searchable.</p><div id="syncRunActions" class="sync-actions"></div></details>
-        <p class="muted">Need to add or enable a source? <a href="/settings/sources">Manage sources →</a></p>
-      </section>
       <div id="syncSourceTables"></div><div id="syncDiagnosticTables"></div>
     </div></section>
     <section id="mcpSettings" class="settings-section" data-settings-route="/settings/mcp" data-page-title="MCP" data-page-description="Control agent access to Pharos and connect your agent clients." aria-labelledby="settingsPageHeading" hidden><div id="mcpSettingsPage"></div></section>

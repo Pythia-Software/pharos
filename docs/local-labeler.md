@@ -17,10 +17,11 @@ combine message labels, caller-text origin and recorded tool actions.
 
 ## Turning it on
 
-In **Settings → Background Processing → Labeling on this Mac** (below the
-schedule), turn on **Message labels** (beside it, **Agent events (preview)**
-turns on [agent events](agent-events.md)). This saves `labels_enabled` in the library's configuration
-and applies it immediately, without restarting Pharos. The control stays
+In **Settings → Background Processing**, open the **Message labels** step
+and turn on **Message labels**. This saves `labels_enabled` in the library’s
+configuration and applies it immediately, without restarting Pharos. The
+**Agent events** step has its own **Agent events (preview)** switch for
+[agent events](agent-events.md). Disabled models appear under **Only when you ask**. The control stays
 visible while off, reports missing downloads or workers while on, and
 queues earlier messages for the background schedule. In the app, enabling
 also starts any missing model/runtime download. Turning it off prevents
@@ -43,7 +44,7 @@ runtime instead, and comes first:
 | `labels_backend` | — | `auto` (default), `cpu`, or `mlx`; shared by message labels and agent events. MLX needs a verified FP32 companion ([Apple silicon GPU](#apple-silicon-gpu)) |
 | `labels_mlx_runtime` | `PHAROS_MLX_LIBRARY` | native MLX engine override; default `mlx/libpharos_mlx.dylib` beside the worker |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | CPU intra-op threads per worker (default 4); Settings → Background Processing → Labeling on this Mac → Message labels → CPU threads; ignored by MLX GPU inference |
+| `labels_threads` | — | CPU intra-op threads per worker (default 4); Settings → Background Processing → Message labels → Threads; ignored by MLX GPU inference |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
 | `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |

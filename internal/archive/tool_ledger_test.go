@@ -635,3 +635,145 @@ func TestToolPathsFollowNewlyKnownCheckouts(t *testing.T) {
 	ingestRecords(t, catalog, record("widget-w2", checkout("widget", dir+"/w2")))
 	check("w2 known", map[string]string{"/w2/a.go": widget, "/w4/b.go": repository("gadget")})
 }
+
+func TestModelRequestSpeedEvidence(t *testing.T) {
+	cases := []struct{ body, want string }{
+		{`{"message":{"usage":{"speed":"fast","service_tier":"standard"}}}`, "fast"},
+		{`{"message":{"usage":{"speed":"standard"}}}`, "standard"},
+		{`{"response":{"service_tier":"priority"}}`, "fast"},
+		{`{"payload":{"service_tier":"default"}}`, "standard"},
+		{`{"message":{"usage":{"service_tier":"standard"}}}`, "standard"},
+		{`{"message":{"usage":{"speed":null,"service_tier":"standard"}}}`, "standard"},
+		{`{"usage":{"speed":"future"}}`, "standard"},
+		{`{"service_tier":"auto"}`, "standard"},
+		{`{"service_tier":"flex"}`, "standard"},
+		{`{"model":"fast-model","effort":"low","input":{"speed":"fast"}}`, "standard"},
+	}
+	for _, sample := range cases {
+		config, _ := messageInference(MessageRecord{RawText: sample.body})
+		speed := config.Speed
+		if speed != sample.want {
+			t.Errorf("%s: %q want %q", sample.body, speed, sample.want)
+		}
+	}
+
+	for _, sample := range []struct {
+		message             MessageRecord
+		speed, tier, source string
+	}{
+		{MessageRecord{}, "standard", "", "assumed_standard"},
+		{MessageRecord{Role: "user", Kind: "message", Text: `{"service_tier":"priority"}`}, "standard", "", "assumed_standard"},
+		{MessageRecord{RawText: `{"service_tier":"priority","speed":null}`}, "fast", "priority", "service_tier"},
+		{MessageRecord{RawText: `{"service_tier":null}`}, "standard", "", "assumed_standard"},
+		{MessageRecord{RawText: `{"message":{"usage":{"speed":"fast"}}}`, ServiceTier: "priority", Speed: "fast", SpeedSource: "service_tier"}, "fast", "priority", "speed"},
+		{MessageRecord{Speed: "fast", SpeedSource: "speed", RawText: `{"message":{"usage":{"service_tier":"standard"}}}`}, "fast", "standard", "speed"},
+		{MessageRecord{Speed: "fast", RawText: `{"message":{"usage":{"service_tier":"standard"}}}`}, "fast", "standard", "speed"},
+		{MessageRecord{Speed: "fast", ServiceTier: "priority", SpeedSource: "speed", RawText: `{"service_tier":null}`}, "fast", "", "speed"},
+		{MessageRecord{Speed: "standard", SpeedSource: "speed", RawText: `{"service_tier":"priority"}`}, "standard", "priority", "speed"},
+		{MessageRecord{Speed: "fast", SpeedSource: "speed", RawText: `{"speed":null,"service_tier":"standard"}`}, "standard", "standard", "service_tier"},
+		{MessageRecord{Speed: "fast", SpeedSource: "service_tier", ServiceTier: "priority", RawText: `{"service_tier":"standard"}`}, "standard", "standard", "service_tier"},
+	} {
+		normalized := normalizeMessageInference(sample.message)
+		if normalized.Speed != sample.speed || normalized.ServiceTier != sample.tier || normalized.SpeedSource != sample.source {
+			t.Fatalf("normalized inference %+v", normalized)
+		}
+		if replay := normalizeMessageInference(normalized); replay.Speed != sample.speed || replay.ServiceTier != sample.tier || replay.SpeedSource != sample.source {
+			t.Fatalf("replayed inference %+v", replay)
+		}
+	}
+	for _, anonymous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streamed/anonymous=%t", anonymous), func(t *testing.T) {
+			for _, sample := range []struct {
+				name, initial, update, speed, tier, source string
+			}{
+				{"tier update preserves fast", `"speed":"fast","service_tier":"priority",`, `"service_tier":"standard",`, "fast", "standard", "speed"},
+				{"tier update preserves standard", `"speed":"standard",`, `"service_tier":"priority",`, "standard", "priority", "speed"},
+				{"speed update preserves tier", `"speed":"fast","service_tier":"standard",`, `"speed":"standard",`, "standard", "standard", "speed"},
+				{"tier reset preserves speed", `"speed":"fast","service_tier":"priority",`, `"service_tier":null,`, "fast", "", "speed"},
+				{"speed reset clears override", `"speed":"fast","service_tier":"standard",`, `"speed":null,`, "standard", "standard", "service_tier"},
+				{"unknown speed clears override", `"speed":"fast","service_tier":"standard",`, `"speed":"future",`, "standard", "standard", "service_tier"},
+				{"tier updates derived speed", `"service_tier":"priority",`, `"service_tier":"standard",`, "standard", "standard", "service_tier"},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					id := `"id":"streamed",`
+					if anonymous {
+						id = ""
+					}
+					messages := []MessageRecord{
+						{NativeID: "event-0", Kind: "metadata", RawText: `{"message":{` + id + `"usage":{` + sample.initial + `"input_tokens":10,"output_tokens":1}}}`},
+						{NativeID: "event-1", Kind: "metadata", RawText: `{"message":{` + id + `"usage":{` + sample.update + `"input_tokens":10,"output_tokens":2}}}`},
+						{NativeID: "event-2", Kind: "metadata", RawText: `{"message":{` + id + `"usage":{"input_tokens":10,"output_tokens":3}}}`},
+					}
+					requests, _ := buildToolLedger(messages, "model")
+					if len(requests) != 1 || requests[0].Speed != sample.speed || requests[0].ServiceTier != sample.tier || requests[0].SpeedSource != sample.source {
+						t.Fatalf("streamed inference: %+v", requests)
+					}
+					if requests[0].Counts["total_tokens"] != 13 {
+						t.Fatalf("streamed usage was counted more than once: %+v", requests)
+					}
+					if anonymous {
+						messages = append(messages,
+							MessageRecord{NativeID: "user", Role: "user", Kind: "message", Text: "next turn"},
+							MessageRecord{NativeID: "event-3", Kind: "metadata", RawText: `{"message":{"usage":{"input_tokens":10,"output_tokens":1}}}`})
+						requests, _ = buildToolLedger(messages, "model")
+						if len(requests) != 2 || requests[0].Speed != sample.speed || requests[1].Speed != "standard" || requests[1].ServiceTier != "" || requests[1].SpeedSource != "assumed_standard" {
+							t.Fatalf("inference leaked into the next request: %+v", requests)
+						}
+					}
+				})
+			}
+		})
+	}
+	messages := []MessageRecord{
+		{Kind: "metadata", RawText: `{"message":{"id":"streamed","usage":{"speed":"fast","input_tokens":10,"output_tokens":1}}}`},
+		{Kind: "metadata", RawText: `{"message":{"id":"streamed","usage":{"input_tokens":10,"output_tokens":2}}}`},
+	}
+	requests, _ := buildToolLedger(messages, "model")
+	if len(requests) != 1 || requests[0].Speed != "fast" {
+		t.Fatalf("streamed request lost speed: %+v", requests)
+	}
+	messages[1].RawText = `{"message":{"id":"streamed","usage":{"speed":null,"input_tokens":10,"output_tokens":2}}}`
+	requests, _ = buildToolLedger(messages, "model")
+	if len(requests) != 1 || requests[0].Speed != "standard" {
+		t.Fatalf("explicit unknown speed must reset: %+v", requests)
+	}
+	// Anonymous streamed events also preserve explicit unknowns when merged.
+	for i := range messages {
+		messages[i].NativeID = fmt.Sprint("event-", i)
+		messages[i].RawText = strings.Replace(messages[i].RawText, `"id":"streamed",`, "", 1)
+	}
+	requests, _ = buildToolLedger(messages, "model")
+	if len(requests) != 1 || requests[0].Speed != "standard" {
+		t.Fatalf("anonymous request retained stale speed: %+v", requests)
+	}
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	// Same model, distinct requests; an unreported request must not inherit fast.
+	fixture := slices.Clone(claudeToolFixture)
+	fixture[1] = strings.Replace(fixture[1], `"input_tokens":10`, `"speed":"fast","service_tier":"standard","input_tokens":10`, 1)
+	writeFixture(t, root, "project/claude-speed.jsonl", fixture)
+	ingestFixture(t, catalog, "claude", root)
+	rows, err := queryMaps(catalog.DB, "SELECT native_id,speed FROM model_requests ORDER BY sequence")
+	if err != nil || len(rows) != 4 {
+		t.Fatalf("requests %+v: %v", rows, err)
+	}
+	if rows[0]["speed"] != "fast" {
+		t.Fatalf("lost recorded fast speed: %+v", rows)
+	}
+	for _, row := range rows[1:] {
+		if firstString(row["speed"]) != "standard" {
+			t.Fatalf("inherited speed without evidence: %+v", row)
+		}
+	}
+	// Replaying the versioned ledger recovers speed from retained raw accounting.
+	if _, err := catalog.DB.Exec("UPDATE model_requests SET speed='standard',speed_source='assumed_standard'; UPDATE tool_ledger_state SET version='before-speed'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var speed string
+	if err := catalog.DB.QueryRow("SELECT speed FROM model_requests ORDER BY sequence LIMIT 1").Scan(&speed); err != nil || speed != "fast" {
+		t.Fatalf("backfill speed %q: %v", speed, err)
+	}
+}

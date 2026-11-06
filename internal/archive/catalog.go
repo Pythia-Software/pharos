@@ -280,9 +280,15 @@ func (c *Catalog) Initialize() error {
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
 		{"messages", "model", "ALTER TABLE messages ADD COLUMN model TEXT"},
 		{"messages", "effort", "ALTER TABLE messages ADD COLUMN effort TEXT"},
+		{"messages", "speed", "ALTER TABLE messages ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'"},
+		{"messages", "service_tier", "ALTER TABLE messages ADD COLUMN service_tier TEXT"},
+		{"messages", "speed_source", "ALTER TABLE messages ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'"},
 		{"conversations", "effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"},
 		{"agent_sessions", "effort", "ALTER TABLE agent_sessions ADD COLUMN effort TEXT"},
 		{"model_requests", "effort", "ALTER TABLE model_requests ADD COLUMN effort TEXT"},
+		{"model_requests", "speed", "ALTER TABLE model_requests ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "service_tier", "ALTER TABLE model_requests ADD COLUMN service_tier TEXT; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "speed_source", "ALTER TABLE model_requests ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
 		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
@@ -358,7 +364,7 @@ func (c *Catalog) Initialize() error {
 		// Cover the timing projection so request reads never visit large
 		// conversation bodies or sort the entire ledger's window partitions.
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
-		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
 		// Ask Pharos's compaction signal reads only requests after a
 		// compaction, a few in a thousand.
