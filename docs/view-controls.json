@@ -3945,15 +3945,6 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "f4e749782d73a9dc:0",
-      "file": "web/src/authored.tsx",
-      "owner": "MessageMix",
-      "tag": "button",
-      "control": "onClick={() => toggle(category.key)}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
       "key": "2b58573583bda488:0",
       "file": "web/src/authored.tsx",
       "owner": "SpanTip",
@@ -6250,15 +6241,6 @@
       "owner": "FindMatchCell",
       "tag": "button",
       "control": "onClick={event => { event.stopPropagation(); openFindHit(hit); }}",
-      "contract": "native-query",
-      "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
-    },
-    {
-      "key": "e89e5712f064fcca:0",
-      "file": "web/src/index.tsx",
-      "owner": "HumanUsageDashboard",
-      "tag": "MessageMix",
-      "control": "onFilter={onFilter}",
       "contract": "native-query",
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },

@@ -1,8 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
+import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
+import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
 import safetyDocument from '../../../schemas/safety.schema.json' with {type:'json'};
@@ -1333,4 +1335,35 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
  assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
  await app.shot('compaction-compare');
+});
+
+
+test('component share charts restore their controls across reloads and view switches',{skip},async t=>{
+ const words=Object.fromEntries(Object.entries({typed:40,pasted:22,quoted:12,resent:8,template:6,attachment:2,harness:7,automated:3}).map(([key,value])=>[key+'_words',value]));
+ const rows=queryFixtureDatasets.writing_messages.map(row=>({...row,...words,words:100,copied_words:20,prompt_words:8,machine_words:10}));
+ const api={'POST /api/query/writing_messages/query-v3':({body})=>answerQuery('query-v3',body,rows,loadSchema(writingMessagesDocument))};
+ const app=await open(t,{api,url:'/analyze?analyze_topic=human',viewport:{width:1920,height:1050},ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ const control=name=>page.locator('.usage-human-dashboard').getByRole('combobox',{name,exact:true});
+ await control('View').selectOption('compare');
+ await control('Metric').selectOption('words');
+ await control('Breakdown').selectOption('category');
+ await control('Show as').selectOption('share');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
+ const saved=path(page);
+ await page.getByRole('button',{name:/^Typed:/}).waitFor();
+ await app.shot('human-text-category-shares');
+ const fresh=await open(t,{api,url:saved,ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ for(const [name,value] of [['View','compare'],['Metric','words'],['Breakdown','category'],['Show as','share']])assert.equal(await fresh.page.getByRole('combobox',{name,exact:true}).inputValue(),value);
+ await fresh.page.getByRole('combobox',{name:'View',exact:true}).selectOption('trend');
+ await fresh.page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await fresh.settled();
+ await fresh.page.getByRole('combobox',{name:'View',exact:true}).selectOption('compare');
+ await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'category');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).inputValue(),'share');
+ await fresh.page.getByRole('button',{name:/^Typed:/}).click();
+ await fresh.page.waitForURL(url=>url.searchParams.get('analyze_mode')==='query');await fresh.settled();
+ const tokenAPI={'POST /api/query/usage/query-v3':({body})=>answerQuery('query-v3',body,queryFixtureDatasets.usage.map(row=>({...row,input_tokens:100,uncached_input_tokens:20,cache_read_input_tokens:70,cache_creation_input_tokens:10})),loadSchema(usageDocument))};
+ const tokens=await open(t,{api:tokenAPI,url:'/analyze?analyze_topic=tokens&analyze_chart='+encodeURIComponent(JSON.stringify({view:'compare',metric:'input',split:'input_type',compareAs:'share'})),viewport:{width:1920,height:1050},ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ await tokens.page.getByRole('button',{name:/^Cache reads:/}).waitFor();
+ await tokens.shot('input-token-shares');
 });

@@ -1,5 +1,6 @@
 import {  branchesOf, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { mapTermPredicates } from "./where-terms";
+import { authorshipCategories } from "./authorship-categories";
 import writing from "../../schemas/writing.schema.json";
 import writingMessages from "../../schemas/writing_messages.schema.json";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
@@ -61,7 +62,8 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
     ...single([["source_kind", "App"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
   },
-  components: { kind: { label: "Text source", measures: ["words"], fallback: "none", parts: writingGroups.map(group => ({ key: group.key, label: group.label, field: group.field, color: group.color })) } },
+  components: { kind: { label: "Text source", measures: ["words"], fallback: "none", parts: writingGroups.map(group => ({ key: group.key, label: group.label, field: group.field, color: group.color })) },
+    category: { label: "Text category", measures: ["words"], fallback: "none", parts: authorshipCategories.map(category => ({ key: category.key, label: category.label, field: `${category.key}_words`, color: category.color })) } },
   records: { label: "Message", plural: "Messages", note: "A message is one classified user message, placed at the time it was sent." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"),

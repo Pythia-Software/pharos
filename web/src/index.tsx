@@ -104,7 +104,7 @@ import { fixDetailURL } from "./fixes-route";
 import fixesDocument from "../../schemas/fixes.schema.json";
 import { createQueryHistory } from "./query-history";
 import { Icon } from "./icons";
-import {  CategoryPill, MessageMix, authoredRenderers } from "./authored";
+import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
 import { HabitsPanels } from "./habits";
@@ -1176,15 +1176,11 @@ function TokenUsageDashboard() {
 // classification runs in the background; each finished build reruns the
 // dashboard's queries, and the note says where it stands.
 function HumanUsageDashboard() {
-  const [reload, setReload] = useState(0);
-  // Refresh, or a finished classification, reloads the message mix too.
-  useEffect(() => onDatasetRefresh("writing_messages", () => setReload(value => value + 1)), []);
   const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere}
     summary={where => <HumanWordsSummary where={where} status={status} />}
-    panels={(where, onFilter) => <>
+    panels={() => <>
       <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, harness instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
-      <MessageMix where={where} reload={reload} onFilter={onFilter} />
     </>} />;
 }
 
