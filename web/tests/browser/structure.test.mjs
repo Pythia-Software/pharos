@@ -461,9 +461,19 @@ const ROUTES = [
   { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },
   { name: "MCP legacy link", url: "/mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
-  { name: "File history", url: "/files?file=internal/archive/api.go&file_project=pharos", ready: "#fileHistoryPage .file-history-file .file-place" },
-  { name: "Files directory", url: "/files?file_dir=internal&file_project=pharos", ready: "#fileHistoryPage .files-directory .file-history-list" },
-  { name: "Files commit", url: "/files?file_commit=0123456&file_project=pharos", ready: "#fileHistoryPage .files-commit .file-history-list" },
+  // Files: a file's tabs (Git's code, blame and history, its sessions'
+  // edits as diffs, the sessions), a directory with Go to file, a commit's
+  // diffs, the checkout chooser, the tree hidden, and the projects.
+  { name: "File code", url: "/files?file=internal/archive/api.go&file_project=pharos", ready: "#fileHistoryPage .files-code .files-lines" },
+  { name: "File blame, tree hidden", url: "/files?file=internal/archive/api.go&file_project=pharos&file_view=blame&files_tree_collapsed=1", ready: "#fileHistoryPage .files-blame-session" },
+  { name: "File history", url: "/files?file=internal/archive/api.go&file_project=pharos&file_view=history", ready: "#fileHistoryPage .files-commits .files-commit-subject" },
+  { name: "File changes", url: "/files?file=internal/archive/api.go&file_project=pharos&file_view=changes", ready: "#fileHistoryPage .files-change .files-diff-line.add" },
+  { name: "File sessions", url: "/files?file=internal/archive/api.go&file_project=pharos&file_view=sessions", ready: "#fileHistoryPage .file-sessions .file-place" },
+  { name: "File checkout chooser", url: "/files?file=internal/archive/api.go&file_project=pharos", ready: "#fileHistoryPage .files-checkout .files-checkout-candidates button",
+    api: { "GET /api/repositories/:id/checkout": ({ params }) => ({ repository_id: params.id, name: "pharos", path: null, status: "unset", reason: "Choose this repository's checkout on this Mac.", candidates: ["/Users/me/pharos", "/Users/me/conductor/workspaces/pharos/a-workspace-with-a-long-name"] }) } },
+  { name: "Files directory", url: "/files?file_dir=internal&file_project=pharos", ready: "#fileHistoryPage .files-directory .files-table tbody tr",
+    open: page => page.getByRole("searchbox", { name: "Go to file" }).fill("api"), shown: "#fileHistoryPage .files-find-results a" },
+  { name: "Files commit", url: "/files?file_commit=0123456&file=internal/archive/api.go&file_project=pharos", ready: "#fileHistoryPage .files-commit .files-commit-diff[open] .files-diff-line.add" },
   { name: "Files projects", url: "/files", ready: "#fileHistoryPage .files-projects li" },
   { name: "Logs overview", url: "/settings/logs", ready: "#logsPage .logs-cards" },
   { name: "Logs service output", url: "/settings/logs?log_source=service", ready: "#logsPage .logs-run pre" },

@@ -1,9 +1,13 @@
 // Files (docs/projects-and-outcomes.md, "Files, sessions and commits,
-// linked both ways"): a project's files as a tree, and for a file, a
-// directory or a commit, the sessions and commits that touched it, each
-// linked to the place in a transcript where it happened. The service
-// (/api/file-history, /api/file-tree, /api/file-commit, /api/work/{id}/files)
-// reads stored facts; this module says how they read on the page.
+// linked both ways" and "The file viewer's checkout"): a project's files as
+// a tree, and for a file, a directory or a commit, its code, blame, history
+// and diffs, and the sessions and commits that touched it, each linked to
+// the place in a transcript where it happened. Most of the service
+// (/api/file-history, /api/file-tree, /api/file-commit, /api/file-changes,
+// /api/work/{id}/files) reads stored facts; code, blame, history and commit
+// diffs (/api/file-content, /api/file-blame, /api/file-log, /api/file-diff,
+// /api/file-commit-git, /api/file-last-commits) are read by Git from the checkout the person chose.
+// This module says how they read on the page.
 
 export const fileHistoryRoute = "/files";
 
@@ -35,7 +39,10 @@ export type FileHistoryFile = {
 export type FileHistory = { path: string; files: FileHistoryFile[]; note: string };
 
 export type FileProject = { ref: string; name: string; kind: "repository" | "folder" | string; repository_id?: string; folder?: string; sessions?: number; files?: number; last_at?: string };
-export type FileTreeEntry = { name: string; path: string; kind: "dir" | "file"; sessions: number; commits: number; last_at?: string | null; in_tree: boolean };
+export type FileTreeEntry = {
+  name: string; path: string; kind: "dir" | "file"; sessions: number; commits: number; last_at?: string | null; in_tree: boolean;
+  last_session?: { workspace_id: string; title?: string | null; at?: string; url: string } | null; last_commit?: { hash: string; author_at?: string; url: string } | null;
+};
 export type FileTreeSession = { workspace_id: string; title?: string; files: number; edits: number; last_edit_at?: string; outcome_label?: string; outcome_why?: string; url: string };
 export type FileTreeCommit = { hash: string; author_at?: string; files: number; lines_added?: number; lines_removed?: number; on_mainline?: boolean | null; reverted_by?: string | null; sessions: FileHistoryLink[] };
 export type FileTree = {
@@ -51,14 +58,23 @@ export type FileCommitDetail = {
 // A Files page address: a project's file, directory or commit, or the
 // project's root. The service's filePageURL (file_tree.go) builds the same,
 // its parameters in the same (sorted) order.
-export type FilePageTarget = { project?: string; file?: string; dir?: string; commit?: string };
+// A commit with a file opens the commit at that file's diff. A view is the
+// tab a file or directory opens on.
+export type FilePageTarget = { project?: string; file?: string; dir?: string; commit?: string; view?: string };
 
 export function filePageURL(target: FilePageTarget): string {
   const params = new URLSearchParams();
   if (target.project) params.set("file_project", target.project);
-  if (target.file) params.set("file", target.file);
-  else if (target.dir) params.set("file_dir", target.dir);
-  else if (target.commit) params.set("file_commit", target.commit);
+  if (target.commit) {
+    params.set("file_commit", target.commit);
+    if (target.file) params.set("file", target.file);
+  } else if (target.file) {
+    params.set("file", target.file);
+    if (target.view) params.set("file_view", target.view);
+  } else {
+    if (target.dir) params.set("file_dir", target.dir);
+    if (target.view) params.set("file_dir_view", target.view);
+  }
   params.sort();
   return `${fileHistoryRoute}?${params}`;
 }
@@ -66,15 +82,51 @@ export function filePageURL(target: FilePageTarget): string {
 // readFilePageRoute reads a Files page address back. A commit shows before
 // a file, and a file before a directory, should a hand-made URL set several.
 export function readFilePageRoute(search: URLSearchParams): Required<FilePageTarget> {
-  return { project: search.get("file_project") ?? "", file: search.get("file") ?? "", dir: search.get("file_dir") ?? "", commit: search.get("file_commit") ?? "" };
+  return {
+    project: search.get("file_project") ?? "", file: search.get("file") ?? "", dir: search.get("file_dir") ?? "", commit: search.get("file_commit") ?? "",
+    view: search.get("file_commit") ? "" : search.get("file") ? search.get("file_view") ?? "" : search.get("file_dir_view") ?? "",
+  };
 }
 
-// keepFilesView carries the page's open directories (its disclosures) to
-// another address on it, so moving through the tree keeps it as it was.
+// A file's tabs: its code and blame and its history from the checkout, the
+// diffs its sessions' edits made, and the sessions themselves. A folder's
+// file has no Git, so only the last two.
+export const fileViews = ["code", "blame", "history", "changes", "sessions"] as const;
+export type FileView = typeof fileViews[number];
+export const fileViewLabels: Record<FileView, string> = { code: "Code", blame: "Blame", history: "History", changes: "Changes", sessions: "Sessions" };
+export function fileTabs(repository: boolean): FileView[] {
+  return repository ? [...fileViews] : ["changes", "sessions"];
+}
+// fileTab is the tab a file shows: the one asked for when it has it, else
+// its code, or its changes outside Git or when the tree does not hold it.
+export function fileTab(asked: string, repository: boolean, inTree = true): FileView {
+  const tabs = fileTabs(repository);
+  if ((tabs as string[]).includes(asked)) return asked as FileView;
+  return repository && inTree ? "code" : "changes";
+}
+// A directory's tabs: its files, its commits from the checkout (a folder
+// has none) and the sessions that edited files in it.
+export const directoryViews = ["files", "commits", "sessions"] as const;
+export type DirectoryView = typeof directoryViews[number];
+export const directoryViewLabels: Record<DirectoryView, string> = { files: "Files", commits: "Commits", sessions: "Sessions" };
+export function directoryTabs(repository: boolean): DirectoryView[] {
+  return repository ? [...directoryViews] : ["files", "sessions"];
+}
+export function directoryTab(asked: string, repository: boolean): DirectoryView {
+  const tabs = directoryTabs(repository);
+  return (tabs as string[]).includes(asked) ? asked as DirectoryView : tabs[0];
+}
+
+// keepFilesView carries the page's open directories (its disclosures) and
+// whether the tree is hidden to another address on it, so moving through
+// the tree keeps it as it was.
 export function keepFilesView(href: string, search: string): string {
-  const url = new URL(href, "http://pharos.invalid");
-  const disclosures = new URLSearchParams(search).get("disclosures");
-  if (url.pathname === fileHistoryRoute && disclosures && !url.searchParams.has("disclosures")) url.searchParams.set("disclosures", disclosures);
+  const url = new URL(href, "http://pharos.invalid"), from = new URLSearchParams(search);
+  if (url.pathname !== fileHistoryRoute) return url.pathname + url.search;
+  for (const param of ["disclosures", "files_tree_collapsed"]) {
+    const value = from.get(param);
+    if (value && !url.searchParams.has(param)) url.searchParams.set(param, value);
+  }
   return url.pathname + url.search;
 }
 
@@ -188,6 +240,7 @@ const linkMethods: Record<string, string> = {
   message: "its git command wrote the message",
   window: "its git command ran then",
   rewrite: "a rebase or amend of its commit",
+  landed: "its branch commit landed in this squash",
   inferred: "inferred from its edits",
 };
 
@@ -196,4 +249,129 @@ const linkMethods: Record<string, string> = {
 export function linkText(link: FileHistoryLink): string {
   const method = linkMethods[link.method] ?? link.method;
   return link.counted ? method : `candidate, ${method}`;
+}
+
+// The checkout of a repository chosen on this Mac, which the Files page's
+// Git views read (repository_checkout.go).
+export type RepositoryCheckout = {
+  repository_id: string; name?: string; path?: string | null; status: "unset" | "set" | "unavailable" | string; reason?: string | null; candidates?: string[];
+};
+// What a Git view answers with: the checkout's state, the commit it read,
+// and a note when it read nothing (the commit or file is not there).
+export type FileGitAnswer = {
+  project?: FileProject; choices?: FileProject[]; checkout?: { path?: string | null; status: string; reason?: string | null };
+  commit?: string; ref?: string; note?: string; path?: string;
+};
+export type FileContent = FileGitAnswer & { text?: string; truncated?: boolean; binary?: boolean; size?: number };
+export type BlameCommit = { author: string; author_at: string; summary: string; sessions: FileHistoryLink[]; read: boolean };
+export type FileBlame = FileGitAnswer & { lines?: string[]; groups?: { hash: string; start: number; count: number }[]; commits?: Record<string, BlameCommit> };
+export type FileLogCommit = {
+  hash: string; parents: string[]; author: string; author_at: string; committed_at?: string; subject: string; body?: string;
+  read: boolean; on_mainline?: boolean | null; reverted_by?: string | null; sessions: FileHistoryLink[]; url: string;
+};
+export type FileLog = FileGitAnswer & { commits?: FileLogCommit[]; more?: boolean; offset?: number };
+export type FileDiff = FileGitAnswer & { diff?: string; truncated?: boolean };
+export type CommitGit = FileGitAnswer & {
+  commit?: FileLogCommit & { files: { path: string; lines_added?: number; lines_removed?: number; binary: boolean }[]; files_truncated?: boolean };
+};
+// Each directory entry's last commit at the tree's commit, by its name.
+export type FileLastCommits = FileGitAnswer & { entries?: Record<string, FileLogCommit>; truncated?: boolean };
+// An edit's diff as its call made it, read from the transcript: kind is
+// replace, write, patch, delete, listed (no lines) or unread.
+export type FileChange = {
+  workspace_id: string; title?: string | null; outcome_label?: string; at?: string | null; tool_name?: string | null;
+  lines_added?: number | null; lines_removed?: number | null; url: string; session_url: string;
+  kind: string; hunks: { header?: string; lines: [string, string][] }[]; truncated?: boolean; note?: string;
+};
+export type FileChanges = { project?: FileProject; choices?: FileProject[]; path: string; changes: FileChange[]; more?: boolean; offset?: number; note?: string };
+export type FileFind = { project?: FileProject; choices?: FileProject[]; files: { path: string; in_tree: boolean; url: string }[]; more?: boolean };
+
+// checkoutText says where Git views read from, or why they cannot yet.
+export function checkoutText(checkout: Pick<RepositoryCheckout, "status" | "path" | "reason"> | undefined): string {
+  if (!checkout) return "";
+  if (checkout.status === "set") return `Reading code, blame and history from ${checkout.path}.`;
+  return checkout.reason || "Choose this repository's checkout on this Mac to see its code, blame and history.";
+}
+
+// A unified diff, file by file and hunk by hunk, each line with its number
+// on the old and new side.
+export type DiffLine = { kind: " " | "+" | "-" | "\\"; text: string; old?: number; new?: number };
+export type DiffHunk = { header: string; lines: DiffLine[] };
+export type DiffFile = { path: string; oldPath?: string; binary: boolean; hunks: DiffHunk[] };
+
+export function parseUnifiedDiff(text: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let file: DiffFile | null = null, hunk: DiffHunk | null = null, oldLine = 0, newLine = 0;
+  const unquote = (name: string) => name.replace(/^"(.*)"$/, "$1").replace(/^[ab]\//, "");
+  for (const line of text.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const names = /^diff --git (?:"?a\/(.+?)"?) (?:"?b\/(.+?)"?)$/.exec(line);
+      file = { path: names?.[2] ?? line.slice(11), oldPath: names?.[1], binary: false, hunks: [] };
+      files.push(file);
+      hunk = null;
+      continue;
+    }
+    if (!file) continue;
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
+    if (header) {
+      oldLine = Number(header[1]); newLine = Number(header[2]);
+      hunk = { header: line, lines: [] };
+      file.hunks.push(hunk);
+      continue;
+    }
+    if (!hunk) {
+      if (line.startsWith("Binary files ")) file.binary = true;
+      else if (line.startsWith("+++ ") && line !== "+++ /dev/null") file.path = unquote(line.slice(4));
+      else if (line.startsWith("rename from ")) file.oldPath = line.slice(12);
+      else if (line.startsWith("rename to ")) file.path = line.slice(10);
+      continue;
+    }
+    const kind = line[0];
+    if (kind === "+") hunk.lines.push({ kind, text: line.slice(1), new: newLine++ });
+    else if (kind === "-") hunk.lines.push({ kind, text: line.slice(1), old: oldLine++ });
+    else if (kind === " ") hunk.lines.push({ kind, text: line.slice(1), old: oldLine++, new: newLine++ });
+    else if (kind === "\\") hunk.lines.push({ kind: "\\", text: line.slice(1).trim() });
+  }
+  for (const each of files) if (each.oldPath === each.path) delete each.oldPath;
+  return files;
+}
+
+// commitsByDay groups commits newest first under the day each was authored,
+// as GitHub's history does.
+export function commitsByDay<T extends { author_at?: string }>(commits: T[], locale?: string): { day: string; commits: T[] }[] {
+  const groups: { day: string; commits: T[] }[] = [];
+  for (const commit of commits) {
+    const day = commit.author_at ? new Date(commit.author_at).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" }) : "Undated";
+    if (groups.at(-1)?.day !== day) groups.push({ day, commits: [] });
+    groups.at(-1)!.commits.push(commit);
+  }
+  return groups;
+}
+
+// age is how long ago a time was, as a file list says it.
+export function age(value: string | null | undefined, now = Date.now()): string {
+  if (!value) return "";
+  const seconds = Math.max(0, (now - new Date(value).getTime()) / 1000);
+  const units: [number, string][] = [[365 * 86400, "year"], [30 * 86400, "month"], [7 * 86400, "week"], [86400, "day"], [3600, "hour"], [60, "minute"]];
+  for (const [size, unit] of units) {
+    const count = Math.floor(seconds / size);
+    if (count >= 1) return `${count} ${unit}${count === 1 ? "" : "s"} ago`;
+  }
+  return "just now";
+}
+
+// blameRows lays a blame out as runs of lines, each run's commit named on
+// its first line, with the file's own line numbers.
+export function blameRows(blame: Pick<FileBlame, "lines" | "groups">): { hash: string; start: number; lines: string[] }[] {
+  const lines = blame.lines ?? [];
+  return (blame.groups ?? []).map(group => ({ hash: group.hash, start: group.start, lines: lines.slice(group.start - 1, group.start - 1 + group.count) }));
+}
+
+// changeText says what an edit did, for its header.
+export function changeText(change: Pick<FileChange, "kind" | "tool_name" | "lines_added" | "lines_removed">): string {
+  const kind: Record<string, string> = { replace: "Replaced lines", write: "Wrote the whole file", patch: "Patched", delete: "Deleted the file", listed: "Changed (lines not recorded)", unread: "Edited" };
+  const parts = [kind[change.kind] ?? "Edited"];
+  if (change.tool_name) parts.push(`with ${change.tool_name}`);
+  if (change.lines_added != null || change.lines_removed != null) parts.push(linesText(change.lines_added, change.lines_removed));
+  return parts.join(" · ");
 }

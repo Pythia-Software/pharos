@@ -232,6 +232,7 @@ func TestFileHistoryWithGit(t *testing.T) {
 	if slices.Sort(linked); strings.Join(linked, "|") != "lib.go /files?file=lib.go&file_project=app|lib_test.go /files?file=lib_test.go&file_project=app" {
 		t.Fatalf("reader links: %v", linked)
 	}
+	fileViewer(t, f, map[string]string{"first": first, "second": second, "byHand": byHand})
 	// Two repositories of one name are addressed by ID, and the name asks
 	// which was meant.
 	execTx(t, f.catalog.DB, `INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo-fork','app','x','x')`)
@@ -336,5 +337,165 @@ func TestFileHistoryWithoutGit(t *testing.T) {
 		if row["git_check"] != "not_applicable" || row["evidence_tier"] == "local_git" || firstString(row["outcome_why"]) == "" {
 			t.Fatalf("an outcome without Git: %#v", row)
 		}
+	}
+}
+
+// fileViewer checks the Files page's views of the repository in
+// TestFileHistoryWithGit: the tree's last commit and session, Go to file,
+// each edit's diff, and, once its checkout is chosen, the contents, blame,
+// diffs and history Git reads from it.
+func fileViewer(t *testing.T, f *gitFixture, commits map[string]string) {
+	t.Helper()
+	ctx := t.Context()
+	root, err := f.catalog.FileTree(ctx, FileTreeOptions{Project: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range root["entries"].([]map[string]any) {
+		if entry["name"] != "main.go" {
+			continue
+		}
+		session, commit := entry["last_session"].(map[string]any), entry["last_commit"].(map[string]any)
+		if session["workspace_id"] != "second" || session["title"] != "second" || commit["hash"] != commits["byHand"] {
+			t.Fatalf("main.go's last session and commit: %#v", entry)
+		}
+	}
+	found, err := f.catalog.FileFind(ctx, "app", "LIB")
+	if paths := fmt.Sprint(found["files"]); err != nil || !strings.Contains(paths, "path:lib.go") || strings.Index(paths, "path:lib.go") > strings.Index(paths, "path:lib_test.go") {
+		t.Fatalf("go to file: %v %v", paths, err)
+	}
+	// Each edit is a diff read from its call, newest first, opening at it.
+	changes, err := f.catalog.FileChanges(ctx, FileChangesOptions{Project: "app", Path: "main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var who []string
+	for _, change := range changes["changes"].([]map[string]any) {
+		hunks := change["hunks"].([]editHunk)
+		if change["kind"] != "replace" || len(hunks) != 1 || len(hunks[0].Lines) != 3 || hunks[0].Lines[0].Kind != '+' || !strings.Contains(firstString(change["url"]), "message=call-") {
+			t.Fatalf("an edit's diff: %#v", change)
+		}
+		who = append(who, firstString(change["workspace_id"]))
+	}
+	if strings.Join(who, " ") != "second second first" || changes["more"] != false {
+		t.Fatalf("main.go's edits: %v", who)
+	}
+
+	// Without a chosen checkout no Git runs: the views say how to choose one,
+	// from the checkouts the sessions ran in.
+	content, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go"})
+	if err != nil || content["text"] != nil || content["checkout"].(map[string]any)["status"] != "unset" {
+		t.Fatalf("content without a checkout: %#v %v", content, err)
+	}
+	checkout, err := f.catalog.RepositoryCheckout(ctx, "repo-app")
+	if err != nil || checkout["status"] != "unset" || !slices.Equal(checkout["candidates"].([]string), []string{f.repo.dir}) {
+		t.Fatalf("checkout choices: %#v %v", checkout, err)
+	}
+	// A repository of another history is refused; a clone of this one is
+	// recognised by its first commit.
+	other := newGitRepository(t)
+	if _, err := f.catalog.SetRepositoryCheckout(ctx, "repo-app", other.dir); err == nil || !strings.Contains(err.Error(), "does not look like") {
+		t.Fatalf("another repository as the checkout: %v", err)
+	}
+	clone := filepath.Join(t.TempDir(), "clone")
+	f.repo.git(time.Now(), "clone", "-q", f.repo.dir, clone)
+	execTx(t, f.catalog.DB, `UPDATE repositories SET root_commit='`+f.repo.git(time.Now(), "rev-list", "--max-parents=0", "HEAD")+`' WHERE id='repo-app'`)
+	if set, err := f.catalog.SetRepositoryCheckout(ctx, "repo-app", filepath.Join(clone, ".")); err != nil || set["status"] != "set" || set["path"] != clone {
+		t.Fatalf("a clone as the checkout: %#v %v", set, err)
+	}
+	if _, err := f.catalog.SetRepositoryCheckout(ctx, "repo-app", f.repo.dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// The file at the tree the scan read, and who last changed each line.
+	content, err = f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go"})
+	if err != nil || content["text"] != "package main\n\nfunc main() { run() }\n" || content["checkout"].(map[string]any)["status"] != "set" {
+		t.Fatalf("content: %#v %v", content, err)
+	}
+	if old, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go", Commit: commits["first"][:8]}); err != nil || old["text"] != "package main\n" {
+		t.Fatalf("content at a commit: %#v %v", old, err)
+	}
+	if gone, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "lib.go"}); err != nil || gone["text"] != nil || !strings.Contains(firstString(gone["note"]), "not in commit") {
+		t.Fatalf("a file never committed: %#v %v", gone, err)
+	}
+	blame, err := f.catalog.FileBlame(ctx, FileGitOptions{Project: "app", Path: "main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []string
+	for _, group := range blame["groups"].([]map[string]any) {
+		runs = append(runs, fmt.Sprintf("%s:%d+%d", firstString(group["hash"])[:7], group["start"], group["count"]))
+	}
+	firstCommit := blame["commits"].(map[string]any)[commits["first"]].(map[string]any)
+	if strings.Join(runs, " ") != commits["first"][:7]+":1+1 "+commits["second"][:7]+":2+1 "+commits["byHand"][:7]+":3+1" ||
+		firstCommit["summary"] != "First" || firstCommit["sessions"].([]map[string]any)[0]["workspace_id"] != "first" {
+		t.Fatalf("blame: %v %#v", runs, blame)
+	}
+	// A commit's diff of the file, its detail and the file's history.
+	diff, err := f.catalog.FileDiff(ctx, FileGitOptions{Project: "app", Path: "main.go", Commit: commits["second"]})
+	if err != nil || !strings.Contains(firstString(diff["diff"]), "+func main() {}") {
+		t.Fatalf("diff: %#v %v", diff, err)
+	}
+	detail, err := f.catalog.CommitDetail(ctx, FileGitOptions{Project: "app", Commit: commits["first"][:7]})
+	if commit, _ := detail["commit"].(map[string]any); err != nil || commit["subject"] != "First" || fmt.Sprint(commit["files"]) != "[map[binary:false lines_added:1 lines_removed:0 path:main.go]]" ||
+		commit["read"] != true || len(commit["sessions"].([]map[string]any)) != 1 {
+		t.Fatalf("commit detail: %#v %v", detail, err)
+	}
+	start := f.repo.git(time.Now(), "rev-list", "--max-parents=0", "HEAD")
+	if detail, err := f.catalog.CommitDetail(ctx, FileGitOptions{Project: "app", Commit: start}); err != nil || !strings.Contains(fmt.Sprint(detail["commit"].(map[string]any)["files"]), "path:README.md") {
+		t.Fatalf("a first commit's files: %#v %v", detail, err)
+	}
+	history, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Path: "main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subjects []string
+	for _, commit := range history["commits"].([]map[string]any) {
+		subjects = append(subjects, fmt.Sprintf("%s:%d", commit["subject"], len(commit["sessions"].([]map[string]any))))
+	}
+	if strings.Join(subjects, " ") != "By hand:0 Second:1 First:1" || history["more"] != false {
+		t.Fatalf("history: %v", subjects)
+	}
+	// Each entry's last commit, read in one walk of history.
+	lastCommits, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app"})
+	if last := lastCommits["entries"].(map[string]any); err != nil || last["main.go"].(map[string]any)["subject"] != "By hand" || last["gen"].(map[string]any)["subject"] != "Generated by a script" ||
+		last["README.md"].(map[string]any)["subject"] != "Start" || last["lib.go"] != nil {
+		t.Fatalf("last commits: %#v %v", lastCommits, err)
+	}
+	if gen, err := f.catalog.LastCommits(ctx, FileGitOptions{Project: "app", Path: "gen"}); err != nil || len(gen["entries"].(map[string]any)) != 1 || gen["entries"].(map[string]any)["script.go"] == nil {
+		t.Fatalf("a directory's last commits: %#v %v", gen, err)
+	}
+	// A squash on mainline is linked to the sessions whose branch commits it
+	// took in, each opening where it made its own commit.
+	execTx(t, f.catalog.DB, `INSERT INTO git_commits(repository_id,hash,author_at,committed_at,parents,files,on_mainline,mainline_evidence)
+		VALUES('repo-app','`+strings.Repeat("ab", 20)+`','x','x',1,1,1,'squashed into `+commits["byHand"][:12]+` on remotes/origin/main')`,
+		`INSERT INTO session_commit_links(workspace_id,repository_id,hash,method,confidence,evidence_json) VALUES('elsewhere','repo-app','`+strings.Repeat("ab", 20)+`','transcript',1,'{"conversation":"elsewhere-c","message":"m-1"}')`)
+	landed, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Path: "main.go"})
+	if link := landed["commits"].([]map[string]any)[0]["sessions"].([]map[string]any); err != nil || len(link) != 1 || link[0]["workspace_id"] != "elsewhere" || link[0]["method"] != "landed" ||
+		link[0]["url"] != "/work/elsewhere?conversation=elsewhere-c&message=m-1" {
+		t.Fatalf("a squash's sessions: %#v %v", link, err)
+	}
+	override(t, &fileLogLimit, 2)
+	if all, err := f.catalog.FileLog(ctx, FileLogOptions{Project: "app", Offset: 5}); err != nil || len(all["commits"].([]map[string]any)) != 1 || all["more"] != false {
+		t.Fatalf("the repository's last page: %#v %v", all, err)
+	}
+	// Paths and commits are checked before Git sees them, and a commit the
+	// checkout lacks says so.
+	for _, options := range []FileGitOptions{{Project: "app", Path: "../outside"}, {Project: "app", Path: "a/../../b"}, {Project: "app", Path: "main.go", Commit: "--output=x"}} {
+		if _, err := f.catalog.FileContent(ctx, options); err == nil {
+			t.Fatalf("%+v should be refused", options)
+		}
+	}
+	if missing, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go", Commit: "abcdef0"}); err != nil || !strings.Contains(firstString(missing["note"]), "does not hold") {
+		t.Fatalf("a commit the checkout lacks: %#v %v", missing, err)
+	}
+	// A file past the viewer's limit is not read.
+	override(t, &fileGitMaxBytes, 10)
+	if large, err := f.catalog.FileContent(ctx, FileGitOptions{Project: "app", Path: "main.go"}); err != nil || large["text"] != nil || !strings.Contains(firstString(large["note"]), "more than the viewer reads") {
+		t.Fatalf("a large file: %#v %v", large, err)
+	}
+	// Forgetting the checkout stops Git again.
+	if cleared, err := f.catalog.ClearRepositoryCheckout(ctx, "repo-app"); err != nil || cleared["status"] != "unset" {
+		t.Fatalf("cleared: %#v %v", cleared, err)
 	}
 }

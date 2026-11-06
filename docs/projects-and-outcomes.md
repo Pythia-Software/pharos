@@ -840,16 +840,79 @@ conversation at its first edit, and a File history link opens the file's
 timeline. A file a change set also found is listed once, with the session's
 project and first edit added to the change set's hit.
 
-**Line-level blame is not built.** It would map a line to its commit with
-`git blame`, then to a session. The commit-to-session links would support
-it: on the calibration sample, counted inferred links matched the hash the
-session printed for 93% to 100% of commits, depending on the rule that
-decided them (see Commit-linking calibration). But blame needs a git process
-per file view, and pages must not run Git on a request. Blaming in the background would mean blaming every edited file at
-every tip, or storing per-line ownership, and the brief forbids storing
-content beyond counts. The commit list per file answers most of the
-question; blame waits until there is a way to precompute it within those
-rules.
+A squash on mainline is linked to the sessions whose branch commits it took
+in: their mainline evidence names the squash ("squashed into", "listed in"
+or "pull request #N," and its hash), so the squash's sessions are theirs,
+shown as "landed" with each one's own confidence and opening where the
+session made its branch commit. Without this, a project that squash-merges
+would show no session on any mainline commit.
+
+## The file viewer's checkout
+
+The Files page is laid out like a code host's: the project's tree in a
+full-height sidebar (hidden with `files_tree_collapsed`) with **Go to file**
+(`/api/file-find`, the tree's paths and those sessions or commits touched),
+and a pane with the path, the tree's commit, the latest commit and tabs.
+
+- A **file** (`file_view`) has **Code**, **Blame** and **History**, read by
+  Git; **Changes**, each edit's diff as its call made it, read from the
+  transcript; and **Sessions**, the timeline above. A folder's file has only
+  the last two, and opens on Changes.
+- A **directory** (`file_dir_view`) has **Files** (each entry with its last
+  change), **Commits** and **Sessions**.
+- A **commit** has its message, where it stands, its sessions and each
+  file's diff, opened one at a time; with `file`, that file's diff opens.
+
+**Code, blame and history need a checkout the person chose.** The brief
+keeps Git off requests: pages read stored facts. Showing a file's code, its
+blame or its full history would mean storing file contents, per-line
+ownership or every commit message, which the brief also forbids. So these
+views run Git when they are opened, and only in a checkout the person named
+for that repository on this Mac (`repository_checkouts`, set from the page's
+chooser: the checkouts its sessions ran in, main checkouts first, or a typed
+folder). Choosing one is the person's consent to Git running there. Pharos
+accepts a folder only if it is that repository's: one of its remotes
+normalizes to the repository's, its first commit is the repository's, or a
+session of the repository ran inside it. Without a checkout these tabs show
+the chooser; Changes, Sessions, the tree and every stored fact still show.
+
+Within the checkout (`file_git.go`), every command:
+
+- is read-only (`cat-file`, `blame --porcelain`, `log`, `diff-tree`,
+  `rev-parse`, `rev-list`) with `GIT_NO_LAZY_FETCH=1`,
+  `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, `--no-textconv
+  --no-ext-diff`, under `nice`;
+- has a 15-second limit and an output cap (1 MiB of content or diff, 8 MiB
+  of blame, 20,000 lines), past which the page says the file is too large;
+- waits for one of two slots, so the viewer never runs more than two Git
+  processes;
+- takes only hex commit IDs and clean repository-relative paths, checked
+  before Git sees them.
+
+Nothing it reads is stored. A view reads the tree the scan read
+(`tree_commit`), or the checkout's HEAD when the checkout lacks that commit.
+Each answer carries the checkout's state, and the page caches answers for a
+minute.
+
+| View | Git | Typical time on this repository |
+|---|---|---|
+| Code | `cat-file -t`, `-s`, `blob` | 0.1 s |
+| Blame (1,300 lines, 70 commits) | `blame --porcelain` | 0.2 s |
+| History, a page of 50 | `log -- path` | 0.1–0.2 s |
+| Directory last commits | one `log --name-only -n 1000` | 0.1–0.3 s |
+| Commit message and files | `log -1`, `diff-tree --numstat` | 0.1 s |
+| A file's diff in a commit | `diff-tree -p` | 0.1 s |
+
+**Changes need no Git.** `/api/file-changes` reads each edit's call input
+from the transcript the library already holds (`session_file_edits` names the
+message) and turns it into a diff (`readEditDiffs`, beside
+`readEditChanges`): a replacement as its old and new lines with the lines
+they share kept, a patch as its own hunks, a whole-file write as added
+lines. A replacement does not know the file's line numbers, and a call that
+listed files without their lines says so.
+
+MCP tools stay Git-free: an agent asking about a file gets the stored
+timeline (`get_file_history`), not code or blame.
 
 ## MCP
 
@@ -912,10 +975,13 @@ fixture.
 - It never runs git in a path another Mac recorded
   (`workspace_sightings.host_id`), because that path may be an unrelated
   checkout here.
-- It never runs git on a request. Pages and MCP tools read stored facts.
-  Git runs in background stages at low priority, with timeouts and
-  cancellation, and caches by the repository's refs.
-- It never stores diffs, file contents or commit messages. It stores
+- It never runs git on a request, except the Files page's code, blame,
+  history and diff views in a checkout the person chose (see The file
+  viewer's checkout). Other pages and every MCP tool read stored facts.
+  Git otherwise runs in background stages at low priority, with timeouts
+  and cancellation, and caches by the repository's refs.
+- It never stores diffs, file contents or commit messages, including what
+  the file viewer reads. It stores
   hashes, paths, counts and timestamps; a commit subject only as a
   fingerprint, to compare a commit with the command that made it.
 - It never makes a network call for git data.
@@ -1108,6 +1174,10 @@ head in, and writes `main_merge_*`. Its properties:
    its transcript, rework between sessions by file, the project tree, the
    Work page's files and commits, and history links on the reader's file
    chips.
+7. **The file viewer:** a sidebar tree with Go to file; a file's code,
+   blame and history from a checkout the person chose, and its sessions'
+   edits as diffs; directories' last changes and commits; commits' messages
+   and diffs; squashes linked to the sessions they landed.
 
 Handoffs between parts are in `.context/projects-and-outcomes-handoff.md`
 (not committed).

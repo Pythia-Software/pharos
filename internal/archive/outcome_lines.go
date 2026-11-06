@@ -180,14 +180,43 @@ var patchEscapes = strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\"`, `"`, `\'`, 
 // the patch's first file; a deleted file is rewritten empty, so every line
 // it had is removed.
 func readPatch(patch, path string) []fileEdit {
+	var files []fileEdit
+	for _, section := range patchSections(patch, path) {
+		change := editChange{Added: lineSet{}, Removed: lineSet{}, Rewrite: section.Kind == "delete"}
+		var added, removed int64
+		for _, line := range section.Lines {
+			if text, ok := strings.CutPrefix(line, "+"); ok {
+				added++
+				fingerprintLines(text, change.Added)
+			} else if text, ok := strings.CutPrefix(line, "-"); ok {
+				removed++
+				fingerprintLines(text, change.Removed)
+			}
+		}
+		files = append(files, fileEdit{Path: section.Path, Change: settle(change), Added: new(added), Removed: new(removed)})
+	}
+	return files
+}
+
+// patchSection is one file's part of an apply_patch patch: its absolute
+// path, whether it is updated, added or deleted, and its lines, each with
+// its +, - or space prefix, or an @@ hunk header.
+type patchSection struct {
+	Path, Kind string
+	Lines      []string
+}
+
+// patchSections splits an apply_patch patch by file. A file named relative
+// to the working directory is placed by the call's path, which is the
+// patch's first file; one that cannot be placed is left out.
+func patchSections(patch, path string) []patchSection {
 	patch = patchText(patch)
 	if patch == "" {
 		return nil
 	}
 	type section struct {
-		name           string
-		change         editChange
-		added, removed int64
+		name, kind string
+		lines      []string
 	}
 	var sections []*section
 	var current *section
@@ -199,21 +228,14 @@ func readPatch(patch, path string) []fileEdit {
 			current = nil
 			for _, kind := range []string{"Update File: ", "Add File: ", "Delete File: "} {
 				if file, ok := strings.CutPrefix(header, kind); ok && strings.TrimSpace(file) != "" {
-					current = &section{name: strings.TrimSpace(file), change: editChange{Added: lineSet{}, Removed: lineSet{}, Rewrite: kind == "Delete File: "}}
+					current = &section{name: strings.TrimSpace(file), kind: strings.ToLower(strings.Fields(kind)[0])}
 					sections = append(sections, current)
 				}
 			}
 			continue
 		}
-		if current == nil || strings.HasPrefix(line, "@@") {
-			continue
-		}
-		if text, ok := strings.CutPrefix(line, "+"); ok {
-			current.added++
-			fingerprintLines(text, current.change.Added)
-		} else if text, ok := strings.CutPrefix(line, "-"); ok {
-			current.removed++
-			fingerprintLines(text, current.change.Removed)
+		if current != nil && (strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ")) {
+			current.lines = append(current.lines, line)
 		}
 	}
 	directory := ""
@@ -223,7 +245,7 @@ func readPatch(patch, path string) []fileEdit {
 			break
 		}
 	}
-	var files []fileEdit
+	var placed []patchSection
 	for _, section := range sections {
 		file := filepath.Clean(section.name)
 		if !filepath.IsAbs(file) {
@@ -232,9 +254,9 @@ func readPatch(patch, path string) []fileEdit {
 			}
 			file = filepath.Join(directory, file)
 		}
-		files = append(files, fileEdit{Path: file, Change: settle(section.change), Added: new(section.added), Removed: new(section.removed)})
+		placed = append(placed, patchSection{Path: file, Kind: section.kind, Lines: section.lines})
 	}
-	return files
+	return placed
 }
 
 // patchNamesPath reports whether a patch's file name, absolute or relative to

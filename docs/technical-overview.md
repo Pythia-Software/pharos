@@ -171,7 +171,15 @@ sessions that edited a file (`session_files`), each edit's call
 (`session_file_edits`) and the rework between them (`session_file_rework`),
 and in a checked repository its commits (`git_commit_files`) and the tree at
 the mainline tip (`git_tree_files`), both filled by the Tier 2 scan. Library
-file search reads `session_files` beside `change_files`.
+file search reads `session_files` beside `change_files`. A file's Changes tab
+(`file_changes.go`, `/api/file-changes`) turns each edit's call input into a
+diff. Code, blame, history, commit diffs and a directory's last commits
+(`file_git.go`; `/api/file-content`, `/api/file-blame`, `/api/file-log`,
+`/api/file-diff`, `/api/file-commit-git`, `/api/file-last-commits`) are the
+only requests that run Git: read-only, bounded, two at a time, and only in
+the checkout the person chose for the repository on this Mac
+(`repository_checkout.go`, `repository_checkouts`,
+`/api/repositories/{id}/checkout`); nothing they read is stored.
 
 Analyze → Outcomes reads the `outcomes` dataset (`outcomes_table.go`): one
 row per Library session, with its label, evidence tier, branch, main model
