@@ -39,7 +39,7 @@ export function readThinkingCard(address: string, now = new Date()): { topic: "t
 
 const recipe = (id: string) => thinkingCardRecipes.find(item => item.id === id)!;
 const breakdownField: Record<ThinkingState["groupBy"], string | undefined> = {
-  none: undefined, model: "model", model_effort: "model_effort", provider: "provider", effort: "effort", harness: "harness",
+  none: undefined, model: "model", model_effort: "model_effort", speed: "speed", model_speed: "model_speed", model_effort_speed: "model_effort_speed", provider: "provider", effort: "effort", harness: "harness",
   repository: "repository_name", machine: "machine", preceding_tool: "preceding_tool", agent_depth: "agent_depth",
 };
 const breakdownLabel = (state: ThinkingState) => thinkingBreakdowns.find(([id]) => id === state.groupBy)![1].toLowerCase();
@@ -53,8 +53,8 @@ export function thinkingCardRecipe(target: ThinkingCardTarget, state: ThinkingSt
   return { ...card, measures: card.measures.map(measure => measure.distribution?.kind === "box" ? { ...measure, display: { ...measure.display, kind: "box", xScale: { mode: "log" }, xLabel: card.unit } } : measure) };
 }
 function thinkingCardMeasures(target: ThinkingCardTarget, state: ThinkingState): QueryRecipe {
-  // Waiting's curves are per model; a card draws a box for each.
-  if (target === "thinking-waits") return waitBoxes(["model"], "Wait by model");
+  // Waiting defaults to model; its card keeps the selected curve grouping.
+  if (target === "thinking-waits") return waitBoxes([breakdownField[state.groupBy] ?? "model"], `Wait by ${state.groupBy === "none" ? "model" : breakdownLabel(state)}`);
   if (target === "thinking-compactions") return recipe("thinking-compactions");
   // Exact quantiles of a whole library exceed the service's budget, so
   // without a breakdown a card draws a box per model.
@@ -105,7 +105,7 @@ export function compactionColumns(result: AggregationResultEntry, limit = 6): { 
 export function thinkingCardTitle(target: ThinkingCardTarget, state: ThinkingState): string {
   let title: string;
   const by = state.groupBy === "none" ? "" : ` by ${breakdownLabel(state)}`;
-  if (target === "thinking-waits") title = "Model wait distribution";
+  if (target === "thinking-waits") title = state.groupBy === "none" || state.groupBy === "model" ? "Model wait distribution" : `Wait by ${breakdownLabel(state)}`;
   else if (thinkingGridView(target, state)) title = state.view === "heatmap" ? `Wait heatmap${by}` : state.view === "time" ? `Wait distributions over time${by}`
     : state.calendarMetric === "ratio" ? "Wait against workload by time of day" : "Wait by time of day";
   else if (target === "thinking-compactions") title = "Context compactions";
@@ -135,7 +135,7 @@ function thinkingCardReading(target: ThinkingCardTarget, state: ThinkingState): 
     : "The median wait in each hour of each day: darker is longer.";
   if (target === "thinking-compactions") return "Requests that follow a context compaction, day by day by model.";
   if (target === "thinking-distributions" && state.view === "reasoning") return "Positive reasoning reports, including requests without timing; zero cannot distinguish no reasoning from unreported reasoning.";
-  if (target === "thinking-distributions" && state.groupBy !== "none") return `Observed post-tool waits by ${breakdownLabel(state)}. Missing timing stays missing.`;
+  if ((target === "thinking-distributions" || target === "thinking-waits") && state.groupBy !== "none") return `Observed post-tool waits by ${breakdownLabel(state)}. Missing timing stays missing.`;
   return "Post-tool request gaps: a coarse proxy for how long an agent waits before its next step. Missing timing stays missing.";
 }
 

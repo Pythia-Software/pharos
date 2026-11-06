@@ -53,7 +53,7 @@ func readThinkingOptions(q url.Values, now time.Time) (thinkingOptions, error) {
 		values   []string
 	}{
 		{"view", "time", &o.View, []string{"time", "heatmap", "histogram", "reasoning", "wait-box", "calendar"}},
-		{"groupBy", "none", &o.GroupBy, []string{"none", "model", "model_effort", "provider", "effort", "harness", "repository", "machine", "preceding_tool", "agent_depth"}},
+		{"groupBy", "none", &o.GroupBy, []string{"none", "model", "model_effort", "speed", "model_speed", "model_effort_speed", "provider", "effort", "harness", "repository", "machine", "preceding_tool", "agent_depth"}},
 		{"period", "day", &o.Period, []string{"hour", "hours", "day", "days", "week", "month"}},
 		{"rows", "day", &o.Rows, []string{"day", "week", "month"}}, {"metric", "raw", &o.Metric, []string{"raw", "ratio"}},
 		{"sort", "median", &o.Sort, []string{"median", "p95", "volume"}}, {"direction", "desc", &o.Direction, []string{"asc", "desc"}},
@@ -209,13 +209,13 @@ func validateThinkingView(value map[string]any) error {
 }
 
 type thinkingRecord struct {
-	ID, Conversation, Stream, Workspace, Model, Effort, Provider, Harness, Repository, Machine, Preceding, Quality, Previous, Native string
-	ObservedMillis                                                                                                                   sql.NullInt64
-	At                                                                                                                               time.Time
-	Sequence, Depth                                                                                                                  int
-	Input, Cache, Output, Reasoning                                                                                                  float64
-	Gap, Ratio                                                                                                                       *float64
-	Compaction                                                                                                                       bool
+	ID, Conversation, Stream, Workspace, Model, Effort, Speed, Provider, Harness, Repository, Machine, Preceding, Quality, Previous, Native string
+	ObservedMillis                                                                                                                          sql.NullInt64
+	At                                                                                                                                      time.Time
+	Sequence, Depth                                                                                                                         int
+	Input, Cache, Output, Reasoning                                                                                                         float64
+	Gap, Ratio                                                                                                                              *float64
+	Compaction                                                                                                                              bool
 }
 type thinkingStats struct {
 	N      int      `json:"n"`
@@ -352,7 +352,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 	// retain several gigabytes and make a full-library read spend its budget in GC.
 	// Fixed-size chunks are joined once at the end, which costs less than
 	// counting the ledger first or regrowing one slice.
-	rows, err := tx.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(agent_session_id,''),workspace_id,model,effort,
+	rows, err := tx.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(agent_session_id,''),workspace_id,model,effort,speed,
  COALESCE(provider,''),COALESCE(harness,''),COALESCE(repository_name,''),COALESCE(machine,''),preceding_tool,timing_quality,
  COALESCE(previous_request_id,''),COALESCE(native_id,''),COALESCE(requested_at,''),observed_millis,sequence,COALESCE(agent_depth,0),input_tokens,
  cache_read_input_tokens,output_tokens,reasoning_output_tokens,gap_seconds,compacted_before FROM (`+thinkingSource+`) d WHERE `+where, args...)
@@ -368,7 +368,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 		var at string
 		var gap sql.NullFloat64
 		var compacted int
-		if err := rows.Scan(&r.ID, &r.Conversation, &r.Stream, &r.Workspace, &r.Model, &r.Effort, &r.Provider, &r.Harness, &r.Repository, &r.Machine, &r.Preceding, &r.Quality, &r.Previous, &r.Native, &at, &r.ObservedMillis, &r.Sequence, &r.Depth, &r.Input, &r.Cache, &r.Output, &r.Reasoning, &gap, &compacted); err != nil {
+		if err := rows.Scan(&r.ID, &r.Conversation, &r.Stream, &r.Workspace, &r.Model, &r.Effort, &r.Speed, &r.Provider, &r.Harness, &r.Repository, &r.Machine, &r.Preceding, &r.Quality, &r.Previous, &r.Native, &at, &r.ObservedMillis, &r.Sequence, &r.Depth, &r.Input, &r.Cache, &r.Output, &r.Reasoning, &gap, &compacted); err != nil {
 			return nil, err
 		}
 		r.At, _ = time.Parse(time.RFC3339Nano, at)
@@ -517,6 +517,16 @@ func thinkingGroupKey(r thinkingRecord, by string) (string, string) {
 		s = r.Model
 	case "effort":
 		s = r.Effort
+	case "speed":
+		return strings.ToLower(speedLabel(r.Speed)), speedLabel(r.Speed)
+	case "model_speed", "model_effort_speed":
+		parts := []string{r.Model}
+		if by == "model_effort_speed" {
+			parts = append(parts, r.Effort)
+		}
+		parts = append(parts, speedLabel(r.Speed))
+		b, _ := json.Marshal(parts)
+		return string(b), strings.Join(parts, " · ")
 	case "model_effort":
 		b, _ := json.Marshal([]string{r.Model, r.Effort})
 		return string(b), r.Model + " · " + r.Effort
@@ -704,7 +714,7 @@ func aggregateThinking(ctx context.Context, records []thinkingRecord, o thinking
 	}
 	for key, rs := range groups {
 		g := thinkingGroup{Key: key, Label: labels[key], Counts: make([]int, len(thinkingEdges)-1), Periods: map[string]thinkingCell{}, Calendar: []thinkingCalendarCell{}, Bands: []thinkingBand{}}
-		if o.GroupBy == "model_effort" {
+		if o.GroupBy == "model_effort" || o.GroupBy == "model_effort_speed" || o.GroupBy == "model_speed" {
 			g.Model = records[rs[0]].Model
 			g.Effort = records[rs[0]].Effort
 		}
