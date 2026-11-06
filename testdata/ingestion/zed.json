@@ -367,6 +367,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/Zed/threads/threads.db#d0000000-0000-4000-8000-000000000002:e0000000-0000-4000-8000-000000000003",
+              "Speed": "fast",
+              "SpeedSource": "speed",
               "RawText": "{\"id\":\"e0000000-0000-4000-8000-000000000003\",\"type\":\"zed_user_message\"}",
               "SourceOrder": 0,
               "Selected": true,
@@ -384,6 +386,8 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/Zed/threads/threads.db#d0000000-0000-4000-8000-000000000002:e0000000-0000-4000-8000-000000000003/reply:1",
+              "Speed": "fast",
+              "SpeedSource": "speed",
               "RawText": "{\"id\":\"e0000000-0000-4000-8000-000000000003/reply:1\",\"type\":\"zed_agent_message\"}",
               "SourceOrder": 0,
               "Selected": true

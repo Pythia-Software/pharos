@@ -87,7 +87,7 @@
               "NativeID": "a1:usage",
               "Role": "system",
               "Kind": "metadata",
-              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_1\"}",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"},\"usage_message_id\":\"msg_1\"}",
               "Model": "claude-opus-4-5",
               "Effort": "high",
               "CreatedAt": "2026-09-01T10:00:05.000Z",
@@ -95,7 +95,7 @@
               "PreviousNativeID": "u1",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/claude/-p/claude-session.jsonl:2",
-              "RawText": "{\"_line\":2,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Read the file first.\",\"type\":\"thinking\"},{\"id\":\"toolu_1\",\"input\":{\"command\":\"wc -w README.md\"},\"name\":\"Bash\",\"type\":\"tool_use\"}],\"id\":\"msg_1\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"u1\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:05.000Z\",\"type\":\"assistant\",\"uuid\":\"a1\",\"version\":\"2.1.3\"}",
+              "RawText": "{\"_line\":2,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Read the file first.\",\"type\":\"thinking\"},{\"id\":\"toolu_1\",\"input\":{\"command\":\"wc -w README.md\"},\"name\":\"Bash\",\"type\":\"tool_use\"}],\"id\":\"msg_1\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"}},\"parentUuid\":\"u1\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:05.000Z\",\"type\":\"assistant\",\"uuid\":\"a1\",\"version\":\"2.1.3\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -135,7 +135,7 @@
               "NativeID": "a2:usage",
               "Role": "system",
               "Kind": "metadata",
-              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_2\"}",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"},\"usage_message_id\":\"msg_2\"}",
               "Model": "claude-opus-4-5",
               "Effort": "high",
               "CreatedAt": "2026-09-01T10:00:08.000Z",
@@ -143,7 +143,7 @@
               "PreviousNativeID": "u2",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/claude/-p/claude-session.jsonl:4",
-              "RawText": "{\"_line\":4,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"id\":\"toolu_2\",\"input\":{\"description\":\"Check the count\",\"prompt\":\"Count the words again\",\"subagent_type\":\"general-purpose\"},\"name\":\"Task\",\"type\":\"tool_use\"}],\"id\":\"msg_2\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"u2\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:08.000Z\",\"type\":\"assistant\",\"uuid\":\"a2\",\"version\":\"2.1.3\"}",
+              "RawText": "{\"_line\":4,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"id\":\"toolu_2\",\"input\":{\"description\":\"Check the count\",\"prompt\":\"Count the words again\",\"subagent_type\":\"general-purpose\"},\"name\":\"Task\",\"type\":\"tool_use\"}],\"id\":\"msg_2\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"}},\"parentUuid\":\"u2\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:08.000Z\",\"type\":\"assistant\",\"uuid\":\"a2\",\"version\":\"2.1.3\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -183,7 +183,7 @@
               "NativeID": "a3:usage",
               "Role": "system",
               "Kind": "metadata",
-              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_3\"}",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"},\"usage_message_id\":\"msg_3\"}",
               "Model": "claude-opus-4-5",
               "Effort": "high",
               "CreatedAt": "2026-09-01T10:00:22.000Z",
@@ -191,7 +191,7 @@
               "PreviousNativeID": "u3",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/claude/-p/claude-session.jsonl:6",
-              "RawText": "{\"_line\":6,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"text\":\"README.md has 74 words.\",\"type\":\"text\"}],\"id\":\"msg_3\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"u3\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:22.000Z\",\"type\":\"assistant\",\"uuid\":\"a3\",\"version\":\"2.1.3\"}",
+              "RawText": "{\"_line\":6,\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"message\":{\"content\":[{\"text\":\"README.md has 74 words.\",\"type\":\"text\"}],\"id\":\"msg_3\",\"model\":\"claude-opus-4-5\",\"output_config\":{\"effort\":\"high\"},\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"}},\"parentUuid\":\"u3\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:22.000Z\",\"type\":\"assistant\",\"uuid\":\"a3\",\"version\":\"2.1.3\"}",
               "SourceOrder": 0,
               "Selected": true
             }
@@ -253,7 +253,7 @@
               "NativeID": "s2:usage",
               "Role": "system",
               "Kind": "metadata",
-              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30},\"usage_message_id\":\"msg_s\"}",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"},\"usage_message_id\":\"msg_s\"}",
               "Model": "claude-haiku-4-5",
               "Effort": "",
               "CreatedAt": "2026-09-01T10:00:19.000Z",
@@ -261,7 +261,7 @@
               "PreviousNativeID": "s1",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/claude/-p/claude-session/subagents/agent-a7.jsonl:2",
-              "RawText": "{\"_line\":2,\"agentId\":\"a7\",\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"isSidechain\":true,\"message\":{\"content\":[{\"text\":\"74 words.\",\"type\":\"text\"}],\"id\":\"msg_s\",\"model\":\"claude-haiku-4-5\",\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30}},\"parentUuid\":\"s1\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:19.000Z\",\"type\":\"assistant\",\"uuid\":\"s2\",\"version\":\"2.1.3\"}",
+              "RawText": "{\"_line\":2,\"agentId\":\"a7\",\"cwd\":\"/work/app\",\"entrypoint\":\"cli\",\"gitBranch\":\"main\",\"isSidechain\":true,\"message\":{\"content\":[{\"text\":\"74 words.\",\"type\":\"text\"}],\"id\":\"msg_s\",\"model\":\"claude-haiku-4-5\",\"role\":\"assistant\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":120,\"output_tokens\":30,\"service_tier\":\"standard\"}},\"parentUuid\":\"s1\",\"sessionId\":\"claude-session\",\"timestamp\":\"2026-09-01T10:00:19.000Z\",\"type\":\"assistant\",\"uuid\":\"s2\",\"version\":\"2.1.3\"}",
               "SourceOrder": 0,
               "Selected": true
             }

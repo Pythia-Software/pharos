@@ -328,6 +328,9 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/opencode.db#ses_root:m4",
+              "Speed": "fast",
+              "ServiceTier": "priority",
+              "SpeedSource": "service_tier",
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true

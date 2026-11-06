@@ -171,7 +171,7 @@
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:6",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "{\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Check the formatter first.\",\"type\":\"thinking\"},{\"text\":\"Checking.\",\"type\":\"text\"}],\"id\":\"msg-think\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":300,\"output_tokens\":40}},\"type\":\"assistant\"}",
+              "RawText": "{\"message\":{\"content\":[{\"signature\":\"c2ln\",\"thinking\":\"Check the formatter first.\",\"type\":\"thinking\"},{\"text\":\"Checking.\",\"type\":\"text\"}],\"id\":\"msg-think\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":300,\"output_tokens\":40,\"service_tier\":\"standard\"}},\"type\":\"assistant\"}",
               "SourceOrder": 0,
               "Selected": true,
               "ReasoningFormat": "text"

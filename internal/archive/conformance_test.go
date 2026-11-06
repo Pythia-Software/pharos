@@ -62,6 +62,7 @@ var conformanceCases = map[string]conformanceCase{
 		// A reply that records the effort it was asked for.
 		answer := mapValue(mapValue(mapValue(conversations[0])["mapping"])["answer"])
 		mapValue(mapValue(answer["message"])["metadata"])["reasoning_effort"] = "high"
+		mapValue(mapValue(answer["message"])["metadata"])["service_tier"] = "priority"
 		data, _ := json.Marshal(conversations)
 		writeSourceFile(t, filepath.Join(root, "conversations.json"), string(data))
 		return conformanceSource("chatgpt", root)
@@ -634,6 +635,10 @@ func conformanceObserved(records []WorkspaceRecord, catalog *Catalog) map[string
 	var tokens int
 	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM model_requests WHERE COALESCE(input_tokens,0)+COALESCE(output_tokens,0)>0`).Scan(&tokens)
 	seen["message_tokens"] = tokens > 0
+	// A speed the source recorded, not the standard it is taken to be.
+	var speeds int
+	_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE speed_source<>'assumed_standard'`).Scan(&speeds)
+	seen["speed"] = speeds > 0
 	return seen
 }
 
@@ -676,7 +681,7 @@ func conformanceClaudeLines() (main, agent []string) {
 		}
 		return jsonText(event)
 	}
-	usage := map[string]any{"input_tokens": 120, "output_tokens": 30, "cache_read_input_tokens": 2000}
+	usage := map[string]any{"input_tokens": 120, "output_tokens": 30, "cache_read_input_tokens": 2000, "service_tier": "standard"}
 	assistant := func(uuid, parent, at, id string, content ...any) string {
 		return line(map[string]any{"type": "assistant", "uuid": uuid, "parentUuid": parent, "timestamp": at,
 			"message": map[string]any{"id": id, "role": "assistant", "model": "claude-opus-4-5", "output_config": map[string]any{"effort": "high"}, "content": content, "usage": usage}})
@@ -736,7 +741,7 @@ func conformanceCodexLines() (main, agent []string) {
 	tokens := map[string]any{"input_tokens": 2000, "cached_input_tokens": 1500, "output_tokens": 40, "reasoning_output_tokens": 10, "total_tokens": 2040}
 	main = []string{
 		event("2026-09-01T10:00:00.000Z", "session_meta", meta(parent, nil)),
-		event("2026-09-01T10:00:01.000Z", "turn_context", map[string]any{"cwd": "/work/app", "model": "gpt-5-codex", "effort": "high"}),
+		event("2026-09-01T10:00:01.000Z", "turn_context", map[string]any{"cwd": "/work/app", "model": "gpt-5-codex", "effort": "high", "service_tier": "priority"}),
 		event("2026-09-01T10:00:02.000Z", "response_item", map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Count the words in README.md"}}}),
 		event("2026-09-01T10:00:03.000Z", "response_item", map[string]any{"type": "reasoning", "id": "rs_1", "summary": []any{map[string]any{"type": "summary_text", "text": "Read the file first."}}, "encrypted_content": "gAAAA"}),
 		event("2026-09-01T10:00:04.000Z", "response_item", map[string]any{"type": "function_call", "name": "shell", "arguments": `{"command":["wc","-w","README.md"]}`, "call_id": "call_1"}),
@@ -766,7 +771,7 @@ func conformanceExport(t *testing.T, kind string) SourceConfig {
 		return row
 	}
 	conversation := func(id, parent string, messages ...any) map[string]any {
-		row := map[string]any{"id": id, "provider": "claude", "model": "claude-opus-4-5", "effort": "high", "started_at": "2026-09-01T10:00:00Z", "ended_at": "2026-09-01T10:01:00Z",
+		row := map[string]any{"id": id, "provider": "claude", "model": "claude-opus-4-5", "effort": "high", "speed": "fast", "started_at": "2026-09-01T10:00:00Z", "ended_at": "2026-09-01T10:01:00Z",
 			"harness": "claude-code/cli", "harness_version_first": "2.1.3", "harness_version_last": "2.1.3", "messages": messages}
 		if parent != "" {
 			row["parent_id"] = parent
@@ -833,6 +838,7 @@ func conformanceZed(t *testing.T) SourceConfig {
 	root := zedFixture(t)
 	rows := zedRows()
 	rows[1].data["thinking_effort"] = "high"
+	rows[1].data["speed"] = "fast"
 	zedWrite(t, root, func(db *sql.DB) error { zedPut(t, db, rows[1]); return nil })
 	return conformanceSource("zed", root)
 }
@@ -846,7 +852,7 @@ func conformanceConductor(t *testing.T) SourceConfig {
 	db := openWritableSQLite(t, filepath.Join(root, "conductor.db"))
 	thought := jsonText(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg-think", "role": "assistant", "content": []any{
 		map[string]any{"type": "thinking", "thinking": "Check the formatter first.", "signature": "c2ln"}, map[string]any{"type": "text", "text": "Checking."}},
-		"usage": map[string]any{"input_tokens": 300, "output_tokens": 40}}})
+		"usage": map[string]any{"input_tokens": 300, "output_tokens": 40, "service_tier": "standard"}}})
 	execSQL(t, db, "ALTER TABLE sessions ADD COLUMN claude_effort_level TEXT", "UPDATE sessions SET claude_effort_level='high'")
 	if _, err := db.Exec("INSERT INTO session_messages VALUES ('m6','session-1','assistant',?,'2026-09-20T10:00:50Z',NULL,NULL,NULL)", thought); err != nil {
 		t.Fatal(err)
