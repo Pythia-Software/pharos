@@ -64,6 +64,7 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+for (const [index, row] of datasets.compactions.entries()) Object.assign(row, { trigger: ["human", "machine", "unknown"][index % 3], trigger_evidence: ["recorded", "inferred", "unknown"][index % 3] });
 for(const [i,row] of datasets.message_labels.entries())Object.assign(row,{fingerprint:row.conversation_id,message_id:"label-message-"+i,label:i%3?"C.report.finding":"P.request.work.implement",family:i%3?"C.report":"P.request",function_role:i%3?"Receiver":"Sender",label_status:"matched",source:["human","output","thinking"][i%3]});
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });

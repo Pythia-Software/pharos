@@ -126,10 +126,21 @@ dirty mark of its own, so a limited run that stops before it keeps it pending. C
   their rows.
 - **How it stores.** Preparation, scoring windows and saving overlap (`agent_events_pipeline.go`). Candidates are
   scored in batches packed by length, and each conversation's results, ledger row and original dirty token are
-  saved in one transaction. A stop keeps committed conversations and kills the verifier's workers, so batches queued
+  saved in one transaction. Preparation credits are released after scoring, separately from the bounded save queue:
+  even a conversation larger than a scoring window can be followed by inference while its save waits. Scored windows
+  release their token arrays before entering that queue; sentence spans and results remain until the transaction commits.
+  There are at most three unscored windows plus one conversation being built, and three scored windows (being saved,
+  queued, and waiting for handoff); a whole conversation may exceed one window. A stop keeps committed conversations and kills the verifier's workers, so batches queued
   at them do not run on; the next run resumes. A finished run leaves them warm for `labels_idle_seconds`. Run stats
   and the final progress line include preparation, inference and save time; these overlap rather than adding to
-  elapsed time.
+  elapsed time. Background passes now retain those summary lines in the service log too.
+- **Progress.** The conversation count advances only after its transaction commits. The activity panel also shows
+  saved messages, successfully scored candidates, overall candidate throughput and the active preparation, scoring
+  or saving phase. Scoring identifies CPU or GPU only after the worker confirms it; GPU idle gaps retain that device
+  identity without claiming ongoing GPU use. Candidate counts update as batches return, including within a large
+  conversation, and are distinct from saved results. Counts and the throughput clock carry across the initial limited
+  pass into its backlog. After a service restart, the next pass counts the remaining work; committed results are kept.
+  No candidate-total estimate or conversation-based ETA is invented before inputs are prepared.
 - **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
   (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
 

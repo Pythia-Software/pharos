@@ -180,6 +180,9 @@ func imageOf(op *Op, view opView) journalImage {
 	image.stepName, image.stepUnit = view.Step.Name, view.Step.Unit
 	image.stepDone, image.stepTotal, image.stepKnown = view.Step.Done, view.Step.Total, view.Step.Total >= 0
 	detail := map[string]any{"holds": view.Spec.Holds, "affects": view.Spec.Affects, "priority": view.Spec.Priority}
+	if view.Step.Detail != "" {
+		detail["step_detail"] = view.Step.Detail
+	}
 	if len(view.Locks) > 0 {
 		detail["locks"] = view.Locks
 	}

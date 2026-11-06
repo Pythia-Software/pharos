@@ -27,7 +27,7 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
   return pageCardURL(url.href);
 }
 
-// A page without a catalog chart (Waiting and Compaction, Thinking) is its
+// A page without a catalog chart (Waiting, Thinking) is its
 // own definition: its address, less what only this visit chose.
 export function pageCardURL(address: string): string {
   const url = new URL(address, location.origin), { topic } = readUsageWorkspace(url.searchParams);
@@ -195,7 +195,7 @@ export function dashboardCardPresentation(address: string, target: DashboardCard
   if (isThinkingCardTarget(target)) return thinkingCardPresentation(target, readThinkingCard(address).state);
   const { topic, state } = readDashboardCard(address);
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
-    : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
+    : topic === "compaction" ? "thinking" : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
     : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" || topic === "habits" ? "machines" : "tools";
   const kind = isTrendView(state.view) ? state.view === "trend_line" || state.view !== "trend_bar" && state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
   const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : Math.min(groups ?? 4, cardGroupsMax);

@@ -313,6 +313,41 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
  }
 });
 
+test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-timeline-legend .usage-legend-item'}),{page}=app;
+ await app.settled();
+ const key=page.locator('.lt-timeline-legend'),button=name=>key.getByRole('button',{name,exact:true});
+ const choices=button('Choices');
+ await choices.focus();await choices.press('ArrowDown');
+ const menu=page.getByRole('menu',{name:'Filter Choices',exact:true});
+ assert.equal(await menu.getByRole('menuitem',{name:/Show only this value/}).evaluate(el=>el===document.activeElement),true);
+ await menu.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
+ assert.equal(await choices.getAttribute('aria-pressed'),'false');
+ assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-agent-event="e-s-root-open"]').count());
+ await button('Read / search').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ await page.locator('.lt-session-root [data-tool-id="tool-error"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-read"]').count());
+ await button('Human typed').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ await button('Sender category').click();await page.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
+ const saved=path(page),fresh=await open(t,{url:saved,ready:'.lt-timeline-legend .usage-legend-item'});
+ await fresh.settled();
+ const restored=fresh.page.locator('.lt-timeline-legend');
+ for(const [name,pressed] of [['Choices','false'],['Friction','true'],['Read / search','true'],['Error','false'],['Human typed','true'],['Likely pasted','false'],['Sender category','true'],['Receiver category','false']]){
+  assert.equal(await restored.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
+ }
+ assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('timeline_visibility')),JSON.parse(new URL(page.url()).searchParams.get('timeline_visibility')));
+ await page.setViewportSize({width:390,height:900});await choices.click();
+ const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
+ await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await choices.click();await page.getByRole('menuitem',{name:'Show all values',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ assert.equal(await button('Choices').getAttribute('aria-pressed'),'false','an unfiltered key has no explicit selection, matching dashboard keys');
+ assert.equal(await button('Read / search').getAttribute('aria-pressed'),'true','resetting events preserves the tool selection');
+ await app.shot('timeline-key-visibility');
+});
+
 test('Timeline segments pin exact content before revealing their conversation source',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-session-root'}),{page}=app;
  const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary'),pinned=page.getByRole('group',{name:'Ribbon segment details',exact:true});
@@ -950,7 +985,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const fresh=await open(t,{url:path(page),ready});
  assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('thinking')),selected);
  const detailTopic=topic();
- await page.locator('.thinking-links').getByRole('link',{name:'Waiting and Compaction →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
+ await page.locator('.thinking-links').getByRole('link',{name:'Waiting →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
  const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
@@ -1194,4 +1229,23 @@ test('Risky actions table edits are Back/Forward steps that restore the table',{
  await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
  assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
 
+});
+
+
+test('Compaction chart controls and source query restore in a fresh browser', {skip}, async t => {
+ const ready = '.usage-compaction-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations';
+ const app = await open(t, {url:'/analyze?analyze_topic=compaction&analyze_data=compactions', ready}), {page} = app;
+ const control = name => page.locator('.usage-compaction-dashboard').getByRole('combobox', {name, exact:true});
+ await control('Breakdown').selectOption('trigger_provider'); await app.settled();
+ await control('Range').selectOption('30d'); await app.settled();
+ await control('View').selectOption('compare');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor(); await app.settled();
+ const saved = path(page);
+ const fresh = await open(t, {url:saved, ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ assert.equal(await fresh.page.getByRole('combobox', {name:'Breakdown', exact:true}).inputValue(), 'trigger_provider');
+ assert.equal(await fresh.page.getByRole('combobox', {name:'View', exact:true}).inputValue(), 'compare');
+ const source = fresh.page.locator('.usage-query-destination').first();
+ await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
+ assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
+ await app.shot('compaction-compare');
 });

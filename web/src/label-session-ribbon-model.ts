@@ -95,14 +95,15 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
  // Agent events come before Tool actions: they read with the message modes they sit in.
  return group('session','Session',[labelNode,authorship,eventNode,activityNode].filter(node=>node.items.length));
 }
-/** Count a retained event once even if it has labels, origin runs and a tool glyph. */
-export function ribbonEventCount(items:RibbonObservation[]){
- // Agent events are already counted as their messages; a row of only events counts them.
- if(items.length&&items.every(item=>item.event))return new Set(items.map(item=>item.event!.id)).size;
- const messages=new Set(items.flatMap(item=>item.message?[item.message.id]:[]));
+/** Session summaries count source messages once across every visible layer.
+ * Agent-event rows count classifications, even when several share a message. */
+export function ribbonEventCount(items:RibbonObservation[],scope:'session'|'events'='session'){
+ if(scope==='events')return new Set(items.flatMap(item=>item.event?[item.event.id]:[])).size;
+ const messages=new Set(items.flatMap(item=>item.message?[item.message.id]:item.event?[item.event.message_id]:[]));
  const marks=new Map(items.filter(item=>item.mark).map(item=>[item.id,item.mark!]));
+ for(const mark of marks.values())if(mark.message_id&&(mark.count??1)>0)messages.add(mark.message_id);
  const inferred=new Set(items.filter(item=>item.inferred).map(item=>item.id));
- return messages.size+[...marks.values()].reduce((total,mark)=>total+Math.max(0,(mark.count??1)-(mark.message_id&&messages.has(mark.message_id)?1:0)),0)+inferred.size;
+ return messages.size+[...marks.values()].reduce((total,mark)=>total+Math.max(0,(mark.count??1)-(mark.message_id?1:0)),0)+inferred.size;
 }
 export function ribbonCounts(items:RibbonObservation[]){return {events:new Set(items.flatMap(item=>item.event?[item.event.id]:[])).size,messages:new Set(items.flatMap(item=>item.message?[item.message.id]:[])).size,thinking:new Set(items.flatMap(item=>item.message&&item.thinking?[item.message.id]:[])).size,activity:items.reduce((n,item)=>n+(item.mark?.count??0),0),inferred:items.filter(item=>item.inferred).length};}
 /** Hit testing includes every overlapping glyph/span, including covered marks. */

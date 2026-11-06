@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -49,9 +50,16 @@ func TestRunnerRunsRowsInOrderByName(t *testing.T) {
 		}
 		rows = append(rows, Framed{IDs: append(ids, SepID)})
 	}
-	outputs, err := runner.Run(t.Context(), rows, []string{"probs"}, 64)
+	var completed, batches atomic.Int64
+	outputs, err := runner.RunWithProgress(t.Context(), rows, []string{"probs"}, 64, func(n int) {
+		completed.Add(int64(n))
+		batches.Add(1)
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if completed.Load() != int64(len(rows)) || batches.Load() < 3 {
+		t.Fatalf("batch progress: %d rows in %d batches", completed.Load(), batches.Load())
 	}
 	for i, row := range rows {
 		if got := outputs[i]["probs"]; len(got) != 3 || got[2] != fakeRowProb(row.IDs, 2) {

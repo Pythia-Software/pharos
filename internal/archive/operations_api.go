@@ -128,6 +128,9 @@ func operationStep(view opView) map[string]any {
 		return nil
 	}
 	step := map[string]any{"index": index, "count": nil, "name": view.Step.Name, "unit": nilIfEmpty(view.Step.Unit), "done": view.Step.Done, "total": nil}
+	if view.Step.Detail != "" {
+		step["detail"] = view.Step.Detail
+	}
 	if count > 0 {
 		step["count"] = count
 	}
@@ -226,16 +229,17 @@ func foreignView(info leaseInfo, row journalRow) opView {
 		total = *row.StepTotal
 	}
 	var detail struct {
-		Holds    []Hold   `json:"holds"`
-		Affects  []string `json:"affects"`
-		Priority string   `json:"priority"`
+		Holds      []Hold   `json:"holds"`
+		Affects    []string `json:"affects"`
+		Priority   string   `json:"priority"`
+		StepDetail string   `json:"step_detail"`
 	}
 	_ = json.Unmarshal(row.Detail, &detail)
 	if detail.Holds == nil {
 		detail.Holds = info.Holds
 	}
 	return opView{ID: OpID(row.ID), Root: OpID(row.RootID), Kind: kind, Process: row.Process, Instance: row.Instance, State: row.State, Reason: row.Reason,
-		Error: row.Error, Started: started, Foreign: true, Step: opStep{Index: row.StepIndex, Name: row.StepName, Unit: row.StepUnit, Done: row.StepDone, Total: total},
+		Error: row.Error, Started: started, Foreign: true, Step: opStep{Index: row.StepIndex, Name: row.StepName, Detail: detail.StepDetail, Unit: row.StepUnit, Done: row.StepDone, Total: total},
 		Spec: OperationSpec{Kind: row.Kind, Variant: row.Variant, Subject: row.Subject, Trigger: row.Trigger, Holds: detail.Holds, Affects: detail.Affects,
 			Priority: defaultString(detail.Priority, kind.Priority), Legacy: row.Legacy}}
 }

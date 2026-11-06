@@ -21,6 +21,7 @@ import {cutAxisLabels,fromVirtual,idleGaps,laneBusy,timeScale,toVirtual,type Idl
 import {useTimelineColumns} from "./timeline-columns";
 import {timelineSessionBranches} from "./timeline-label-model";
 import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
+import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
 import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
 // reader-model.js loads before the bundle and also supplies turn ages.
@@ -1668,6 +1669,7 @@ export function ParallelActivity({
   const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
   const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
+  const [timelineVisibility,setTimelineVisibility]=useViewState<TimelineVisibility>("timeline_visibility",{},timeline);
   const recursive=timeline;
   const [brush, setBrush] = useState<Range | null>(null);
   const [workExpanded,setWorkExpanded]=useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/"));
@@ -1883,7 +1885,7 @@ export function ParallelActivity({
         scale={fullScale}
         idle={timeline&&!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
       />
-      {timeline?<TimelineLegend messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
+      {timeline?<TimelineLegend data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
         {!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred
@@ -1949,7 +1951,7 @@ export function ParallelActivity({
           </div>
         </div>}
         {timeline?<div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
-          <RecursiveSessionRibbon collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+          <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
             sourceHref={item=>{const owner=rows.find(row=>row.id===item.message?.session_id);return owner?sourceHref(owner,item):null;}}
             foldControl={<Icon name="human"/>} restore={()=>{}}
             select={item=>{if(!item.message)return;const owner=rows.find(row=>row.id===item.message!.session_id);if(owner){setEventID('label:'+item.message.id);openNode(owner,item.message.id,item.message.conversation_id);}}}/>
@@ -1963,7 +1965,7 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}

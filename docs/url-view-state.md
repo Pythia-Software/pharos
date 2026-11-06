@@ -68,6 +68,23 @@ Draft controls are explicitly classified as editing: source/library onboarding; 
 
 `check-view-controls` now rejects native accordions, summaries, and `aria-expanded` controls classified only as `settings`. JSX expansion attributes and classic `setAttribute("aria-expanded", ...)` sites are included in the inventory. Static HTML `data-view-field` bindings are discovered directly, so settings values cannot accidentally hide a missing view binding in the review ledger. New controls still require individual review.
 
+## Timeline Key
+
+The timeline Key uses the dashboard legend menu: show only a value or category,
+add/remove values, show everything except a value or category, or reset that
+section. Hidden values stay in the Key with muted, desaturated swatches so they
+can be restored. Sender, Receiver and message-mode families apply to all of
+their displayed labels, with mixed selection indicated on the parent.
+
+`timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
+selections. Each optional section has `{values: string[], excluded: boolean}`;
+an absent section or empty values shows everything in that section. Values use
+stable message-label IDs (`?` for uncategorized), event-group keys, tool-category
+IDs (`error` for failed calls), or caller-source IDs. The selection filters
+ribbon spans, event arcs and markers, counts and inspection targets together.
+Original timing, zoom, idle compression and retained records remain unchanged.
+Caller-source filtering preserves each run's original portion of the message.
+
 ## Agent interface
 
 Ask Pharos uses the existing MCP CLI-style interface:

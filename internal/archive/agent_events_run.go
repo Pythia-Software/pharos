@@ -257,6 +257,8 @@ type AgentEventsRunOptions struct {
 	// and conversations that ended before it are not looked at.
 	Since    time.Time
 	Progress io.Writer
+	// progressBase carries committed counts across the inline/backlog handoff.
+	progressBase agentEventsCounts
 }
 
 // AgentEventsRunStats describe a run.
@@ -266,6 +268,7 @@ type AgentEventsRunStats struct {
 	Candidates, Stored, Events                                                   int
 	Cut, Complete                                                                bool
 	Prepare, Infer, Write, Total                                                 time.Duration
+	progress                                                                     agentEventsCounts
 }
 
 // agentEventsConversation is one conversation's pending work.
@@ -294,8 +297,10 @@ type agentEventsMessage struct {
 }
 
 // agentEventsChunkRows bounds a scoring window. Preparation and persistence
-// overlap inference, with at most three windows retained plus the conversation
-// currently being built. A conversation is kept whole even if it exceeds this.
+// overlap inference, with at most three unscored windows plus the conversation
+// being built. The writer separately retains at most three scored windows
+// (active, queued, and awaiting handoff), without their token arrays. A whole
+// conversation may exceed a window in either stage.
 var agentEventsChunkRows = 512
 
 // RunAgentEvents brings agent events up to date: it rebuilds the units of
@@ -353,7 +358,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		return stats, err
 	}
 	progress("agent events: %d conversations to look at of %d", len(jobs), stats.Conversations)
-	reportWork(ctx, "finding agent events", "conversation", 0, len(jobs))
+	status := newAgentEventsProgress(ctx, opts.progressBase, started, len(jobs), opts.DryRun)
 
 	var runner *labelrt.Runner
 	target := labelerThreadTarget{read: opts.ThreadTarget}
@@ -381,6 +386,8 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			}
 		}
 		if len(framed) > 0 {
+			status.stage("scoring", true)
+			defer status.stage("scoring", false)
 			next := target.settings(labels)
 			if runner != nil && runner.UsesCPUThreads() && next.Threads != runner.Threads() {
 				// The preceding chunk has finished, so no request is lost.
@@ -398,8 +405,11 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 					return err
 				}
 			}
+			status.setDevice(runner.Pool().Ready().Worker.Device)
 			inferStarted := time.Now()
-			outputs, err := runner.Run(ctx, framed, agentEventRunOutputs, labels.BatchTokens)
+			outputs, err := runner.RunWithProgress(ctx, framed, agentEventRunOutputs, labels.BatchTokens, func(n int) {
+				status.scored(n, runner.Pool().Ready().Worker.Device)
+			})
 			stats.Infer += time.Since(inferStarted)
 			if err != nil {
 				// Do not leave canceled requests computing while preparation
@@ -416,7 +426,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		return nil
 	}
 	pipeline := agentEventsPipeline{
-		opts: opts, stats: stats, progress: progress,
+		opts: opts, stats: stats, progress: progress, status: status,
 		build: func(job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
 			// IO priority is per thread, so each pipeline goroutine applies
 			// the operation's policy to its own database work.
@@ -809,7 +819,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		}
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
-	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
+	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
 		return errStageContinues
@@ -845,7 +855,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 				}
 			}
 		}()
-		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true)})
+		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr, progressBase: stats.progress})
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			op.legacyOutcome("interrupted", nil)
