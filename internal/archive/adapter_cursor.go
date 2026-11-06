@@ -830,6 +830,32 @@ func errorText(err error) string {
 	return err.Error()
 }
 
+// cursorInference is a chat's fast mode: a parameter of its selected model,
+// fast ("true" or "false") or, in newer releases, speed. Cursor keeps only the
+// chat's setting now, so it stands for every request; a chat without one, or
+// with speed "default", records none.
+func cursorInference(modelConfig map[string]any) (inferenceSpeed, bool) {
+	selectedModels, _ := modelConfig["selectedModels"].([]any)
+	for _, selected := range selectedModels {
+		parameters, _ := mapValueDefault(selected)["parameters"].([]any)
+		for _, parameter := range parameters {
+			parameter := mapValueDefault(parameter)
+			value := strings.ToLower(strings.TrimSpace(firstString(parameter["value"])))
+			speed := ""
+			switch firstString(parameter["id"]) {
+			case "fast":
+				speed = map[string]string{"true": inferenceFast, "false": inferenceStandard}[value]
+			case "speed":
+				speed = value
+			}
+			if config, _ := inferenceSetting(map[string]any{"speed": speed}); config.Source == speedFromField {
+				return config, true
+			}
+		}
+	}
+	return inferenceSpeed{}, false
+}
+
 // conversation builds a composer's conversation from its messages; nil when
 // it has none. spawned marks a subagent a tool call started, whose prompt is
 // its parent's.
@@ -843,6 +869,7 @@ func (a *cursorAdapter) conversation(origin string, thread *cursorThread, spawne
 			}
 		}
 	}
+	inference, fast := cursorInference(mapValueDefault(data["modelConfig"]))
 	started := iso(data["createdAt"])
 	conversation := &ConversationRecord{NativeID: id, Provider: "cursor", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cursor", Model: model, StartedAt: started}
 	if !thread.complete() {
@@ -880,6 +907,9 @@ func (a *cursorAdapter) conversation(origin string, thread *cursorThread, spawne
 			// The bubble's ID stands in for its raw text, so text quoting usage
 			// JSON is never read as token usage.
 			RawText: jsonText(map[string]any{"type": "cursor_bubble", "id": bubbleID})}
+		if fast {
+			base = withInference(base, inference)
+		}
 		add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
 		text, _ := bubble["text"].(string)
 		kind, _ := number(bubble["type"])
