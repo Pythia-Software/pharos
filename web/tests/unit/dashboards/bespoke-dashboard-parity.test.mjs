@@ -442,6 +442,7 @@ test("Human Words queries keep a relative range relative, so a repeated request 
   const query = trendQuery(human, { metric: "messages", split: "none" }, where, { now, zone }).query;
   const arrived = { ...cardRows.writing_messages[2], id: "late", sent_at: new Date(now + 60000).toISOString(), ...{ day: new Date(now + 60000).toLocaleDateString("en-CA") } };
   let clock = now;
+ t.mock.method(Date,"now",()=>clock);
   const prior = global.fetch;
   global.fetch = async (url, init = {}) => Response.json(answerQuery(String(url).split("?")[0].split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, [...cardRows.writing_messages, arrived], schemas.writing_messages, { now: clock }));
   t.after(() => { global.fetch = prior; });

@@ -42,6 +42,9 @@ type modelInput struct {
 }
 
 type modelInfo struct {
+	MaxBatch  int // optional backend row limit
+	MaxTokens int // optional padded-token limit for native GPU memory
+	MaxSeq    int
 	Runtime   string // for example "onnxruntime 1.31.1"
 	Device    string
 	Providers []string
@@ -309,6 +312,13 @@ func (w *worker) start(payload []byte) error {
 	r.Model.Outputs = info.Outputs
 	r.Limits.MaxBatch, r.Limits.MaxSeq = limits(&hello, len(info.Inputs), info.Outputs)
 	r.Limits.MaxFrameBytes = labeler.MaxFrameBytes
+	r.Limits.MaxTokens = info.MaxTokens
+	if info.MaxBatch > 0 {
+		r.Limits.MaxBatch = min(r.Limits.MaxBatch, info.MaxBatch)
+	}
+	if info.MaxSeq > 0 {
+		r.Limits.MaxSeq = min(r.Limits.MaxSeq, info.MaxSeq)
+	}
 	r.Capabilities = []string{"ping"}
 
 	w.queue = make(chan job, runQueue)
@@ -414,6 +424,10 @@ func (w *worker) enqueue(payload []byte) {
 	}
 	if err := labeler.ValidateRun(req, w.hello.RunInputs(), w.hello.VocabSize, w.ready.Limits.MaxBatch, w.ready.Limits.MaxSeq); err != nil {
 		w.out.error(req.ID, labeler.ErrCodeBadRequest, "%v", err)
+		return
+	}
+	if w.info.MaxTokens > 0 && req.Inputs[0].Dims[0]*req.Inputs[0].Dims[1] > w.info.MaxTokens {
+		w.out.error(req.ID, labeler.ErrCodeBadRequest, "batch exceeds %d padded tokens", w.info.MaxTokens)
 		return
 	}
 	outputs, err := w.outputs(req.Outputs)

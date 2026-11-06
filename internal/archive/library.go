@@ -288,6 +288,8 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
+	completed := maintenanceBatch(ctx, tx, "Indexing the Search view", "workspace", len(rows),
+		"SELECT ?+count(*) FROM workspace_library_dirty", len(rows))
 	args := make([]any, len(rows))
 	for index, row := range rows {
 		args[index] = row["workspace_id"]
@@ -301,7 +303,9 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 	if _, err := tx.ExecContext(ctx, previews, args...); err != nil {
 		return 0, err
 	}
-	return len(rows), tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return len(rows), err
 }
 
 // refreshPreviews stores the preview IDs of up to batch large workspaces
@@ -312,10 +316,19 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 // stored only for workspaces nothing has changed since: a change marks the
 // workspace dirty, and RefreshLibrary stores its previews.
 func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
-	rows, err := queryMapsContext(ctx, c.DB, libraryPreviewSelect(`w.id IN (SELECT l.workspace_id FROM workspace_library l
-		WHERE l.turn_count+l.tool_use_count>200 AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
-			AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)
-		ORDER BY l.turn_count+l.tool_use_count DESC LIMIT ?)`), batch)
+	const pending = `FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200
+		AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
+		AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`
+	selected, err := queryMapsContext(ctx, c.DB, "SELECT l.workspace_id "+pending+" ORDER BY l.turn_count+l.tool_use_count DESC LIMIT ?", batch)
+	if err != nil || len(selected) == 0 {
+		return 0, err
+	}
+	completed := maintenanceBatch(ctx, c.DB, "Filling in previews", "workspace", len(selected), "SELECT count(*) "+pending)
+	ids := make([]any, len(selected))
+	for i, row := range selected {
+		ids[i] = row["workspace_id"]
+	}
+	rows, err := queryMapsContext(ctx, c.DB, libraryPreviewSelect("w.id IN ("+placeholders(len(ids))+")"), ids...)
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
@@ -332,7 +345,9 @@ func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
 			return 0, err
 		}
 	}
-	return len(rows), tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return len(rows), err
 }
 
 // refreshAllLibrary clears every dirty workspace, for commands that ingest
@@ -359,9 +374,11 @@ type libraryCatchUp struct {
 	since time.Time
 	// stopped is set while the user has stopped the refresh: maintainLibrary
 	// leaves dirty workspaces dirty (reads compute them live) until it is
-	// resumed or the service restarts. cancel abandons the pass in progress.
-	stopped bool
-	cancel  context.CancelFunc
+	// resumed or the service restarts. Every active pass is cancellable,
+	// including overlapping continuous and explicitly requested catch-up.
+	stopped  bool
+	nextPass uint64
+	passes   map[uint64]context.CancelFunc
 }
 
 func (c *Catalog) noteLibraryRefresh(count int, err error) {
@@ -393,8 +410,8 @@ func (c *Catalog) stopLibraryRefresh() bool {
 		return false
 	}
 	c.catchUp.stopped, c.catchUp.since = true, time.Time{}
-	if c.catchUp.cancel != nil {
-		c.catchUp.cancel()
+	for _, cancel := range c.catchUp.passes {
+		cancel()
 	}
 	return true
 }
@@ -424,10 +441,15 @@ func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), boo
 		return nil, nil, false
 	}
 	pass, cancel := context.WithCancel(ctx)
-	c.catchUp.cancel = cancel
+	if c.catchUp.passes == nil {
+		c.catchUp.passes = map[uint64]context.CancelFunc{}
+	}
+	c.catchUp.nextPass++
+	id := c.catchUp.nextPass
+	c.catchUp.passes[id] = cancel
 	return pass, func() {
 		c.catchUp.mu.Lock()
-		c.catchUp.cancel = nil
+		delete(c.catchUp.passes, id)
 		c.catchUp.mu.Unlock()
 		cancel()
 	}, true
@@ -445,7 +467,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 	origins := c.beginPass(ctx, "maintenance.origins", triggerChained)
 	var published bool
 	var err error
-	origins.runIO(func() { published, err = c.publishOrigins(ctx) })
+	origins.runIO(ctx, func(ctx context.Context) { published, err = c.publishOrigins(ctx) })
 	if published {
 		origins.worked(1)
 	}
@@ -469,6 +491,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // none; filling previews and measuring parallelism likewise. A publication
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	var view, previews, parallelism *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
@@ -484,7 +507,14 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
 	var originsAt time.Time
 	for {
-		if c.queries.wait(ctx) != nil {
+		workCtx := ctx
+		for _, active := range []*daemonPass{view, previews, parallelism} {
+			if active.active() {
+				workCtx = active.context(ctx)
+				break
+			}
+		}
+		if schedule.wait(ctx, c, &view, &previews, &parallelism) != nil || c.queries.wait(workCtx) != nil {
 			return
 		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
@@ -506,7 +536,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		begin(&view, "maintenance.library-view")
 		var count int
 		var err error
-		view.runIO(func() { count, err = c.RefreshLibrary(pass, 10) })
+		view.runIO(pass, func(ctx context.Context) { count, err = c.RefreshLibrary(ctx, 10) })
 		c.noteLibraryRefresh(count, err)
 		view.worked(count)
 		settle(&view, count > 0, err)
@@ -523,7 +553,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			// Idle: fill in previews, then keep the page caches warm.
 			begin(&previews, "maintenance.previews")
 			var filled int
-			previews.runIO(func() { filled, err = c.refreshPreviews(pass, 25) })
+			previews.runIO(pass, func(ctx context.Context) { filled, err = c.refreshPreviews(ctx, 25) })
 			previews.worked(filled)
 			settle(&previews, filled > 0, err)
 			if err != nil || filled == 0 {
@@ -534,7 +564,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				// page computes only what changed since (all, after an upgrade).
 				begin(&parallelism, "maintenance.parallelism")
 				var derived int
-				parallelism.runIO(func() { derived, err = c.refreshParallelism(pass, parallelismBatch, false) })
+				parallelism.runIO(pass, func(ctx context.Context) { derived, err = c.refreshParallelism(ctx, parallelismBatch, false) })
 				parallelism.worked(derived)
 				settle(&parallelism, derived > 0, err)
 				if err != nil || derived == 0 {
@@ -544,7 +574,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 					wait = 2 * time.Second
 					// Warming only reads; its operation is never published.
 					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-					warm.runIO(func() { c.warmCaches(ctx) })
+					warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
 					warm.end(nil)
 				}
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,61 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAuditDefersChangesWaitingForIndex(t *testing.T) {
+	for _, change := range []string{"append", "subagent", "name"} {
+		t.Run(change, func(t *testing.T) {
+			useHost(t, "host-a")
+			root := t.TempDir()
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: root, Account: "local", Enabled: true}
+			path := filepath.Join(root, "session.jsonl")
+			writeSourceFile(t, path, claudeLine("session", "first", "original question", "", 1))
+			server := automaticTestServer(t, source)
+			if result := ingestSource(t, server.Catalog, source); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			initial := firstSyncUnit(t, server.Catalog, source)
+			if err := server.Catalog.recordVerification(initial, server.Catalog.auditUnit(t.Context(), initial, "initial", 0)); err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "append":
+				appendSourceFile(t, path, claudeLine("session", "second", "another question", "", 2))
+			case "subagent":
+				writeSourceFile(t, filepath.Join(root, "session", "subagents", "agent-child.jsonl"), claudeLine("session", "child", "agent assignment", "", 2))
+			case "name":
+				writeSourceFile(t, filepath.Join(root, "sessions-index.json"), `{"entries":[{"sessionId":"session","summary":"A new source title"}]}`)
+			}
+			unit := firstSyncUnit(t, server.Catalog, source)
+			// A queued large check rediscovers current evidence independently of
+			// indexing. Stable new evidence must wait for the index to catch up.
+			if err := server.Catalog.recordVerification(initial, auditResult{Outcome: "deferred", Reason: "evidence_size"}); err != nil {
+				t.Fatal(err)
+			}
+			if !server.runBackgroundPass(t.Context(), "requested", []string{"verification"}, nil) {
+				t.Fatal("queued verification did not run")
+			}
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues") != 0 {
+				t.Fatal("pending input changes were reported as corruption")
+			}
+			if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verifications WHERE outcome='deferred'") != 1 {
+				t.Fatal("pending input was incorrectly certified")
+			}
+			if result := ingestSource(t, server.Catalog, source); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			if result := server.Catalog.auditUnit(t.Context(), unit, "indexed", 0); result.Outcome != "passed" {
+				t.Fatalf("indexed input did not pass verification: %+v", result)
+			}
+			if _, err := server.Catalog.DB.Exec("UPDATE messages SET text='corrupted text' WHERE native_id='first'"); err != nil {
+				t.Fatal(err)
+			}
+			if result := server.Catalog.auditUnit(t.Context(), unit, "corrupt", 0); result.Outcome != "mismatch" || !slices.Contains(result.Differences, "messages") {
+				t.Fatalf("current indexed input failed to expose corruption: %+v", result)
+			}
+		})
+	}
+}
 
 func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {
 	useHost(t, "host-a")
@@ -81,12 +137,62 @@ func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {
 	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verification_progress WHERE heavy=1") != 1 {
 		t.Fatal("cancellation discarded pending verification")
 	}
+	_, op := server.begin(ctx, OperationSpec{Kind: "index.verify", Trigger: triggerUser})
+	err := server.verifyQueued(ctx, op)
+	op.Finish(err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("parent cancellation was reported as a completed batch: %v", err)
+	}
 
-	for _, kind := range []string{"codex", "antigravity"} {
+	for _, problem := range []string{"budget", "read-error"} {
+		t.Run(problem, func(t *testing.T) {
+			server, units := stableCodexDirectory(t, 1)
+			unit := units[0]
+			if err := server.Catalog.recordVerification(unit, auditResult{Outcome: "deferred", Reason: "evidence_size"}); err != nil {
+				t.Fatal(err)
+			}
+			var verified string
+			if err := server.Catalog.DB.QueryRow("SELECT verified_at FROM sync_verification_progress WHERE unit=?", unit.ID).Scan(&verified); err != nil {
+				t.Fatal(err)
+			}
+			if problem == "budget" {
+				// Exhaust the batch before discovery, without a timing-dependent
+				// fixture or waiting thirty seconds for a large database scan.
+				override(t, &heavyAuditWall, time.Duration(0))
+			} else if err := os.RemoveAll(unit.Source.Path); err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			if !server.runBackgroundPass(t.Context(), "requested", []string{"verification"}, nil) {
+				t.Fatal("queued verification did not run")
+			}
+			var problemText, next, reason, retained string
+			if err := server.Catalog.DB.QueryRow("SELECT COALESCE(error,'') FROM background_runs WHERE item='verification'").Scan(&problemText); err != nil {
+				t.Fatal(err)
+			}
+			if (problemText != "") != (problem == "read-error") {
+				t.Fatalf("batch %s failure: %q", problem, problemText)
+			}
+			if err := server.Catalog.DB.QueryRow("SELECT next_at,reason,verified_at FROM sync_verification_progress WHERE unit=? AND heavy=1", unit.ID).Scan(&next, &reason, &retained); err != nil {
+				t.Fatal(err)
+			}
+			wantReason := "time_budget"
+			if problem == "read-error" {
+				wantReason = "source_unavailable"
+			}
+			if retry, ok := parseTime(next); !ok || !retry.After(started) || reason != wantReason || retained != verified {
+				t.Fatalf("unfinished check lost its retry or completed coverage: next=%q reason=%q verified=%q (was %q)", next, reason, retained, verified)
+			}
+		})
+	}
+
+	for _, kind := range []string{"codex", "antigravity", "conductor"} {
 		t.Run("retained-"+kind, func(t *testing.T) {
 			root := t.TempDir()
 			if kind == "antigravity" {
 				root = antigravityFixture(t)
+			} else if kind == "conductor" {
+				conductorFixture(t, root)(addConductorSession("queued-session", 2)...)
 			} else {
 				writeSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), codexLines("queued-session", 1))
 				db, err := sql.Open("sqlite", filepath.Join(root, "state_1.sqlite"))
@@ -96,7 +202,9 @@ func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {
 				execSQL(t, db, "CREATE TABLE threads(id TEXT,name TEXT);INSERT INTO threads VALUES('queued-session','Queued name')")
 				db.Close()
 			}
-			source := SourceConfig{Name: kind, Kind: kind, Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+			// Conductor's live adapter exercises queued session selection;
+			// the other sources exercise retained logical group identities.
+			source := SourceConfig{Name: kind, Kind: kind, Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": kind != "conductor"}}
 			server := automaticTestServer(t, source)
 			override(t, &automaticAuditBytes, int64(1))
 			var queued string

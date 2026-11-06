@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
@@ -188,28 +187,41 @@ func (p *recordSearchPlan) restrictSource(ctx context.Context, tx *sql.Tx, d *qt
 	}
 	predicate := p.predicate("record_source." + sqlIdentifier(p.field))
 	where := q.Result.Where
-	if q.Grouping != nil {
+	if q.Grouping != nil || q.Distinct != nil {
 		where = q.Source.Where
 	}
 	if len(where) > 0 {
 		// Use the upstream compiler for the complete source WHERE, including
 		// canonical computed definitions, OR, negation and relative dates. The
-		// identity set has no page/population limit: those limits apply only
-		// after keyword matching. Result HAVING must stay after grouping.
+		// identity plan is complete within the V3 source budget. Refuse a larger
+		// eligible set rather than silently searching only its prefix. Result
+		// HAVING must stay after grouping.
 		schema := d.Schema
 		schema.DefaultSort, schema.TiebreakSort = nil, nil
-		eligible, err := qt.CompileSQLiteComputedRows(ctx, qt.WireQuery{Select: []string{schema.IDField}, Where: where}, schema, qt.PlanOptions{
-			SourceSQL: d.SourceSQL, SourceArgs: d.SourceArgs, Now: time.UnixMilli(q.Now),
-			ComputedFilterable: d.ComputedFilterable, ExpectedRevisions: q.ExpectedRevisions,
+		eligibleDataset := *d
+		eligibleDataset.Schema = schema
+		eligible, err := eligibleDataset.SourcePlan(ctx, qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: q.Now, Rows: true,
+			Result: qt.WireQuery{Select: []string{schema.IDField}, Where: where}, ExpectedRevisions: q.ExpectedRevisions}, qt.PlanOptions{
 			Resolver: qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset},
 		})
 		if err != nil {
 			return err
 		}
+		var eligibleCount int64
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM ("+eligible.SQL+")", eligible.Args...).Scan(&eligibleCount); err != nil {
+			return err
+		}
+		budget := d.MaxPopulation
+		if budget == 0 {
+			budget = 250_000
+		}
+		if eligibleCount > int64(budget) {
+			return &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: "record keyword source exceeds the V3 population budget; narrow the record filters"}
+		}
 		// CASE guarantees short-circuit evaluation. An AND or nested WHERE can
 		// be reordered by SQLite and verify excluded, over-budget record text.
 		predicate = "CASE WHEN record_source." + sqlIdentifier(schema.IDField) + " IN (SELECT " +
-			sqlIdentifier(eligible.Columns[0].ValueAlias) + " FROM (" + eligible.SQL + ")) THEN " + predicate + " ELSE 0 END"
+			sqlIdentifier(recordIdentityColumn(eligible.Columns, schema.IDField)) + " FROM (" + eligible.SQL + ")) THEN " + predicate + " ELSE 0 END"
 		d.SourceArgs = eligible.Args
 	}
 	d.SourceSQL = "SELECT * FROM (" + d.SourceSQL + ") record_source WHERE " + predicate
@@ -232,4 +244,13 @@ func (p *recordSearchPlan) table(table sqlDataset) (sqlDataset, error) {
 	// Cubes and compact facts do not contain arbitrary record text.
 	table.cube, table.scalarFacts = nil, false
 	return table, nil
+}
+
+func recordIdentityColumn(columns []qt.OutputColumn, identity string) string {
+	for _, column := range columns {
+		if column.Field == identity {
+			return column.ValueAlias
+		}
+	}
+	panic("query source plan omitted identity")
 }
