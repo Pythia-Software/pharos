@@ -289,9 +289,25 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	if got := strings.Join(outcomes, " "); got != "a.go:ok b.go:no_result c.go:ok" {
 		t.Fatalf("reused IDs' calls = %s", got)
 	}
+	// An ID a provider gave that looks like one told apart is not taken,
+	// whether it comes after the reuse or before it.
+	clash := read(2, "c.go", "package c")
+	clash["tool_uses"].([]any)[0].(map[string]any)["id"] = "call_1#2"
+	clash["tool_results"].([]any)[0].(map[string]any)["tool_use_id"] = "call_1#2"
+	for _, order := range [][]any{{read(0, "a.go", "package a"), read(1, "b.go", ""), clash}, {clash, read(0, "a.go", "package a"), read(1, "b.go", "package b")}} {
+		clashed := (&zedAdapter{}).conversation("zed", "clash", map[string]any{}, map[string]any{"version": "0.2.0", "messages": order})
+		_, calls = buildToolLedger(clashed.Messages, "")
+		counted := map[string]string{}
+		for _, call := range calls {
+			counted[call.FilePath] = call.Status
+		}
+		if len(calls) != 3 || counted["a.go"] != "ok" || counted["c.go"] != "ok" || counted["b.go"] == "" {
+			t.Fatalf("a raw ID like a given one: calls = %v", counted)
+		}
+	}
 	// A command's result that isn't text says nothing of how it ended.
 	var unread MessageRecord
-	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message }, map[string]int{})
+	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message }, map[string]bool{})
 	if strings.Contains(unread.Text, "exit_code") {
 		t.Fatalf("a result without text = %s", unread.Text)
 	}
@@ -332,7 +348,7 @@ func TestZedTerminalOutcomeIsZedsHeader(t *testing.T) {
 			input = map[string]any{"command": "make", "timeout_ms": 9000}
 		}
 		(&zedAdapter{}).tool(MessageRecord{NativeID: "call"}, "call", "terminal", input,
-			map[string]any{"tool_name": "terminal", "is_error": false, "content": test.content}, add, map[string]int{})
+			map[string]any{"tool_name": "terminal", "is_error": false, "content": test.content}, add, map[string]bool{})
 		_, calls := buildToolLedger(messages, "test")
 		if len(calls) != 1 {
 			t.Fatalf("%s: calls = %+v", test.name, calls)
