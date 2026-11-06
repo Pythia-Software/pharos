@@ -1055,7 +1055,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const control=name=>page.locator('.thinking-controls').getByRole('combobox',{name,exact:true});
  const state=()=>JSON.parse(new URL(page.url()).searchParams.get('thinking'));
  const topic=()=>new URL(page.url()).searchParams.get('analyze_topic');
- await control('Model').selectOption('gpt-6.1-sol');await app.settled();
+ await control('Model').selectOption('gpt-6.1-sol');await control('Breakdown').selectOption('model_speed');await app.settled();
  const chart=page.locator('.thinking-brush').first();await chart.scrollIntoViewIfNeeded();const rect=await chart.boundingBox();
  await page.mouse.move(rect.x+rect.width*.3,rect.y+rect.height*.4);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.65,rect.y+rect.height*.4,{steps:8});await page.mouse.up();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('thinking')).range==='custom');await app.settled();
@@ -1066,6 +1066,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  await page.locator('.thinking-links').getByRole('link',{name:'Waiting →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
  const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
  // An already-open validation section must fetch its evidence on restoration,
  // even though shared accordions notify onOpenChange only for deliberate toggles.
@@ -1081,8 +1082,12 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  assert.ok(copied.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
  await page.goBack();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,detailTopic);await page.locator(ready).waitFor();
  assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.goForward();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,overviewTopic);await page.locator(ready).waitFor();
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
+ await control('Breakdown').selectOption('model_effort_speed');await app.settled();
+ assert.ok(app.calls.some(call=>call.path==='/api/thinking'&&call.query.get('overview')==='1'&&call.query.get('groupBy')==='model_effort_speed'));
 });
 
 // Date arithmetic is covered in node; here verify the shared editor is wired to

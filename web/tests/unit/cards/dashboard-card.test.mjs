@@ -526,6 +526,17 @@ test('Waiting and Thinking charts are dashboard cards over their page population
   assert.deepEqual(source.where.slice(0, 3), [{ field: 'harness', op: '=', value: 'codex' }, { field: 'model', op: '=', value: 'gpt-5' }, { field: 'requested_at', op: '>=', value: '-30d' }]);
   assert.throws(() => collectDashboardCard(overview, 'Thinking', '', 'thinking-distributions'), /cannot/);
   assert.throws(() => collectDashboardCard(overview, 'Compactions', '', 'thinking-compactions'), /cannot/);
+  for (const groupBy of ['speed', 'model_speed', 'model_effort_speed']) {
+    for (const topic of ['thinking-overview', 'thinking-detail']) {
+      const address = pageCardURL(page(topic, { groupBy, view: 'wait-box' }));
+      const target = topic === 'thinking-overview' ? 'thinking-waits' : 'thinking-distributions';
+      const copy = dashboardCardMetadata(address, target);
+      assert.match(copy.title, /speed/);
+      assert.match(copy.description, /speed/);
+      const state = initialThinking(new URL(address, location.origin).searchParams);
+      assert.deepEqual(thinkingCardRecipe(target, state).measures[0].groupBy, [groupBy]);
+    }
+  }
   const waits = await loadDashboardCardPreview(overview, schemas.model_requests, undefined, undefined, now, 'thinking-waits');
   assert.equal(waits.action, DASHBOARD_CARD_ACTION);
   assert.deepEqual([waits.metrics[0].clause.distribution.kind, waits.metrics[0].clause.groupBy, waits.metrics[0].clause.display.xScale.mode], ['box', ['model'], 'log']);
