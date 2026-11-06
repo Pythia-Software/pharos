@@ -1,0 +1,204 @@
+[
+  {
+    "name": "all visible",
+    "state": {},
+    "valid": true
+  },
+  {
+    "name": "all sections",
+    "state": {
+      "modes": {
+        "values": [
+          "C.report.finding",
+          "?"
+        ],
+        "excluded": false
+      },
+      "events": {
+        "values": [
+          "choices"
+        ],
+        "excluded": true
+      },
+      "tools": {
+        "values": [
+          "error"
+        ],
+        "excluded": true
+      },
+      "origins": {
+        "values": [
+          "typed"
+        ],
+        "excluded": false
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "empty exclusion",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "future value IDs",
+    "state": {
+      "tools": {
+        "values": [
+          "future-tool"
+        ],
+        "excluded": false
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "selection extension",
+    "state": {
+      "events": {
+        "values": [
+          "friction"
+        ],
+        "excluded": false,
+        "extra": "metadata"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "null state",
+    "state": null,
+    "valid": false
+  },
+  {
+    "name": "array state",
+    "state": [],
+    "valid": false
+  },
+  {
+    "name": "scalar state",
+    "state": "all",
+    "valid": false
+  },
+  {
+    "name": "unknown section",
+    "state": {
+      "other": {
+        "values": [],
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null selection",
+    "state": {
+      "events": null
+    },
+    "valid": false
+  },
+  {
+    "name": "array selection",
+    "state": {
+      "events": []
+    },
+    "valid": false
+  },
+  {
+    "name": "scalar selection",
+    "state": {
+      "events": true
+    },
+    "valid": false
+  },
+  {
+    "name": "missing exclusion",
+    "state": {
+      "events": {
+        "values": [
+          "choices"
+        ]
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null exclusion",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "string exclusion",
+    "state": {
+      "events": {
+        "values": [],
+        "excluded": "false"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "missing values",
+    "state": {
+      "tools": {
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null values",
+    "state": {
+      "tools": {
+        "values": null,
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "scalar values",
+    "state": {
+      "tools": {
+        "values": "read",
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "non-string value",
+    "state": {
+      "modes": {
+        "values": [
+          "?",
+          1
+        ],
+        "excluded": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "null value",
+    "state": {
+      "origins": {
+        "values": [
+          null
+        ],
+        "excluded": false
+      }
+    },
+    "valid": false
+  }
+]

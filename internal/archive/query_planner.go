@@ -29,9 +29,6 @@ func (c *Catalog) ensureQueryPlannerStatistics(ctx context.Context) error {
 		return err
 	}
 	if cube {
-		if _, err := conn.ExecContext(ctx, machineTimeIndexSQL); err != nil {
-			return err
-		}
 		if _, err := conn.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS tool_call_cube_count_idx ON tool_call_cube(call_count)"); err != nil {
 			return err
 		}

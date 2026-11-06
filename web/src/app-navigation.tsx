@@ -11,6 +11,7 @@ import { focusPageContent } from "./page-focus";
 import { attentionBySource, attentionLabel, withLogSources } from "./logs-model";
 import { useLogsSummary } from "./logs-summary";
 import "./app-shell.css";
+import "./sidebar-toggle.css";
 
 type Layout = "wide" | "compact" | "phone";
 const readLayout = () => getComputedStyle(document.documentElement).getPropertyValue("--app-shell-layout").trim() as Layout || "wide";
@@ -140,7 +141,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const path = <span className="app-location-path"><span>{section.label}</span>{page ? <><span className="app-location-separator">/</span><strong>{page.label}</strong></> : selected.section === "library" && location.pathname.startsWith("/work/") ? <><span className="app-location-separator">/</span><strong>{location.pathname.includes("/conversation/") ? "Conversation" : "Workspace"}</strong></> : null}</span>;
   return <>
     <button ref={layout === "phone" ? trigger : undefined} id="appNavigationToggle" className="app-location-switcher" type="button" aria-haspopup="dialog" aria-controls="appNavigationDialog" aria-expanded={open} onClick={show}>{path}<Icon name="chevron-down" /></button>
-    {createPortal(<>{hasSidebar ? <button ref={trigger} id="appSidebarToggle" data-view-field="nav_collapsed" className="app-sidebar-toggle" type="button" aria-label={rail ? "Collapse sidebar" : "Expand sidebar"} title={rail ? "Collapse sidebar" : "Expand sidebar"} aria-controls="appNavigationRail" aria-expanded={rail} onClick={toggleSidebar}><Icon name="sidebar" /></button> : null}
+    {createPortal(<>{hasSidebar ? <button ref={trigger} id="appSidebarToggle" data-view-field="nav_collapsed" className="sidebar-toggle app-sidebar-toggle" type="button" aria-label={rail ? "Collapse sidebar" : "Expand sidebar"} title={rail ? "Collapse sidebar" : "Expand sidebar"} aria-controls="appNavigationRail" aria-expanded={rail} onClick={toggleSidebar}><Icon name="sidebar" /></button> : null}
       <aside id="appNavigationRail" data-view-field="nav_expanded" className="app-navigation-rail" aria-label={`${section.label} navigation`} hidden={!rail}><div className="app-navigation-rail-head"><h2 className="app-navigation-rail-title">{section.label}</h2></div><nav className="app-navigation-list" aria-label={`${section.label} pages`}>
       <NavigationItems pages={section.pages} current={selected.current} navigate={navigate} expanded={expanded[section.id] ?? {}} toggle={(id, defaultOpen) => toggle(section.id, id, defaultOpen)} />
     </nav></aside></>, contentNavigation)}

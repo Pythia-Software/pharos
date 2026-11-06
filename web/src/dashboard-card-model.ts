@@ -1,9 +1,9 @@
-import { EMPTY_QUERY, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
-import { analysisCatalogs } from "./analysis-catalogs";
+import {peopleMessageLabelCatalog} from "./people-message-labels";
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type FieldSchema, type WhereTerm } from "@pythia-software/query-table-core";
+import { analysisCatalogFor, analysisCatalogs } from "./analysis-catalogs";
 import { isTrendView, barsShown, canonicalState, normalizeAnalysis, slicesShown, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 
 import { dashboardDefaults } from "./dashboard-defaults";
-import { trendTitle } from "./dashboard-trend-model";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
@@ -12,9 +12,10 @@ import type { QuerySuggestion } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
 import { fittedCoverHeight, type CardLoadingSpec } from "./card-loading-model";
 import { normalizeConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
-import { ribbonCardTitle, ribbonCardWindow } from "./parallelism-ribbon-card";
+import { ribbonCardDescription, ribbonCardTitle, ribbonCardWindow } from "./parallelism-ribbon-card";
 import { habitsCardDescription, habitsCardPresentation, habitsCardTargets, habitsCardTitle, habitsCardWindow, isHabitsCardTarget, readHabitsCardView, type HabitsCardTarget } from "./habits-card";
 import { isThinkingCardAddress, isThinkingCardTarget, readThinkingCard, thinkingCardDescription, thinkingCardPresentation, thinkingCardTitle, thinkingCardWindow, thinkingTopicTargets, type ThinkingCardTarget } from "./thinking-card";
+import { analysisCardCopy, analysisCardTitle, dashboardCardCopy, type DashboardCardCopy } from "./dashboard-card-copy";
 
 // The dashboard URL is the card definition. Keep requested filters relative;
 // execution (including Today) resolves them anew whenever the card refreshes.
@@ -27,7 +28,7 @@ export function dashboardCardURL(address: string, catalog: AnalysisCatalog, stat
   return pageCardURL(url.href);
 }
 
-// A page without a catalog chart (Waiting and Compaction, Thinking) is its
+// A page without a catalog chart (Waiting, Thinking) is its
 // own definition: its address, less what only this visit chose.
 export function pageCardURL(address: string): string {
   const url = new URL(address, location.origin), { topic } = readUsageWorkspace(url.searchParams);
@@ -39,21 +40,21 @@ export function pageCardURL(address: string): string {
 // above the catalog chart, and Habits its sections. A card names the one it
 // shows; "chart", the catalog chart, is the default and is never stored.
 export type DashboardCardTarget = "chart" | "ribbon" | HabitsCardTarget | ThinkingCardTarget;
-export function dashboardCardTargets(address: string): Array<{ id: DashboardCardTarget; label: string; title: string }> {
+export function dashboardCardTargets(address: string, schema?: FieldSchema): Array<{ id: DashboardCardTarget; label: string; title: string }> {
   // Each is labelled with the heading it has on the page.
   if (isThinkingCardAddress(address)) {
     const { topic, state } = readThinkingCard(address);
-    return thinkingTopicTargets(topic).map(id => ({ id, label: thinkingCardTitle(id, state), title: thinkingCardTitle(id, state) }));
+    return thinkingTopicTargets(topic).map(id => ({ id, label: thinkingCardTitle(id, state), title: dashboardCardMetadata(address, id, schema).title }));
   }
-  const { topic, state } = readDashboardCard(address), catalog = analysisCatalogs[topic]!, title = dashboardCardTitle(catalog, state);
-  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: isTrendView(state.view) ? trendTitle(catalog, state) : title, title }];
+  const { topic } = readDashboardCard(address), title = dashboardCardMetadata(address, "chart", schema).title;
+  const charts: Array<{ id: DashboardCardTarget; label: string; title: string }> = [{ id: "chart", label: title, title }];
   if (topic === "habits") {
     const view = readHabitsCardView(new URL(address, location.origin).searchParams);
-    return [...habitsCardTargets.map(id => ({ id, label: habitsCardTitle(id, view), title: habitsCardTitle(id, view) })), ...charts];
+    return [...habitsCardTargets.map(id => ({ id, label: habitsCardTitle(id, view), title: dashboardCardMetadata(address, id, schema).title })), ...charts];
   }
   if (topic !== "parallelism") return charts;
   const ribbon = ribbonCardTitle(dashboardCardRibbon(address));
-  return [{ id: "ribbon", label: ribbon, title: ribbon }, ...charts];
+  return [{ id: "ribbon", label: ribbon, title: dashboardCardMetadata(address, "ribbon", schema).title }, ...charts];
 }
 
 // The ribbon's settings travel in the URL; without them it opens on the
@@ -76,13 +77,12 @@ export function readDashboardCard(address: string, now = new Date()) {
   if (url.origin !== location.origin || url.pathname !== "/analyze" || mode !== "dashboards" || !catalog || !Object.hasOwn(usageTopics, url.searchParams.get("analyze_topic") ?? "")) throw new Error("This dashboard card is unavailable.");
   const opened = readDashboardLink(url.searchParams, dashboardDefaults[topic], state => validAnalysisState(catalog, state), catalog.time, undefined, now);
   if (opened.error) throw new Error(opened.error);
-  return { topic, dataset: usageTopicDatasets[topic], state: normalizeAnalysis(catalog, opened.view), where: opened.where, params: url.searchParams };
+  const resolved=peopleMessageLabelCatalog(catalog,opened.view);
+  return { topic, dataset: resolved.dataset as UsageDataset, state: normalizeAnalysis(resolved, opened.view), where: opened.where, params: url.searchParams };
 }
 
 export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisState): string {
-  const view = normalizeAnalysis(catalog, state), measure = catalog.measures[view.metric].label;
-  const split = catalog.breakdowns[view.split]?.label;
-  return `${measure}${isTrendView(view.view) ? " over time" : view.view === "cycle" ? ` by ${view.cycle === "hour" ? "hour of day" : "weekday"}` : split ? ` by ${split.toLowerCase()}` : ""}`;
+  return analysisCardTitle(catalog, state);
 }
 
 export function collectDashboardCard(url: string, title: string, description: string, target: DashboardCardTarget = "chart", labels: CardLabels = {}, templateId?: string, groups?: number): Bookmark {
@@ -119,11 +119,51 @@ export function dashboardCardCollected(url: string, target: DashboardCardTarget 
   return readBookmarks().some(item => item.dashboard && item.url === url && (item.dashboardTarget ?? "chart") === target);
 }
 
-export function dashboardCardDescription(address: string, target: DashboardCardTarget = "chart"): string {
-  if (isThinkingCardTarget(target)) return thinkingCardDescription(target, readThinkingCard(address).state);
-  const { topic, params } = readDashboardCard(address);
-  if (isHabitsCardTarget(target)) return habitsCardDescription(target, readHabitsCardView(params));
-  return usageTopics[topic].description;
+// All creation entry points use this contract: title and context come from the
+// selected target's saved controls and population. Bespoke targets must describe
+// their own inputs; catalog additions inherit the shared implementation.
+export function dashboardCardMetadata(address: string, target: DashboardCardTarget = "chart", schema?: FieldSchema, groups?: number): DashboardCardCopy {
+  if (isThinkingCardTarget(target)) {
+    const { state, filters } = readThinkingCard(address), where = filters ? decodeQueryStrict(filters)!.where : [];
+    return dashboardCardCopy(thinkingCardTitle(target, state), [thinkingCardWindow(state), thinkingCardDescription(target, state)], where, schema, ["requested_at"]);
+  }
+  if (target === "ribbon") {
+    const settings = dashboardCardRibbon(address);
+    return dashboardCardCopy(ribbonCardTitle(settings), [ribbonCardWindow(settings), ribbonCardDescription(settings)]);
+  }
+  const { topic, state, params, where } = readDashboardCard(address);
+  const catalog = topic === "parallelism" ? analysisCatalogFor(topic, { parallelism: dashboardCardRibbon(address).counting })! : (analysisCatalogFor(topic,{},state) ?? analysisCatalogs[topic])!;
+  if (isHabitsCardTarget(target)) {
+    const view = readHabitsCardView(params);
+    // These sections read /api/habits, which does not use analyze_filters.
+    return dashboardCardCopy(habitsCardTitle(target, view), [habitsCardDescription(target, view)]);
+  }
+  const window = dashboardCardWindow(address);
+  const population = window === "Today" ? where.filter(term => !("field" in term && [catalog.time.first, catalog.time.last].includes(term.field) && !term.negated && [">=", ">", "<", "<="].includes(term.op))) : where;
+  return analysisCardCopy(catalog, state, population, schema, groups ?? dashboardCardGroups(address)?.fallback,
+    [window, ...dashboardSettingsContext(topic, params)]);
+}
+
+function dashboardSettingsContext(topic: string, params: URLSearchParams): string[] {
+  if (topic === "parallelism") {
+    const settings = dashboardCardRibbon(`/analyze?${params}`);
+    return [`Count ${settings.counting === "agent" ? "top-level sessions" : "workspaces"}; join turns across gaps up to ${settings.gap} minutes`];
+  }
+  if (topic === "carbon" && params.has("analyze_carbon")) {
+    const settings = JSON.parse(params.get("analyze_carbon")!);
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("This card's Carbon assumptions are invalid.");
+    return [
+      typeof settings.scenario === "string" ? `Energy estimate: ${settings.scenario}` : "",
+      typeof settings.pueScenario === "string" ? `Facility overhead: ${settings.pueScenario}` : "",
+      typeof settings.grid === "string" ? `Grid: ${settings.grid === "custom" ? `${Math.max(0, Number(settings.customGrid) || 0)} g CO₂e/kWh` : settings.grid.replaceAll("_", " ")}` : "",
+      settings.inputSensitivity === "third" ? "Watershed input sensitivity" : settings.inputSensitivity === "current" ? "Labs input sensitivity" : "",
+    ].filter(Boolean);
+  }
+  return [];
+}
+
+export function dashboardCardDescription(address: string, target: DashboardCardTarget = "chart", schema?: FieldSchema, groups?: number): string {
+  return dashboardCardMetadata(address, target, schema, groups).description;
 }
 
 export function dashboardCardWindow(address: string, target: DashboardCardTarget = "chart"): string {
@@ -142,7 +182,9 @@ export function dashboardCardWindow(address: string, target: DashboardCardTarget
 // breakdowns, over time or compared, have groups to count.
 export function dashboardCardGroups(address: string, target: DashboardCardTarget = "chart"): CardGroups | undefined {
   if (target !== "chart") return;
-  const { topic, state } = readDashboardCard(address), split = analysisCatalogs[topic]!.breakdowns[state.split];
+  const opened = readDashboardCard(address), { topic } = opened;
+  const catalog = topic === "parallelism" ? analysisCatalogFor(topic, { parallelism: dashboardCardRibbon(address).counting })! : (analysisCatalogFor(topic,{},opened.state) ?? analysisCatalogs[topic])!;
+  const state = normalizeAnalysis(catalog, opened.state), split = catalog.breakdowns[state.split];
   if (!split || !isTrendView(state.view) && !["compare", "distribution"].includes(state.view)) return;
   if (isTrendView(state.view) && analysisCatalogs[topic]!.trend.allSeries) return;
   const fallback = isTrendView(state.view) ? state.seriesLimit! : state.view === "compare" && state.compareAs === "share" ? Math.max(slicesShown, (state.selection?.values.length ?? 0) + 1) : barsShown;
@@ -155,7 +197,7 @@ export function dashboardCardPresentation(address: string, target: DashboardCard
   if (isThinkingCardTarget(target)) return thinkingCardPresentation(target, readThinkingCard(address).state);
   const { topic, state } = readDashboardCard(address);
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
-    : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
+    : topic === "compaction" ? "thinking" : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
     : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" || topic === "habits" ? "machines" : "tools";
   const kind = isTrendView(state.view) ? state.view === "trend_line" || state.view !== "trend_bar" && state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
   const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : Math.min(groups ?? 4, cardGroupsMax);

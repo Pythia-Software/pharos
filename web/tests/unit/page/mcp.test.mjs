@@ -1,3 +1,5 @@
+import { capabilities, answerQuery } from "../../support/query-server.mjs";
+import { schemas } from "../helpers/recipes.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMCPMonitor } from "../../../src/mcp-monitor";
@@ -121,10 +123,10 @@ test("MCP details load the full call by ID independently of the table projection
   t.after(() => { global.fetch = previous; });
   const call = { id: 607, tool_name: "search_conversations", called_at: "2026-10-20T17:00:00Z", arguments_json: '{"query":"parser"}', status: "ok", error_text: null, duration_ms: 0, response_bytes: 7109, estimated_output_tokens: 2370, result_count: null, truncated: true };
   let received;
-  global.fetch = async (url, init) => { received = init.signal; assert.equal(url, "/api/query/mcp_calls/item?id=607"); return Response.json({ row: call }); };
+  global.fetch = async (url, init) => { received = init.signal; if(url.endsWith("capabilities"))return Response.json(capabilities());assert.equal(url,"/api/query/mcp_calls/query-v3");return Response.json(answerQuery("query-v3",JSON.parse(init.body),[call],schemas.mcp_calls)); };
   const projected = { id: 607, tool_name: "search_conversations" };
   const result = await loadMCPCall(String(projected.id), controller.signal);
-  assert.deepEqual(result, call);
+  for(const [key,value]of Object.entries(call))assert.deepEqual(result[key],value,key);
   assert.equal(result.response_bytes, 7109);
   assert.equal(result.arguments_json, call.arguments_json);
   controller.abort();
@@ -134,7 +136,7 @@ test("MCP details load the full call by ID independently of the table projection
 test("a pruned MCP call or a failed detail read is reported rather than rendered as a partial record", async t => {
   const previous = global.fetch;
   t.after(() => { global.fetch = previous; });
-  global.fetch = async () => Response.json({ row: null });
+  global.fetch = async (url,init) => url.endsWith("capabilities") ? Response.json(capabilities()) : Response.json(answerQuery("query-v3",JSON.parse(init.body),[],schemas.mcp_calls));
   await assert.rejects(loadMCPCall("607"), /no longer available/);
   global.fetch = async () => Response.json({ error: "Call read failed" }, { status: 500 });
   await assert.rejects(loadMCPCall("607"), /Call read failed/);

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import type { AggregationClause, FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
+import type { AggregationClause, FieldSchema, QueryRequestV3, WhereTerm } from "@pythia-software/query-table-core";
 import { postMetrics, type MetricResult } from "./metric-request";
+import { postQueryRows } from "./query-transport";
 import { onDatasetRefresh } from "./dataset-refresh";
 import { conversationRowURL } from "./usage-row-model";
 import { useViewState } from "./view-state";
@@ -21,11 +22,8 @@ function useRefresh() {
   useEffect(() => onDatasetRefresh(dataset, () => setRefresh(value => value + 1)), []);
   return refresh;
 }
-async function postRows(request: Record<string, unknown>, signal: AbortSignal): Promise<{ rows: Array<Record<string, unknown>>; total: number }> {
-  const response = await fetch(`/api/query/${dataset}/rows-v2`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 2, profile: "qt-sqlite-v1", ...request }), signal });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error?.message ?? body.error ?? "Sessions could not be loaded.");
-  return { rows: body.rows ?? [], total: Number(body.total) || 0 };
+async function postRows(result: QueryRequestV3["result"], signal: AbortSignal): Promise<{ rows: Array<Record<string, unknown>>; total: number }> {
+  return postQueryRows<Record<string, unknown>>(dataset, result, signal);
 }
 type Loaded<T> = { value: T | null; error: string; loading: boolean };
 function useLoad<T>(key: string, load: (signal: AbortSignal) => Promise<T>): Loaded<T> {

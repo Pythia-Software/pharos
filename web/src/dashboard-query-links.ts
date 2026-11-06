@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import {messageLabelConversationQuery} from "./message-label-results-model";
 import { NULLARY_OPS, branchesOf, groupKeyField, isCalendarGroupKey, isOrGroup, type FieldSchema, type GroupKey, type QueryState, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { groupedDashboardQuery } from "./usage-dashboard-model";
@@ -29,7 +30,7 @@ function groupKeyLabel(schema: LinkSchema, query: QueryState, key: GroupKey): st
   return isCalendarGroupKey(key) ? `${label} by ${key.interval}` : label;
 }
 
-function filterDescriptions(schema: LinkSchema, query: QueryState, where: WhereTerm[]): string[] {
+export function dashboardFilterDescriptions(schema: LinkSchema, query: QueryState, where: WhereTerm[]): string[] {
   const options = optionLabels(schema.fields);
   const value = (clause: WhereClause) => {
     const labelled = options.get(clause.field)?.get(clause.value);
@@ -74,11 +75,11 @@ function filterDescriptions(schema: LinkSchema, query: QueryState, where: WhereT
 // WHERE vs grouped HAVING. Empty sections are omitted.
 export function dashboardQueryDetails(schema: LinkSchema, query: QueryState): QueryLinkDetail[] {
   const source = query.grouping?.source ?? query;
-  const filters = filterDescriptions(schema, source, source.where);
+  const filters = dashboardFilterDescriptions(schema, source, source.where);
   const sorts = query.orderBy;
   return [
     { label: "Filters", values: filters },
-    ...query.grouping && query.where.length ? [{ label: "Group filters", values: filterDescriptions(schema, query, query.where) }] : [],
+    ...query.grouping && query.where.length ? [{ label: "Group filters", values: dashboardFilterDescriptions(schema, query, query.where) }] : [],
     ...query.grouping ? [{ label: "Measures", values: query.grouping.summaries.filter(column => column.op !== "row" && column.op !== "link").map(column => fieldLabel(schema, query, column.id)) }] : [],
     { label: "Group by", values: query.grouping?.keys.map(key => groupKeyLabel(schema, source, key)) ?? [] },
     { label: "Sort", values: sorts.map(sort => `${fieldLabel(schema, query, sort.field)}${sort.extract ? ` matching /${sort.extract.regex}/` : ""} ${sort.dir === "desc" ? "descending" : "ascending"}${sort.nulls === "first" ? " (empty first)" : ""}`) },
@@ -121,7 +122,7 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
     ...(explorations.length ? explorations : [{ title: `${usageDatasets[dataset].label} records`, query: records }]),
   ];
   return destinations.map(destination => {
-    const query = { ...orderedUsageQuery(dataset, destination.query), fitToScreen: true };
+    const query = fitQueryToScreen(orderedUsageQuery(dataset, destination.query));
     const details = dashboardQueryDetails(schema, query);
     return { ...destination, query, dataset: usageDatasets[dataset].label,
       href: usageWorkspaceURL({ mode: "query", search: true, dataset, query }, params),

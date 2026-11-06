@@ -4,12 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	qt "github.com/Pythia-Software/query-table/backends/go"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 func TestSafetySelection(t *testing.T) {
@@ -347,18 +348,11 @@ func safetyTestCall(t *testing.T, c *Catalog, id, command, at string, completed 
 }
 
 func TestSafetyHandoffLifecycle(t *testing.T) {
+	// The command/option matrix belongs to TestSafetyIdentityAndExecution.
+	// Exercise persistence for a resolved identity and a call-scoped one.
 	for _, commands := range [][2]string{
 		{`git clean -fdx -- data`, `git clean -fdx`},
-		{`git clean -fdX`, `git clean -fdx`},
-		{`git clean -fdx`, `git clean -ffdx`},
 		{`git -C "$CHECKOUT" push --force origin HEAD`, `git -C "$CHECKOUT" push --force origin HEAD`},
-		{`git push --force origin "$REF"`, `git push --force origin "$REF"`},
-		{`cd /other/a && gh release delete v1`, `cd /other/b && gh release delete v1`},
-		{`git push --force --tags origin`, `git push --mirror origin`},
-		{`pkill -u 501 -x worker`, `pkill -f worker`},
-		{`rsync --delete --exclude keep source/ /outside/`, `rsync --delete-excluded source/ /outside/`},
-		{`rsync --delete --exclude-from filters source/ /outside/`, `rsync --delete --exclude-from filters source/ /outside/`},
-		{`cd /outside && rm -rf .git`, `cd /outside || rm -rf .git`},
 	} {
 		t.Run("separate handoff for "+commands[0], func(t *testing.T) {
 			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
@@ -556,7 +550,7 @@ func TestSafetyAPIAndMCP(t *testing.T) {
 	}
 	for _, endpoint := range []string{"cart/prompt", "cart/copy"} {
 		response := httptest.NewRecorder()
-		s.postFindings(response, httptest.NewRequest(http.MethodPost, "/api/findings/safety/"+endpoint, nil), map[string]any{"target": "repo:repo-1", "ids": []any{id, "efficiency"}})
+		s.postFindings(response, queryFixtureHTTPRequest(http.MethodPost, "/api/findings/safety/"+endpoint, nil), map[string]any{"target": "repo:repo-1", "ids": []any{id, "efficiency"}})
 		if response.Code < 400 {
 			t.Fatal(fmt.Sprint("mixed request accepted: ", endpoint))
 		}
@@ -667,7 +661,7 @@ func TestSafetyQueryTableMatchesReviews(t *testing.T) {
 		var value struct {
 			Rows []map[string]any `json:"rows"`
 		}
-		response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/safety/rows-v2", qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state", "rule", "subject", "command", "calls", "target_label"}, Where: where, OrderBy: []qt.OrderBy{{Field: "subject", Dir: "asc"}}, Limit: 50}})
+		response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/safety/rows-v2", queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state", "rule", "subject", "command", "calls", "target_label"}, Where: where, OrderBy: []qt.OrderBy{{Field: "subject", Dir: "asc"}}, Limit: 50}})
 		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &value) != nil {
 			t.Fatal(response.Code, response.Body.String())
 		}
@@ -696,7 +690,7 @@ func TestSafetyQueryTableMatchesReviews(t *testing.T) {
 		t.Fatal("table should reflect review state changes immediately", got)
 	}
 	response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/safety/metrics", metricRequest(qt.AggSpec{ID: "reviews", Expression: "SUM([review_count])"}))
-	var metrics qt.SQLiteMetricsV2Result
+	var metrics queryFixtureMetricsResult
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &metrics) != nil || len(metrics.Metrics) != 1 || len(metrics.Metrics[0].Buckets) != 1 || floatOr(metrics.Metrics[0].Buckets[0].Value) != 3 {
 		t.Fatal(response.Code, response.Body.String())
 	}

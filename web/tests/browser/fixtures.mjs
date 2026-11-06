@@ -36,7 +36,14 @@ for (const c of conversationLabelsFixture.conversations) {
     event('grandchild-0','message','fixture-grandchild',0,[]),event('grandchild-1','message','fixture-grandchild',1,[['C.report.product',.95]]),
     event('grandchild-2','message','fixture-grandchild',2,[]),event('grandchild-3','message','fixture-grandchild',3,[['C.report.product',.95]]));
   c.messages.sort((a,b)=>a.order-b.order);
+  // Exercise a completed no-match beside the still-unprocessed grandchild-2.
+  c.messages.find(m=>m.id==='grandchild-0').chunks=1;
 }
+// Agent events on the first conversation's fingerprint: two point back at
+// the same prompt (one arc), one at another, one has no target.
+const linkEvent=(id,message,group,target)=>({id,message_id:message,kind:'assumption',label:'Assumption',group,probability:.9,source:'reply',sentence:'I assume the explorer means the sidebar list.',
+  target:target?{method:'quote',message_id:target,role:'user',kind:'message',start:0,end:8,text:'Invented',strong:true}:null});
+const fingerprintEvents=[linkEvent('e1','first-2','Choices you may not see','first-0'),linkEvent('e2','first-4','Reactions and learning','first-0'),linkEvent('e3','first-6','Friction','first-3'),linkEvent('e4','first-4','Friction',null)];
 for(const c of conversationLabelsFixture.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
 conversationLabelsFixture.version=2;
 export const sourceSetupCandidates = [
@@ -57,6 +64,7 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+for (const [index, row] of datasets.compactions.entries()) Object.assign(row, { trigger: ["human", "machine", "unknown"][index % 3], trigger_evidence: ["recorded", "inferred", "unknown"][index % 3] });
 for(const [i,row] of datasets.message_labels.entries())Object.assign(row,{fingerprint:row.conversation_id,message_id:"label-message-"+i,label:i%3?"C.report.finding":"P.request.work.implement",family:i%3?"C.report":"P.request",function_role:i%3?"Receiver":"Sender",label_status:"matched",source:["human","output","thinking"][i%3]});
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
@@ -97,6 +105,10 @@ for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
 // transcript (long code blocks, a wide table, tool output, an edit, nested
 // agents) and two child sessions.
 export const workID = "work-long", rootConversation = "conv-root";
+datasets.people_message_labels=['human','activity','habits'].flatMap(scope=>datasets.writing_messages.slice(0,24).map((row,i)=>{
+ const label=i%3?'P.request.work.implement':'P.control.redirect';
+ return {...row,id:`${scope}:${row.id}:${label}`,message_id:row.id,people_scope:scope,label,family:label.split('.').slice(0,2).join('.'),label_status:'matched',sent_at:row.sent_at,event_at:row.sent_at,started_at:row.sent_at,typed_words:8,source_conversation_id:rootConversation,source_workspace_id:workID,actor:'you',initiator:'human'};
+}));
 const start = now - 2 * 3600000;
 const at = seconds => new Date(start + seconds * 1000).toISOString();
 let sequence = 0;
@@ -150,15 +162,15 @@ const work = {
 };
 
 // The delegation explorer's analysis of the workspace's three sessions.
-const metricKeys = ["start", "tokens", "cost", "calls", "errors", "files", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
+const metricKeys = ["start", "tokens", "cost", "calls", "events", "errors", "files", "filesRead", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
 const durations = new Set(["clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime"]);
-const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
+const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", messages: "Messages", events: "Agent events", filesRead: "Files read", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
   unit: id === "cost" ? "usd" : durations.has(id) ? "ms" : id === "start" ? "date" : "count", definition: `Definition for ${id}` }));
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const sessionEnd = start + 300000;
 function session(id, conversation, parent, provider, outline, depth, label, tokens) {
   const self = Object.fromEntries(metricKeys.map(key => [key, metric(0)]));
-  Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
+  Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), filesRead: metric(4), messages: metric(12), events: metric(2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
   return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, outline, depth, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
     order: depth, child_count: depth < 2 ? 1 : 0, start, end: sessionEnd, subtree_start: start, subtree_end: sessionEnd, self, all: { ...self } };
 }
@@ -185,7 +197,7 @@ function workPreview(id, query) {
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
   return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:conversationLabelsFixture.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
-    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false}:{}),
+    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false,agent_events:[{id:'e-'+id,message_id:'thought-'+id,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'I assume the change means the importer.',target:{method:'quote',message_id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',start:0,end:9,text:'Implement',strong:true,at:new Date(start+10000).toISOString()}},{id:'e-'+id+'-open',message_id:'thought-'+id,kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.8,source:'thinking',sentence:'The build failed once.',target:null}]}:{}),
     model_inferred: [{ start: Math.max(from, start + 1000), end: Math.min(to, sessionEnd - 1000) }], episodes: [{ start, end: sessionEnd }], truncated: false,
     marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1", preview: "/repo/README.md", status: "ok" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2", preview: "npm test", status: "error" }] })) };
 }
@@ -216,6 +228,31 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   evidence: [{ at: iso(day), workspace_id: workID, conversation_id: rootConversation, message_id: "m-1", where: "tl1 · Codex", did: "searched for `AGENTS.md`", happened: "found nothing" }],
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
+
+// Synthetic fixes for layout; grouping, bounds and lifecycle are tested in Go and fixes-model.
+const fixStatus = { state: "recurring", label: "Still recurring", detail: "Seen in the last 3 days of the data.", first: iso(9 * day).slice(0, 10), last: iso(day).slice(0, 10), days_quiet: 1 };
+const fixCard = { id: "fix_sample", title: "trimesh isn't installed in this environment, so the mesh check falls back to a slower path", category: "env", category_label: "Environment or setup", source: "friction",
+  target: repoTarget, target_label: "explo", scope: "repo", scope_reason: "All but one event are in explo.", destination_kind: "Environment", destination: "explo's setup (requirements, setup script)",
+  terms: ["trimesh"], files: ["requirements.txt"], work_items: 6, events: 9, conversations: 7, repositories: [{ key: "explo", count: 8 }, { key: "No repository", count: 1 }], status: fixStatus, hours: 1.4, episodes: 3,
+  guidance_hit: { repository: "explo", file: "AGENTS.md", line: 2, term: "trimesh", text: "Install trimesh before running mesh checks." }, groups: 2, tentative: false, safeguards: 1,
+  state: "open", recurred: false, handed_at: null, cart: { target: repoTarget, target_label: "explo", ticked: true }, priority: 8.8, hidden: "", deprioritized: false };
+export const fixesFixtures = {
+  items: [fixCard,
+    { ...fixCard, id: "fix_global", title: "gh pr edit fails with a GraphQL error about Projects (classic)", category: "tool", category_label: "Tool or integration", target: "global", target_label: "Global setup", scope: "global", scope_reason: "Seen in 3 repositories; none holds more than 85%.", destination_kind: "Global guidance", destination: "~/.claude/CLAUDE.md", terms: ["gh pr edit"], files: [], repositories: [{ key: "explo", count: 2 }, { key: "tl1", count: 2 }, { key: "corpus", count: 1 }], guidance_hit: null, groups: 1, safeguards: 0, cart: null, work_items: 4, events: 5, hours: 0, priority: 4 },
+    { ...fixCard, id: "fix_rare", title: "The fixture loader expects UTC timestamps", category: "knowledge", category_label: "Codebase knowledge", tentative: true, work_items: 2, events: 2, hidden: "rare", cart: null, guidance_hit: null, groups: 1, safeguards: 0, priority: 2 },
+    { ...fixCard, id: "fix_handed", title: "The sandbox blocks writes to ~/.cache", category: "harness", category_label: "Harness and shell behaviour", state: "handed_off", handed_at: iso(2 * day), cart: null, groups: 1, status: { ...fixStatus, state: "quiet", label: "Quiet since handoff", days_quiet: 8 }, deprioritized: true }],
+  summary: { open: 2, handed_off: 1, dismissed: 0 }, hidden: { stale: 0, rare: 1, total: 1 },
+  bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 }, default_bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 },
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and propose, or make the change; you choose before copying.", items: [{ id: "fix_sample", title: fixCard.title, ticked: true, change_label: "Environment or setup", suggested_target: repoTarget }] }],
+  targets: [{ target: "global", label: "Global setup" }, { target: repoTarget, label: "explo" }], built_at: iso(3600000), end: iso(day).slice(0, 10), in_scope_events: "412", excluded_events: 37, safeguard_events: 3, prompt_limit: 12, version: "fixes-v1",
+  coverage: "Agent events from the last 90 days the events pass scanned, grouped by what they say.",
+};
+const fixQuote = { event_id: "e1", sentence: fixCard.title, about: "the mesh check", kind: "friction", kind_label: "Friction", repository: "explo", model: "claude-opus", day: iso(day).slice(0, 10), source: "reply", workspace_id: workID, conversation_id: rootConversation, message_id: "m-1" };
+export const fixDetailFixture = { ...fixCard, suggestion: "Add trimesh to the environment agents run in, pinned, so the check never falls back.", category_explanation: "Something agents need is missing, too slow or the wrong version where they run.",
+  quotes: [fixQuote, { ...fixQuote, event_id: "e2", source: "thinking", about: "" }], members: [fixQuote, { ...fixQuote, event_id: "e2" }, { ...fixQuote, event_id: "e3" }], member_count: 9,
+  guidance_hits: [fixCard.guidance_hit], tool_errors: [{ key: "ModuleNotFoundError: trimesh", count: 4 }], kinds: [{ key: "friction", label: "Friction", count: 7 }, { key: "workaround", label: "Workaround", count: 2 }], models: [{ key: "claude-opus", count: 9 }], thinking: 3,
+  cost: { episodes: 3, hours: 1.4, calls: 22, unresolved: 1 }, status: { ...fixStatus, messages_after: 40 } };
+export const fixesSettingsFixture = { bounds: fixesFixtures.bounds, default_bounds: fixesFixtures.default_bounds, open: 3, hidden_stale: 0, hidden_rare: 1, built_at: fixesFixtures.built_at, end: fixesFixtures.end, window_days: 90, version: "fixes-v1" };
 
 // Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
 const safetyCard = { id: "safety_sample", rule: "credentials", danger: "high", subject: "/Users/example/repo/.build/gcloud", title: "Credentials copied to another location", explanation: "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
@@ -374,6 +411,9 @@ export const safetySettingsFixture = { rules: [
     "enabled": true
   }
 ], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v3" };
+datasets.fixes = fixesFixtures.items.map(item => ({ id: item.id, title: item.title, lead: item.title, state: item.state, shown: item.state === "open" && item.hidden ? item.hidden : "shown", category: item.category, status: item.status.state,
+  target: item.target, target_label: item.target_label, destination: item.destination, terms: item.terms.join(", "), check_name: null, work_items: item.work_items, events: item.events, conversations: item.conversations,
+  hours: item.hours, priority: item.priority, safeguards: item.safeguards, in_prompt: Boolean(item.cart), first_seen: item.status.first, last_seen: item.status.last, handed_at: item.handed_at, fix_count: 1 }));
 datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, danger_rank: card.danger === "high" ? 3 : 2, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
@@ -470,7 +510,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 // Resources as a service reports them (§10): itself and a Terminal command.
-const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const statusResources = (label, processes) => ({ cpu_percent: 3, gpu: { utilization_percent: 62, sampled_at: iso(0), basis: "IOAccelerator.AppUsage.accumulatedGPUTime" }, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
 const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
   { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
 const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
@@ -481,6 +521,9 @@ const statusHeadings = { work: "Work", data: "Data" };
 // /api/background report it.
 const backgroundItem = (id, label, cadence, state, changes = {}) => ({
   id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence, usual_cadence: cadence,
+  cadence_moves: ["frequent", "hourly", "daily", "manual"].filter(target => target !== cadence).map(target => ({
+    cadence: target, label: `Move to ${{ frequent: "Frequently", hourly: "Hourly", daily: "Daily", manual: "Only when you ask" }[target]} for a week`,
+  })),
   adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
   as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s", typical: "Typically 30–45 s" },
   choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
@@ -500,25 +543,25 @@ const idleBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
     sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
-  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
-    cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
-    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min", typical: "Typically 5–8 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("writing", "Update writing estimates", "frequent", "current", { cost: { seconds: 2, runs: 7, class: "light", text: "a few seconds", typical: "Typically a few seconds" } }),
   backgroundItem("findings", "Findings", "hourly", "current"),
   backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
+  ...[["labels", "Message labels"], ["agent_events", "Agent events"]].map(([id, label]) => backgroundItem(id, label, "manual", "disabled", { state_label: "Off", column: "hourly", usual_cadence: "hourly", next_at: null, cost: null })),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "failed", { error: "git rev-list timed out after 5 s in ~/code/a-repository-with-a-very-long-name-that-has-to-wrap" }),
-  backgroundItem("writing", "Your writing", "hourly", "running"),
+  backgroundItem("writing", "Update writing estimates", "frequent", "running"),
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
-  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', threads: 4, thread_choices: [1, 2, 4, 8, 16, 28] },
-  agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
+  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', notice:'', execution: {device:'gpu', status:'GPU · Automatic', detail:'Confirmed by the last worker. GPU capacity is managed automatically.', confirmed:true}, threads: 4, threads_can_change: false },
+  agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', notice:'', execution: {device:'cpu', status:'CPU · GPU unavailable', detail:'Confirmed by the last worker. Automatic GPU selection fell back to CPU.', confirmed:true}, threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
   settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
     battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
     battery_slower_minutes: 15, low_battery_percent: 20 },
@@ -562,7 +605,7 @@ export const busyStatus = {
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
   freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
-  library: {...idleStatus.library, wal_bytes: 64e6},
+  library: {...idleStatus.library, wal_bytes: 2e9},
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -661,12 +704,14 @@ export const defaultApi = {
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
-  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false}),
+  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,messages:conversationLabelsFixture.conversations[0].messages.map(message=>({...message,conversation_id:params.id}))},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
+  "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
   // Query Table, on the production transport.
   "POST /api/query/usage/carbon": carbon,
   "POST /api/query/writing/series": ({ body }) => ({ works: 2, ...(body?.hourly ? { hourly: [] } : {}),
     daily: Array.from({ length: 14 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), typed_messages: 3, messages: 5, ...writingCounts(120 + index * 10, 40, 900) })),
     totals: { messages: 70, typed_messages: 42, first_day: new Date(now - 13 * day).toLocaleDateString("en-CA"), ...writingCounts(2000, 560, 12600) } }),
+  "GET /api/tool-calls/:id": ({ params }) => datasets.tool_calls.find(row => String(row.id) === params.id) ?? {},
   "* /api/query/:dataset/:operation": ({ params, body, query }) => schemas[params.dataset] && answerQuery(params.operation, body, datasets[params.dataset], schemas[params.dataset], { now, id: query.get("id") }),
   "POST /api/query/:dataset": ({ params, body }) => schemas[params.dataset] && answerQuery("rows", body, datasets[params.dataset], schemas[params.dataset], { now }),
 
@@ -677,7 +722,7 @@ export const defaultApi = {
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
-  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
+  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
@@ -729,7 +774,7 @@ export const defaultApi = {
   },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
-  "GET /api/authorship": { built_at: iso(3600000), running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
+  "GET /api/authorship": { built_at: iso(120000), refined_at: iso(8*3600000), provisional_messages: 12, refinement_pending: true, pending_messages: 0, refining: false, running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
@@ -745,12 +790,22 @@ export const defaultApi = {
   "GET /api/sync/recovery": { jobs: [] },
   "GET /api/background": backgroundDocument,
   "POST /api/background/settings": backgroundDocument,
-  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { ...backgroundDocument.labels, enabled: body.enabled, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
+  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument,
+    labels: { ...backgroundDocument.labels, ...('enabled' in body ? {enabled:body.enabled, status:body.enabled ? 'On, waiting for the labeling model.' : 'Off.'} : {}), ...('threads' in body ? {threads:body.threads} : {}) },
+    agent_events: { ...backgroundDocument.agent_events, ...('agent_events_threads' in body ? {threads:body.agent_events_threads} : {}) } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
   // Findings and MCP.
   "GET /api/findings": findings,
+  "GET /api/findings/fixes": fixesFixtures,
+  "GET /api/findings/fixes/settings": fixesSettingsFixture,
+  "POST /api/findings/fixes/settings": ({ body }) => ({ ...fixesSettingsFixture, bounds: { ...fixesSettingsFixture.bounds, ...Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key in fixesSettingsFixture.bounds)) } }),
+  "GET /api/findings/fixes/:id": ({ params }) => ({ ...fixDetailFixture, ...fixesFixtures.items.find(item => item.id === params.id) }),
+  "POST /api/findings/fixes/bulk": ({ body }) => ({ ok: true, count: body?.ids?.length ?? 0 }),
+  "POST /api/findings/fixes/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Improve the guidance, setup and docs agents work with in explo.\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
+  "POST /api/findings/fixes/cart/copy": { ok: true },
+  "POST /api/findings/fixes/:id/action": { ok: true },
   "GET /api/findings/safety": safetyFixtures,
   "GET /api/findings/safety/settings": safetySettingsFixture,
   "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),

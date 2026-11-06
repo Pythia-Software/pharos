@@ -10,6 +10,7 @@ Query Table **0.9.8** supplies portable native property inspectors. Search, Filt
 - `web/src/view-state.ts` supplies `useViewState`, `useViewEntry`, the classic-script bridge and content-disclosure binding. URL values are the source of truth. Back/Forward and in-app navigation use the same reader. Active pages write effective defaults, including false and empty values, so a copied view overrides another browser's preferences. Route-scoped writes are rejected after navigation, even if a component is still mounted. Viewer-dependent disclosure defaults are captured together in one frame; fixed defaults stay implicit and do not accumulate per rendered row. Opt into viewer-dependent capture with `ViewDisclosure captureInitial` or `useViewEntry(..., active, {captureInitial:true})`. Explicitly changed row disclosures remain addressable after paging.
 - Query Table writes each table edit to `q_<dataset>` with `replaceState`. A table can opt into history steps with `QuerySurface queryHistory` (`web/src/query-history.ts`): each change to filters, sorts, grouping, metrics, columns or paging becomes its own Back/Forward entry, rapid edits within a second coalesce into one, and column widths never count. Restorations from Back/Forward or in-app links are recorded into their entry, never pushed over it. Only the Risky actions table opts in.
 - Existing native query/chart/host-search codecs remain with their owners. `delegatedViewFields` explicitly identifies those owners. Query Table is consumed through published APIs, without local patches.
+- Background processing tables use native `q_<schema>` query parameters (for example, `q_sync_operations`) and `query_layout` entries keyed by schema name. Filters, sorts, columns, grouping, metrics and paging restore independently for each retained snapshot; the query editor starts expanded.
 - `web/src/site-map.ts` exports the contract to `assets/site-map.json`. `site_view.go` reads this same data for validation/building/parsing; it does not maintain a second field catalog.
 - `docs/view-controls.json` is the reviewed ledger of actual JSX, every classic script, the static shell and standalone HTML fragments. It includes controls that are buttons or disclosures, not just inputs. `web/view-controls.mjs` discovers these from source.
 
@@ -52,7 +53,7 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Surface | Portable state |
 |---|---|
 | Layout settings | `menuBarPreferences`, `headerSettings`, `quickStatsSettings` |
-| Capture/index settings | `sync:separate`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
+| Capture/index settings | `sync:history`, `sync:sources`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
 | Background schedule items | `background:<item ID>`; several rows may open together |
 | Connected cloud schedules | `cloud:schedule:<destination ID>`; IDs survive renaming and reordering |
 | Library health and app location | `library:drive-health`, `library:application` |
@@ -67,7 +68,26 @@ Draft controls are explicitly classified as editing: source/library onboarding; 
 
 `check-view-controls` now rejects native accordions, summaries, and `aria-expanded` controls classified only as `settings`. JSX expansion attributes and classic `setAttribute("aria-expanded", ...)` sites are included in the inventory. Static HTML `data-view-field` bindings are discovered directly, so settings values cannot accidentally hide a missing view binding in the review ledger. New controls still require individual review.
 
+## Timeline Key
+
+The timeline Key uses the dashboard legend menu: show only a value or category,
+add/remove values, show everything except a value or category, or reset that
+section. Hidden values stay in the Key with muted, desaturated swatches so they
+can be restored. Sender, Receiver and message-mode families apply to all of
+their displayed labels, with mixed selection indicated on the parent.
+
+`timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
+selections. Each optional section has `{values: string[], excluded: boolean}`;
+an absent section or empty values shows everything in that section. Values use
+stable message-label IDs (`?` for uncategorized), event-group keys, tool-category
+IDs (`error` for failed calls), or caller-source IDs. The selection filters
+ribbon spans, event arcs and markers, counts and inspection targets together.
+Original timing, zoom, idle compression and retained records remain unchanged.
+Caller-source filtering preserves each run's original portion of the message.
+
 ## Agent interface
+
+On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
 
 Ask Pharos uses the existing MCP CLI-style interface:
 

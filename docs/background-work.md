@@ -160,6 +160,10 @@ func (op *Op) Finish(err error)                // terminal state from err and th
   only where it is today, and the snapshot labels it as such.
 - `Plan` may be revised once discovery knows more (sources, needed steps);
   revisions only add or drop steps not yet started.
+- A declared plan owns the task position. Worker phase/source changes update
+  the active task's measurements without advancing its index. Replanning
+  preserves that task's identity; discovery before the plan starts has no
+  planned position.
 - `SafePoint` defaults from the kind's latency class (§3.1); work that knows
   better (an index inside a huge workspace) reports a measured estimate.
 - Handle methods never touch SQLite or take a catalog lock: progress hooks
@@ -173,6 +177,10 @@ func (op *Op) Finish(err error)                // terminal state from err and th
   refresh mirror their progress callbacks. Nothing in the registry writes
   to a run, so `libraryActivities` and the old drive panel are unchanged.
   (This replaces phase 0's plan of the handle updating `SyncRun.Work`.)
+- `reportWork` mirrors a worker's phase and measured counts to the operation
+  in its context, as well as its optional history/forecast callback. Chain
+  stages pass their own operation context into work; a history meter must not
+  be required for scheduled work to report progress.
 - Work that returns `nil` once a release cancelled its context did not
   finish: a top-level operation without a recorded outcome then ends
   `interrupted`.
@@ -291,7 +299,7 @@ the words here are the words surfaces show (§8).
 | `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
 | `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
 | `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; resuming the repair continues it (`sync_recovery_jobs`). | batch | always | fg |
-| `index.verify` (variants `sample`, `all`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`); step only (`sample`) | fg |
+| `index.verify` (variants `sample`, `all`, `repair`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs; `repair` explicitly affects `conv:*`, `view`, `an.*` | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`, `repair`); step only (`sample`) | fg |
 | `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — | Runs inside the request, with the service's lifetime merged into its context: a release stops it between workspaces. | batch | always | fg |
 | `ingest.cli` (variants `ingest`, `repair-existing`) | Index (Terminal) · Indexing | cli | cli | D:w W:w (no `I` today) | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `host.add` | Add this Mac (Terminal) · Adding this Mac | cli | cli | D:w W:w | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
@@ -325,7 +333,8 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Stops on release only. | batch | step | parent's |
 | `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
 | `analysis.tools` | Update the Tools rollup · Updating the Tools rollup | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
-| `analysis.authorship` | Classify your writing · Classifying your writing | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.authorship` | Update writing estimates · Updating writing estimates | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.authorship.refine` | Refine writing history · Refining writing history | daily, requested | svc | D:w W:w | an.authorship.refined | work | Stops; historical refinement runs again on its daily schedule. | batch | always | bg |
 | `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.agent_events` (variant `backlog`) | Find agent events · Finding agent events | chained (after labels, when the Agent Experience switch or `agent_events_enabled` is on; background item Agent events; the first run downloads the verifier if the broker has not), user (turning the switch on runs the item), cli (`pharos agent-events run`); `backlog` as for `analysis.labels` | svc, cli (+ worker process) | D:w W:w | an.agent_events | work | Stops between chunks of conversations; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
@@ -376,11 +385,23 @@ operation.
 
 **Daemon passes.** A pass's operation is registered before the pass runs,
 tentatively: it counts for the verdict but tells no subscriber, and a pass
-that did nothing is forgotten without a trace. The first unit of work
-publishes it. A stretch of passes that keep finding work (the Search view
+that did nothing is forgotten without a trace. A positive work inventory
+publishes it before the first expensive batch; otherwise the first completed
+unit publishes it. Zero-work probes stay tentative. A stretch of passes that keep finding work (the Search view
 catching up, previews, parallelism, an index build) is one operation, from
 the first pass that works to the first that finds nothing. These kinds do
 not call `Wrote()`, so they are journaled only past their threshold.
+
+Maintenance batches report named phases and actual units: conversations for
+message-label query facts and parallelism, workspaces for Search projections,
+metrics and previews, messages/tool calls for search backfills, and files for
+capture compression. Counts advance after successful commits. Inventories are
+collected by the worker, never by a status request, and refreshed at most once
+per second or when the next batch would exhaust the previous inventory. New
+arrivals can increase a queue's total; the fraction is completed work in this
+pass, not elapsed time. Word-index removal retains its approximate row-cursor
+fraction, while its final merge reports completed batches with an unknown
+total. Any remaining unmeasured daemon work still reports named batch counts.
 
 **Very frequent tiny work.** WAL bounding checks every 10 s; almost every
 check does nothing. The check is the daemon. Only a check that runs a
@@ -777,7 +798,8 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `scheduled-frequent` / `scheduled-hourly` / `scheduled-daily` (`scheduled`: work waits for its background item's cadence, §11), `late` (behind: it has waited longer than its cadence's window, 30 min, 3 h or 30 h, since `sync_deferred.pending_since`), `deferred-by-schedule` (behind: background updates are off or paused, or the item is set to only when you ask), `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
 | `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
-| `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
+| `an.authorship` | `authorship_complete_at` | both visible and exact generations lag inputs, or queued messages remain | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
+| `an.authorship.refined` | `authorship_refined_at` | exact `authorship_generation` lags inputs | scheduled daily / late / running | `analysis.authorship.refine` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
 | `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
 | `upgrade` | when it was last counted | steps with pending units, from the last `UpgradeSteps` | `running`, `not-counted` (unknown), `upgrade-available` | `library.upgrade` |
@@ -1219,6 +1241,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   whole `eject` document and the journal rows.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
+- Optional `step.detail` describes concurrent stages or secondary counts without
+  starting another step. The panel shows it beside the phase; the journal retains
+  it as `detail_json.step_detail`, including for another process's operation.
 - `time` reuses the forecast states of
   [Progress and time estimates](progress-estimates.md). A range is shown
   only for `estimating`, or `provisional` marked as early ("about 3–6 min,
@@ -1408,7 +1433,8 @@ Scheduled (muted: "updates tomorrow"; never "stale"), `behind` Behind,
 ### 8.3 Reason codes
 
 Blocked: `capture-running`, `ingest-busy` (another run holds the
-coordinator), `catalog-busy` (the writer, with retries), `destination-busy`,
+coordinator), `catalog-busy` (the writer, with retries), `interactive-query`
+(yielding to interactive reads when enabled), `destination-busy`,
 `waiting-for-drive`, `waiting-for-network`. Skipped: `already-running`,
 `nothing-to-do`, `disabled`, `capture-busy`, `deferred-to-<kind>`,
 `stopping`. Interrupted: `owner-exited` (its process died), `released`
@@ -1540,12 +1566,47 @@ Phase 4 measures, and the snapshots report, per process (`resources.go`):
   once-a-second `ps` forks. This changes no behaviour and drops one fork
   per second of a run.
 
+**GPU utilization** (`resources_gpu.go`) uses only the same Pharos processes
+and descendants as CPU and RAM. On macOS,
+`/usr/sbin/ioreg -a -l -r -d 2 -c IOAccelerator` reads the accelerator's
+immediate clients. `IOUserClientCreator` supplies the owner PID;
+`AppUsage[].accumulatedGPUTime` supplies cumulative GPU time in nanoseconds.
+These counters are also used by
+[MacUnburden](https://github.com/LMU-AI/MacUnburden/blob/main/Sources/PerfRelease/Sampler.swift).
+They are best-effort driver properties, not a stable Apple API. Client
+names may be truncated, so attribution uses PIDs and registry client IDs.
+The accelerator's device-wide counters are never used as a fallback.
+
+Each Pharos process shares one registry query among status readers and
+library summaries for five seconds. Sampling runs only when a status
+snapshot needs resources; there is no background sampler, privilege prompt,
+profiler, MLX instrumentation, or new native dependency. A query has a
+250 ms timeout. For each client, the rate is its GPU-time increase divided
+by elapsed wall time; only clients owned by the summary's process tree
+contribute. The service therefore reports its library's tree, and the
+broker reports all its Pharos trees, with separate scoped library totals.
+Repeated process IDs cannot count a client twice. Summed rates are capped
+at 100%; overlapping GPU contexts can overlap in time, so this is a sampled
+GPU-time share rather than a measure of hardware saturation or peak compute
+capacity. It does not change scheduling decisions.
+
+A GPU client needs two samples before it has a rate. Newly created clients,
+changed owners, decreasing counters (for example, closed contexts), query
+failures, and gaps over ten seconds require a fresh baseline. Any measured
+portion remains visible with `gpu.partial: true` while other clients warm
+up. A supported snapshot with no clients in the selected process tree is
+0%; unavailable process counters or no usable rate produce
+`gpu.utilization_percent: null`. Query failures clear old rates and are
+cached too. Unsupported platforms omit `gpu`. Clients that exit between
+samples can lose their final GPU time; it is not recovered through a
+parent's CPU counters.
+
 Shape, in `/api/status` (`resources`, `null` when nothing could be read)
 and in `/api/app/status` (the machine's total as `resources`, and each
 library entry's own as `libraries[].resources`):
 
 ```json
-{"cpu_percent": 45, "cpu_partial": false, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "disk_partial": false, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+{"cpu_percent": 45, "cpu_partial": false, "gpu": {"utilization_percent": 62, "partial": false, "sampled_at": "…", "basis": "IOAccelerator.AppUsage.accumulatedGPUTime"}, "memory_bytes": 1200000000, "disk_bytes_per_second": 4200000, "disk_partial": false, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
  "label": "Pharos is using ~45% of one core · 1.2 GB",
  "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
                 "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
@@ -1553,10 +1614,18 @@ library entry's own as `libraries[].resources`):
 
 `role` is `service`, `broker` or the lease's process (`cli:ingest`).
 `label` and `text` are the server's words. The panel's Load row shows CPU
-(% of one core), RAM and Disk (per second) in one row, each with its icon,
-for the machine in the app and the library otherwise, with `label` and the
-processes' `text` in its tooltip. The panel's Load row has five cells,
-CPU | RAM | I/O | Storage | WAL: I/O is `disk_bytes_per_second`, and
+(% of one core), GPU, RAM and Disk (per second) in one row, each with its icon,
+for the machine in the app and the library otherwise. The panel's Load row is
+CPU | GPU | RAM | I/O | Storage, with a WAL cell only when the known size
+exceeds 1,000,000,000 bytes (one decimal GB). GPU is a percentage from
+0–100; an unavailable reading is a dash. Services without a GPU field omit that
+cell. All metrics remain on one line, including when WAL is shown. The row has
+no summary tooltip; resource labels and values are already visible. Partial
+CPU, GPU and I/O rates carry a visible `≥` qualifier and a per-metric warning
+that processes or clients awaiting another sample may cause undercounting. An
+unmeasured rate remains a dash. Per-process
+`text` remains available in the status API.
+I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it
 keeps on its drive, from the last drive check, which Health refreshes;
 the snapshot never measures it, and leaves it out before a check). WAL
@@ -1635,7 +1704,8 @@ the same schedule from one declaration (`backgroundItems`):
 | Preserve originals | capture this Mac, then index every Mac's captures | Daily | `background.capture/preserve` |
 | Repositories & merges | the chain's GitHub, identities and Git stages | Frequently, adaptive | the three stages |
 | Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
-| Your writing | the chain's authorship stage | Hourly, adaptive | `analysis.authorship` |
+| Update writing estimates | bounded recent/history lanes with reserved capacity, durable per-message outcomes, and exact suffix reuse when cheap | Frequently | `analysis.authorship` |
+| Refine writing history | full historical classifier after the chain | Daily | `analysis.authorship.refine` |
 | Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
 | Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |
 | Agent events | the chain's agent events stage, only where the agent events switch (Settings → Background Processing) or `agent_events_enabled` is on (docs/agent-events.md) | Hourly, adaptive | `analysis.agent_events` (not its `backlog` runs) |
@@ -1659,17 +1729,25 @@ the same schedule from one declaration (`backgroundItems`):
   near a limit does not flap. Placements are stored in
   `background_settings.placements_json`.
 - **Overrides** may permanently move an item to a slower cadence or to only
-  when you ask. Adaptive items also have **Promote/Demote … for a week**
-  actions: they move one bucket faster or slower, even beyond the measured
-  placement. In Settings, dragging an adaptive item onto another cadence's
-  column does the same for any cadence, and dragging it back to its usual
-  one ends the week. The choice is stored per Mac in `background_temporary_cadences`
-  with a seven-day expiry and takes precedence over automatic placement and
-  permanent overrides until then. The usual schedule resumes at expiry or
-  when **End temporary schedule** is selected. Choosing a permanent schedule
-  ends the temporary choice too. Automatic cost measurements continue during
-  the week. Off, pause and battery rules still apply. Fixed and opt-in items
-  have no temporary moves.
+  when you ask, using its existing schedule picker. Every item also has
+  **Move to … for a week** actions for all three other columns. Dragging any
+  item onto another column does the same, including **Only when you ask**;
+  all four columns remain available when empty. The choice is stored per Mac
+  in `background_temporary_cadences` with a seven-day expiry and takes
+  precedence over automatic placement and permanent overrides until then.
+  Dragging it back to its usual column, choosing **End temporary schedule**,
+  or choosing a permanent schedule ends the temporary choice. Automatic
+  cost measurements continue during the week. Off, pause and battery rules
+  still apply. New conversations follows its chosen cadence in the automatic
+  indexing loop, using this Mac's last recorded check for Hourly and Daily;
+  saving settings never counts as a check. Search keeps its continuous
+  catch-up daemons in Frequently;
+  Hourly and Daily catch up the same projections and index backfills in a
+  background pass, and Only when you ask waits for Run now. The Library view's
+  Stop action holds and cancels projection work in either kind of pass;
+  explicit Run now resumes it. Independent index backfills keep their own
+  lifecycles. Indexes maintained
+  directly by ingestion triggers still update with their source data.
 - **Sequencing.** A pass runs the items that bring in new data (captures)
   first, then the stage items through `finishDeferredStages`, in chain
   order. Earlier stages with pending work, read from `sync_deferred` after
@@ -1735,6 +1813,10 @@ the same schedule from one declaration (`backgroundItems`):
   carries `typical`, the middle of its recent runs ("Typically 2–3 h",
   between the runs a quarter of the way in from each end), which leads its
   line in Settings.
+  For labels and agent events, `as_of` uses the newer of the last successful
+  background pass and deferred-stage completion. A bounded pass
+  updates Last run and starts the cadence's clock even while its backlog
+  remains pending; pending generations still determine whether work remains.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled
@@ -1755,9 +1837,16 @@ the same schedule from one declaration (`backgroundItems`):
   Schedule head their sections. A background pass leads with its current
   task, shows its cadence beside it, and marks its place among the planned
   tasks. The marker is a task position, not an elapsed-time percentage; a
-  measured step has a separate progress bar. Other running lines say who
-  started them (`trigger`). An alert's title and action share a line, its detail
-  below.
+  measured step has a separate accessible progress bar. All active operations
+  are shown in start order, oldest first, including concurrent maintenance.
+  Each line uses its active child's current phase and counts, without inheriting a
+  previous stage's percentage. A wait or stop on any ancestor remains visible
+  alongside those child counts; stopping takes precedence over waiting, and
+  waiting suppresses the running countdown. Unknown totals keep completed counts and use
+  an indeterminate bar; elapsed time and actual query/writer wait reasons
+  remain visible. Other running lines identify user or scheduled starts
+  (`trigger`); chained work adds no provenance label. An alert's title and
+  action share a line, its detail below.
 
 ## Known hazards this contract must not hide
 

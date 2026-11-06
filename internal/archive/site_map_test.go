@@ -474,9 +474,10 @@ func TestSiteLinkChangesACardAsItsDashboardDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `[{"field":"repository_name","op":"contains","value":"pharos"},{"field":"sent_at","op":">=","value":"-7d"},{"field":"sent_at","op":"<","value":"+0s"}]`; compactJSON(where.Where) != want {
-		t.Errorf("filters with the card's window: %s", compactJSON(where.Where))
+	if want := []qt.WhereTerm{{Field: "repository_name", Op: "contains", Value: "pharos"}, {Field: "sent_at", Op: ">=", Value: "-7d"}, {Field: "sent_at", Op: "<", Value: "+0s"}}; !reflect.DeepEqual(where.Where, want) {
+		t.Errorf("filters with the card's window: %+v", where.Where)
 	}
+
 	// A link the dashboard wrote after the same change reads as the same
 	// changed card, already canonical.
 	values := ownURL.Query()
@@ -698,7 +699,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := roundTrip(t, site, "full query", result["url"].(string))
-	if read.Query == nil || read.Query.Offset != 10 || read.Query.Limit != 5 || len(read.Query.Select) != 1 || read.Query.FitToScreen || len(read.Query.Aggregations) != 1 || len(read.Highlight) != 2 || read.Reveal != "control:disclosures" {
+	if read.Query == nil || read.Query.Offset != 10 || read.Query.Limit != 5 || len(read.Query.Select) != 1 || (read.Query.Fit == "screen") || len(read.Query.Aggregations) != 1 || len(read.Highlight) != 2 || read.Reveal != "control:disclosures" {
 		t.Fatalf("lost view: %+v", read)
 	}
 	advanced := linkArgs(t, `{"page":"library","view":{"search_state":{"editor":"visual","match":"literal","mode":"advanced","text":"failure","root":{"kind":"group","join":"all","children":[],"exclude":false},"scope":{"surface":"prose","roles":[],"kinds":[],"repository":"pharos","provider":"","source":"","from":"","to":"","conversation_id":"","workspace_id":""},"fuzzy":false,"caseSensitive":true,"separators":false}}}`)
@@ -733,6 +734,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"timeline_visibility":{"modes":{"values":["C.report.finding","?"],"excluded":false},"events":{"values":["friction"],"excluded":true},"tools":{"values":["error"],"excluded":true},"origins":{"values":["typed"],"excluded":false}}}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {
@@ -997,6 +999,51 @@ func TestSiteLinkJSONInspectionsAndDetailTargets(t *testing.T) {
 
 func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 	site := testSiteMap(t)
+	visibilityData, err := os.ReadFile(filepath.Join("..", "..", "testdata", "timeline-visibility-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visibilityCases []struct {
+		Name  string
+		State any
+		Valid bool
+	}
+	if err := json.Unmarshal(visibilityData, &visibilityCases); err != nil {
+		t.Fatal(err)
+	}
+	checkVisibility := func(t *testing.T, value any, valid bool) {
+		t.Helper()
+		args := map[string]any{"page": "work", "options": map[string]any{"work_id": "w"}, "view": map[string]any{"timeline_visibility": value}}
+		result, err := site.linkTool(args)
+		if (err == nil) != valid {
+			t.Fatalf("structured arguments: valid=%v: %v", valid, err)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = site.linkTool(map[string]any{"url": "/work/w?timeline_visibility=" + url.QueryEscape(string(raw))})
+		if (err == nil) != valid {
+			t.Fatalf("URL arguments: valid=%v: %v", valid, err)
+		}
+		if valid {
+			roundTrip(t, site, "timeline visibility", result["url"].(string))
+		}
+	}
+	for _, sample := range visibilityCases {
+		t.Run("timeline visibility "+sample.Name, func(t *testing.T) {
+			checkVisibility(t, sample.State, sample.Valid)
+		})
+	}
+	for _, count := range []int{1000, 1001} {
+		t.Run(fmt.Sprintf("timeline visibility %d values", count), func(t *testing.T) {
+			values := make([]string, count)
+			for i := range values {
+				values[i] = "?"
+			}
+			checkVisibility(t, map[string]any{"modes": map[string]any{"values": values, "excluded": false}}, count <= 1000)
+		})
+	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "search-draft-cases.json"))
 	if err != nil {
 		t.Fatal(err)

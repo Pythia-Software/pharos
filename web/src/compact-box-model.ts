@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import type { AggregationBucket, AggregationResultEntry, MetricBoxSummary } from "@pythia-software/query-table-core";
 
 export function filterBoxSamples(result: AggregationResultEntry, minimum?: number): AggregationResultEntry {
@@ -37,7 +38,7 @@ export function sharedBoxScale(buckets: AggregationBucket[], budget: number, req
 }
 
 export function boxCost(value: number): string {
-  return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value > 0 && value < .01 ? Math.min(8, 1 - Math.floor(Math.log10(value))) : 2 });
+  return formatUSD(value);
 }
 export function boxNumber(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: value !== 0 && Math.abs(value) < .01 ? Math.min(6, 1 - Math.floor(Math.log10(Math.abs(value)))) : 2 });
@@ -63,7 +64,7 @@ export function boxDetails(label: string, summary: MetricBoxSummary, unit = "USD
 }
 
 export function boxAxisCost(value: number): string {
-  return value.toLocaleString(undefined, { style: "currency", currency: "USD", notation: value >= 1000 ? "compact" : "standard", maximumFractionDigits: value > 0 && value < .01 ? Math.min(8, -Math.floor(Math.log10(value))) : value < 1 && value > 0 ? 2 : 0 });
+  return formatUSD(value);
 }
 export function boxOutliers(summary: MetricBoxSummary): number[] {
   return [...new Set([...summary.outliers, ...(summary.max > summary.high ? [summary.max] : []), ...(summary.min < summary.low ? [summary.min] : [])])];

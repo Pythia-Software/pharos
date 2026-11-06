@@ -108,14 +108,27 @@ func TestWorkerStartFailureNamesTheCause(t *testing.T) {
 }
 
 func TestPoolRestartsACrashedWorker(t *testing.T) {
+	deviceFile := filepath.Join(t.TempDir(), "device")
+	if err := os.WriteFile(deviceFile, []byte("gpu"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(labelertest.FakeDeviceFileEnv, deviceFile)
 	var restarts atomic.Int32
 	cfg := labeler.PoolConfig{Worker: fakeConfig(t, "crash-after:3"), Backoff: func(int) time.Duration { return 10 * time.Millisecond },
-		OnRestart: func(int, error) { restarts.Add(1) }}
+		OnRestart: func(int, error) {
+			restarts.Add(1)
+			if err := os.WriteFile(deviceFile, []byte("cpu"), 0600); err != nil {
+				t.Error(err)
+			}
+		}}
 	pool, err := labeler.NewPool(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	if pool.Ready().Worker.Device != "gpu" {
+		t.Fatal("initial device was not GPU")
+	}
 	// Every fourth run crashes the worker; each batch still gets its result.
 	for n := range 10 {
 		row := []int32{labeler.ClsID, int32(n), labeler.SepID}
@@ -129,6 +142,9 @@ func TestPoolRestartsACrashedWorker(t *testing.T) {
 	}
 	if restarts.Load() < 2 || pool.Restarts() != int(restarts.Load()) {
 		t.Fatalf("restarts %d / %d", restarts.Load(), pool.Restarts())
+	}
+	if pool.Ready().Worker.Device != "cpu" {
+		t.Fatal("restarted worker's CPU fallback was not reported")
 	}
 }
 

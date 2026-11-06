@@ -190,7 +190,7 @@ func (s *Server) automaticLoop(ctx context.Context) {
 	for {
 		background, err := s.Catalog.backgroundSettings(ctx, time.Now())
 		requested := s.indexRequested()
-		if err == nil && automaticDue(background, s.cachedPower(ctx), requested, time.Now()) && s.runAutomatic(ctx, background.sync) && requested {
+		if err == nil && automaticDue(background, s.cachedPower(ctx), requested, time.Now()) && s.automaticScheduleReady(ctx, background, requested, time.Now()) && s.runAutomatic(ctx, background.sync) && requested {
 			s.takeIndexRequest()
 		}
 		select {
@@ -203,22 +203,43 @@ func (s *Server) automaticLoop(ctx context.Context) {
 
 // automaticDue is whether the scheduled index runs now: Run now
 // (requested) whatever the mode, power or time; otherwise when background
-// updates are on, the battery policy lets Frequently run, and its time has
-// come, 15 min after the last run on battery when Frequently runs slower
-// (§11).
+// updates are on, the chosen cadence and battery policy allow it, and its
+// time has come (§11).
 func automaticDue(background backgroundSettings, power powerState, requested bool, at time.Time) bool {
 	if requested {
 		return true
 	}
-	battery := background.Battery.onPower(cadenceFrequent, power)
-	if background.Mode != "on" || battery == batteryWait {
+	item, _ := backgroundItemByID("conversations")
+	cadence := background.cadence(item)
+	battery := background.Battery.onPower(cadence, power)
+	if background.Mode != "on" || cadence == cadenceManual || battery == batteryWait {
 		return false
 	}
-	due, _ := time.Parse(time.RFC3339Nano, background.sync.NextAt)
+	due := background.conversationsPlan(time.Time{}, at).Next
 	if battery == batterySlower && !due.IsZero() {
 		due = due.Add(slowerBy(background.sync.Interval))
 	}
 	return due.IsZero() || !at.Before(due)
+}
+
+// The Hourly/Daily columns also honor quiet time and Hold while busy.
+func (s *Server) automaticScheduleReady(ctx context.Context, settings backgroundSettings, requested bool, at time.Time) bool {
+	item, _ := backgroundItemByID("conversations")
+	if requested || settings.cadence(item) == cadenceFrequent {
+		return true
+	}
+	deferred, err := s.Catalog.freshnessDeferred(ctx)
+	if err != nil {
+		return false
+	}
+	quiet := time.Time{}
+	for _, row := range deferred {
+		if changed, ok := parseTime(row.changedAt); ok {
+			quiet = maxTime(quiet, changed.Add(hourlyQuiet))
+		}
+	}
+	plan := settings.conversationsPlan(quiet, at)
+	return !plan.Next.IsZero() && !at.Before(plan.Next) && (!settings.HoldWhenBusy || plan.Overdue || !machineBusy())
 }
 
 func (s *Server) runAutomatic(parent context.Context, settings syncSettings) bool {

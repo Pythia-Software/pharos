@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,16 +11,13 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	"modernc.org/sqlite"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-func queryV2Fixture(t testing.TB, n int) (*sql.DB, qt.SQLiteV2Dataset) {
+func queryV2Fixture(t testing.TB, n int) (*sql.DB, queryFixtureDataset) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "metrics.db")+"?_pragma=journal_mode(WAL)&_pragma=temp_store(MEMORY)")
 	if err != nil {
@@ -53,14 +49,14 @@ func queryV2Fixture(t testing.TB, n int) (*sql.DB, qt.SQLiteV2Dataset) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return db, qt.SQLiteV2Dataset{Schema: schema, SourceSQL: "SELECT * FROM samples", Scope: "local", Dataset: "samples", MaxPopulation: queryTablePopulation}
+	return db, queryFixtureDataset{Schema: schema, SourceSQL: "SELECT * FROM samples", Scope: "local", Dataset: "samples", MaxPopulation: queryTablePopulation}
 }
-func metricRequest(specs ...qt.AggSpec) qt.MetricQuery {
-	return qt.MetricQuery{Version: 2, Profile: qt.SQLiteExpressionProfile, Limit: 50, Metrics: specs}
+func metricRequest(specs ...qt.AggSpec) queryFixtureMetrics {
+	return queryFixtureMetrics{Version: 2, Profile: qt.SQLiteExpressionProfile, Limit: 50, Metrics: specs}
 }
 
 func TestGeneratedQuerySchemas(t *testing.T) {
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "parallelism", "agent_events", "agent_event_messages", "message_labels"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "safety", "fixes", "parallelism", "agent_events", "agent_event_messages", "message_labels"} {
 		t.Run(dataset, func(t *testing.T) {
 			doc, err := querySchemaDocument(dataset)
 			if err != nil {
@@ -82,7 +78,7 @@ func BenchmarkQueryTableV2(b *testing.B) {
 	for _, n := range []int{10_000, 100_000, 250_000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
 			db, d := queryV2Fixture(b, n)
-			cases := map[string]qt.MetricQuery{}
+			cases := map[string]queryFixtureMetrics{}
 			for _, formula := range []string{"COUNT()", "SUM([x])", "AVG([x])", "MEDIAN([x])", "SUM([x])/NULLIF(SUM([y]),0)"} {
 				cases[formula] = metricRequest(qt.AggSpec{ID: "m", Expression: formula, GroupBy: []string{"category"}})
 			}
@@ -115,7 +111,7 @@ func BenchmarkQueryTableV2(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						ctx, cancel := context.WithTimeout(context.Background(), queryTableDeadline)
-						_, err := d.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{})
+						_, err := d.executeFixture(ctx, db, nil, &q, qt.PlanOptions{})
 						cancel()
 						if err != nil {
 							b.Fatal(err)
@@ -172,7 +168,7 @@ func TestQueryV2UsageHourly(t *testing.T) {
 				qt.AggSpec{ID: "average", Op: "avg", Field: "total_tokens"}, qt.AggSpec{ID: "sum", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "last", Op: "max", Field: "hour"},
 				qt.AggSpec{ID: "newest", Op: "sum", Field: "total_tokens", GroupBy: []string{"hour"}, Sort: []qt.MetricSort{{Key: "group0", Dir: "desc"}}})
 			q.Where = sample.where
-			result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
+			result, err := server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &q)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,14 +197,14 @@ func TestQueryV2UsageHourly(t *testing.T) {
 	}
 	// Usage has its own group budget, beyond other datasets'; past it a metric
 	// fails rather than dropping groups.
-	override(t, &queryV2MaxGroups, 1)
+	override(t, &queryV3MaxGroups, 1)
 	hours := metricRequest(qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}})
-	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &hours)
+	result, err := server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &hours)
 	if err != nil || result.Metrics.Metrics[0].Error != "" || len(result.Metrics.Metrics[0].Buckets) != 3 {
 		t.Fatal("usage group budget", err, result.Metrics)
 	}
-	override(t, &queryV2UsageMaxGroups, 2)
-	if result, err = server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &hours); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group population exceeds host budget") {
+	override(t, &queryV3UsageMaxGroups, 2)
+	if result, err = server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &hours); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group population exceeds host budget") {
 		t.Fatal("usage groups beyond the budget", err, result.Metrics)
 	}
 	// Temp staging, enrichment and canonical-definition reads must not consume a
@@ -217,7 +213,7 @@ func TestQueryV2UsageHourly(t *testing.T) {
 	q := metricRequest(qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := server.executeQueryV2(ctx, "usage", nil, schema, nil, &q); err != nil {
+	if _, err := server.executeQueryFixture(ctx, "usage", nil, schema, nil, &q); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -247,124 +243,16 @@ func TestQueryV2IndexedCandidates(t *testing.T) {
 	} {
 		q := metricRequest(qt.AggSpec{ID: "count", Expression: "COUNT()"})
 		q.Where = where
-		got, err := server.executeQueryV2(context.Background(), "tool_calls", nil, schema, nil, &q)
+		got, err := server.executeQueryFixture(context.Background(), "tool_calls", nil, schema, nil, &q)
 		if err != nil {
 			t.Fatal(err)
 		}
-		d := queryV2Dataset("tool_calls", schema)
-		d.SourceSQL = toolCallDataset.v2Source(schema)
-		want, err := d.ExecuteV2(context.Background(), catalog.DB, nil, &q, qt.PlanOptions{})
-		if err != nil || !same(got.SQLiteV2ExecutionResult, want) {
+		d := queryFixtureFor("tool_calls", schema)
+		d.SourceSQL = toolCallDataset.querySourceSQL(schema)
+		want, err := d.executeFixture(context.Background(), catalog.DB, nil, &q, qt.PlanOptions{})
+		if err != nil || !same(got, want) {
 			t.Fatalf("candidate result differs: %v %v", where, err)
 		}
-	}
-}
-
-func TestQueryV2IndexedWindow(t *testing.T) {
-	db, d := queryV2Fixture(t, 100)
-	q := metricRequest(qt.AggSpec{ID: "shown", Expression: "SUM([x])", Scope: "shownRows"})
-	q.OrderBy = []qt.OrderBy{{Field: "at", Dir: "desc"}}
-	plan, err := qt.CompileSQLiteMetrics(context.Background(), q, d.Schema, qt.PlanOptions{SourceSQL: d.SourceSQL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := queryMapsContext(context.Background(), db, "EXPLAIN QUERY PLAN "+plan.Metrics[0].SQL, plan.Metrics[0].Args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(fmt.Sprint(rows), "samples_at") {
-		t.Fatalf("timestamp index missing: %v", rows)
-	}
-	if len(plan.Metrics[0].Stages) > 0 && plan.Metrics[0].Stages[0].Materialized {
-		t.Fatal("source unexpectedly materialized")
-	}
-}
-
-var queryV2ProbeCalls atomic.Int64
-
-func init() {
-	if err := sqlite.RegisterDeterministicScalarFunction("pharos_metric_probe", 1, func(_ *sqlite.FunctionContext, values []driver.Value) (driver.Value, error) {
-		queryV2ProbeCalls.Add(1)
-		return values[0], nil
-	}); err != nil {
-		panic(err)
-	}
-}
-func TestQueryV2ReductionReuse(t *testing.T) {
-	db, d := queryV2Fixture(t, 1000)
-	d.SourceSQL = "SELECT *, pharos_metric_probe(x) AS sample_x FROM samples"
-	f := d.Schema.Fields["x"]
-	f.Expr = "r.sample_x"
-	d.Schema.Fields["x"] = f
-	specs := []qt.AggSpec{
-		{ID: "sum", Expression: "SUM([x])", GroupBy: []string{"category"}},
-		{ID: "same", Expression: "SUM([x])", GroupBy: []string{"category"}},
-		{ID: "plus", Expression: "SUM([x])+2", GroupBy: []string{"category"}},
-		{ID: "top", Expression: "SUM([x])+5", GroupBy: []string{"category"}, Sort: []qt.MetricSort{{Key: "value", Dir: "desc"}}, GroupLimit: 3},
-		{ID: "shown", Expression: "SUM([x])+2", Scope: "shownRows", GroupBy: []string{"category"}},
-		{ID: "avg", Expression: "AVG([x])", GroupBy: []string{"category"}},
-		{ID: "min", Expression: "MIN([x])", GroupBy: []string{"category"}},
-	}
-	q := metricRequest(specs...)
-	q.Where = []qt.WhereTerm{{Field: "other", Op: "=", Value: "h1"}}
-	q.Offset = 2
-	q.Limit = 7
-	want := []qt.SQLiteMetricV2{}
-	singleCalls := int64(0)
-	for i, spec := range specs {
-		single := q
-		single.Metrics = []qt.AggSpec{spec}
-		queryV2ProbeCalls.Store(0)
-		result, err := d.ExecuteV2(context.Background(), db, nil, &single, qt.PlanOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		want = append(want, result.Metrics.Metrics[0])
-		if i == 0 {
-			singleCalls = queryV2ProbeCalls.Load()
-		}
-	}
-	// Independently verify an identical batch executes the population once.
-	repeated := q
-	repeated.Metrics = specs[:2]
-	queryV2ProbeCalls.Store(0)
-	if _, err := d.ExecuteV2(context.Background(), db, nil, &repeated, qt.PlanOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if n := queryV2ProbeCalls.Load(); n != singleCalls || n == 0 {
-		t.Fatalf("duplicate population visits=%d want %d", n, singleCalls)
-	}
-	queryV2ProbeCalls.Store(0)
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	result, err := d.ExecuteV2In(context.Background(), tx, nil, &q, qt.PlanOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !same(result.Metrics.Metrics, want) {
-		t.Fatalf("shared reductions differ: %+v want %+v", result.Metrics.Metrics, want)
-	}
-	if n := queryV2ProbeCalls.Load(); n >= singleCalls*3 {
-		t.Fatalf("shared reduction repeated population: %d (single %d)", n, singleCalls)
-	}
-	var temp int
-	if err := tx.QueryRow("SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '_qt_reduction_%'").Scan(&temp); err != nil || temp != 0 {
-		t.Fatal("temporary reductions leaked", temp, err)
-	}
-	// An invalid metric fails alone; its siblings keep their shared results.
-	q.Metrics = append(q.Metrics, qt.AggSpec{ID: "bad", Expression: "SUM([missing])"})
-	result, err = d.ExecuteV2In(context.Background(), tx, nil, &q, qt.PlanOptions{})
-	if err != nil || len(result.Metrics.Metrics) != len(want)+1 {
-		t.Fatal("invalid metric failed its batch", err)
-	}
-	if bad := result.Metrics.Metrics[len(want)]; bad.ID != "bad" || bad.Error == "" || len(bad.Buckets) != 0 {
-		t.Fatalf("invalid metric result: %+v", bad)
-	}
-	if !same(result.Metrics.Metrics[:len(want)], want) {
-		t.Fatalf("siblings of an invalid metric differ: %+v want %+v", result.Metrics.Metrics, want)
 	}
 }
 
@@ -379,7 +267,7 @@ func TestQueryV2UsageShownHours(t *testing.T) {
 	q := metricRequest(qt.AggSpec{ID: "shownHours", Expression: "COUNT()", GroupBy: []string{"hour"}, Scope: "shownRows"})
 	q.Limit = 1
 	q.OrderBy = []qt.OrderBy{{Field: "total_tokens", Dir: "desc"}}
-	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
+	result, err := server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,15 +275,15 @@ func TestQueryV2UsageShownHours(t *testing.T) {
 		t.Fatalf("daily window should expand into two hours: %+v", m)
 	}
 	q.Where = []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}
-	rows := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Where: q.Where, Select: []string{"total_tokens"}, Limit: 1}}
-	result, err = server.executeQueryV2(context.Background(), "usage", nil, schema, &rows, nil)
+	rows := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Where: q.Where, Select: []string{"total_tokens"}, Limit: 1}}
+	result, err = server.executeQueryFixture(context.Background(), "usage", nil, schema, &rows, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Rows.Total != 1 || integer(result.Rows.Rows[0]["total_tokens"]) != 2130 {
 		t.Fatal("hour filter changed daily rows", result.Rows)
 	}
-	result, err = server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
+	result, err = server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +302,7 @@ func BenchmarkPharosToolLedgerV2(b *testing.B) {
 			if err := catalog.prepareSQLDataset(context.Background(), "tool_calls"); err != nil {
 				b.Fatal(err)
 			}
-			cases := map[string]qt.MetricQuery{}
+			cases := map[string]queryFixtureMetrics{}
 			cases["paired"] = metricRequest(qt.AggSpec{ID: "m", Expression: "SUM([duration_ms])/NULLIF(COUNT([duration_ms]),0)", ExpressionY: "SUM([result_bytes])", GroupBy: []string{"tool_name", "provider"}})
 			cases["histogram"] = metricRequest(qt.AggSpec{ID: "m", Distribution: &qt.MetricDistribution{Kind: "histogram", Input: "[duration_ms]", Bins: 20}, GroupBy: []string{"tool_name"}})
 			cases["command_trigram"] = metricRequest(qt.AggSpec{ID: "m", Expression: "COUNT()"})
@@ -440,7 +328,7 @@ func BenchmarkPharosToolLedgerV2(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						ctx, cancel := context.WithTimeout(context.Background(), queryTableDeadline)
-						_, err := server.executeQueryV2(ctx, "tool_calls", nil, schema, nil, &q)
+						_, err := server.executeQueryFixture(ctx, "tool_calls", nil, schema, nil, &q)
 						cancel()
 						if err != nil {
 							b.Fatal(err)
@@ -464,8 +352,8 @@ func TestQueryTempStorageLease(t *testing.T) {
 		mode  int    // what the engine's queries need
 		prior string // the connection's own setting
 	}{
-		{"V2 stages in memory", beginQueryV2, 2, "DEFAULT"},
-		{"large V3 copies spill to disk", beginQueryV3, 1, "MEMORY"},
+		{"V2 stages in memory", beginQueryMemory, 2, "DEFAULT"},
+		{"large V3 copies spill to disk", beginQueryDisk, 1, "MEMORY"},
 	} {
 		t.Run(engine.name, func(t *testing.T) {
 			if _, err := catalog.DB.Exec("PRAGMA temp_store=" + engine.prior); err != nil {
@@ -515,70 +403,6 @@ func TestQueryTempStorageLease(t *testing.T) {
 // Metrics answered without staging read in a plain transaction, on one pooled
 // connection; anything the adapter executes still leases memory-backed
 // temporary storage.
-func TestQueryV2LeasesTempStorageOnlyToStage(t *testing.T) {
-	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 30)
-	ingestUsageFixture(t, catalog)
-	if err := catalog.ensureToolRollup(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	server := testServer(t, config, catalog)
-	pool := catalog.reader()
-	previous := pool.Stats().MaxOpenConnections
-	t.Cleanup(func() { pool.SetMaxOpenConns(previous) })
-	leases := 0
-	override(t, &leaseQueryV2, func(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error) {
-		leases++
-		tx, release, err := beginQueryV2(ctx, db)
-		var mode int
-		if err == nil && (tx.QueryRow("PRAGMA temp_store").Scan(&mode) != nil || mode != 2) {
-			t.Errorf("staged work without memory-backed temporary storage: temp_store=%d", mode)
-		}
-		return tx, release, err
-	})
-	machine := []string{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
-	for _, sample := range []struct {
-		name, dataset string
-		q             qt.MetricQuery
-		staged        bool
-	}{
-		{"a bare count", "tool_calls", metricRequest(qt.AggSpec{ID: "n", Op: "count"}), false},
-		{"a Machine Time cube", "tool_calls", metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: machine}), false},
-		{"native tool sums", "tool_calls", metricRequest(qt.AggSpec{ID: "calls", Op: "sum", Field: "call_count", GroupBy: []string{"tool_name"}}), false},
-		{"Usage in memory", "usage", metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}}, qt.AggSpec{ID: "sessions", Op: "count_distinct", Field: "agent_session_id"}), false},
-		{"an average", "tool_calls", metricRequest(qt.AggSpec{ID: "mean", Op: "avg", Field: "duration_ms"}), true},
-		{"filtered Usage", "usage", func() qt.MetricQuery {
-			q := metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}})
-			q.Where = []qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1"}}
-			return q
-		}(), false},
-		{"a Usage formula", "usage", metricRequest(qt.AggSpec{ID: "per day", Expression: "SUM([total_tokens]) / COUNT()"}), true},
-	} {
-		t.Run(sample.name, func(t *testing.T) {
-			schema, _ := sqliteQuerySchema(sample.dataset)
-			for _, connections := range []int{previous, 1} {
-				// One pooled connection is enough: nothing reads beside the transaction.
-				pool.SetMaxOpenConns(connections)
-				leases = 0
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				result, err := server.executeQueryV2(ctx, sample.dataset, nil, schema, nil, &sample.q)
-				cancel()
-				if err != nil {
-					t.Fatal(connections, err)
-				}
-				for _, metric := range result.Metrics.Metrics {
-					if metric.Error != "" || len(metric.Buckets) == 0 {
-						t.Fatalf("%d connections: %+v", connections, metric)
-					}
-				}
-				if staged := leases > 0; staged != sample.staged {
-					t.Fatalf("%d connections: leased temporary storage %d times", connections, leases)
-				}
-			}
-			pool.SetMaxOpenConns(previous)
-		})
-	}
-}
 
 // TestQueryMetadataQueue: metadata scans (distinct values, field stats) wait
 // in one queue. A scan's deadline starts when it leaves the queue, a
@@ -679,19 +503,19 @@ func TestQueryIndexedDatetimeCandidatesPreserveTypedResults(t *testing.T) {
 		request := metricRequest(qt.AggSpec{ID: "count", Expression: "COUNT()"})
 		request.Where = where
 		plain := dataset
-		plain.SourceSQL = table.v2Source(dataset.Schema)
-		want, err := plain.ExecuteV2(context.Background(), db, nil, &request, qt.PlanOptions{Now: clock})
+		plain.SourceSQL = table.querySourceSQL(dataset.Schema)
+		want, err := plain.executeFixture(context.Background(), db, nil, &request, qt.PlanOptions{Now: clock})
 		if err != nil {
 			t.Fatal(err)
 		}
 		indexed := dataset
-		indexed.SourceSQL, indexed.SourceArgs = table.v2WindowedSource(dataset.Schema, where, clock)
-		got, err := indexed.ExecuteV2(context.Background(), db, nil, &request, qt.PlanOptions{Now: clock})
+		indexed.SourceSQL, indexed.SourceArgs = table.windowedQuerySource(dataset.Schema, where, clock)
+		got, err := indexed.executeFixture(context.Background(), db, nil, &request, qt.PlanOptions{Now: clock})
 		if err != nil || !same(got, want) {
 			t.Fatalf("candidate changes typed results for %v: %v", where, err)
 		}
 	}
-	source, args := table.v2WindowedSource(dataset.Schema, []qt.WhereTerm{{Field: "at", Op: ">=", Value: "-7d"}, {Field: "at", Op: "<", Value: "+0s"}}, clock)
+	source, args := table.windowedQuerySource(dataset.Schema, []qt.WhereTerm{{Field: "at", Op: ">=", Value: "-7d"}, {Field: "at", Op: "<", Value: "+0s"}}, clock)
 	plan, err := queryMapsContext(context.Background(), db, "EXPLAIN QUERY PLAN SELECT count(*) FROM ("+source+")", args...)
 	if err != nil || !strings.Contains(fmt.Sprint(plan), "samples_at") {
 		t.Fatalf("timestamp index not used: %v %v", plan, err)
@@ -717,14 +541,14 @@ func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	call := func(method, path string, value any) *httptest.ResponseRecorder {
 		return apiCall(t, server, config.APIToken, method, path, value)
 	}
-	capabilities := func() (qt.SQLiteComputedExecution, map[string]*qt.PlanDiagnostic) {
+	capabilities := func() (qt.ComputedExecution, map[string]*qt.PlanDiagnostic) {
 		t.Helper()
 		w := call(http.MethodGet, "/api/query/tool_calls/capabilities", nil)
 		if w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
 		}
 		var response struct {
-			Execution   qt.SQLiteComputedExecution    `json:"computedExecution"`
+			Execution   qt.ComputedExecution          `json:"computedExecution"`
 			Unavailable map[string]*qt.PlanDiagnostic `json:"computedDiagnostics"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
@@ -752,7 +576,7 @@ func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &listed) != nil || len(listed) != 5 {
 		t.Fatal("repair catalogue lost definitions", w.Code, w.Body.String())
 	}
-	rows := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: execution.ResolvedRevisions, WireQuery: qt.WireQuery{Select: []string{"id", "@computed/good_child"}, Limit: 2}}
+	rows := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: execution.ResolvedRevisions, WireQuery: qt.WireQuery{Select: []string{"id", "@computed/good_child"}, Limit: 2}}
 	if w = call(http.MethodPost, "/api/query/tool_calls/rows-v2", rows); w.Code != 200 {
 		t.Fatal("valid rows blocked by unrelated formula", w.Code, w.Body.String())
 	}
@@ -812,7 +636,7 @@ func TestQueryComputedCapabilitiesLargeCatalogue(t *testing.T) {
 	}
 	w := apiCall(t, testServer(t, config, catalog), config.APIToken, http.MethodGet, "/api/query/tool_calls/capabilities", nil)
 	var response struct {
-		Execution qt.SQLiteComputedExecution `json:"computedExecution"`
+		Execution qt.ComputedExecution `json:"computedExecution"`
 	}
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Execution.Fields) != 70 || len(response.Execution.ResolvedRevisions) != 70 {
 		t.Fatal("catalogue description truncated or rejected", w.Code, w.Body.String())
@@ -823,12 +647,12 @@ func TestQueryV2LibraryCompactRequests(t *testing.T) {
 	catalog, config := libraryFixture(t)
 	catalog.DB.SetMaxOpenConns(1)
 	server := testServer(t, config, catalog)
-	rowRequest := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"title"}, Limit: 1}}
+	rowRequest := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"title"}, Limit: 1}}
 	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/rows-v2", rowRequest)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	var page qt.SQLiteRowsV2Result
+	var page qt.QueryResultV3
 	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || len(page.Rows) != 1 {
 		t.Fatal("page", err, w.Body.String())
 	}
@@ -867,46 +691,46 @@ func TestQueryV2LibraryDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rowQuery := func(selects []string, where []qt.WhereTerm, order qt.OrderBys) *qt.ServerQueryV2 {
-		return &qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: revisions, WireQuery: qt.WireQuery{Select: selects, Where: where, OrderBy: order, Limit: 2}}
+	rowQuery := func(selects []string, where []qt.WhereTerm, order []qt.OrderBy) *queryFixtureRows {
+		return &queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: revisions, WireQuery: qt.WireQuery{Select: selects, Where: where, OrderBy: order, Limit: 2}}
 	}
-	metricQuery := func(spec qt.AggSpec, where []qt.WhereTerm, order []qt.OrderBy) *qt.MetricQuery {
+	metricQuery := func(spec qt.AggSpec, where []qt.WhereTerm, order []qt.OrderBy) *queryFixtureMetrics {
 		q := metricRequest(spec)
 		q.ExpectedRevisions, q.Where, q.OrderBy = revisions, where, order
 		return &q
 	}
 	for _, sample := range []struct {
 		name    string
-		rows    *qt.ServerQueryV2
-		metrics *qt.MetricQuery
+		rows    *queryFixtureRows
+		metrics *queryFixtureMetrics
 		fields  []string
 	}{
 		{"default row order", rowQuery([]string{"title"}, nil, nil), nil, []string{"activity_at", "id", "title"}},
-		{"OR filter and cost sort", rowQuery([]string{"outcome"}, []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "purpose", Op: "contains", Value: "purpose"}, {Field: "changed_files", Op: "contains", Value: "parser"}}}}, qt.OrderBys{{Field: "cost_usd", Dir: "desc"}}), nil, []string{"changed_files", "cost_usd", "id", "outcome", "purpose"}},
-		{"transitive computed select and sort", rowQuery([]string{"@computed/number"}, nil, qt.OrderBys{{Field: "@computed/nested", Dir: "asc"}}), nil, []string{"id", "outcome", "purpose", "token_count"}},
-		{"ratio and grouping", nil, metricQuery(qt.AggSpec{ID: "ratio", Expression: "SUM([token_count])/NULLIF(SUM([tool_use_count]),0)", GroupBy: []string{"source_kind"}}, []qt.WhereTerm{{Field: "purpose", Op: "contains", Value: "purpose"}}, nil), []string{"id", "purpose", "source_kind", "token_count", "tool_use_count"}},
-		{"paired shown and computed grouping", nil, metricQuery(qt.AggSpec{ID: "paired", Expression: "AVG([token_count])", ExpressionY: "SUM([cost_usd])", GroupBy: []string{"@computed/number"}, Scope: "shownRows"}, nil, []qt.OrderBy{{Field: "@computed/nested", Dir: "desc"}}), []string{"cost_usd", "id", "outcome", "purpose", "token_count"}},
-		{"distribution input", nil, metricQuery(qt.AggSpec{ID: "hist", Distribution: &qt.MetricDistribution{Kind: "histogram", Input: `IF([purpose]="Summarized purpose",[token_count],0)`, Bins: 4}, GroupBy: []string{"source_kind"}, Scope: "shownRows"}, nil, nil), []string{"activity_at", "id", "purpose", "source_kind", "token_count"}},
-		{"count", nil, metricQuery(qt.AggSpec{ID: "count", Expression: "COUNT()"}, nil, nil), []string{"id"}},
+		{"OR filter and cost sort", rowQuery([]string{"outcome"}, []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "purpose", Op: "contains", Value: "purpose"}, {Field: "changed_files", Op: "contains", Value: "parser"}}}}, []qt.OrderBy{{Field: "cost_usd", Dir: "desc"}}), nil, []string{"activity_at", "changed_files", "cost_usd", "id", "outcome", "purpose"}},
+		{"transitive computed select and sort", rowQuery([]string{"@computed/number"}, nil, []qt.OrderBy{{Field: "@computed/nested", Dir: "asc"}}), nil, []string{"activity_at", "id", "outcome", "purpose", "token_count"}},
+		{"ratio and grouping", nil, metricQuery(qt.AggSpec{ID: "ratio", Expression: "SUM([token_count])/NULLIF(SUM([tool_use_count]),0)", GroupBy: []string{"source_kind"}}, []qt.WhereTerm{{Field: "purpose", Op: "contains", Value: "purpose"}}, nil), []string{"activity_at", "id", "purpose", "source_kind", "token_count", "tool_use_count"}},
+		{"paired shown and computed grouping", nil, metricQuery(qt.AggSpec{ID: "paired", Expression: "AVG([token_count])", ExpressionY: "SUM([cost_usd])", GroupBy: []string{"@computed/number"}, Scope: "shownRows"}, nil, []qt.OrderBy{{Field: "@computed/nested", Dir: "desc"}}), []string{"activity_at", "cost_usd", "id", "outcome", "purpose", "token_count"}},
+		{"distribution input", nil, metricQuery(qt.AggSpec{ID: "hist", Op: "count", Distribution: &qt.MetricDistribution{Kind: "histogram", Input: `IF([purpose]="Summarized purpose",[token_count],0)`, Bins: 4}, GroupBy: []string{"source_kind"}, Scope: "shownRows"}, nil, nil), []string{"activity_at", "id", "purpose", "source_kind", "token_count"}},
+		{"count", nil, metricQuery(qt.AggSpec{ID: "count", Expression: "COUNT()"}, nil, nil), []string{"activity_at", "id"}},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			clock := time.Now()
-			fields, err := queryV2SourceFields(context.Background(), catalog.DB, schema, sample.rows, sample.metrics, clock)
+			fields, err := fixtureSourceFields(context.Background(), catalog.DB, schema, sample.rows, sample.metrics, clock)
 			if err != nil || !reflect.DeepEqual(fields, sample.fields) {
 				t.Fatalf("fields=%v, want=%v, err=%v", fields, sample.fields, err)
 			}
-			tx, release, err := beginQueryV2(context.Background(), catalog.DB)
+			tx, release, err := beginQueryMemory(context.Background(), catalog.DB)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer release()
-			d := queryV2Dataset("library", schema)
+			d := queryFixtureFor("library", schema)
 			d.ComputedGroupable = map[string]bool{"text": true, "nested": true, "number": true}
 			d.SourceSQL, err = stageQueryRows(context.Background(), tx, "wide_rows", wide, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
-			full, err := d.ExecuteV2In(context.Background(), tx, sample.rows, sample.metrics, qt.PlanOptions{Now: clock})
+			full, err := d.executeFixtureIn(context.Background(), tx, sample.rows, sample.metrics, qt.PlanOptions{Now: clock})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -933,11 +757,11 @@ func TestQueryV2LibraryDependencies(t *testing.T) {
 			if !reflect.DeepEqual(staged, fields) {
 				t.Fatalf("staged unused values: %v, want %v", staged, fields)
 			}
-			narrow, err := d.ExecuteV2In(context.Background(), tx, sample.rows, sample.metrics, qt.PlanOptions{Now: clock})
+			narrow, err := d.executeFixtureIn(context.Background(), tx, sample.rows, sample.metrics, qt.PlanOptions{Now: clock})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(full.Metrics, narrow.Metrics) || full.Rows != nil && (full.Rows.Total != narrow.Rows.Total || !reflect.DeepEqual(full.Rows.Rows, narrow.Rows.Rows) || !reflect.DeepEqual(full.Rows.Computed, narrow.Rows.Computed)) {
+			if !reflect.DeepEqual(full.Metrics, narrow.Metrics) || full.Rows != nil && (full.Rows.Total != narrow.Rows.Total || !reflect.DeepEqual(full.Rows.Rows, narrow.Rows.Rows)) {
 				t.Fatalf("selective staging changed results: full=%+v narrow=%+v", full, narrow)
 			}
 		})
@@ -956,7 +780,7 @@ func BenchmarkQueryV2LibraryStaging(b *testing.B) {
 		b.Run(fmt.Sprintf("selective_%t", selective), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				tx, release, err := beginQueryV2(context.Background(), catalog.DB)
+				tx, release, err := beginQueryMemory(context.Background(), catalog.DB)
 				if err != nil {
 					b.Fatal(err)
 				}

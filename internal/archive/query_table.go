@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
+	if _, ok := s.Catalog.sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "people_message_labels" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" && dataset != "findings" && dataset != "safety" && dataset != "fixes" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -106,6 +106,8 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		} else {
 			rows, err = c.localUsageRows(ctx)
 		}
+	case "people_message_labels":
+		rows, err = c.peopleMessageLabelRows(ctx, fields, where...)
 	case "conversation_activity":
 		rows, err = c.conversationActivityRows(ctx)
 	case "writing":
@@ -116,6 +118,8 @@ func (c *Catalog) datasetRows(ctx context.Context, dataset string, fields librar
 		rows, err = c.cachedTL1AttemptRows(ctx)
 	case "safety":
 		rows, err = c.safetyQueryRows(ctx)
+	case "fixes":
+		rows, err = c.fixesQueryRows(ctx)
 	case "findings":
 		rows, err = c.findingQueryRows(ctx)
 	case "parallelism":
@@ -331,13 +335,13 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		return
 	}
 	// The legacy grouped route is gone. A page loaded before an upgrade can
-	// still call it; reloading picks up /metrics.
+	// still call it; reloading picks up /query-v3.
 	if operation == "aggregations" {
 		writeError(w, fmt.Errorf("this version of Pharos no longer serves this request; reload the page"), http.StatusGone)
 		return
 	}
 	if operation == "metrics" || operation == "rows-v2" {
-		s.postQueryV2(w, r, dataset, operation)
+		writeError(w, fmt.Errorf("this query protocol is no longer supported; reload the page to use query-v3"), http.StatusGone)
 		return
 	}
 	schema, err := s.queryTableSchema(dataset)
@@ -458,7 +462,7 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 		c.ensureAuthorship()
 		return nil
 	}
-	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
+	if dataset == "compactions" || dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
 		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	if dataset == "model_requests" {

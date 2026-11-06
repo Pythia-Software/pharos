@@ -51,6 +51,12 @@ var durableCatalog = catalogPragmas{synchronous: "FULL", fullfsync: true, checkp
 // durability itself restore durableCatalog.
 var catalogDurability = durableCatalog
 
+// syncToDrive flushes retained files and their directories before publication.
+// Ordinary tests keep writes in the OS cache, as testDurability does for
+// SQLite; durability tests restore the real flush. A process exit alone does
+// not discard that cache, and the suite does not simulate drive power loss.
+var syncToDrive = (*os.File).Sync
+
 func catalogDSN(path string) string {
 	pragmas := catalogDurability
 	fullfsync, checkpointFullfsync := 0, 0
@@ -89,7 +95,10 @@ func (c *Catalog) openReader() error {
 	return nil
 }
 
-// reader is the pool for reads that serve requests. A catalog opened without
+// reader is the pool for reads that serve requests and paged authorship
+// classification. Those pages must not queue behind connections occupied
+// by long writes and other writers waiting for SQLite's writer lock.
+// A catalog opened without
 // one (a findings run, an audit's reference copy) reads through DB. Writes
 // through it fail, and so would a read that needs this connection's own
 // uncommitted writes; TEMP tables still work.
