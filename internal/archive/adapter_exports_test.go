@@ -268,13 +268,14 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 
 // Reasoning and tool replies in the other shapes ChatGPT writes: o1's
 // reasoning summary as a tool's reply to no call, thoughts with and without
-// their text, a browser click that quotes several pages, and Python code
+// their text, a browser click that quotes several pages (one of them
+// regenerated, as an alternative that failed), and Python code
 // that raised an exception.
 func TestChatGPTExportReadsReasoningAndToolReplies(t *testing.T) {
 	const id = "c0000000-0000-4000-8000-000000000003"
 	browser := map[string]any{"author": map[string]any{"role": "tool", "name": "browser"}}
-	quote := func(id, parent, child string, at float64, text string) map[string]any {
-		return chatGPTNodeOf(id, parent, []string{child}, "tool", at, map[string]any{"content_type": "tether_quote", "url": "https://example.com/" + id, "title": id, "text": text}, browser)
+	quote := func(id, parent string, children []string, at float64, text string) map[string]any {
+		return chatGPTNodeOf(id, parent, children, "tool", at, map[string]any{"content_type": "tether_quote", "url": "https://example.com/" + id, "title": id, "text": text}, browser)
 	}
 	failed := map[string]any{"author": map[string]any{"role": "tool", "name": "python"}, "metadata": map[string]any{"aggregate_result": map[string]any{
 		"status": "failed_with_in_kernel_exception", "in_kernel_exception": map[string]any{"name": "ZeroDivisionError", "traceback": []any{"ZeroDivisionError: division by zero"}}}}}
@@ -287,10 +288,13 @@ func TestChatGPTExportReadsReasoningAndToolReplies(t *testing.T) {
 			"thoughts": chatGPTNodeOf("thoughts", "o1", []string{"click"}, "assistant", 1793722003, map[string]any{"content_type": "thoughts", "thoughts": []any{
 				map[string]any{"summary": "First", "content": "Open the first page"}, map[string]any{"summary": "Second", "content": ""}, map[string]any{"summary": "Third", "content": "Open the third page"}}}, nil),
 			"click": chatGPTNodeOf("click", "thoughts", []string{"q1"}, "assistant", 1793722004, map[string]any{"content_type": "code", "text": "mclick([0, 1, 2])"}, map[string]any{"recipient": "browser"}),
-			"q1":    quote("q1", "click", "q2", 1793722010, "Page one"),
-			"q2":    quote("q2", "q1", "q3", 1793722011, "Page two"),
-			"q3":    quote("q3", "q2", "run", 1793722012, "Page three"),
-			"run":   chatGPTNodeOf("run", "q3", []string{"error"}, "assistant", 1793722020, map[string]any{"content_type": "code", "language": "python", "text": "1 / 0"}, map[string]any{"recipient": "python"}),
+			"q1":    quote("q1", "click", []string{"q2b", "q2"}, 1793722010, "Page one"),
+			// The alternative, off the current branch, listed first.
+			"q2b": chatGPTNodeOf("q2b", "q1", []string{"q3b"}, "tool", 1793722011, map[string]any{"content_type": "system_error", "text": "Page two failed"}, browser),
+			"q3b": quote("q3b", "q2b", nil, 1793722012, "Page three, again"),
+			"q2":  quote("q2", "q1", []string{"q3"}, 1793722011, "Page two"),
+			"q3":  quote("q3", "q2", []string{"run"}, 1793722012, "Page three"),
+			"run": chatGPTNodeOf("run", "q3", []string{"error"}, "assistant", 1793722020, map[string]any{"content_type": "code", "language": "python", "text": "1 / 0"}, map[string]any{"recipient": "python"}),
 			// Python wrote the exception as its output.
 			"error":  chatGPTNodeOf("error", "run", []string{"answer"}, "tool", 1793722021, map[string]any{"content_type": "execution_output", "text": "ZeroDivisionError: division by zero"}, failed),
 			"answer": chatGPTNodeOf("answer", "error", nil, "assistant", 1793722030, chatGPTText("They agree."), nil),
@@ -312,6 +316,8 @@ func TestChatGPTExportReadsReasoningAndToolReplies(t *testing.T) {
 		"click assistant tool_call  click",
 		// Each page the click quotes replies to it.
 		"q1 tool tool_result  click",
+		"q2b tool tool_result  click",
+		"q3b tool tool_result  click",
 		"q2 tool tool_result  click",
 		"q3 tool tool_result  click",
 		"run assistant tool_call  run",
@@ -327,7 +333,8 @@ func TestChatGPTExportReadsReasoningAndToolReplies(t *testing.T) {
 	if text := byID["thoughts"].Text; text != "Open the first page\n\nSecond\n\nOpen the third page" {
 		t.Fatalf("thoughts %q", text)
 	}
-	// The click is one call, whose output is every page it quoted; the
+	// The click is one call, whose output is every page it quoted on the
+	// current branch, not the alternative, which failed; the
 	// exception fails the run.
 	_, calls := buildToolLedger(messages, "")
 	ledger := map[string]toolCall{}
@@ -345,6 +352,15 @@ func TestChatGPTExportReadsReasoningAndToolReplies(t *testing.T) {
 	repeated := append(slices.Clone(messages), MessageRecord{NativeID: "again", Role: "tool", Kind: "tool_result", CallID: "click", Text: jsonText(map[string]any{"content": "Page one again"})})
 	if _, calls := buildToolLedger(repeated, ""); calls[0].ResultBytes != ledger["click"].ResultBytes {
 		t.Fatalf("with a repeated result: %+v", calls[0])
+	}
+	// Of two results that each continue the same one, alternatives, only
+	// the first is more of its output.
+	continuing := func(id, text string) MessageRecord {
+		return MessageRecord{NativeID: id, Role: "tool", Kind: "tool_result", CallID: "click", Text: jsonText(map[string]any{"content": text, "continues": "q3"})}
+	}
+	forked := append(slices.Clone(messages), continuing("x1", "More"), continuing("x2", "Other"))
+	if _, calls := buildToolLedger(forked, ""); calls[0].ResultBytes != ledger["click"].ResultBytes+int64(len("\nMore")) {
+		t.Fatalf("with alternative results: %+v", calls[0])
 	}
 	// Either the run's status or its exception tells it failed.
 	run := failed["metadata"].(map[string]any)["aggregate_result"].(map[string]any)
