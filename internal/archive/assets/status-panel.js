@@ -197,7 +197,7 @@
     });
     // Ad hoc: the items set to only when you ask (Back up, unless chosen),
     // on no schedule, as one more row, run as the manual cadence.
-    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(Boolean);
+    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(item => item && item.state !== 'disabled');
     if (adhoc.length) {
       const running = adhoc.some(item => item.state === 'running'), failed = adhoc.some(item => item.state === 'failed');
       rows.push({id: 'manual', label: 'Ad hoc', icon: CADENCE_ICONS.manual, dot: running ? SCHEDULE_DOTS.running : failed ? 'bad' : 'paused',

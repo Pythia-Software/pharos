@@ -249,10 +249,10 @@ func sourceDomains(config Config, other bool) []string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "power": "Waits until on outlet power"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until on outlet power"}
 
 // stateRank orders states from the one a cadence's row should show first.
-var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable"}
+var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable", "disabled"}
 
 // backgroundView is the schedule as surfaces show it.
 func (s *Server) backgroundView(ctx context.Context, views []opView, freshness []freshnessRow, at time.Time) map[string]any {
@@ -263,6 +263,13 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	costs := s.cachedCosts(ctx)
 	in := s.backgroundInputsFor(ctx, s.peekRequested())
 	plans := backgroundPlan(settings, in, at)
+	// The step details own model settings. Keep disabled models reachable in
+	// the unscheduled column without adding them to the execution plan.
+	for _, item := range backgroundItems {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+			plans = append(plans, itemPlan{ID: item.ID, Cadence: cadenceManual})
+		}
+	}
 	rows := map[string]freshnessRow{}
 	for _, row := range freshness {
 		rows[row.Domain] = row
@@ -286,6 +293,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
+		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents:
+			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
 		case item.ID == "backup" && in.backupDestination == "":

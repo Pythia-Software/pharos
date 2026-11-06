@@ -88,9 +88,9 @@
 .bg-battery-row{display:grid;gap:4px;font-size:var(--fs-sm);font-weight:600;min-width:0}
 .bg-battery-row select{font:inherit;font-weight:400;border:1px solid var(--line);border-radius:5px;padding:5px 6px;background:var(--bg);color:var(--ink);min-width:0}
 .bg-check input{margin-top:3px;accent-color:var(--accent)}
-.bg-card .optional-behavior{padding:14px 0 0;border-bottom:0}
-.bg-card .optional-behavior h4{margin:0;font-size:var(--fs-md)}
-.bg-card .optional-behavior p{margin:4px 0 0;overflow-wrap:anywhere}
+.bg-detail .optional-behavior{padding:14px 0 0;border-bottom:0}
+.bg-detail .optional-behavior h4{margin:0;font-size:var(--fs-md)}
+.bg-detail .optional-behavior p{margin:4px 0 0;overflow-wrap:anywhere}
 .bg-labeler-heading{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px}
 .bg-labeler-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;font-size:var(--fs-sm);color:var(--muted)}
 .bg-threads{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--muted)}
@@ -100,7 +100,7 @@
 
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
   const CADENCE_LABELS = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
-  const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
+  const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', disabled: 'paused', power: 'paused'};
 
   // ---- times and durations (the only words this file makes)
   const parse = value => { const time = Date.parse(value); return Number.isFinite(time) ? time : null; };
@@ -185,7 +185,7 @@
     const unscheduled = inColumn('manual', view.unscheduled);
     // Only when you ask runs as the manual cadence: not while one of its
     // items runs, nor when none of them can.
-    const unscheduledRunnable = unscheduled.length > 0 && !unscheduled.some(item => item.state === 'running') && !unscheduled.every(item => item.state === 'unavailable');
+    const unscheduledRunnable = unscheduled.length > 0 && !unscheduled.some(item => item.state === 'running') && !unscheduled.every(item => ['unavailable', 'disabled'].includes(item.state));
     const mode = document.settings?.mode || view.mode;
     return {mode, pause: mode === 'paused' ? pauseLength(document.settings?.paused_until || view.paused_until, now) : '',
       settings: document.settings || {}, columns, unscheduled, unscheduledRunnable, everything: view.everything?.text || '',
@@ -418,16 +418,16 @@
         section.append(row);
       }
       section.append(when);
-      for (const item of column.items) section.append(renderItem(item));
+      for (const item of column.items) section.append(renderItem(item, model));
       columns.append(section);
     }
     // Only when you ask is one more column; four go two by two until
     // they fit on one line.
-    columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable));
+    columns.append(renderUnscheduled(model.unscheduled, model.unscheduledRunnable, model));
     return columns;
   }
 
-  function renderUnscheduled(items, runnable) {
+  function renderUnscheduled(items, runnable, model) {
     const section = node('section', 'bg-col bg-unscheduled');
     section.setAttribute('aria-label', 'Only when you ask');
     section.dataset.cadence = 'manual';
@@ -436,14 +436,14 @@
     title.append(runButton('Only when you ask', 'manual', !runnable));
     head.append(title);
     section.append(head, node('div', 'bg-when', 'On no schedule: these run when you choose Run now, or once you give them a schedule.'));
-    for (const item of items) section.append(renderItem(item));
+    for (const item of items) section.append(renderItem(item, model));
     return section;
   }
 
-  function renderItem(item) {
+  function renderItem(item, model) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
-    if (item.id) {
+    if (item.id && item.state !== 'disabled') {
       entry.draggable = true;
       entry.ondragstart = event => {
         dragging = item;
@@ -469,10 +469,10 @@
     head.append(node('span', `bg-dot ${item.dot}`), node('span', 'bg-name', item.label));
     // The name opens the details; ▶ beside it runs the item now.
     const headLine = node('div', 'bg-item-line');
-    headLine.append(head, runButton(item.label, {item: item.id}, item.state === 'running' || item.state === 'unavailable'));
+    headLine.append(head, runButton(item.label, {item: item.id}, ['running', 'unavailable', 'disabled'].includes(item.state)));
     if (item.cost?.class) headLine.append(node('span', `bg-cost ${item.cost.class}`, {light: 'Light', moderate: 'Moderate', heavy: 'Heavy'}[item.cost.class]));
     entry.append(headLine, node('span', 'bg-sub', item.sub), node('span', 'bg-state', item.text));
-    if (item.id) {
+    if (entry.draggable) {
       // A grip under the dot: this item drags to another schedule.
       const grip = node('span', 'bg-grip');
       grip.setAttribute('aria-hidden', 'true');
@@ -487,15 +487,17 @@
     if (item.why) detail.append(node('p', 'muted', item.why));
     if (item.error) detail.append(node('p', 'bg-error', item.error));
     if (item.sources?.length) detail.append(sourcePicker(item.sources));
+    if (item.id === 'labels' && model.labels) detail.append(renderLabelSettings(model.labels));
+    if (item.id === 'agent_events' && model.agentEvents) detail.append(renderAgentEventSettings(model.agentEvents));
     const row = node('div', 'bg-row');
-    if (item.choices.length) {
+    if (item.choices.length && item.state !== 'disabled') {
       const label = node('label', '', item.temporary ? 'Normally ' : 'Run ');
       label.append(select(item.choices.map(choice => [choice.value, choice.label]), item.override, value => save({overrides: {[item.id]: value}}), `When ${item.label} runs`));
       row.append(label);
     }
     // A running item that can stop offers Stop instead: it ends at its next
     // safe point, keeping what it finished, and its next run resumes it.
-    row.append(item.stop ? button('Stop', async () => {
+    const run = item.stop ? button('Stop', async () => {
       await call('/api/operations/stop', {id: item.stop.id});
       toast(`Stopping ${item.label}. What it finished is kept; its next run resumes it.`);
       refresh(true);
@@ -503,13 +505,15 @@
       await call('/api/background/run', {item: item.id});
       toast(`${item.label} runs next.`);
       refresh(true);
-    }));
+    });
+    run.disabled = ['unavailable', 'disabled'].includes(item.state);
+    row.append(run);
     detail.append(row);
     if (item.temporary?.expires_at) {
       const expiry = new Date(item.temporary.expires_at).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
       detail.append(line('Temporary schedule', `${item.cadenceLabel} until ${expiry}`));
     }
-    if (item.moves.length || item.temporary) {
+    if (item.state !== 'disabled' && (item.moves.length || item.temporary)) {
       const moves = node('div', 'bg-row bg-moves');
       for (const move of item.moves) {
         moves.append(button(move.label, () => save({temporary_cadences: {[item.id]: move.cadence}})));
@@ -588,7 +592,6 @@
       card.append(rule);
     }
     content.append(card);
-    if (model.labels) content.append(renderLabels(model.labels, model.agentEvents));
     if (model.battery) {
       const battery = node('section', 'bg-card');
       battery.dataset.card = 'battery';
@@ -609,38 +612,34 @@
       content.append(battery);
     }
     target.replaceChildren(...content.childNodes);
-    if (labelsFocused) target.querySelector(`#${labelsFocused}`)?.focus({preventScroll: true});
     const keyed = focusKey && target.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`);
-    if (keyed) keyed.focus({preventScroll: true});
+    if (labelsFocused) target.querySelector(`#${labelsFocused}`)?.focus({preventScroll: true});
+    else if (keyed) keyed.focus({preventScroll: true});
     else if (focused) target.querySelector(`[data-item="${window.CSS.escape(focused)}"] .bg-item-head`)?.focus({preventScroll: true});
   }
 
-  // Message labels and agent events: both small models run on this Mac
-  // through the labeling worker, so they share a card. Labels save to the
-  // library's configuration; agent events are the agentEventsFlag preference
-  // (agent_events_run.go), so Analyze lists Agent Experience as it changes.
-  function renderLabels(labels, events) {
-    const card = node('section', 'bg-card');
-    card.append(node('h3', '', 'Labeling on this Mac'),
-      node('p', 'muted', 'Runs in the background. Turning a model off keeps its results.'));
-    card.append(labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
-      'Classify requests, replies, feedback and more.', labels,
+  // Model settings live with the schedule item they configure. Disabled
+  // models stay in Only when you ask so their switches remain reachable.
+  function renderLabelSettings(labels) {
+    return labelSwitch('labelsEnabled', 'messageLabels', 'Message labels',
+      'Classify requests, replies, feedback and more. Turning this off keeps its results.', labels,
       enabled => call('/api/labels/settings', {enabled}),
-      threads => call('/api/labels/settings', {threads})));
-    if (events) card.append(labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
-      'Find obstacles, discoveries and workarounds in agent replies from the last 90 days.', events,
+      threads => call('/api/labels/settings', {threads}));
+  }
+
+  function renderAgentEventSettings(events) {
+    return labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
+      'Find obstacles, discoveries and workarounds in agent replies from the last 90 days. Turning this off keeps its results.', events,
       async enabled => {
         window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
         await window.pharosPrefs.flush?.();
         if (enabled) await call('/api/background/run', {item: 'agent_events'}).catch(() => {});
         return call('/api/background');
       },
-      threads => call('/api/labels/settings', {agent_events_threads: threads})));
-    return card;
+      threads => call('/api/labels/settings', {agent_events_threads: threads}));
   }
 
-  // One switch of the labeling card, the App preferences toggle, with its
-  // model's effective CPU control: each save returns the next document.
+  // Each model keeps its effective CPU control and returns the next document.
   function labelSwitch(id, prefix, text, about, settings, saveSwitch, saveThreads) {
     const controls = labelingControls(settings);
     const row = node('div', 'optional-behavior');

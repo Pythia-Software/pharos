@@ -1,8 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {open,skip,activateHeaderTool} from './harness.mjs';
-import {workID,rootConversation,defaultApi,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
+import {workID,rootConversation,defaultApi,queryFixtureDatasets,busyStatus,eventStream,conversationLabelsFixture} from './fixtures.mjs';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict,loadSchema} from '@pythia-software/query-table-core';
+import writingMessagesDocument from '../../../schemas/writing_messages.schema.json' with {type:'json'};
+import usageDocument from '../../../schemas/usage.schema.json' with {type:'json'};
 import toolCallsDocument from '../../../schemas/tool_calls.schema.json' with {type:'json'};
 import mcpCallsDocument from '../../../schemas/mcp_calls.schema.json' with {type:'json'};
 import safetyDocument from '../../../schemas/safety.schema.json' with {type:'json'};
@@ -974,20 +976,22 @@ test('row disclosures record deliberate choices without capturing every rendered
 });
 
 test('accordion links restore capture/index diagnostics in fresh browsers and history, and reveal a closed accordion without opening it',{skip},async t=>{
- const keys=['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'],ready='#syncDiagnosticTables details';
+ const keys=['sync:history','sync:sources','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast','background:labels','background:agent_events'],ready='#syncDiagnosticTables details';
  const route=entries=>'/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
- const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,false]));
+ const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,['sync:history','sync:sources'].includes(key)]));
  const app=await open(t,{url:route(entries),ready}),{page}=app;
  const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
   const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
   return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
  }),expected);
  await state(page,entries);
- const first=page.locator('[data-view-key="'+keys[0]+'"]');
+ const first=page.locator('[data-view-key="'+keys[0]+'"],[data-pharos-target="section:'+keys[0]+'"]');
  if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
  await state(page,{...entries,[keys[0]]:false});
  await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,keys[0]);await app.settled();
  const fresh=await open(t,{url:path(page),ready});
+ await state(fresh.page,{...entries,[keys[0]]:false});
+ await fresh.page.evaluate(()=>window.pharosSync.refresh());
  await state(fresh.page,{...entries,[keys[0]]:false});
  await page.evaluate(url=>window.pharosNavigate(url),route({}));
  await state(page,defaults);
@@ -995,7 +999,7 @@ test('accordion links restore capture/index diagnostics in fresh browsers and hi
  await page.goForward();await state(page,defaults);
  assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
  // Revealing a closed accordion highlights its summary without overriding explicit false.
- const closed={'sync:separate':false,'sync:diagnostics':false};
+ const closed={'sync:history':false,'sync:sources':false,'sync:diagnostics':false};
  await page.evaluate(url=>window.pharosNavigate(url),route(closed)+'&'+new URLSearchParams({reveal:'section:sync:diagnostics'}));
  const target=page.locator('[data-pharos-target="section:sync:diagnostics"].pharos-reveal');await target.waitFor({state:'visible'});
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
@@ -1055,7 +1059,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const control=name=>page.locator('.thinking-controls').getByRole('combobox',{name,exact:true});
  const state=()=>JSON.parse(new URL(page.url()).searchParams.get('thinking'));
  const topic=()=>new URL(page.url()).searchParams.get('analyze_topic');
- await control('Model').selectOption('gpt-6.1-sol');await app.settled();
+ await control('Model').selectOption('gpt-6.1-sol');await control('Breakdown').selectOption('model_speed');await app.settled();
  const chart=page.locator('.thinking-brush').first();await chart.scrollIntoViewIfNeeded();const rect=await chart.boundingBox();
  await page.mouse.move(rect.x+rect.width*.3,rect.y+rect.height*.4);await page.mouse.down();await page.mouse.move(rect.x+rect.width*.65,rect.y+rect.height*.4,{steps:8});await page.mouse.up();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('thinking')).range==='custom');await app.settled();
@@ -1066,6 +1070,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  await page.locator('.thinking-links').getByRole('link',{name:'Waiting →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
  const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
  // An already-open validation section must fetch its evidence on restoration,
  // even though shared accordions notify onOpenChange only for deliberate toggles.
@@ -1081,8 +1086,12 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  assert.ok(copied.calls.some(call=>call.path==='/api/thinking'&&call.query.get('evidence')==='1'));
  await page.goBack();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,detailTopic);await page.locator(ready).waitFor();
  assert.equal(state().model,'gpt-6.1-sol');assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
  await page.goForward();await page.waitForFunction(topic=>new URLSearchParams(location.search).get('analyze_topic')===topic,overviewTopic);await page.locator(ready).waitFor();
  assert.equal(state().from,selected.from);
+ assert.equal(await control('Breakdown').inputValue(),'model_speed');
+ await control('Breakdown').selectOption('model_effort_speed');await app.settled();
+ assert.ok(app.calls.some(call=>call.path==='/api/thinking'&&call.query.get('overview')==='1'&&call.query.get('groupBy')==='model_effort_speed'));
 });
 
 // Date arithmetic is covered in node; here verify the shared editor is wired to
@@ -1326,4 +1335,35 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
  assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
  await app.shot('compaction-compare');
+});
+
+
+test('component share charts restore their controls across reloads and view switches',{skip},async t=>{
+ const words=Object.fromEntries(Object.entries({typed:40,pasted:22,quoted:12,resent:8,template:6,attachment:2,harness:7,automated:3}).map(([key,value])=>[key+'_words',value]));
+ const rows=queryFixtureDatasets.writing_messages.map(row=>({...row,...words,words:100,copied_words:20,prompt_words:8,machine_words:10}));
+ const api={'POST /api/query/writing_messages/query-v3':({body})=>answerQuery('query-v3',body,rows,loadSchema(writingMessagesDocument))};
+ const app=await open(t,{api,url:'/analyze?analyze_topic=human',viewport:{width:1920,height:1050},ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ const control=name=>page.locator('.usage-human-dashboard').getByRole('combobox',{name,exact:true});
+ await control('View').selectOption('compare');
+ await control('Metric').selectOption('words');
+ await control('Breakdown').selectOption('category');
+ await control('Show as').selectOption('share');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await app.settled();
+ const saved=path(page);
+ await page.getByRole('button',{name:/^Typed:/}).waitFor();
+ await app.shot('human-text-category-shares');
+ const fresh=await open(t,{api,url:saved,ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ for(const [name,value] of [['View','compare'],['Metric','words'],['Breakdown','category'],['Show as','share']])assert.equal(await fresh.page.getByRole('combobox',{name,exact:true}).inputValue(),value);
+ await fresh.page.getByRole('combobox',{name:'View',exact:true}).selectOption('trend');
+ await fresh.page.locator('.usage-chart-bars:not(.loading) > button').first().waitFor();await fresh.settled();
+ await fresh.page.getByRole('combobox',{name:'View',exact:true}).selectOption('compare');
+ await fresh.page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();await fresh.settled();
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'category');
+ assert.equal(await fresh.page.getByRole('combobox',{name:'Show as',exact:true}).inputValue(),'share');
+ await fresh.page.getByRole('button',{name:/^Typed:/}).click();
+ await fresh.page.waitForURL(url=>url.searchParams.get('analyze_mode')==='query');await fresh.settled();
+ const tokenAPI={'POST /api/query/usage/query-v3':({body})=>answerQuery('query-v3',body,queryFixtureDatasets.usage.map(row=>({...row,input_tokens:100,uncached_input_tokens:20,cache_read_input_tokens:70,cache_creation_input_tokens:10})),loadSchema(usageDocument))};
+ const tokens=await open(t,{api:tokenAPI,url:'/analyze?analyze_topic=tokens&analyze_chart='+encodeURIComponent(JSON.stringify({view:'compare',metric:'input',split:'input_type',compareAs:'share'})),viewport:{width:1920,height:1050},ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ await tokens.page.getByRole('button',{name:/^Cache reads:/}).waitFor();
+ await tokens.shot('input-token-shares');
 });

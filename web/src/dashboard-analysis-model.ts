@@ -54,8 +54,8 @@ export const partField = (part: RatioPart) => ratioPart(part).field;
 export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string };
 // A component breakdown splits a measure into its additive parts, such as
 // tokens into uncached input, cache reads and writes, and output. Its series
-// are fields, not groups of records, so only the trend draws it, and only for
-// the measures it lists; any other measure moves to its fallback breakdown.
+// are fields, not groups of records. Trends draw them per period; record
+// comparisons draw their totals across the range, including as pie slices.
 export type AnalysisComponent = { key: string; label: string; field?: string; color: string; optional?: boolean; fields?: string[] };
 // A derived component breakdown computes its parts rather than summing them:
 // the trend queries the summed input fields per period, grouped further by
@@ -260,7 +260,7 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
   return oneOf(state.view, availableViews(catalog).map(([view]) => view))
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit))
     && has(catalog.measures, state.metric) && (state.metricY === undefined || has(catalog.measures, state.metricY))
-    && (state.split === noSplit || has(catalog.breakdowns, state.split))
+    && (state.split === noSplit || has(catalog.breakdowns, state.split) || state.view === "compare" && has(catalog.components ?? {}, state.split))
     && (state.reduce === undefined || oneOf(state.reduce, analysisReductions.map(([reduce]) => reduce)))
     && (state.compareAs === undefined || oneOf(state.compareAs, compareModes))
     && (state.minSamples === undefined || Number.isInteger(state.minSamples) && state.minSamples >= 0 && state.minSamples <= 1_000_000)
@@ -273,6 +273,14 @@ export const shareable = (catalog: AnalysisCatalog, state: ResolvedAnalysis) => 
 // The trend draws records by any breakdown, a component breakdown, or none.
 export const trendSplit = (catalog: AnalysisCatalog, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) || has(catalog.components ?? {}, split);
 export const splitValid = (catalog: AnalysisCatalog, unit: string, split: string) => split === noSplit && catalog.allowNoSplit !== false || has(catalog.breakdowns, split) && (unit === records || has(catalog.units[unit]?.breakdowns ?? {}, split));
+// Calculated components retain their per-period calculation in the trend.
+export function comparisonComponentUnavailable(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "unit">, split: string): string | undefined {
+  const component = catalog.components?.[split];
+  if (!component) return "Unknown component breakdown";
+  if (!component.measures.includes(state.metric)) return `${component.label} splits ${component.measures.map(id => catalog.measures[id].label.toLowerCase()).join(" and ")} only`;
+  if (state.unit && state.unit !== records) return "Component totals count records; choose the records option in Count each";
+  if (component.derived) return "Calculated components are available over time";
+}
 // Units add up an additive measure, and pool a ratio's parts. Distinct counts
 // and other non-additive values have no honest unit total.
 export const unitTotal = (measure: AnalysisMeasure) => measure.additive || Boolean(measure.ratio);
@@ -280,7 +288,7 @@ export const unitTotal = (measure: AnalysisMeasure) => measure.additive || Boole
 // active on two Mondays would otherwise count twice.
 export const cycleTotal = (measure: AnalysisMeasure) => measure.additive;
 // A threshold hides groups; a share display divides by all groups.
-export const thresholded = (state: ResolvedAnalysis) => state.minSamples > 1 && state.split !== noSplit && (state.view === "distribution" || state.view === "compare" && state.compareAs !== "share");
+export const thresholded = (state: ResolvedAnalysis, catalog: AnalysisCatalog) => !catalog.components?.[state.split] && state.minSamples > 1 && state.split !== noSplit && (state.view === "distribution" || state.view === "compare" && state.compareAs !== "share");
 export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure, unit: AnalysisUnit) {
   if (reduce === "total" && measure.ratio) return `Pooled across ${unit.plural.toLowerCase()}`;
   if (reduce === "mean" && !measure.additive) return `Unweighted mean per ${unit.label.toLowerCase()}`;
@@ -336,7 +344,7 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   if (next.view === "distribution" && next.unit === records && !catalog.measures[next.metric].value) {
     if (firstUnit) next.unit = firstUnit; else next.metric = Object.keys(catalog.measures).find(id => catalog.measures[id].value)!;
   }
-  if (!splitValid(catalog, next.unit, next.split)) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
+  if (!splitValid(catalog, next.unit, next.split) && !(next.view === "compare" && !comparisonComponentUnavailable(catalog, next, next.split))) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
   // A cycle summarizes slot values: a box per slot by default, or their mean,
   // or their total where slot values add up (not ratios or distinct counts).
   if (next.view === "cycle") { if (state.reduce === undefined || !["total", "mean", "median"].includes(next.reduce) || next.reduce === "total" && !cycleTotal(catalog.measures[next.metric])) next.reduce = "median"; }
@@ -441,7 +449,7 @@ export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, in
   if (isTrendView(current)) {
     const trend = normalizeTrend(catalog, { ...analysisDefaults, ...state, view: "trend" } as T & ResolvedAnalysis);
     return normalizeAnalysis(catalog, { ...state, view, metric: trend.metric, compareAs: trend.share ? "share" as const : "bars" as const, ...view === "cycle" ? { reduce: "median" as const } : {},
-      split: has(catalog.breakdowns, trend.split) ? trend.split : noSplit });
+      split: has(catalog.breakdowns, trend.split) || view === "compare" && !comparisonComponentUnavailable(catalog, trend, trend.split) ? trend.split : noSplit });
   }
   return normalizeAnalysis(catalog, { ...state, view, ...view === "cycle" ? { reduce: "median" as const } : {} });
 }
@@ -466,8 +474,9 @@ export function aggregate(measure: AnalysisMeasure): Pick<AggregationClause, "op
 }
 
 export type AnalysisQuery = {
-  // The query the chart executes; its first aggregation is the chart's clause.
+  // The query the chart executes. Component totals combine into one chart.
   query: QueryState; clause: AggregationClause;
+  components?: AnalysisComponents;
   // What "View supporting query" opens: the same population and grouping.
   supporting: QueryState;
   grouped: boolean;
@@ -523,6 +532,19 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const state = normalizeAnalysis(catalog, input);
   if (isTrendView(state.view)) throw new Error("The trend view has its own chart.");
   const shares = state.view === "compare" && state.compareAs === "share" && state.split !== noSplit;
+  const components = state.view === "compare" ? catalog.components?.[state.split] : undefined;
+  if (components) {
+    const measure = catalog.measures[state.metric];
+    const where = unique([...inputWhere, ...measure.where ?? []]);
+    const terms = catalog.executable ? catalog.executable(where, now) : where;
+    const aggregations: AggregationClause[] = components.parts.map(part => ({ id: `component:${part.key}`, op: "sum", field: part.field, groupBy: [], label: part.label }));
+    const clause: AggregationClause = { id: "analysis", op: "sum", groupBy: [state.split], label: measure.label,
+      display: shares ? { kind: "pie", maxGroups: components.parts.length, showOther: true, legendPosition: "right", format: measure.format }
+        : { kind: "bar-horizontal", maxGroups: components.parts.length, legendPosition: "none", xLabel: measure.label, xScale: log(state.scale), format: measure.format } };
+    return { query: { ...EMPTY_QUERY, where: terms, aggregations }, clause, components, grouped: false,
+      supporting: { ...EMPTY_QUERY, where: terms },
+      selection: state.selection?.values.length ? { ...state.selection, fields: 1, share: shares } : undefined };
+  }
   // The selection is of the breakdown's groups, drawn on the group fields of
   // the current unit.
   const recordFields = state.split === noSplit || state.view === "cycle" ? [] : catalog.breakdowns[state.split].fields;
@@ -556,7 +578,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   if (selection && !shares && !filter) selection.late = true;
   // A records compare counts the catalog's samples; distributions take row
   // minimums only, and each unit row is one unit.
-  const counted = thresholded(state) ? { minCount: !unit && state.view === "compare" ? minimumOf(catalog, state.minSamples) : state.minSamples } : {};
+  const counted = thresholded(state, catalog) ? { minCount: !unit && state.view === "compare" ? minimumOf(catalog, state.minSamples) : state.minSamples } : {};
   const valueLabel = state.view === "compare" && unit && state.reduce !== "total" ? `${reductionLabel(state.reduce, measure, unit)}${state.reduce === "count" ? "" : ` · ${measure.label}`}` : measure.label;
   const format = state.view === "compare" && state.reduce === "count" ? { kind: "number" as const, decimals: 0 } : measure.format;
   const compareDisplay = (groups: boolean): MetricDisplay => !groups ? { kind: "value", format, valueLabel }
@@ -728,6 +750,34 @@ export function selectGroups(entry: AggregationResultEntry, selection?: Analysis
   return { ...shown, ...rest.length ? { other: { keys: [], value, count } } : { other: undefined } };
 }
 
+// A component query returns one complete total per part. Missing or partial
+// totals cannot read as zero: that would change the denominator of 100%.
+export function analysisResult(analysis: AnalysisQuery, results: AggregationResultEntry[]): (AggregationResultEntry & { missing?: number }) | undefined {
+  if (!results.length) return undefined;
+  if (!analysis.components) return selectGroups(results[0], analysis.selection);
+  const buckets: AggregationBucket[] = [];
+  for (const part of analysis.components.parts) {
+    const entry = results.find(result => result.id === `component:${part.key}`);
+    if (!entry || entry.error || entry.coverage === "partial" || entry.other || entry.buckets.some(bucket => bucket.error) || entry.buckets.length > 1 || (entry.groupCount ?? 0) > entry.buckets.length) {
+      return { id: analysis.clause.id, buckets: [], error: entry?.error ?? "The component totals are incomplete. Refresh to try again." };
+    }
+    const value = entry.buckets[0]?.value ?? 0;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return { id: analysis.clause.id, buckets: [], error: "The component totals contain an invalid value." };
+    buckets.push({ keys: [part.key], value, count: entry.buckets[0]?.count ?? 0 });
+  }
+  return selectGroups({ ...results[0], id: analysis.clause.id, buckets, groupCount: buckets.length }, analysis.selection);
+}
+
+export function analysisLabels(catalog: AnalysisCatalog, state: AnalysisState): AnalysisCatalog["labels"] {
+  const component = catalog.components?.[state.split];
+  return component ? { ...catalog.labels, [state.split]: value => component.parts.find(part => part.key === value)?.label ?? value } : catalog.labels;
+}
+
+export function analysisFields(catalog: AnalysisCatalog, state: AnalysisState, schema: FieldSchema): FieldSchema["fields"] {
+  const component = catalog.components?.[state.split];
+  return component ? [...schema.fields, { name: state.split, label: component.label, type: "text", source: { kind: "derived" } }] : schema.fields;
+}
+
 function groupedRecords(where: WhereTerm[], keys: GroupKey[], summaries: SummaryColumn[], having: WhereTerm[], order = summaries[0].id): QueryState {
   const fields = groupKeyFields(keys);
   return { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where }, keys, summaries, representative: null },
@@ -743,6 +793,12 @@ function groupedRecords(where: WhereTerm[], keys: GroupKey[], summaries: Summary
 // A query past the predicate budget in any where list has none: a link
 // would drop its last predicates, the bucket's own keys, and open more.
 export function analysisInspectQuery(analysis: AnalysisQuery, bucket: AggregationBucket, clause: AggregationClause, schema: FieldSchema, view: AnalysisView): QueryState | null {
+  if (analysis.components) {
+    const part = analysis.components.parts.find(part => part.key === bucket.keys[0]);
+    if (!part?.field) return null;
+    const query = { ...analysis.supporting, where: [...analysis.supporting.where, { field: part.field, op: ">" as const, value: "0" }] };
+    return withinBudget(query) ? query : null;
+  }
   if (view === "cycle" && !analysis.native) return null;
   const { aggregations: _, ...units } = analysis.query;
   const opened = inspectBucketQuery(analysis.grouped ? units : { ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
@@ -820,10 +876,11 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
     : `Bars show the ${state.reduce === "max" ? "largest" : state.reduce} ${unit.label.toLowerCase()} in each group${state.reduce === "mean" && !measure.additive ? `, every ${unit.label.toLowerCase()} weighted equally` : ""}.`);
   if (state.view === "cycle" && state.reduce === "mean" && !measure.additive) parts.push(`The mean weights every ${state.cycle === "hour" ? "hour" : "day"} equally${measure.ratio ? ", not by tokens" : ""}.`);
   if (state.view === "cycle" && state.reduce === "total") parts.push(`Totals add up every ${state.cycle === "hour" ? "hour" : "day"} that falls on each bar.`);
+  if (state.view === "compare" && catalog.components?.[state.split]) parts.push(`Each ${state.compareAs === "share" ? "slice" : "bar"} adds up one component across every matching record in the range. The components account for 100% of ${measure.label.toLowerCase()}.`);
   const narrowed = state.view === "scatter" ? [[measure, catalog.measures[state.metricY]], [catalog.measures[state.metricY], measure]].filter(([own, other]) => own.where?.length && !other.where?.length).map(([own, other]) => `${other.label} counts only ${own.label.toLowerCase()}'s records here.`) : [];
   if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both measures use the records matching both measures' populations.${narrowed.length ? ` ${narrowed.join(" ")}` : ""} Up to ${analysisLimits.points.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
   if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value are left out.`);
-  if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
+  if (thresholded(state, catalog)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
   if (state.compareAs === "share" && state.view === "compare") parts.push("Shares divide each group by the total of all groups, including those folded into Other.");
   return parts.join(" ");
 }
@@ -835,5 +892,5 @@ export const sampleSubject = (catalog: AnalysisCatalog, state: ResolvedAnalysis)
 export function analysisEmptyLabel(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, input);
   const subject = state.unit === records ? catalog.records.plural.toLowerCase() : catalog.units[state.unit].plural.toLowerCase();
-  return thresholded(state) ? `No groups with at least ${state.minSamples.toLocaleString("en-US")} ${sampleSubject(catalog, state)}` : `No matching ${subject}`;
+  return thresholded(state, catalog) ? `No groups with at least ${state.minSamples.toLocaleString("en-US")} ${sampleSubject(catalog, state)}` : `No matching ${subject}`;
 }

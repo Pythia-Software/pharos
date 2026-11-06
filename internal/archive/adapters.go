@@ -18,6 +18,9 @@ import (
 type MessageRecord struct {
 	accounting                                                                                                      *messageAccounting
 	NativeID, Role, Kind, Text, Model, Effort, CreatedAt, ParentNativeID, PreviousNativeID, CallID, EvidenceLocator string
+	Speed                                                                                                           string `json:"Speed,omitempty"`
+	ServiceTier                                                                                                     string `json:"ServiceTier,omitempty"`
+	SpeedSource                                                                                                     string `json:"SpeedSource,omitempty"`
 	RawText                                                                                                         string
 	SourceOrder                                                                                                     int
 	Selected                                                                                                        bool
@@ -322,7 +325,7 @@ func ensureEOF(decoder *json.Decoder) error {
 
 type canonicalAdapter struct{ baseAdapter }
 
-const exportIndexVersion = "token-events-v5-origin"
+const exportIndexVersion = "token-events-v6-inference-speed"
 
 func (a *canonicalAdapter) indexVersion() string { return exportIndexVersion }
 
@@ -409,6 +412,11 @@ func (a *canonicalAdapter) workspace(row map[string]any, file string, index int)
 				id = fmt.Sprintf("m%d", mindex)
 			}
 			messages = append(messages, MessageRecord{RawText: accountingRaw(message), Model: firstString(message["model"], conversation["model"]), Effort: exportedEffort(message, conversation), NativeID: id, Role: defaultString(message["role"], "unknown"), Kind: defaultString(message["kind"], "message"), ReasoningFormat: firstString(message["reasoning_format"]), Text: messageText(firstNonNil(message["text"], message["content"])), CreatedAt: iso(firstNonNil(message["created_at"], message["timestamp"])), ParentNativeID: firstString(message["parent_id"]), CallID: firstString(message["call_id"]), Selected: defaultBool(message["selected"], true), EvidenceLocator: fmt.Sprintf("%s:%d:%d", a.original(file), cindex, mindex)})
+			config, found := inferenceSetting(message)
+			if !found {
+				config, _ = inferenceSetting(conversation)
+			}
+			messages[len(messages)-1] = withInference(messages[len(messages)-1], config)
 		}
 		nativeID := firstString(conversation["id"], conversation["native_id"])
 		if nativeID == "" {
@@ -514,7 +522,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v17-origin-entrypoints"
+const jsonlExtractor = "message-model-v18-inference-speed"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -736,6 +744,8 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 	origin := a.original(path)
 	meta := map[string]any{}
 	model, effort := "", a.initialEffort
+	currentInference := standardInference()
+	inferenceApplied := 0
 	harness, versionFirst, versionLast := "codex", "", ""
 	messages := []MessageRecord{}
 	usage := map[string]float64{}
@@ -754,6 +764,10 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 	// session belong to neither and stay unlabeled.
 	inTurn, turnFresh := false, false
 	for _, event := range events {
+		for inferenceApplied < len(messages) {
+			messages[inferenceApplied] = withInference(messages[inferenceApplied], currentInference)
+			inferenceApplied++
+		}
 		payload := mapValue(event["payload"])
 		if payload == nil {
 			payload = event
@@ -793,11 +807,15 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			}
 			model = defaultString(payload["model"], model)
 			effort = updatedEffort(effort, payload)
+			if config, found := inferenceSetting(payload); found {
+				currentInference = config
+			}
 			continue
 		}
 		if etype == "turn_context" {
 			model = defaultString(payload["model"], model)
 			effort = recordedEffort(payload)
+			currentInference, _ = inferenceSetting(payload)
 			continue
 		}
 		role, text, kind, sender := "", "", "", ""
@@ -920,6 +938,10 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			}
 			messages = append(messages, MessageRecord{RawText: raw, NativeID: id, Role: role, Kind: kind, Text: text, Model: model, Effort: effort, CallID: firstString(payload["call_id"]), CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: sender})
 		}
+	}
+	for inferenceApplied < len(messages) {
+		messages[inferenceApplied] = withInference(messages[inferenceApplied], currentInference)
+		inferenceApplied++
 	}
 	for callID, extra := range details {
 		if index, ok := resultIndexes[callID]; ok && index < len(messages) && messages[index].CallID == callID {
