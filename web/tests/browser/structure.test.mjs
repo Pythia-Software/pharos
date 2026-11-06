@@ -398,6 +398,7 @@ const ROUTES = [
   {name:'Message label conversation cards',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels',ready:'.message-label-result-card'},
   {name:'Message label conversation rows',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels&label_results=table',ready:'.qt-row'},
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  { name: "Human Words component shares", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "compare", metric: "words", split: "category", compareAs: "share" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations' },
   // One route per chart kind and dashboard component; the numbers each
   // topic draws are covered by the dashboard parity and analysis unit tests.
   {

@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { analysisResult, analysisLabels, analysisFields, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, availableViews, catalogProblems, cycleResult, normalizeAnalysis, switchView, trendUnavailable, validAnalysisState, viewOptions } from "../../../src/dashboard-analysis-model";
+import { humanAnalysisCatalog as human } from "../../../src/human-analysis-catalog";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
@@ -36,8 +37,8 @@ test("switching views keeps what both views share and coerces the rest", () => {
   assert.deepEqual([share.metric, share.compareAs, share.split, share.rollingPeriods], ["cost", "share", "provider", 7], "percent cost becomes a cost share");
   assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, share, "trend")[key]), ["cost", true, "provider"]);
   const typed = switchView(catalog, { ...trend, metric: "percent" }, "compare");
-  assert.deepEqual([typed.metric, typed.compareAs, typed.split], ["tokens", "bars", "none"], "token type is no breakdown, and one group has no shares");
-  assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, typed, "trend")[key]), ["tokens", false, "none"], "no breakdown is the trend's total line");
+  assert.deepEqual([typed.metric, typed.compareAs, typed.split], ["tokens", "share", "type"], "token type remains a component breakdown and keeps shares");
+  assert.deepEqual(["metric", "share", "split"].map(key => switchView(catalog, typed, "trend")[key]), ["tokens", true, "type"], "component shares return to the trend");
   const ratio = switchView(catalog, { ...share, metric: "cache_read_share", split: "provider" }, "compare");
   assert.equal(ratio.compareAs, "bars", "a ratio cannot be shown as shares");
   const scatter = switchView(catalog, { view: "compare", metric: "cost", split: "model_effort" }, "scatter");
@@ -241,7 +242,7 @@ test("Over time draws every measure and population; only unit reductions stay un
   assert.deepEqual(["metric", "share"].map(key => switchView(catalog, { ...share, unit: "conversation", reduce: "total" }, "trend")[key]), ["cost", true], "a unit total adds up the same records");
   // A share needs groups to divide.
   assert.equal(normalizeAnalysis(catalog, { ...share, split: "none" }).compareAs, "bars");
-  assert.equal(switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare").compareAs, "bars", "token type is no breakdown, so no share");
+  assert.equal(switchView(catalog, { ...trend, metric: "percent", split: "type" }, "compare").compareAs, "share", "token components partition the total");
   // Values return as bars, whatever display came before.
   assert.equal(switchView(catalog, { ...there, share: false }, "compare").compareAs, "bars");
 });
@@ -350,4 +351,42 @@ test("a shared snapshot filtered to an hour groups the days holding that hour, a
   const records = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "none" }, where);
   const [total] = await runAnalysisQuery("usage", schema, records.query, { local: { rows, hourly } });
   assert.equal(total.buckets[0].value, Object.values(expected).reduce((n, value) => n + value, 0));
+});
+
+
+test("component comparisons partition every matching word or input token, with full shares and record drill-downs", async () => {
+  const wordRows = [
+    { id: "one", provider: "codex", words: 100, typed_words: 20, pasted_words: 30, quoted_words: 10, resent_words: 10, template_words: 10, attachment_words: 5, harness_words: 10, automated_words: 5 },
+    { id: "two", provider: "claude", words: 900, typed_words: 900 },
+  ];
+  const tokenRows = [{ provider: "codex", input_tokens: 100, uncached_input_tokens: 20, cache_read_input_tokens: 70, cache_creation_input_tokens: 10, output_tokens: 500 }];
+  for (const [source, metric, split, records, total] of [[human, "words", "category", wordRows, 100], [catalog, "input", "input_type", tokenRows, 100]]) {
+    const sourceSchema = schemas[source.dataset], where = [{ field: "provider", op: "=", value: "codex" }];
+    const state = { view: "compare", metric, split, compareAs: "share", minSamples: 50 };
+    assert.ok(validAnalysisState(source, state));
+    assert.doesNotMatch(analysisNote(source, state), /hidden/, "a threshold cannot omit components from 100%");
+    const analysis = analysisQuery(source, state, where);
+    assert.equal(analysis.clause.display.kind, "pie");
+    assert.deepEqual(analysis.query.where, where);
+    const results = await runAnalysisQuery(source.dataset, sourceSchema, analysis.query, { local: { rows: records }, now });
+    const result = analysisResult(analysis, results);
+    assert.equal(result.error, undefined);
+    assert.equal(result.buckets.reduce((sum, bucket) => sum + bucket.value, 0), total, "parts sum to the full selected population");
+    assert.deepEqual(analysis.supporting.where, where);
+    assert.equal(analysisFields(source, state, sourceSchema).at(-1).label, source.components[split].label);
+    assert.equal(analysisLabels(source, state)[split](result.buckets[0].keys[0]), source.components[split].parts[0].label);
+    const drilled = analysisInspectQuery(analysis, result.buckets[0], analysis.clause, sourceSchema, "compare");
+    assert.deepEqual(core.evaluateMetrics(records, { ...drilled, aggregations: [{ id: "count", op: "count", groupBy: [] }] }, sourceSchema).metrics[0].buckets[0].value, 1);
+    const selected = analysisQuery(source, { ...state, selection: { values: [result.buckets[0].keys[0]], excluded: false } }, where);
+    const drawn = analysisResult(selected, results);
+    assert.equal(drawn.buckets.length, 1);
+    assert.equal(drawn.buckets[0].value + drawn.other.value, total, "a selected part keeps the rest in Other");
+    assert.deepEqual(analysisResult(analysis, results.slice(1)).buckets, []);
+    assert.match(analysisResult(analysis, results.map((entry, index) => index ? entry : { ...entry, coverage: "partial" })).error, /incomplete/);
+    const empty = analysisResult(analysis, await runAnalysisQuery(source.dataset, sourceSchema, analysis.query, { local: { rows: [] }, now }));
+    assert.ok(empty.buckets.every(bucket => bucket.value === 0));
+    assert.equal(normalizeAnalysis(source, { ...state, metric: metric === "words" ? "typed" : "cost" }).split, "none", "incompatible measures leave the component split");
+    assert.equal(switchView(source, state, "distribution").split, "none");
+    assert.equal(switchView(source, state, "trend").split, split);
+  }
 });
