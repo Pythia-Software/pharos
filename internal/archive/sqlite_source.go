@@ -108,7 +108,8 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 // out the lock and copying the whole database and WAL again for each group.
 // A copy is made after the pass's discovery began, so a group read from it
 // is never older than what discovery planned for it; a write since leaves a
-// change the next pass reads.
+// change the next pass reads. A pass opens its databases one at a time (its
+// groups are read in turn), so two opens never race to copy one database.
 type sqliteCopyShare struct {
 	mu     sync.Mutex
 	copies map[string]sqliteSharedCopy // by the path opened
