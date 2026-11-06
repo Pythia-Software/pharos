@@ -62,3 +62,25 @@ export function updateSlice<Value>(selection: SliceSelection<Value>, value: Valu
   const values = selection.values.includes(value) ? selection.values.filter(item => item !== value) : [...selection.values, value];
   return { values, excluded: values.length > 0 && selection.excluded };
 }
+
+// Apply a category action once, preserving selections outside the category.
+// A mixed category is filled on Add; a fully visible one is removed on Remove,
+// including when the selection is expressed as exclusions.
+export function updateSliceValues<Value>(selection: SliceSelection<Value>, values: Value[], action: LegendAction): SliceSelection<Value> {
+  if (action === "clear") return {values:[],excluded:false};
+  const group = [...new Set(values)];
+  if (!group.length) return selection;
+  if (action === "only" || action === "exclude") return {values:group,excluded:action === "exclude"};
+  const current = new Set(selection.values), members = new Set(group);
+  const remove = selection.excluded ? group.some(value => current.has(value)) : group.every(value => current.has(value));
+  const next = remove ? selection.values.filter(value => !members.has(value)) : [...selection.values,...group.filter(value => !current.has(value))];
+  return {values:next,excluded:next.length > 0 && selection.excluded};
+}
+
+export function sliceGroupState<Value>(selection: SliceSelection<Value>, values: Value[]) {
+  const group = [...new Set(values)], selected = new Set(selection.values);
+  if (!selected.size || !group.length) return {active:false,mixed:false,dimmed:false,soleSelection:false};
+  const count = group.filter(value => selection.excluded ? !selected.has(value) : selected.has(value)).length;
+  return {active:count === group.length,mixed:count > 0 && count < group.length,dimmed:count === 0,
+    soleSelection:!selection.excluded && count === group.length && selected.size === group.length};
+}

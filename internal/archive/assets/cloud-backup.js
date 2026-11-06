@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const GB = 1e9, GiB = 2 ** 30, uploadPartMiB = 64, reviewed = '2026-10-22';
-  const formatCost = value => value > 0 && value < .000001 ? '<$0.000001' : new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:value>0&&value<.01?6:2}).format(value);
+  const formatCost = pharosCurrency.formatUSD;
   const providers = {
     aws: {name: 'Amazon S3', source: 'https://aws.amazon.com/s3/pricing/', permissions: 'Upload and resume this archive; no download, object listing or deletion of completed revisions.'},
     gcp: {name: 'Google Cloud Storage', source: 'https://cloud.google.com/storage/pricing', permissions: 'Create and delete objects in this bucket; no download or object listing.'},
@@ -523,7 +523,7 @@ PY
   if (!mount) return;
   const prefKey = 'pharos-cloud-backup-configurations-v2';
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
-  const money = value => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(value);
+  const money = formatCost;
   const number = value => new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(value);
   const size = value => `${number(value / GB)} GB`;
   function newDraft(){

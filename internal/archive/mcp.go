@@ -269,6 +269,9 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 	if value, ok, err := callSafetyMCP(catalog, name, args); ok {
 		return value, err
 	}
+	if value, ok, err := callFixesMCP(catalog, name, args); ok {
+		return value, err
+	}
 	if value, ok, err := callSiteMCP(ctx, catalog, name, args); ok {
 		return value, err
 	}

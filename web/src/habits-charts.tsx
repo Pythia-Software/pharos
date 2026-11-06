@@ -1,0 +1,130 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { hourOfDayColor } from "./chart-colors";
+import {
+  calendarValue, calendarWeeks, formatClock, formatDay, formatHours, level, monthLabels, punchcardGrid, punchcardViews, quartileLevels, streakActors, workdayShape,
+  type HabitsDay, type HabitsSummary, type PunchcardActor, type PunchcardView, type StreakActor,
+} from "./habits-model";
+import type { HabitsCover } from "./habits-card";
+import { HabitsChartInspection, type HabitChartPoint } from "./habits-chart-inspection";
+import "./habits.css";
+
+// The Habits page's three drawings, shared by the page and its Home cards.
+// The day chart fills its page card; the calendar and punchcard can scroll.
+// On a Home card (fit), each chart shrinks to the cover.
+
+const cell = 11, gapPx = 2, pitch = cell + gapPx;
+export const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const size = (fit: boolean | undefined, width: number, height: number) => fit
+  ? { viewBox: `0 0 ${width} ${height}`, width: "100%", height: "100%", preserveAspectRatio: "xMinYMin meet", style: { maxWidth: width, maxHeight: height } }
+  : { width, height };
+
+export function CalendarChart({ data, actor, weeks, weekends, selected = "", onSelect, fit }: {
+  data: HabitsSummary; actor: StreakActor; weeks: number; weekends: boolean; selected?: string; onSelect?: (day: string) => void; fit?: boolean;
+}) {
+  const columns = useMemo(() => calendarWeeks(data.days, weeks), [data.days, weeks]);
+  const months = useMemo(() => monthLabels(columns), [columns]);
+  const thresholds = useMemo(() => quartileLevels(data.days.map(day => calendarValue(day, actor))), [data.days, actor]);
+  const rows = weekends ? [0, 1, 2, 3, 4, 5, 6] : [0, 1, 2, 3, 4];
+  const label = streakActors.find(item => item.id === actor)?.label ?? actor;
+  const left = 30, top = 14, width = left + columns.length * pitch + 24;
+  const points: HabitChartPoint[] = columns.flatMap(column => column.filter((day): day is HabitsDay => Boolean(day && rows.includes(day.weekday)))).map(day => ({
+    key: `${actor}:${day.day}`, heading: formatDay(day.day), selection: { day: day.day },
+    rows: actor === "you" ? [
+      { label: "Engaged time", value: formatHours(day.you.engaged_ms), color: "var(--sea)", actors: ["you"] },
+      { label: "Typed messages", value: day.you.messages.toLocaleString(), actors: ["you"] },
+    ] : actor === "agents" ? [{ label: "Agents you started", value: formatHours(day.agents_ms), color: "var(--accent)", actors: ["with_you", "unattended"] }]
+      : [{ label: "Automatic agent time", value: formatHours(day.automated.elapsed_ms), color: "var(--gold)", actors: ["automated"] },
+        { label: "Turns started", value: day.automated.turns.toLocaleString(), actors: ["automated"] }],
+    detail: day.vacation ? "Vacation day" : day.excused ? "Not counted toward your streak" : undefined,
+  }));
+  const byDay = new Map(points.map(point => [point.key, point]));
+  return <div className={`habits-calendar habits-calendar-${actor}`}>
+    <HabitsChartInspection chart="habits-calendar" data={data} points={points} fit={fit} onSelect={key => {
+      const day = points.find(point => point.key === key)?.selection;
+      if (day && "day" in day) onSelect?.(day.day === selected ? "" : day.day);
+    }}>{mark => <svg {...size(fit, width, top + rows.length * pitch)} role={fit ? "img" : "group"} aria-label={`${label}: ${data.streaks[actor].current} day streak`}>
+      {months.map((month, index) => month ? <text key={index} x={left + index * pitch} y={10} className="habits-axis">{month}</text> : null)}
+      {rows.map((weekday, row) => <text key={weekday} x={0} y={top + row * pitch + cell - 2} className="habits-axis">{weekdayNames[weekday]}</text>)}
+      {columns.map((column, week) => rows.map((weekday, row) => { const day = column[weekday]; return day ? <rect key={day.day} x={left + week * pitch} y={top + row * pitch} width={cell} height={cell} rx={2}
+        {...mark(byDay.get(`${actor}:${day.day}`)!)}
+        className={`habits-level-${level(calendarValue(day, actor), thresholds)}${day.excused ? " habits-excused" : ""}${day.day === selected ? " habits-selected" : ""}${day.day === data.today ? " habits-today" : ""}`}>
+        {fit ? <title>{dayTitle(day, actor)}</title> : null}</rect> : null; }))}
+    </svg>}</HabitsChartInspection>
+  </div>;
+}
+
+function dayTitle(day: HabitsDay, actor: StreakActor) {
+  const what = actor === "you" ? `${formatHours(day.you.engaged_ms)} engaged, ${day.you.messages} messages`
+    : actor === "agents" ? `${formatHours(day.agents_ms)} of agents you started`
+    : `${day.automated.turns} automatic agent runs`;
+  return `${formatDay(day.day)}: ${what}${day.vacation ? " · vacation" : day.excused ? " · not counted" : ""}`;
+}
+
+export function PunchcardChart({ data, view, fit }: { data: HabitsSummary; view: PunchcardView; fit?: boolean }) {
+  const grid = useMemo(() => punchcardGrid(data, view), [data, view]);
+  const largest = Math.max(1, ...grid.flat().map(Math.abs));
+  const left = 34, top = 16, step = 22, radius = (value: number) => Math.sqrt(Math.abs(value) / largest) * (step / 2 - 1);
+  const views = view === "difference" ? ["agents", "you"] as const : [view];
+  const grids = views.map(actor => punchcardGrid(data, actor));
+  const points: HabitChartPoint[] = grid.flatMap((hours, weekday) => hours.flatMap((value, hour) => value ? [{
+    key: `${view}:${weekday}:${hour}`, heading: `${weekdayNames[weekday]} ${formatClock(hour)}–${formatClock(hour + 1)}`, selection: { weekday, hour },
+    rows: views.map((actor, index) => ({ label: punchcardViews.find(([id]) => id === actor)?.[1] ?? actor,
+      value: `${Math.round(grids[index][weekday][hour])} min/week`, color: hourOfDayColor(hour),
+      actors: actor === "agents" ? ["with_you", "unattended"] : [actor] as PunchcardActor[],
+    })), detail: `${view === "difference" ? `Difference: ${Math.round(value)} min/week. ` : ""}${formatDay(data.punchcard.from)} to ${formatDay(data.punchcard.to)} · ${data.punchcard.weeks[weekday][hour]} occurrences`,
+  }] : []));
+  const bySlot = new Map(points.map(point => [point.key, point]));
+  return <HabitsChartInspection chart="habits-punchcard" data={data} points={points} fit={fit}>{mark => <svg {...size(fit, left + 24 * step, top + 7 * step)} role={fit ? "img" : "group"} aria-label={`Punchcard of ${punchcardViews.find(([id]) => id === view)?.[1]}`}>
+    {Array.from({ length: 24 }, (_, hour) => hour % 3 === 0 ? <text key={hour} x={left + hour * step + step / 2} y={10} textAnchor="middle" className="habits-axis">{formatClock(hour)}</text> : null)}
+    {grid.map((hours, weekday) => <g key={weekday}>
+      <text x={0} y={top + weekday * step + step / 2 + 4} className="habits-axis">{weekdayNames[weekday]}</text>
+      {hours.map((value, hour) => value ? <g key={hour} {...mark(bySlot.get(`${view}:${weekday}:${hour}`)!)}>
+        <circle cx={left + hour * step + step / 2} cy={top + weekday * step + step / 2} r={step / 2} fill="transparent" />
+        <circle cx={left + hour * step + step / 2} cy={top + weekday * step + step / 2} r={Math.max(1.5, radius(value))} className={value < 0 ? "habits-dot habits-dot-negative" : "habits-dot"} style={value < 0 ? { stroke: hourOfDayColor(hour) } : { fill: hourOfDayColor(hour) }}>
+          {fit ? <title>{`${weekdayNames[weekday]} ${formatClock(hour)}–${formatClock(hour + 1)}: ${Math.round(value)} min a week`}</title> : null}</circle></g> : null)}
+    </g>)}
+  </svg>}</HabitsChartInspection>;
+}
+
+export function DaysChart({ data, count = 28, fit }: { data: HabitsSummary; count?: number; fit?: boolean }) {
+  const days = useMemo(() => workdayShape(data.days, count, data.settings.dayStart, data.timezone === "Local" ? undefined : data.timezone), [data, count]);
+  const container = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+  useEffect(() => {
+    if (fit || !container.current) return;
+    const element = container.current;
+    const observer = new ResizeObserver(() => setAvailableWidth(element.clientWidth));
+    observer.observe(element);
+    setAvailableWidth(element.clientWidth);
+    return () => observer.disconnect();
+  }, [fit]);
+  const span = Math.max(24, ...days.map(day => Math.ceil(day.end ?? 0))), height = 210, top = 6, left = 42;
+  const width = fit ? left + days.length * 14 : Math.max(left + 1, availableWidth || left + days.length * 14);
+  const pitchX = (width - left) / Math.max(1, days.length), bar = Math.min(18, pitchX * 0.72);
+  const x = (index: number) => left + index * pitchX + (pitchX - bar) / 2;
+  const y = (hours: number) => top + (hours / span) * (height - top);
+  const clock = (hours: number) => formatClock(hours + data.settings.dayStart);
+  const points: HabitChartPoint[] = days.map(day => ({ key: day.day, heading: formatDay(day.day), selection: { day: day.day }, rows: [
+    { label: "Engaged time", value: `${day.engagedHours.toFixed(1)} h`, color: "var(--sea)", actors: ["you"] },
+    { label: "Engaged blocks", value: String(day.blockCount) },
+    { label: "First engaged", value: day.start === undefined ? "—" : clock(day.start) },
+    { label: "Last engaged", value: day.end === undefined ? "—" : clock(day.end) },
+  ], detail: day.vacation ? "Vacation day" : undefined }));
+  return <div className="habits-days-chart" ref={container}><HabitsChartInspection chart="habits-days" data={data} points={points} fit={fit}>{mark => <svg {...size(fit, width, height + 10)} role={fit ? "img" : "group"} aria-label="When you were engaged each day">
+    {[0, 6, 12, 18, 24].filter(hours => hours <= span).map(hours => <g key={hours}><line x1={left - 4} x2={width} y1={y(hours)} y2={y(hours)} className="habits-grid" /><text x={0} y={y(hours) + 4} className="habits-axis">{clock(hours)}</text></g>)}
+    {days.map((day, index) => day.start !== undefined && day.end !== undefined ? <g key={day.day} {...mark(points[index])} className={day.vacation ? "habits-excused" : undefined}>
+      <rect x={x(index)} y={y(day.start)} width={bar} height={Math.max(2, y(day.end) - y(day.start))} rx={2} className="habits-span">
+        {fit ? <title>{`${formatDay(day.day)}: ${clock(day.start)} to ${clock(day.end)}, ${day.engagedHours.toFixed(1)} h engaged in ${day.blockCount} ${day.blockCount === 1 ? "block" : "blocks"}`}</title> : null}</rect>
+      {day.blocks.map((piece, part) => <rect key={part} x={x(index)} y={y(piece.start)} width={bar} height={Math.max(1, y(piece.end) - y(piece.start))} style={{ fill: piece.color }} pointerEvents="none" />)}
+    </g> : null)}
+  </svg>}</HabitsChartInspection></div>;
+}
+
+// A Home card's cover: the section's chart, scaled to the card.
+export function HabitsCoverChart({ cover }: { cover: HabitsCover }) {
+  return <span className="habits-cover">
+    {cover.chart === "calendar" ? <CalendarChart data={cover.summary} actor={cover.actor} weeks={cover.weeks} weekends={cover.weekends} fit />
+      : cover.chart === "punchcard" ? <PunchcardChart data={cover.summary} view={cover.view} fit />
+      : <DaysChart data={cover.summary} count={cover.count} fit />}
+  </span>;
+}

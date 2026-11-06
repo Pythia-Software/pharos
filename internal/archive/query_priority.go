@@ -59,6 +59,12 @@ func (q *queryActivity) begin() func() {
 }
 
 func (q *queryActivity) wait(ctx context.Context) error {
+	var resume func()
+	defer func() {
+		if resume != nil {
+			resume()
+		}
+	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -72,6 +78,9 @@ func (q *queryActivity) wait(ctx context.Context) error {
 		changed := q.changed
 		q.waiting++
 		q.mu.Unlock()
+		if resume == nil {
+			resume = opFrom(ctx).waitFor("interactive-query", "interactive queries to finish")
+		}
 		select {
 		case <-idle:
 		case <-changed:

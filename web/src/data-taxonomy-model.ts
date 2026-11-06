@@ -10,6 +10,9 @@ export const dataEntities = {
 export type DataEntity = keyof typeof dataEntities;
 
 export const dataSources = {
+  people_message_labels:{label:"People message labels",entity:"messages",grain:"One user message within a People dashboard population, assigned to its highest-confidence accepted specific label or missing-label coverage. Label groups add up to the message total."},
+  message_labels:{label:"Message label observations",entity:"messages",grain:"One most-specific accepted label per retained message, or one coverage observation. Messages can have several labels."},
+  compactions: { label: "Context Compaction Events", entity: "agents", grain: "One recorded compaction boundary, with human, machine or unknown trigger attribution" },
   model_requests: {label:"Individual Model Requests",entity:"agents",grain:"One retained usage-bearing response event, with linked post-tool timing evidence when available"},
   library: { label: "Workspaces", entity: "workspaces", grain: "One workspace" },
   usage: { label: "Agent Session Token Usage by Day, Model & Effort", entity: "agents", grain: "Daily tokens for one agent session, with a separate row for each model and effort level" },
@@ -21,7 +24,9 @@ export const dataSources = {
   mcp_calls: { label: "Individual Calls to Pharos MCP", entity: "tool_calls", grain: "One request to Pharos’s MCP server" },
   skill_usages: { label: "Skill Invocations & Loads in Messages", entity: "messages", grain: "One piece of message evidence for a named skill invocation or load" },
   parallelism: { label: "Workspace Parallel Activity by Hour", entity: "workspaces", grain: "Active time for one workspace in one local hour, split when machine-wide or repository concurrency changes" },
-  safety: { label: "Risky Action Reviews", entity: "tool_calls", grain: "One risky action review of selected archived tool calls" },
+  rhythm: { label: "Rhythm by Hour", entity: "conversations", grain: "Active time for one actor (you, or agents with you, unattended or automated) in one top-level conversation in one local hour" },
+  safety: { label: "Risky Action Notices", entity: "tool_calls", grain: "One risky action notice about selected archived tool calls" },
+  fixes: { label: "Fixes for Recurring Agent Problems", entity: "messages", grain: "One recurring problem agents ran into, grouped from agent events across work items" },
   findings: { label: "Findings from Archived Work", entity: "workspaces", grain: "One finding" },
   tl1_attempts: { label: "Individual Agent Attempts (TL1)", entity: "agents", grain: "One TL1 attempt" },
   agent_events: { label: "Events in Agent Replies & Thinking", entity: "messages", grain: "One sentence judged to express one kind of event (experimental)" },

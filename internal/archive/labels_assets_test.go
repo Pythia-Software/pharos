@@ -423,3 +423,34 @@ func TestBrokerFetchesLabelsAssetsThenAsksLibrariesToLabel(t *testing.T) {
 		t.Fatalf("broker operations: %+v (present %v)", views, labelsAssets.Model.present())
 	}
 }
+
+func TestModelReleaseDefaultVariant(t *testing.T) {
+	t.Setenv("PHAROS_LABELS_MODEL_DIR", "")
+	t.Setenv("PHAROS_AGENT_EVENTS_MODEL_DIR", "")
+	assets := labelsAssets
+	assets.Model.DefaultVariant = "fp32"
+	assets.AgentEventsModel.DefaultVariant = "fp32"
+	override(t, &labelsAssets, assets)
+	base := t.TempDir()
+	labels := labelerSettingsFrom(nil, base)
+	events := agentEventSettingsFrom(nil, base)
+	if labels.Variant != "fp32" || events.Variant != "fp32" {
+		t.Fatalf("managed download defaults: labels %s events %s", labels.Variant, events.Variant)
+	}
+	root := map[string]any{"labels_variant": "int8", "agent_events_variant": "int8"}
+	if labelerSettingsFrom(root, base).Variant != "int8" || agentEventSettingsFrom(root, base).Variant != "int8" {
+		t.Fatal("explicit int8 was lost")
+	}
+	// Existing custom model directories keep their established default, even
+	// when the app's managed model release switches to FP32.
+	root = map[string]any{"labels_model_dir": "custom-labels", "agent_events_model_dir": "custom-events"}
+	if labelerSettingsFrom(root, base).Variant != "int8" || agentEventSettingsFrom(root, base).Variant != "int8" {
+		t.Fatal("custom model defaults changed")
+	}
+	assets.Model.DefaultVariant = ""
+	assets.AgentEventsModel.DefaultVariant = ""
+	labelsAssets = assets
+	if labelerSettingsFrom(nil, base).Variant != "int8" || agentEventSettingsFrom(nil, base).Variant != "int8" {
+		t.Fatal("legacy descriptors changed behavior")
+	}
+}

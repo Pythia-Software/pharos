@@ -107,13 +107,16 @@ test('calendar cost breakdown separates upload frequency from storage and minimu
   for(const month of archive.months)close(month.cost,month.storageCost+month.uploadCost+month.minimumStorageCost);
 });
 
-test('small upload fees remain distinguishable instead of rounding to zero dollars', () => {
+test('backup costs show at most cents below $100 and whole dollars above it', () => {
   assert.equal(cloud.formatCost(0),'$0.00');
-  assert.equal(cloud.formatCost(.000005),'$0.000005');
-  assert.equal(cloud.formatCost(.000025),'$0.000025');
-  assert.equal(cloud.formatCost(.00015),'$0.00015');
-  assert.equal(cloud.formatCost(.0000001),'<$0.000001');
+  assert.equal(cloud.formatCost(.000005),'$0.00');
+  assert.equal(cloud.formatCost(.000025),'$0.00');
+  assert.equal(cloud.formatCost(.00015),'$0.00');
+  assert.equal(cloud.formatCost(.0000001),'$0.00');
   assert.equal(cloud.formatCost(1.23),'$1.23');
+  assert.equal(cloud.formatCost(99.99),'$99.99');
+  assert.equal(cloud.formatCost(100),'$100');
+  assert.equal(cloud.formatCost(1234.56),'$1,235');
 });
 
 test('regional forecast ranges cover every offered location and calculator needs no account details', () => {
