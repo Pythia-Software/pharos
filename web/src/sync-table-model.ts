@@ -5,18 +5,20 @@ import { loadSchema, type FieldSchema } from "@pythia-software/query-table-core"
 // so filters, ordering, grouping and metrics operate on the measured values.
 export type SyncRecord = Record<string, any>;
 export type SyncTable = { schema: FieldSchema<SyncRecord>; rows: SyncRecord[]; empty: string };
-type Column = [name: string, label: string, type?: "text" | "number" | "date", render?: string, width?: number];
+type Column = [name: string, label: string, type?: "text" | "number" | "datetime", render?: string, width?: number];
 function schema(name: string, columns: Column[], sort?: string, hidden: Column[] = []): FieldSchema<SyncRecord> {
   return loadSchema<SyncRecord>({ name: `sync_${name}`, version: 1, idField: "id", defaultLimit: 25,
     defaultSort: sort ? [{ field: sort, dir: "desc" }] : [],
     defaultSelect: columns.map(([field, , , , width]) => ({ field, width: width ?? 140 })),
-    fields: [{ name: "id", label: "Identity", type: "text", select: { default: false } },
-      ...[...columns, ...hidden].map(([name, label, type = "text", render]) => ({ name, label, type, render, aggregate: { groupable: true } }))],
+    fields: [{ name: "id", label: "Identity", type: "text", source: "backend", select: { default: false } },
+      // These are fields supplied by clientRows, rather than derived columns.
+      // Native filtering, sorting, grouping and metrics use that distinction.
+      ...[...columns, ...hidden].map(([name, label, type = "text", render]) => ({ name, label, type, render, source: "backend", aggregate: { groupable: true } }))],
   });
 }
 const duration = (name: string, label: string): Column => [name, label, "number", "sync_seconds", 110];
 const memory = (name: string, label: string): Column => [name, label, "number", "sync_memory", 110];
-const date = (name: string, label: string): Column => [name, label, "date", "sync_time", 160];
+const date = (name: string, label: string): Column => [name, label, "datetime", "sync_time", 160];
 const count = (name: string, label: string): Column => [name, label, "number", "number", 120];
 const percent = (name: string, label: string): Column => [name, label, "number", "sync_percent", 140];
 export const syncSchemas = {

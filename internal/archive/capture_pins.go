@@ -588,7 +588,7 @@ func (c *sourceCapture) pinHistoryVersion(v capturedVersion) (capturedVersion, e
 		}
 		_, e = io.Copy(out, &recordCountReader{r: input, ctx: c.ctx})
 		if e == nil {
-			e = out.Sync()
+			e = syncToDrive(out)
 		}
 		if closeErr := out.Close(); e == nil {
 			e = closeErr

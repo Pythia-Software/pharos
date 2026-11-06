@@ -9,9 +9,30 @@ import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
-  const {page, settled, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
+  let background = structuredClone(defaultApi['GET /api/background']);
+  const {page, settled, shot} = await open(t, {url:'/settings/sync',viewport:{width:1920,height:1050},ready:'#backgroundSchedule .bg-col', api: {
+    'GET /api/background': () => background,
+    'POST /api/labels/settings': ({body}) => {
+      if ('enabled' in body) {
+        background.labels.enabled = body.enabled;
+        const step = background.view.items.find(item => item.id === 'labels');
+        Object.assign(step, {state: body.enabled ? 'queued' : 'disabled', state_label: body.enabled ? 'Up next' : 'Off', cadence: body.enabled ? 'hourly' : 'manual'});
+        background.view.unscheduled = background.view.items.filter(item => item.cadence === 'manual').map(item => item.id);
+        background.view.cadences.find(row => row.id === 'hourly').items = background.view.items.filter(item => item.cadence === 'hourly').map(item => item.id);
+      }
+      if ('agent_events_threads' in body) background.agent_events.threads = body.agent_events_threads;
+      return background;
+    },
+  }});
+  const refreshFocused = async control => {
+    await control.focus();
+    await page.evaluate(() => window.pharosBackground.refresh(true));
+    await settled();
+    assert.ok(await control.evaluate(element => document.activeElement === element), 'refreshing an idle model switch keeps keyboard focus');
+  };
+  await page.locator('[data-view-key="background:labels"]').click();
   const labels = page.getByRole('switch', {name:'Message labels',exact:true});
-  await labels.focus();
+  await refreshFocused(labels);
   for (const enabled of [true, false]) {
     const saved = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
     await page.keyboard.press('Space');
@@ -20,8 +41,22 @@ test('Settings switches keep keyboard focus and their saved state across Setting
       const toggle = document.getElementById('labelsEnabled');
       return toggle?.getAttribute('aria-checked') === String(enabled) && !toggle.disabled && document.activeElement === toggle;
     }, enabled);
+    assert.equal(await labels.evaluate(element => element.closest('[data-cadence]').dataset.cadence), enabled ? 'hourly' : 'manual');
+    await refreshFocused(labels);
     if (enabled) await shot('enabled');
   }
+  await page.locator('[data-view-key="background:agent_events"]').click();
+  await refreshFocused(page.getByRole('switch', {name:'Agent events (preview)',exact:true}));
+  const threads = page.getByRole('combobox', {name:'Agent events (preview) CPU threads', exact:true});
+  await threads.focus();
+  const savedThreads = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
+  await threads.selectOption('2');
+  await savedThreads;
+  await page.waitForFunction(() => {
+    const select = document.querySelector('[data-focus-key="agentEvents:threads"]');
+    return select?.value === '2' && document.activeElement === select;
+  });
+  await shot('labeling');
   await page.evaluate(() => window.pharosNavigate('/settings/mcp'));
   await page.locator('#mcpSettingsPage .mcp-setup-grid').waitFor();
   const mcp = page.getByRole('switch', { name: 'Enable MCP', exact: true });
@@ -178,9 +213,10 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-// Tokens stand for every dashboard topic: all share usage-chart.tsx.
-for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} inspection focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: 'tokens', analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+// Habits surrounds the shared chart with its own panels; exercise that page
+// at both widths so panel styles cannot break chart hit targets or gestures.
+for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['habits', 'interval', 1440], ['habits', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
   await bar.focus();
@@ -194,6 +230,7 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
   assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
   await bar.click();
   await details.waitFor();
+  assert.equal(await bar.getAttribute('aria-pressed'), 'true', 'pointer inspection selects the period under the pointer');
   await page.locator('.usage-chart-headline > h2').click();
   await details.waitFor({ state: 'hidden' });
   await settled();
@@ -201,6 +238,7 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
 
   // Pointer capture snaps to columns and treats a drag back to its anchor as inspection.
   const bars = chart.locator('.usage-chart-bars > button');
+  await bars.nth(1).scrollIntoViewIfNeeded();
   const before = page.url();
   const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
   await page.mouse.move(start.x + start.width / 2, start.y + 30);
@@ -214,11 +252,13 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
   assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),new URL(before).searchParams.get('analyze_filters'),'one-period inspection leaves date filters alone');
   assert.ok(Object.keys(JSON.parse(new URL(page.url()).searchParams.get('chart_pins'))).length,'a deliberate pinned bucket is represented in the URL');
   await page.locator('.usage-chart-headline > h2').click();
-  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await bars.nth(1).scrollIntoViewIfNeeded();
+  const dragStart = await bars.nth(4).boundingBox(), dragEnd = await bars.nth(1).boundingBox();
+  await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + 30);
   await page.mouse.down();
-  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.move(dragEnd.x + dragEnd.width / 2, dragEnd.y + 30);
   await page.mouse.up();
-  await page.waitForFunction(previous => location.href !== previous, before);
+  await page.waitForFunction(previous => new URLSearchParams(location.search).get('analyze_filters') !== previous, new URL(before).searchParams.get('analyze_filters'));
   await settled();
 });
 
@@ -306,9 +346,11 @@ async function holdsFocus(page, surface, opener) {
 // across a pushed snapshot. Stop and Eject decisions are unit tested in
 // web/tests/unit/page/status-panel.test.mjs.
 test("Unified activity panel holds focus and its disclosure across refreshes", { skip }, async t => {
+  const snapshot = {...busyStatus, operations: busyStatus.operations.map(operation => operation.id === 'op-index'
+    ? {...operation, children: [], children_count: 0} : operation)};
   const app = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
-    "GET /api/status/stream": eventStream(busyStatus),
-    "GET /api/status": busyStatus,
+    "GET /api/status/stream": eventStream(snapshot),
+    "GET /api/status": snapshot,
   } });
   const { page, push } = app;
   const chip = page.locator("#pharosDrive");
@@ -326,10 +368,35 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   await daily.locator("summary").click();
   const stop = panel.getByRole("button", { name: "Stop", exact: true });
   await stop.focus();
-  push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
+  push("/api/status/stream", { ...snapshot, revision: 3, operations: snapshot.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
+  const progress = panel.getByRole('progressbar', { name: 'Index changes progress', exact: true });
+  assert.notEqual(await progress.getAttribute('aria-valuenow'), null);
+  push('/api/status/stream', {...snapshot, revision: 4, operations: snapshot.operations.map(operation => operation.id === 'op-index'
+    ? {...operation, step: {...operation.step, total: null, fraction: null}} : operation)});
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 4);
+  assert.equal(await progress.getAttribute('aria-valuenow'), null, 'a new unknown-total phase must remove the old percentage');
+  assert.ok(await stop.evaluate(element => document.activeElement === element), 'changing progress mode moved focus');
+  push('/api/status/stream', {...snapshot, revision: 5});
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 5);
+  assert.notEqual(await progress.getAttribute('aria-valuenow'), null, 'measured progress returns when inventory is known');
+  const detail = 'Waiting for the catalog writer';
+  const child = {id: 'git', kind: 'analysis.git', label: 'Check repositories', state: 'running', state_label: 'Checking repositories',
+    step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}, children: []};
+  const waiting = {state: 'blocked', state_label: 'Waiting', detail};
+  for (const [index, ancestor] of [
+    {...snapshot.operations[0], ...waiting, children: [child]},
+    {...snapshot.operations[0], children: [{id: 'chain', kind: 'analysis.chain', label: 'Update analyses', ...waiting, children: [child]}]},
+  ].entries()) {
+    const revision = 6 + index;
+    push('/api/status/stream', {...snapshot, revision, operations: snapshot.operations.map(operation => operation.id === 'op-index' ? ancestor : operation)});
+    await page.waitForFunction(revision => window.pharosStatusStore.current()?.view?.library?.revision === revision, revision);
+    await panel.getByText(detail).waitFor();
+    await panel.getByRole('progressbar', {name: `${child.label} progress`, exact: true}).waitFor();
+    assert.ok(await stop.evaluate(element => document.activeElement === element), 'an ancestor wait moved focus');
+  }
   await app.shot("refreshed");
 });
 
@@ -811,6 +878,28 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   const sheet = page.locator('[role="dialog"][aria-label="Workspace sessions"]');
   await sheet.waitFor();
   await holdsFocus(page, sheet, show);
+  await press(show);
+  await press(sheet.getByRole('button', { name: 'Hide workspace sessions', exact: true }));
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+});
+
+test("the workspace sidebar returns focus when collapsed and preserves the reader when reopened", { skip }, async t => {
+  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn" });
+  const reader = page.getByRole('region', { name: 'Conversation viewer', exact: true });
+  const hide = page.getByRole('button', { name: 'Hide workspace sessions', exact: true });
+  const show = page.getByRole('button', { name: 'Show workspace sessions', exact: true });
+  await page.locator('.turn').nth(6).evaluate(turn => turn.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await settled();
+  const scroll = await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop);
+  await press(hide);
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+  assert.equal(await reader.isVisible(), true);
+  assert.equal(await hide.evaluate(el => { el.focus(); return el === document.activeElement; }), false, 'collapsed sessions cannot receive keyboard focus');
+  await press(show);
+  await page.waitForFunction(() => document.activeElement?.closest('.workspace-overview'));
+  assert.equal(await page.getByRole('region', { name: 'Workspace overview', exact: true }).isVisible(), true);
+  assert.equal(await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop), scroll);
+  assert.equal(new URL(page.url()).searchParams.get('conversation'), 'conv-root');
 });
 
 test("conversation navigation focuses the requested reader unless focus moved while it loaded", { skip }, async t => {
@@ -836,7 +925,7 @@ test("conversation navigation focuses the requested reader unless focus moved wh
     const target = moveFocus ? control : page.locator(".conversation-panel");
     await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
   }
-  await press(page.locator(".workspace-reader-workspace"));
+  await press(page.getByRole('button', { name: 'Open workspace overview', exact: true }));
   await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });
@@ -1037,7 +1126,6 @@ test('Capture & index keeps run details focus, table scrolling and query edits t
   }
 
   // The query editor keeps focus and its edit across refreshes.
-  await history.getByRole('button', { name: 'Expand query builder', exact: true }).click();
   const limit = history.getByRole('spinbutton');
   await limit.fill('2');
   await page.evaluate(() => window.pharosSync.refresh());
@@ -1977,6 +2065,10 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   assert.ok(await dialog.getByRole('textbox',{name:'Title',exact:true}).evaluate(el=>el===document.activeElement));
   await holdsFocus(page,dialog,create);
   await create.click();
+  for(const [width,height] of [[1440,900],[320,568]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.scrollWidth<=el.clientWidth;}),'default card copy fits the viewport');
+  }
   await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
   await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
   await dialog.getByRole('combobox',{name:'Category',exact:true}).selectOption('cost');

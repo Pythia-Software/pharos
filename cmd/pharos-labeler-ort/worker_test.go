@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -900,5 +901,64 @@ func TestLimits(t *testing.T) {
 		if batch < 1 || seq < 1 || request(batch, seq) > labeler.MaxFrameBytes || (len(c.outputs) == 1 && result > labeler.MaxFrameBytes) {
 			t.Errorf("%s: limits %d, %d do not fit a frame", c.name, batch, seq)
 		}
+	}
+}
+
+func TestNativeTokenLimit(t *testing.T) {
+	info := fakeInfo()
+	info.MaxTokens = 4
+	info.MaxSeq = 4
+	sess := &fakeSession{info: info}
+	h := startWorker(t, sess)
+	ready := h.handshake()
+	if ready.Limits.MaxSeq != 4 || ready.Limits.MaxTokens != 4 {
+		t.Fatalf("native limits missing: %+v", ready.Limits)
+	}
+	h.send(labeler.FrameRun, runPayload(t, 1, [][]int32{{50281, 1, 50282}, {50281, 50282}}))
+	h.expectError(1, labeler.ErrCodeBadRequest, false)
+	if sess.calls.Load() != 0 {
+		t.Fatal("over-budget batch reached the engine")
+	}
+	h.send(labeler.FrameRun, runPayload(t, 2, [][]int32{{50281, 50282}, {50281, 50282}}))
+	if got := h.expectResult(); got.ID != 2 {
+		t.Fatalf("worker did not recover: %+v", got)
+	}
+	// A caller can request more rows than a backend can run, independently
+	// of the frame and token limits. Negotiate the smaller limit in Ready.
+	for _, requested := range []int{512, 1, 0} {
+		t.Run(fmt.Sprintf("rows requested %d", requested), func(t *testing.T) {
+			info := fakeInfo()
+			info.MaxBatch, info.MaxTokens = 2, 16384
+			sess := &fakeSession{info: info}
+			h := startWorker(t, sess)
+			hello := h.hello()
+			hello.MaxBatch = requested
+			h.sendJSON(labeler.FrameHello, hello)
+			kind, payload := h.recv()
+			var ready labeler.Ready
+			if kind != labeler.FrameReady || json.Unmarshal(payload, &ready) != nil {
+				t.Fatalf("want ready, got %q %s", kind, payload)
+			}
+			want := 2
+			if requested == 1 {
+				want = 1
+			}
+			if ready.Limits.MaxBatch != want {
+				t.Fatalf("advertised %d rows, want %d", ready.Limits.MaxBatch, want)
+			}
+			rows := make([][]int32, want+1)
+			for i := range rows {
+				rows[i] = []int32{50281, 50282}
+			}
+			h.send(labeler.FrameRun, runPayload(t, 1, rows))
+			h.expectError(1, labeler.ErrCodeBadRequest, false)
+			if sess.calls.Load() != 0 {
+				t.Fatal("batch exceeding the row limit reached the engine")
+			}
+			h.send(labeler.FrameRun, runPayload(t, 2, rows[:want]))
+			if got := h.expectResult(); got.ID != 2 {
+				t.Fatalf("worker did not recover: %+v", got)
+			}
+		})
 	}
 }

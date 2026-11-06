@@ -77,6 +77,8 @@ type safetyEvidence struct {
 	Outcome       string `json:"outcome"`
 	Conditional   bool   `json:"conditional"`
 	Path          string `json:"path"`
+	// Quote marks evidence that is an agent's sentence, not a command.
+	Quote bool `json:"quote,omitempty"`
 }
 
 type safetyCandidate struct {
@@ -1252,6 +1254,19 @@ func (c *Catalog) refreshSafety(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Agents saying they got around a safeguard (safety_safeguards.go).
+	safeguards, events, err := safetySafeguardCandidates(ctx, read, formatTime(c.clock().AddDate(0, 0, -safetyWindowDays)))
+	if err != nil {
+		return err
+	}
+	for _, candidate := range safeguards {
+		if disabled[candidate.Rule] || cases[candidate.ID] != nil {
+			continue
+		}
+		value := candidate
+		value.Calls, value.First, value.Last = 1, candidate.Evidence[0].At, candidate.Evidence[0].At
+		cases[value.ID] = &value
+	}
 	if err = read.Commit(); err != nil {
 		return err
 	}
@@ -1326,7 +1341,7 @@ func (c *Catalog) refreshSafety(ctx context.Context) error {
 		if _, err := tx.Exec(prune, args...); err != nil {
 			return err
 		}
-		for key, value := range map[string]string{"safety_built_at": formatTime(c.clock()), "safety_version": safetyVersion, "safety_scanned_calls": fmt.Sprint(count)} {
+		for key, value := range map[string]string{"safety_built_at": formatTime(c.clock()), "safety_version": safetyVersion, "safety_scanned_calls": fmt.Sprint(count), "safety_scanned_events": fmt.Sprint(events)} {
 			if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 				return err
 			}

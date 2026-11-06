@@ -15,6 +15,7 @@ import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
 import { CreateDashboardCard, DashboardCardSourceContext } from "./create-dashboard-card";
+import { thinkingCardTitle } from "./thinking-card";
 
 import {
   thinkingBreakdowns,
@@ -454,7 +455,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     >
       <div className="thinking-links">
         <PageLink href={thinkingDashboardURL(state, !detail)}>
-          {detail ? "Waiting and Compaction" : "Thinking"} →
+          {detail ? "Waiting" : "Thinking"} →
         </PageLink>
         {detail ? (
           <PageLink href={thinkingDashboardURL(state, false, true)}>
@@ -512,16 +513,16 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           ]}
           onChange={(effort) => change({ effort })}
         />
+        <ChartSelect
+          label="Breakdown"
+          value={!detail && state.groupBy === "none" ? "model" : state.groupBy}
+          options={thinkingBreakdowns.filter(([key]) => detail || key !== "none").map(([a, b]) => [a, b])}
+          onChange={(groupBy) =>
+            change({ groupBy: groupBy as ThinkingState["groupBy"] })
+          }
+        />
         {detail ? (
           <>
-            <ChartSelect
-              label="Breakdown"
-              value={state.groupBy}
-              options={thinkingBreakdowns.map(([a, b]) => [a, b])}
-              onChange={(groupBy) =>
-                change({ groupBy: groupBy as ThinkingState["groupBy"] })
-              }
-            />
             <ChartSelect
               label="Order by"
               disabled={fixed}
@@ -679,10 +680,15 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               : ""}
             .
           </p>
+          {state.groupBy.includes("speed") ? (
+            <p className="usage-dashboard-note">
+              Speed uses recorded settings; requests without a fast or priority marker count as Standard.
+            </p>
+          ) : null}
           {detail ? (
             <>
               <div className="thinking-card-title">
-                <h2>Compare whole distributions</h2>
+                <h2>{thinkingCardTitle("thinking-distributions", state)}</h2>
                 <CreateDashboardCard target="thinking-distributions" />
               </div>
               {fixed ? (
@@ -913,6 +919,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               <div className="thinking-overview-pair">
                 <ThinkingCDF
                   groups={data.groups}
+                  groupBy={state.groupBy === "none" ? "model" : state.groupBy}
+                  title={thinkingCardTitle("thinking-waits", state)}
                   action={<CreateDashboardCard target="thinking-waits" />}
                 />
                 <div>
@@ -1017,35 +1025,34 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   necessarily API vendor.
                 </p>
               </ViewDisclosure>
-              <div className="thinking-card-title">
-                <h2 className="thinking-section-title">
-                  Compaction and thinking time
-                </h2>
-                <CreateDashboardCard target="thinking-compactions" />
-              </div>
-              <p className="usage-dashboard-note">
-                Compare median waits before and after compaction within the
-                same model, effort and conversation stream. We use up to three
-                waits before and the next two usable waits after, skipping the
-                wait that crosses compaction.
-              </p>
-              <p className="usage-dashboard-note">
-                For example, waits of 10, 9 and 11 seconds before compaction
-                have a median of 10 seconds. Waits of 3 and 1 seconds after have
-                a median of 2 seconds. The compaction ratio is after ÷ before:
-                2 ÷ 10 = <strong>0.2×</strong>, an 80% shorter wait.
-              </p>
-              {data.compactions?.length ? (
-                <ThinkingCompactions events={data.compactions} />
-              ) : (
+              <ViewDisclosure viewKey="thinking:compaction-waits" summary="How compaction changes observed waits" className="usage-query-search thinking-disclosure">
                 <p className="usage-dashboard-note">
-                  No eligible paired compactions in this population.
+                  Compare median waits before and after compaction within the
+                  same model, effort and conversation stream. We use up to three
+                  waits before and the next two usable waits after, skipping the
+                  wait that crosses compaction.
                 </p>
-              )}
+                <p className="usage-dashboard-note">
+                  For example, waits of 10, 9 and 11 seconds before compaction
+                  have a median of 10 seconds. Waits of 3 and 1 seconds after have
+                  a median of 2 seconds. The compaction ratio is after ÷ before:
+                  2 ÷ 10 = <strong>0.2×</strong>, an 80% shorter wait.
+                </p>
+                {data.compactions?.length ? (
+                  <ThinkingCompactions events={data.compactions} />
+                ) : (
+                  <p className="usage-dashboard-note">
+                    No eligible paired compactions in this population.
+                  </p>
+                )}
+                <p className="usage-dashboard-note">
+                  The response after compaction often gets shorter too, so the
+                  reduction can reflect both shorter context and shorter output.
+                  Compaction’s own duration is excluded.
+                </p>
+              </ViewDisclosure>
               <p className="usage-dashboard-note">
-                The response after compaction often gets shorter too, so the
-                reduction can reflect both shorter context and shorter output.
-                Compaction’s own duration is excluded.
+                <PageLink href={usageWorkspaceURL({ mode: "dashboards", topic: "compaction" })}>Explore compaction counts and triggers →</PageLink>
               </p>
               <ViewDisclosure
                 viewKey="thinking:conversation"

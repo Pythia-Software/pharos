@@ -12,6 +12,8 @@
 #   PHAROS_CODESIGN_TIMESTAMP Set to 1 for a secure signing timestamp (required
 #                             for Developer ID notarization). Default: 0.
 #   PHAROS_ENABLE_UPDATES     Set to 1 only for Developer ID releases. Default: 0.
+#   PHAROS_DEBUG_SYMBOLS      Set to 1 to retain Go symbols/DWARF for debugging.
+#                             Default: 0; app executables omit debug metadata.
 #   SDKROOT                  macOS SDK path. Default: installed macOS 26.5 SDK.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -27,7 +29,21 @@ APP="$OUT/Pharos.app"
 BUNDLE_ID=local.pharos
 SERVICE_ID=local.pharos.service
 MACOS_MIN=14.0
+# cgo and the external Go linker must preserve the app's deployment floor too.
+MACOSX_DEPLOYMENT_TARGET=$MACOS_MIN
+export MACOSX_DEPLOYMENT_TARGET
+# Explicit flags also invalidate cgo's cache, which does not track the
+# deployment-target environment variable when reusing compiled C objects.
+CGO_CFLAGS="${CGO_CFLAGS:--O2 -g} -mmacosx-version-min=$MACOS_MIN"
+CGO_CXXFLAGS="${CGO_CXXFLAGS:--O2 -g} -mmacosx-version-min=$MACOS_MIN"
+CGO_LDFLAGS="${CGO_LDFLAGS:--O2 -g} -mmacosx-version-min=$MACOS_MIN"
+export CGO_CFLAGS CGO_CXXFLAGS CGO_LDFLAGS
 VERSION=${PHAROS_VERSION:-0.2.0}
+case "${PHAROS_DEBUG_SYMBOLS:-0}" in
+    0) GO_LDFLAGS='-s -w' ;;
+    1) GO_LDFLAGS= ;;
+    *) echo "PHAROS_DEBUG_SYMBOLS must be 0 or 1." >&2; exit 2 ;;
+esac
 case "$VERSION" in
     *[!0-9.]*|.*|*.|*..*) echo "PHAROS_VERSION must be major.minor.patch (numeric)." >&2; exit 2 ;;
 esac
@@ -75,10 +91,10 @@ for goarch in $GOARCHES; do
     esac
     ARCHS="$ARCHS $arch"
     echo "Building the Go service ($arch)…"
-    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED="$CGO" go build -o "$WORK/pharos-$arch" ./cmd/pharos)
+    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED="$CGO" go build -trimpath -ldflags="$GO_LDFLAGS" -o "$WORK/pharos-$arch" ./cmd/pharos)
     # The worker calls ONNX Runtime's C API, so it always needs cgo.
     echo "Building the labeling worker ($arch)…"
-    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
+    (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -trimpath -ldflags="$GO_LDFLAGS" -o "$WORK/pharos-labeler-ort-$arch" ./cmd/pharos-labeler-ort)
     echo "Building the Swift wrapper ($arch)…"
     /bin/sh "$ROOT/macos/swift-toolchain.sh" compile -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
         -framework DiskArbitration -framework Security -F "$SPARKLE" -framework Sparkle \
@@ -116,6 +132,13 @@ done
 
 rm -f "$APP/Contents/MacOS/libonnxruntime.dylib"
 cp -L "$ORT/lib/libonnxruntime.dylib" "$APP/Contents/MacOS/libonnxruntime.dylib"
+
+# Optional native Metal engine: arm64 only, loaded conditionally on macOS 26.2+.
+# Remove stale resources when reusing an output directory for an Intel build.
+rm -rf "$APP/Contents/MacOS/mlx"
+case " $GOARCHES " in
+    *" arm64 "*) "$ROOT/macos/build-labeler-mlx.sh" "$APP/Contents/MacOS/mlx" ;;
+esac
 
 # Regenerate with macos/make-icon.sh after editing macos/AppIcon.svg.
 cp "$ROOT/macos/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
@@ -211,6 +234,14 @@ done
 codesign "$@" "$FRAMEWORK"
 codesign "$@" --identifier "$SERVICE_ID" "$APP/Contents/MacOS/pharos"
 codesign "$@" "$APP/Contents/MacOS/libonnxruntime.dylib"
+if [ -d "$APP/Contents/MacOS/mlx" ]; then
+    # Metal libraries are code objects too; deep bundle verification checks them.
+    for name in libjaccl.dylib libmlx.dylib libpharos_mlx.dylib mlx.metallib; do
+        codesign "$@" "$APP/Contents/MacOS/mlx/$name"
+    done
+    rm -rf "$APP/Contents/Resources/licenses/mlx"
+    mv "$APP/Contents/MacOS/mlx/licenses" "$APP/Contents/Resources/licenses/mlx"
+fi
 # The worker loads whichever ONNX Runtime it is given: the bundled one, the
 # download, or a configured labels_runtime (an Intel Mac's). Those are signed
 # by Microsoft, ad hoc, or by whoever built them, so library validation is off

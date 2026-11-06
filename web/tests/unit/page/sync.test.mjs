@@ -1,8 +1,8 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
-import { applyQuery, EMPTY_QUERY } from "@pythia-software/query-table-core";
+import { applyQuery, EMPTY_QUERY, isFilterable, isSortable, isMeasurable, isGroupable, opsForField } from "@pythia-software/query-table-core";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
@@ -13,6 +13,41 @@ class FixedDate extends Date { static now() { return reference; } }
 const { pharosSync, document: syncDocument } = loadClassicScript("sync.js", { Date: FixedDate }).window;
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
+
+test("verification summaries distinguish selective repairs from unresolved checks", () => {
+  assert.equal(pharosSync.verificationSummary(null), "");
+  const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };
+  const summary = pharosSync.verificationSummary({ state: "complete", verification });
+  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatch", "1 deferred", "1 errors"]) assert.ok(summary.includes(text));
+  assert.match(pharosSync.verificationSummary({ state: "interrupted", verification }), /stopped/);
+  assert.match(pharosSync.verificationSummary({ state: "running", verification }), /in progress/);
+});
+
+test("mismatch actions request full verification in the selected source scope", async () => {
+  const dashboard = syncDocument.createElement("div");
+  dashboard.prepend = (...nodes) => dashboard.children.unshift(...nodes);
+  const posts = [];
+  const script = loadClassicScript("sync.js", {
+    document: { ...syncDocument, getElementById: id => id === "syncDashboard" ? dashboard : null },
+    fetch: async (path, options) => {
+      if (options?.method === "POST") posts.push({ path, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => path === "/api/sync/status" ? { settings: {}, issues: [{ id: "old-alert", source_name: "codex", unit: "rollout" }] } : { runs: [], issues: [] } };
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const elements = root => [root, ...(root.children || []).flatMap(elements)];
+  for (const [label, repair] of [["Verify this source again", false], ["Verify & repair this source", true]]) {
+    const button = elements(dashboard).find(el => el.tagName === "BUTTON" && el.textContent === label);
+    assert.ok(button, label);
+    await button.onclick();
+    assert.deepEqual(posts.at(-1), { path: "/api/sync/verify", body: { all: true, repair, sources: ["codex"] } });
+  }
+  const button = elements(dashboard).find(el => el.tagName === "BUTTON" && el.textContent === "Verify all & repair mismatches");
+  assert.ok(button);
+  await button.onclick();
+  assert.deepEqual(posts.at(-1), { path: "/api/sync/verify", body: { all: true, repair: true } });
+  assert.equal(script.window.pharosSync.status().issues.length, 1);
+});
 
 test("empty pages distinguish source setup, idle sources and a running sync", () => {
   const message = status => emptyLibraryState(status)?.message ?? null;
@@ -187,11 +222,22 @@ test('work history queries include analyses and backups alongside indexing', () 
     { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
   ];
   const history = operationHistoryTable(operations);
+  for (const schema of Object.values(syncSchemas)) {
+    for (const field of schema.fields) {
+      assert.ok(isFilterable(field), `${schema.name}.${field.name} is offered in the filter picker`);
+      assert.ok(opsForField(field)?.length, `${schema.name}.${field.name} offers typed filter conditions`);
+      assert.ok(isSortable(field), `${schema.name}.${field.name} is offered in the sort picker`);
+      assert.ok(isMeasurable(field), `${schema.name}.${field.name} is offered in the metric editor`);
+      assert.ok(isGroupable(field), `${schema.name}.${field.name} is offered in the grouping editor`);
+    }
+  }
   assert.deepEqual(history.rows.map(row => row.work), ['Index changes', 'Update findings', 'Back up']);
   const result = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'seconds', op: '>=', value: 60 }], orderBy: [{ field: 'seconds', dir: 'desc' }] }, history.schema);
   assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
   assert.equal(history.rows[2].result, 'Failed');
   assert.equal(history.rows[2].error, 'Drive unavailable');
+  const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{field:'started_at',op:'>=',value:new Date(reference - 120000).toISOString()}] }, history.schema);
+  assert.deepEqual(recent.rows.map(row => row.id), ['index', 'analysis']);
 });
 
 test('run results distinguish postponed verification from errors and indexing failures', () => {
