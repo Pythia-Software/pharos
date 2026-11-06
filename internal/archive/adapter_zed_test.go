@@ -280,9 +280,18 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 		!strings.Contains(reused.Messages[1].Text, "package a") || !strings.Contains(reused.Messages[4].Text, "package c") {
 		t.Fatalf("reused IDs = %s: %+v", got, reused.Messages)
 	}
+	// and the tool ledger counts three calls, each with its own outcome.
+	_, calls := buildToolLedger(reused.Messages, "")
+	outcomes := []string{}
+	for _, call := range calls {
+		outcomes = append(outcomes, call.FilePath+":"+call.Status)
+	}
+	if got := strings.Join(outcomes, " "); got != "a.go:ok b.go:no_result c.go:ok" {
+		t.Fatalf("reused IDs' calls = %s", got)
+	}
 	// A command's result that isn't text says nothing of how it ended.
 	var unread MessageRecord
-	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message })
+	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message }, map[string]int{})
 	if strings.Contains(unread.Text, "exit_code") {
 		t.Fatalf("a result without text = %s", unread.Text)
 	}
@@ -304,6 +313,7 @@ func TestZedTerminalOutcomeIsZedsHeader(t *testing.T) {
 		{"failed with a note", "Note: this command ran WITHOUT an OS sandbox.\n\nCommand \"make\" failed with exit code 1.", "error", "", 1, nil},
 		{"output quoting a failure", "```\nCommand \"make\" failed with exit code 2.\n```", "ok", "", 0, nil},
 		{"output after a note", "Note: this command ran WITHOUT an OS sandbox because one could not be created (setup timed out. bwrap failed with exit code 1.).\n\n```\nCommand \"make\" failed with exit code 2.\n```", "ok", "", 0, nil},
+		{"a command with spaces around it", "Command \" exit 7 \" failed with exit code 7.\n\n```\n```", "error", "", 7, map[string]any{"command": " exit 7 "}},
 		{"a fence in the command", "Command \"cat <<'EOF'\n```\nEOF\nexit 7\" failed with exit code 7.\n\n```\n```\n```", "error", "", 7, map[string]any{"command": "cat <<'EOF'\n```\nEOF\nexit 7"}},
 		{"failed, its command unknown", "Command \"make\" failed with exit code 2.\n\n```\nmain.go:3: error\n```", "error", "", 2, map[string]any{}},
 		{"timed out, its command unknown", "Command \"make\" timed out. No output was captured.", "error", "timeout", -1, map[string]any{}},
@@ -322,7 +332,7 @@ func TestZedTerminalOutcomeIsZedsHeader(t *testing.T) {
 			input = map[string]any{"command": "make", "timeout_ms": 9000}
 		}
 		(&zedAdapter{}).tool(MessageRecord{NativeID: "call"}, "call", "terminal", input,
-			map[string]any{"tool_name": "terminal", "is_error": false, "content": test.content}, add)
+			map[string]any{"tool_name": "terminal", "is_error": false, "content": test.content}, add, map[string]int{})
 		_, calls := buildToolLedger(messages, "test")
 		if len(calls) != 1 {
 			t.Fatalf("%s: calls = %+v", test.name, calls)
