@@ -760,7 +760,7 @@ func (a *cursorAdapter) thread(tx *sql.Tx, member cursorComposer) (*cursorThread
 			// A chunk lost or damaged loses its headers, as a missing message
 			// loses its own: the composer is partial, and the rest are read.
 			var list []any
-			if err != nil || json.Unmarshal(raw, &list) != nil {
+			if err != nil || json.Unmarshal(raw, &list) != nil || list == nil {
 				thread.short = true
 				if gap < 0 {
 					gap = len(headers)
