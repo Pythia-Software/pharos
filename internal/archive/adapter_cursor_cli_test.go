@@ -718,12 +718,19 @@ func cursorCLIProto(fields ...any) []byte {
 // A Task subagent's chat is its parent's child, its prompt the parent's; a
 // compaction's summary is a boundary, not a prompt; a call failed by its
 // flags fails; and each turn's recorded times place its prompt, replies and
-// calls.
+// calls, and its steps the thinking each reply holds only encrypted.
 func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".cursor")
 	chat := cursorCLIConversation()
 	// No later update time than the turns give.
 	delete(chat.metaJSON, "updatedAtMs")
+	// A reply whose step is 32 bytes long, as a root's message ID is, and an
+	// edit and a closing reply led to by thinking.
+	chat.messages[3].(map[string]any)["content"].([]any)[1].(map[string]any)["text"] = "Running make in the app"
+	chat.messages[5].(map[string]any)["content"] = append([]any{map[string]any{"type": "reasoning", "text": "", "signature": "sig2"}},
+		chat.messages[5].(map[string]any)["content"].([]any)...)
+	chat.messages[7].(map[string]any)["content"] = append([]any{map[string]any{"type": "reasoning", "text": "", "signature": "sig3"}},
+		chat.messages[7].(map[string]any)["content"].([]any)...)
 	dir := cursorCLIWriteChat(t, root, chat)
 	const child = "a0000000-0000-4000-8000-00000000000c"
 	high := func(fields map[string]any) map[string]any {
@@ -760,18 +767,34 @@ func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
 			"subagentInfo": map[string]any{"parentAgentId": child, "rootParentAgentId": cursorCLIChatA, "toolCallId": "call10", "typeName": "explore"}},
 	})
 	// The latest root's turn: the prompt sent at 16:18:30.250, the reply
-	// begun at 16:19:05 and the shell call run from 16:19:06 to 16:19:07.
+	// begun at 16:19:05, the shell call run from 16:19:06 to 16:19:07, then
+	// thinking begun at 16:19:07.500 and the edit it led to, then thinking and
+	// the reply it led to. The first reply's thinking was not kept as text,
+	// nor the turn's last, which led nowhere.
 	ms := func(at string) uint64 {
 		parsed, _ := time.Parse(time.RFC3339Nano, at)
 		return uint64(parsed.UnixMilli())
 	}
-	prompt := cursorCLIProto(1, "Fix the build", 25, ms("2026-11-04T16:18:30.250Z"))
-	reply := cursorCLIProto(1, cursorCLIProto(1, "Running make.", 2, ms("2026-11-04T16:19:05Z")))
+	prompt := cursorCLIProto(1, "Fix the build", 2, "b0000000-0000-4000-8000-000000000001", 25, ms("2026-11-04T16:18:30.250Z"))
+	text := cursorCLIProto(1, "Running make in the app", 2, ms("2026-11-04T16:19:05Z"))
+	if len(text) != 32 {
+		t.Fatalf("the reply step holds %d bytes", len(text))
+	}
+	reply := cursorCLIProto(1, text)
 	call := cursorCLIProto(2, cursorCLIProto(57, "call1", 59, ms("2026-11-04T16:19:06Z"), 60, ms("2026-11-04T16:19:07Z")))
+	thinking := cursorCLIProto(3, cursorCLIProto(1, "The build needs main.go edited.", 2, uint64(400), 3, ms("2026-11-04T16:19:07.500Z")))
+	edit := cursorCLIProto(2, cursorCLIProto(57, "call2"))
+	closing := cursorCLIProto(3, cursorCLIProto(1, "The edit took."))
+	fixed := cursorCLIProto(1, cursorCLIProto(1, "Fixed."))
+	trailing := cursorCLIProto(3, cursorCLIProto(1, "Nothing more to do.", 3, ms("2026-11-04T16:19:20Z")))
 	id := func(data []byte) []byte { raw, _ := hex.DecodeString(cursorCLIBlobID(data)); return raw }
-	turn := cursorCLIProto(1, cursorCLIProto(1, id(prompt), 2, id(reply), 2, id(call)))
+	turn := cursorCLIProto(1, cursorCLIProto(1, id(prompt), 2, id(reply), 2, id(call), 2, id(thinking), 2, id(edit), 2, id(closing), 2, id(fixed), 2, id(trailing)))
 	latest := append(cursorCLIRootBlob(cursorCLIRootIDs(chat, 2), "/work/app"), cursorCLIProto(8, id(turn))...)
-	cursorCLIStore(t, dir, func(db *sql.DB) error { return cursorCLISetLatest(db, latest, prompt, reply, call, turn) })
+	// A prompt of 32 bytes no turn names is not a root either.
+	orphan := cursorCLIProto(1, "12345678901234567890123456789012", 2, "b0000000-0000-4000-8000-000000000002", 25, ms("2026-11-04T16:30:00Z"))
+	cursorCLIStore(t, dir, func(db *sql.DB) error {
+		return cursorCLISetLatest(db, latest, prompt, reply, call, thinking, edit, closing, fixed, trailing, turn, orphan)
+	})
 
 	records := cursorCLIRecords(t, root)
 	// What the turns give no time for follows the last time they do; what
@@ -780,13 +803,34 @@ func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
 	for _, message := range records[cursorCLIChatA].Conversations[0].Messages {
 		timed[message.Kind+":"+defaultString(message.CallID, message.Text)] = message.CreatedAt
 	}
-	if timed["message:Fix the build"] != "2026-11-04T16:18:30.250Z" || timed["message:Running make."] != "2026-11-04T16:19:05.000Z" ||
+	if timed["message:Fix the build"] != "2026-11-04T16:18:30.250Z" || timed["message:Running make in the app"] != "2026-11-04T16:19:05.000Z" ||
 		timed["tool_call:call1"] != "2026-11-04T16:19:06.000Z" || timed["tool_result:call1"] != "2026-11-04T16:19:07.000Z" ||
-		timed["message:Fixed."] != "2026-11-04T16:19:07.000Z" || timed["message:Abandoned reply."] != "2026-11-04T16:18:00.000Z" {
+		timed["message:Fixed."] != "2026-11-04T16:19:07.500Z" || timed["message:Abandoned reply."] != "2026-11-04T16:18:00.000Z" {
 		t.Fatalf("times = %v", timed)
 	}
+	// Each reply's thinking is the step that led to its call or text, at its
+	// start; one without is still encrypted.
+	messages := records[cursorCLIChatA].Conversations[0].Messages
+	if got, want := cursorKinds(messages[:10]), "user:message assistant:metadata assistant:message assistant:tool_call tool:tool_result assistant:reasoning assistant:tool_call tool:tool_result assistant:reasoning assistant:message"; got != want {
+		t.Fatalf("kinds = %s, want %s", got, want)
+	}
+	if thought := messages[5]; thought.Text != "The build needs main.go edited." || thought.CreatedAt != "2026-11-04T16:19:07.500Z" {
+		t.Fatalf("thinking = %+v", thought)
+	}
+	if thought := messages[8]; thought.Text != "The edit took." || thought.CreatedAt != "2026-11-04T16:19:07.500Z" {
+		t.Fatalf("closing thinking = %+v", thought)
+	}
+	for _, message := range records[cursorCLIChatA].Conversations[0].Messages {
+		if strings.Contains(message.Text, "Nothing more") {
+			t.Fatalf("thinking that led nowhere is placed: %+v", message)
+		}
+	}
+	// Neither a reply step nor a prompt is read as a root.
+	if coverage := records[cursorCLIChatA].Conversations[0].Coverage; coverage != "complete" {
+		t.Fatalf("coverage = %s, unread %v", coverage, records[cursorCLIChatA].Conversations[0].Unread)
+	}
 	// The chat ends with the last time a selected message was placed at.
-	if chatA := records[cursorCLIChatA]; chatA.Conversations[0].EndedAt != "2026-11-04T16:19:07.000Z" || chatA.ActivityAt != chatA.Conversations[0].EndedAt {
+	if chatA := records[cursorCLIChatA]; chatA.Conversations[0].EndedAt != "2026-11-04T16:19:07.500Z" || chatA.ActivityAt != chatA.Conversations[0].EndedAt {
 		t.Fatalf("ended %s, active %s", chatA.Conversations[0].EndedAt, chatA.ActivityAt)
 	}
 	record := records[child]
