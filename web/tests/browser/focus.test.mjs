@@ -347,7 +347,7 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
-  const progress = panel.getByRole('progressbar').first();
+  const progress = panel.getByRole('progressbar', { name: 'Index changes progress', exact: true });
   assert.notEqual(await progress.getAttribute('aria-valuenow'), null);
   push('/api/status/stream', {...snapshot, revision: 4, operations: snapshot.operations.map(operation => operation.id === 'op-index'
     ? {...operation, step: {...operation.step, total: null, fraction: null}} : operation)});
