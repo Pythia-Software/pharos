@@ -21472,7 +21472,7 @@
         90
       ],
       "id": "agent-events-thinking-vs-reply",
-      "title": "Thinking says more than replies",
+      "title": "Opus thinking beside its replies",
       "unit": "events per 1,000 messages",
       "description": "Events per 1,000 Opus messages read over the last {days} days, thinking blocks beside visible replies.",
       "where": [
@@ -21753,6 +21753,11 @@
           "field": "family_group",
           "op": "=",
           "value": "Friction"
+        },
+        {
+          "field": "repository_name",
+          "op": "is_not_null",
+          "value": ""
         }
       ],
       "measures": [
@@ -21790,7 +21795,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
-      "note": "Friction is obstacles, environment friction, out-of-date guidance, pre-existing failures, missing capabilities, unclear instructions, getting stuck and giving up. The denominator is every message read in the repository, so a kind filter does not shrink it. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
+      "note": "Friction is obstacles, environment friction, out-of-date guidance, pre-existing failures, missing capabilities, unclear instructions, getting stuck and giving up. The denominator is every message read in the repository, so a kind filter does not shrink it. Conversations outside a repository are left out. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
@@ -21950,67 +21955,6 @@
         },
         "dataset": "agent_event_rates",
         "detailAction": "Compare subagents"
-      }
-    },
-    {
-      "dataset": "agent_event_rates",
-      "field": "occurred_at",
-      "category": "agent_events",
-      "idea": "conversation-01",
-      "id": "agent-events-friction-trend",
-      "title": "Friction day by day",
-      "unit": "events per 1,000 messages",
-      "days": [
-        30,
-        90
-      ],
-      "description": "Friction events per 1,000 messages read each day over the last {days} days, by kind.",
-      "where": [
-        {
-          "field": "family_group",
-          "op": "=",
-          "value": "Friction"
-        }
-      ],
-      "measures": [
-        {
-          "id": "friction_daily",
-          "op": "sum",
-          "expression": "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)",
-          "groupBy": [
-            "day",
-            "family"
-          ],
-          "groupLimit": 10000,
-          "label": "Friction events per 1,000 messages read"
-        }
-      ],
-      "cover": {
-        "mode": "source",
-        "metricId": "friction_daily",
-        "kind": "auto",
-        "maxGroups": 8,
-        "showOther": false,
-        "showLegend": true,
-        "showHeadline": false,
-        "height": 300
-      },
-      "action": "Explore Agent Events",
-      "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
-      "note": "Each day divides its events by that day's messages read. Days with few messages read swing widely. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
-      "destination": {
-        "topic": "agent_event_rates",
-        "chart": {
-          "v": 2,
-          "view": "trend",
-          "metric": "per_thousand",
-          "split": "family",
-          "period": "day",
-          "scale": "linear",
-          "nonzero": false
-        },
-        "dataset": "agent_event_rates",
-        "detailAction": "Explore friction over time"
       }
     },
     {

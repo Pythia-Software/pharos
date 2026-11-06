@@ -11,6 +11,8 @@ const days = [7, 30, 90];
 // The dashboard's compare minimum, in messages read, so the cover hides the
 // same small groups.
 const floor = { min: 200, distinct: "message_id" } as const;
+// Card covers draw a day-by-day series only from additive sums, so a rate
+// over time is the dashboard's trend rather than a card.
 const perThousand = "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)";
 const shareOf = (field: string) => `COUNT_DISTINCT(IF([events]>0,[${field}],NULL))/NULLIF(COUNT_DISTINCT([${field}]),0)`;
 const rate = (id: string, groupBy: string[], label: string, extra: Partial<AggregationClause> = {}): AggregationClause => ({
@@ -26,7 +28,7 @@ const read = "Rates divide by the agent replies and thinking blocks the events p
 const empty = "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.";
 
 export const agentEventCardRecipes: QueryRecipe[] = [
-  { ...base, days, id: "agent-events-thinking-vs-reply", title: "Thinking says more than replies", unit: "events per 1,000 messages",
+  { ...base, days, id: "agent-events-thinking-vs-reply", title: "Opus thinking beside its replies", unit: "events per 1,000 messages",
     description: "Events per 1,000 Opus messages read over the last {days} days, thinking blocks beside visible replies.", where: [opus],
     measures: [rate("events_by_source", ["source"], "Events per 1,000 messages read", { minCount: floor })], cover: bars("events_by_source"),
     action: "Compare thinking and replies", emptyLabel: empty,
@@ -47,10 +49,10 @@ export const agentEventCardRecipes: QueryRecipe[] = [
     action: "Compare models", emptyLabel: empty,
     note: `Models differ in how much they narrate and in how much thinking their harness records, so these rates describe what each model wrote, not how well it worked. ${read}` },
   { ...base, days, id: "agent-events-repository-friction", title: "Friction by repository", unit: "events per 1,000 messages",
-    description: "Friction events per 1,000 messages read over the last {days} days, by repository.", where: [friction],
+    description: "Friction events per 1,000 messages read over the last {days} days, by repository.", where: [friction, { field: "repository_name", op: "is_not_null", value: "" }],
     measures: [rate("friction_by_repository", ["repository_name"], "Friction events per 1,000 messages read", { minCount: floor })], cover: bars("friction_by_repository"),
     action: "Compare repositories", emptyLabel: empty,
-    note: `Friction is obstacles, environment friction, out-of-date guidance, pre-existing failures, missing capabilities, unclear instructions, getting stuck and giving up. The denominator is every message read in the repository, so a kind filter does not shrink it. ${read}` },
+    note: `Friction is obstacles, environment friction, out-of-date guidance, pre-existing failures, missing capabilities, unclear instructions, getting stuck and giving up. The denominator is every message read in the repository, so a kind filter does not shrink it. Conversations outside a repository are left out. ${read}` },
   { ...base, days, id: "agent-events-ambiguity-by-length", title: "Unclear instructions by prompt length", unit: "turns",
     description: "Share of person-prompted turns over the last {days} days in which the agent said the instructions were unclear or conflicting, by prompt length.",
     where: [{ field: "family", op: "=", value: "ambiguous_request" }, { field: "prompted_by", op: "=", value: "person" }],
@@ -62,10 +64,4 @@ export const agentEventCardRecipes: QueryRecipe[] = [
     measures: [rate("kinds_by_role", ["family", "agent_role"], "Events per 1,000 messages read", { minCount: floor })], cover: bars("kinds_by_role", 12),
     action: "Compare subagents", emptyLabel: empty,
     note: `A subagent is a conversation an agent delegated to. Each side's denominator is its own messages read, so the kinds compare as rates rather than counts. ${read}` },
-  { ...base, id: "agent-events-friction-trend", title: "Friction day by day", unit: "events per 1,000 messages", days: [30, 90],
-    description: "Friction events per 1,000 messages read each day over the last {days} days, by kind.", where: [friction],
-    measures: [{ id: "friction_daily", op: "sum", expression: perThousand, groupBy: ["day", "family"], groupLimit: 10000, label: "Friction events per 1,000 messages read" }],
-    cover: { mode: "source", metricId: "friction_daily", kind: "auto", maxGroups: 8, showOther: false, showLegend: true, showHeadline: false, height: 300 },
-    action: "Explore friction over time", emptyLabel: empty,
-    note: `Each day divides its events by that day's messages read. Days with few messages read swing widely. ${read}` },
 ];

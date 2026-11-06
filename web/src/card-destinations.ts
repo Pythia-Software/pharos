@@ -165,7 +165,6 @@ const dashboards: Record<string, CardDashboard> = {
   "agent-events-repository-friction": events("per_thousand", "repository_name"),
   "agent-events-ambiguity-by-length": events("turn_share", "prompt_length"),
   "agent-events-subagent-kinds": events("per_thousand", "family_role"),
-  "agent-events-friction-trend": engine("agent_event_rates", "trend")("per_thousand", "family"),
 };
 
 function dashboardFor(recipe: QueryRecipe): CardDashboard {
