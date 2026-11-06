@@ -236,7 +236,7 @@ func TestSkillUsageStoreAndBackfill(t *testing.T) {
 		}
 	}
 	skills := metricRequest(qt.AggSpec{ID: "skills", Op: "count", GroupBy: []string{"skill_name", "evidence_type"}})
-	metric, err := (&Server{Catalog: catalog}).executeQueryV2(ctx, "skill_usages", nil, PharosSkillUsagesSchema(), nil, &skills)
+	metric, err := (&Server{Catalog: catalog}).executeQueryFixture(ctx, "skill_usages", nil, PharosSkillUsagesSchema(), nil, &skills)
 	if err != nil || len(metric.Metrics.Metrics) != 1 || metric.Metrics.Metrics[0].Error != "" || len(metric.Metrics.Metrics[0].Buckets) != 2 {
 		t.Fatalf("skill metrics = %#v, %v", metric.Metrics, err)
 	}
@@ -314,7 +314,7 @@ func TestMCPMethodQueriesMatchCube(t *testing.T) {
 	}
 	methods := metricRequest(qt.AggSpec{ID: "methods", Op: "count", GroupBy: []string{"mcp_server", "mcp_method"}})
 	methods.Where = where
-	grouped, err := (&Server{Catalog: catalog}).executeQueryV2(ctx, "tool_calls", nil, PharosToolCallsSchema(), nil, &methods)
+	grouped, err := (&Server{Catalog: catalog}).executeQueryFixture(ctx, "tool_calls", nil, PharosToolCallsSchema(), nil, &methods)
 	if err != nil || len(grouped.Metrics.Metrics[0].Buckets) != 1 || grouped.Metrics.Metrics[0].Buckets[0].Value != float64(1) || grouped.Metrics.Metrics[0].Buckets[0].Keys[1] != "navigate" {
 		t.Fatalf("method metric = %#v, %v", grouped.Metrics, err)
 	}

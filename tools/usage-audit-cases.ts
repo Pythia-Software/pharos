@@ -91,6 +91,7 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     const where = conditions[i % conditions.length];
     const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: topic, analyze_data: dataset, analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }) });
     let view: any;
+    if (topic === "compaction") view = { metric: i % 2 ? "compactions" : "conversations", split: ["trigger", "provider", "trigger_provider", "harness", "model", "repository_name", "channel"][i % 7], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "labels") view = { metric: ["messages", "conversations", "labels", "observations"][i % 4], split: ["family", "label", "function_role", "source", "label_status", "repository_name", "model", "provider"][i % 8], view: ["trend", "compare", "distribution", "scatter"][i % 4], period: ["day", "week", "month"][Math.floor(i / 9)], share: i % 4 === 0, scale: scales[i % 3], rollingPeriods: [0, 3, 7][i % 3] };
     if (topic === "tokens") view = { metric: ["tokens", "cost", "percent", "percent_cost"][i % 4], split: tokenSplits[i % tokenSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "human") view = { scope: i % 2 ? "all" : "typed", split: humanSplits[i % humanSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };

@@ -33,9 +33,10 @@ export function compactMetricPresentation(preview: QueryPreview) {
   }
   const { clause, result } = metric;
   const originalKind = clause.display?.kind ?? "auto";
+  const timeline = originalKind === "line" || Boolean(clause.dateGrouping) || ["hour", "day", "week", "month"].includes(clause.groupBy[0]);
   const scalar = !preview.stackBy && result.coverage !== "partial" && (result.groupCount ?? result.buckets.length) === 1 && result.buckets.length === 1
     && typeof result.buckets[0].value === "number" && Number.isFinite(result.buckets[0].value) && !result.buckets[0].error && !result.buckets[0].yError
-    && !clause.distribution && !clause.expressionY && !clause.dateGrouping && clause.groupBy[0] !== "day";
+    && !clause.distribution && !clause.expressionY && !timeline;
   const compoundList = (clause.groupBy.length > 1 || Boolean(preview.groupLabels)) && ["auto", "table", "list", "bar-horizontal"].includes(originalKind);
   const kind = scalar ? "value" : compoundList || originalKind === "bar-horizontal" ? "list" : originalKind;
   const budget = clause.display?.maxGroups ?? (kind === "box" ? 3 : ["scatter", "line", "bar-vertical"].includes(kind) ? 24 : ["pie", "donut"].includes(kind) ? 8 : 4);

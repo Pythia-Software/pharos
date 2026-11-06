@@ -424,7 +424,7 @@ func TestCaptureResumesAfterInterruption(t *testing.T) {
 
 func openWritableSQLite(t *testing.T, file string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+file+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+file+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous("+catalogDurability.synchronous+")")
 	if err != nil {
 		t.Fatal(err)
 	}

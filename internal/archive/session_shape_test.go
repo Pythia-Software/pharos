@@ -520,7 +520,7 @@ func TestSessionShapeIncremental(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	w = queryExplorationCall(server, config.APIToken, http.MethodPost, "/api/query/session_shape/query-v3",
-		`{"version":3,"profile":"qt-sqlite-v1","rows":true,"result":{"select":["id","archetype","active_seconds","has_authorship"],"limit":50}}`)
+		fmt.Sprintf(`{"version":3,"profile":"qt-sqlite-v1","now":%d,"rows":true,"source":{},"result":{"select":["id","archetype","active_seconds","has_authorship"],"limit":50}}`, time.Now().UnixMilli()))
 	if w.Code != 200 || strings.Count(w.Body.String(), `"archetype"`) < 5 {
 		t.Fatal(w.Code, w.Body.String())
 	}

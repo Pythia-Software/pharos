@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers, formatMetricOutput, type MetricTheme } from "@pythia-software/query-table-ui";
 import { BinnedHistogram, histogramOf } from "./dashboard-histogram";
-import { chartSeriesStyle, colorFields } from "./chart-colors";
+import { chartSeriesStyle, colorFields, metricSeriesColor } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
-import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { onDatasetRefresh } from "./dataset-refresh";
@@ -19,6 +19,7 @@ import { CreateDashboardCard } from "./create-dashboard-card";
 import { PopulationControl, usePopulation } from "./dashboard-population-control";
 import { selectionPopulation } from "./dashboard-population";
 import { PercentileControl } from "./percentile-control";
+import { analysisCardCopy } from "./dashboard-card-copy";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
@@ -65,8 +66,8 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
   const unitOptions: Array<[string, string, string?]> = [[records, catalog.records.plural, view.view === "scatter" ? "A scatter pairs two measures of each conversation, session or run." : view.view === "distribution" && !measure.value ? "This measure has no value per record." : undefined],
     ...Object.entries(catalog.units).map(([id, item]): [string, string, string?] => [id, item.plural, view.view === "distribution" && item.recordsAlike && measure.value ? `Each is one ${catalog.records.label.toLowerCase()}, so ${catalog.records.plural} draws the same distribution` : undefined])];
   const minimum = sampleThresholds.includes(view.minSamples) ? sampleThresholds : [...sampleThresholds, view.minSamples].sort((a, b) => a - b);
-  const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`]),
-    ...trend ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, limits.component(id)]) : []];
+  const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, item.views && !item.views.includes(view.view) ? "Use Over time or Compare groups" : item.measures && !item.measures.includes(view.metric) ? "Choose a message-count metric" : trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`]),
+    ...trend || view.view === "compare" ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, trend ? limits.component(id) : comparisonComponentUnavailable(catalog, view, id)]) : []];
   const count = trendPeriodCount(view);
   // A catalog that chooses each chart (present) has no controls for what it
   // chooses: shares, display and scale. The %ile levels stay the reader's.
@@ -84,7 +85,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
     {trend && adjustable && view.display !== "heatmap" ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
       title="Values; values without zeroes, which leaves out periods with nothing drawn and passes lines over a series' zeroes; or each series' share of its period's total" onChange={shown => set({ share: shown === "share", nonzero: shown === "nonzero" })} /> : null}
     {trend && adjustable ? <DisplayControl value={view.display} disabled={limits.cumulative} heatmap={{ disabled: limits.heatmap }} onChange={display => set({ display })} /> : null}
-    {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
+    {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit && !catalog.components?.[view.split] ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
     {view.view === "cycle" && catalog.cycleOn ? <ChartSelect label="Placed by" value={view.cycleOn ?? ""} options={[["", catalog.cycleOn.label], ...Object.entries(catalog.cycleOn.options).map(([id, option]) => [id, option.label] as [string, string])]}
       title="Which of each record's times places it in the cycle" onChange={cycleOn => set({ cycleOn: cycleOn || undefined })} /> : null}
@@ -137,8 +138,8 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
 
-  const selected = result.results[0] && selectGroups(result.results[0], analysis.selection);
-  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = analysis.problem ?? result.error, slots = "";
+  const selected = analysisResult(analysis, result.results);
+  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = analysis.problem ?? selected?.error ?? result.error, slots = "";
   if (view.view === "cycle" && entry) {
     const per = view.cycle === "hour" ? "hours" : "days";
     try {
@@ -154,12 +155,14 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
       }
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
-  const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, catalog.labels), [entry, originRevision, clause, catalog]);
+  const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, analysisLabels(catalog, view)), [entry, originRevision, clause, catalog]);
   // Hours of the day take the sky's colour at that hour; a band's or an
   // archetype's steps, their ramp's.
   const themed = colorFields(clause)[0], hourTheme: MetricTheme | undefined = (themed === "hour_of_day" || Object.hasOwn(orderedValues, themed)) && presentation.metric ? { dimensions: { [clause.groupBy[0]]: { layer: "hours",
     overrides: presentation.metric.buckets.map(bucket => ({ value: bucket.keys[0] as AggregationBucket["keys"][number], color: chartSeriesStyle(themed, String(bucket.keys[0])).color })) } } } : undefined;
-  const empty = !result.loading && !error && entry && (!entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
+  const componentTheme: MetricTheme | undefined = analysis.components ? { dimensions: { [view.split]: { layer: "components",
+    overrides: analysis.components.parts.map(part => ({ value: part.label, color: metricSeriesColor([view.split], [part.label]) })) } } } : undefined;
+  const empty = !result.loading && !error && entry && (analysis.components ? !entry.buckets.some(bucket => Number(bucket.value) > 0) && !Number(entry.other?.value) : !entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
   const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the minimum of ${view.minSamples.toLocaleString()} ${sampleSubject(catalog, view)}.` : "";
 
   // A distribution over fine bins draws its own histogram (distributionBins).
@@ -172,7 +175,6 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
   const tall = (clause.display?.kind === "box" || clause.display?.kind === "bar-horizontal") && (entry?.buckets.length ?? 0) > 16;
   const population = usePopulation(catalog, schema, where);
-  if (population.suffix) clause = { ...clause, label: `${clause.label ?? ""}${population.suffix}` };
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={subjects} onFilter={onFilter} /> : undefined} />;
 
@@ -180,19 +182,19 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
-      : histogram && entry ? <div className="dashboard-card-anchor"><div className="dashboard-histogram-card"><div className="usage-chart-title"><h3>{clause.label}</h3></div>
+      : histogram && entry ? <div className="dashboard-card-anchor"><div className="dashboard-histogram-card"><div className="usage-chart-title"><h3>{analysisCardCopy(catalog, view, where, schema).title}</h3></div>
         <BinnedHistogram histogram={histogram.chart} label={histogram.bins.label} noun={subjects} format={histogram.format}
           onSelect={low => {
             const bucket = entry!.buckets.find(item => Number(item.keys[0]) === low);
             const query = bucket && analysisInspectQuery(analysis, bucket, analysis.clause, schema, view.view);
             if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
           }} /></div><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>
-      : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers} theme={hourTheme}
+      : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={{ ...clause, label: analysisCardCopy(catalog, view, where, schema).title }} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? analysisFields(catalog, view, schema) : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers} theme={componentTheme ?? hourTheme}
         onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}
-    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
+    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote((catalog.breakdowns[view.split] ?? catalog.components![view.split]).label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}
       {analysis.selection && catalog.population ? <> <button type="button" className="usage-preset-clear" onClick={() => {
         // The selection becomes the population, so every other view and breakdown counts it too.
@@ -201,6 +203,6 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
       }}>Make this the population</button></> : null}</p> : null}
     {children}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
-    <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
+    <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : view.compareAs === "share" ? "slice" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
   </section>;
 }

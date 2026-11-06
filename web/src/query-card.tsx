@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { cardNavigationURL } from "./card-exploration";
 import React, { useRef } from "react";
 import { CompactColumns } from "./column-marks";
@@ -39,7 +40,7 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
       : preview.metrics ? <CompactMetric preview={preview} />
       : preview.insights ? <span className="query-findings">
       <span className="query-finding-heading">{preview.headline}</span>
-      {preview.insights.map((item, i) => <span className="query-finding" key={i} data-chart-tooltip={`${item.label}\n${item.value}${item.context ? `\n${item.context}` : ""}`} title="">
+      {preview.insights.map((item, i) => <span className="query-finding" key={i}>
         <span className="query-finding-label">{item.label}</span><strong>{item.value}</strong>
         {item.context ? <small>{item.context}</small> : null}
       </span>)}
@@ -73,7 +74,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   const ranked = presentation?.ranked || Boolean(!presentation && (preview?.insights || preview?.ranking || preview?.groupSummary));
   const summary = ranked || preview?.study ? undefined : preview && (presentation ? presentation.summary : preview.summary);
   const headlineMetric = preview && (presentation ? presentation.headlineMetric : ranked ? undefined : preview.headlineMetric);
-  const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "USD" ? { style: "currency" as const, currency: "USD" } : {}), ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
+  const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.format === "USD" ? formatUSD(preview.study.value) : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
   const destination = cardNavigationURL(url);
   const linkProps: React.AnchorHTMLAttributes<HTMLAnchorElement> = {
     href: destination, "aria-hidden": xray || undefined, tabIndex: xray ? -1 : undefined, draggable: false,

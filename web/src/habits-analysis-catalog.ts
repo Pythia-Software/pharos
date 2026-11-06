@@ -1,3 +1,4 @@
+import {peopleLabelBreakdowns} from "./people-message-labels";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 
 // Habits over the rhythm dataset: one record is one local hour of one actor in
@@ -33,6 +34,7 @@ export const initiatorLabels: Record<string, string> = { human: "You", scheduled
 export const habitsAnalysisCatalog: AnalysisCatalog = {
   dataset: "rhythm", time: { first: "started_at", last: "started_at" }, measures,
   breakdowns: {
+    ...peopleLabelBreakdowns("rhythm"),
     actor: { label: "Actor", fields: ["actor"], order: ["you", "with_you", "unattended", "automated"], values: actorLabels },
     initiator: { label: "Started by", fields: ["initiator"], order: ["human", "scheduled", "scripted", "orchestrated", "agent", "delegated", "unknown"], values: initiatorLabels },
     automation: { label: "Automation", fields: ["automation"], empty: "Not automated" },

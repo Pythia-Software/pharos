@@ -45,7 +45,7 @@ test("rapid edits are one step, and widths are not a step", () => {
   clock += 5000; steps.observe(filtered, url);
   clock += 200; assert.equal(steps.observe(narrowed, url), false);
   assert.deepEqual(history.entries.map(entry => entry.url), [url(query()), url(narrowed)]);
-  assert.equal(queryHistoryKey({ ...narrowed, select: [{ field: "subject", width: 90 }], fitToScreen: true }), queryHistoryKey(narrowed));
+  assert.equal(queryHistoryKey({ ...narrowed, select: [{ field: "subject", width: 90 }], fit: "screen" }), queryHistoryKey(narrowed));
   assert.notEqual(queryHistoryKey({ ...narrowed, offset: 50 }), queryHistoryKey(narrowed));
 });
 

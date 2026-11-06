@@ -446,7 +446,7 @@ func compressSourceFiles(ctx context.Context, target captureTarget, policy compr
 		return nil
 	}
 	outcomes := loadCompressionOutcomes(target.Dir)
-	var failures []error
+	candidates := []compressCandidate{}
 	for _, candidate := range compressCandidates(manifest) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -455,6 +455,18 @@ func compressSourceFiles(ctx context.Context, target captureTarget, policy compr
 		if outcomes.settled(target.Dir, generation) || !candidate.eligible(target.Dir, manifest, policy) {
 			continue
 		}
+		candidates = append(candidates, candidate)
+	}
+	var failures []error
+	phase := "Compressing cold captures: " + target.Source
+	if len(candidates) > 0 {
+		reportWork(ctx, phase, "file", 0, len(candidates))
+	}
+	for index, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		generation := candidate.v
 		stored, err := compressEntry(ctx, target, manifest, candidate, policy, outcomes)
 		switch {
 		case err == nil:
@@ -476,6 +488,7 @@ func compressSourceFiles(ctx context.Context, target captureTarget, policy compr
 		default:
 			failures = append(failures, fmt.Errorf("%s: %w", generation.Captured, err))
 		}
+		reportWork(ctx, phase, "file", index+1, len(candidates))
 	}
 	if err := outcomes.save(target.Dir, manifest); err != nil {
 		failures = append(failures, err)
@@ -591,7 +604,7 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if err == nil {
 		// F_FULLFSYNC: the encoded bytes are on the drive before the rename
 		// can replace the only copy of the original.
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
@@ -891,13 +904,9 @@ func (s *Server) compressCapturesLoop(ctx context.Context) {
 		}
 		wait = captureCompressInterval
 		pass := s.Catalog.beginPass(ctx, "maintenance.capture-compress", triggerSchedule)
-		passCtx := ctx
-		if pass.op != nil {
-			passCtx = pass.op.Context()
-		}
 		var err error
-		pass.runIO(func() {
-			err = compressCaptures(passCtx, s.Config(), s.Catalog, func(compressedGeneration) { pass.worked(1) })
+		pass.runIO(ctx, func(ctx context.Context) {
+			err = compressCaptures(ctx, s.Config(), s.Catalog, func(compressedGeneration) { pass.worked(1, "generation") })
 		})
 		if ctx.Err() != nil {
 			err = nil

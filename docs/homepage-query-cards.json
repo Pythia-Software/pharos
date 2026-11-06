@@ -7346,8 +7346,7 @@
         }
       },
       "days": [
-        7,
-        30
+        365
       ],
       "action": "Explore Tokens and Cost",
       "cover": {
@@ -17651,6 +17650,407 @@
       "retired": true
     },
     {
+      "id": "task-delegated-runs",
+      "title": "Delegated runs per root task",
+      "description": "Total active delegated runs per root task over the last {days} days, including tasks with no delegation.",
+      "category": "delegation",
+      "idea": "models-06",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        365
+      ],
+      "unit": "runs",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "!=",
+          "value": ""
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root repository; missing repository stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. One observation per root task with positive-token usage from itself or its children in the selected period. Count all distinct active delegated descendants at every depth, merging handles, linked transcripts and continuations. The initiating execution is excluded from the run count. Zero-delegation tasks remain in the distribution; roots with only child activity are included. These are selected-period counts, not lifetime counts for tasks selected by recent activity.",
+      "exploration": {
+        "keys": [
+          "root_repository_name",
+          "root_conversation_id"
+        ],
+        "summaries": [
+          {
+            "id": "dg_runs",
+            "op": "formula",
+            "expression": "COUNT_DISTINCT(NULLIF([delegated_session_id],\"\"))",
+            "label": "Active delegated runs"
+          },
+          {
+            "id": "dg_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Period tokens"
+          },
+          {
+            "id": "dg_title",
+            "op": "row",
+            "field": "root_title",
+            "label": "Root task"
+          }
+        ],
+        "valueField": "dg_runs",
+        "unit": "runs",
+        "subjects": "root tasks",
+        "action": "Inspect total delegated runs per task",
+        "labelFields": [
+          "dg_title",
+          "root_repository_name"
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "last_usage_at",
+              "dir": "desc",
+              "nulls": "last"
+            },
+            {
+              "field": "id",
+              "dir": "asc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "coverMetric": {
+          "id": "dg_runs",
+          "op": "count",
+          "field": "dg_runs",
+          "groupBy": [],
+          "label": "Total delegated runs per root task",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[dg_runs]"
+          },
+          "display": {
+            "kind": "histogram",
+            "xLabel": "Delegated runs per root task",
+            "yLabel": "Root tasks",
+            "xFormat": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_runs",
+        "kind": "histogram"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "nonzero": false,
+          "v": 2,
+          "metric": "delegated_runs",
+          "split": "none",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          },
+          "view": "distribution",
+          "unit": "conversation"
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect total delegated runs per task"
+      }
+    },
+    {
+      "id": "delegation-fanout-trend",
+      "title": "Average fan-out over time",
+      "description": "Weekly average direct child runs per delegating agent over the last {days} days, including initiating agents and nested parents.",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "category": "delegation",
+      "idea": "models-06",
+      "days": [
+        365
+      ],
+      "unit": "runs per delegating agent",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "!=",
+          "value": ""
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">=",
+          "value": "0"
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "!=",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "dg_fanout",
+          "op": "sum",
+          "expression": "COUNT_DISTINCT([delegated_session_id])/NULLIF(COUNT_DISTINCT([delegated_parent_session_id]),0)",
+          "groupBy": [
+            "week"
+          ],
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "label": "Average direct child runs per delegating agent",
+          "display": {
+            "kind": "line",
+            "xLabel": "Week",
+            "yLabel": "Direct children per delegating agent",
+            "format": {
+              "kind": "number",
+              "decimals": 1
+            }
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "dg_fanout",
+        "kind": "line",
+        "showHeadline": false,
+        "showLegend": false,
+        "height": 300
+      },
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root repository; missing repository stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. Each point is one recorded Monday-based week inside the selected range. Divide distinct active direct child executions by distinct canonical parents in that week; every child has one resolved parent, so this is the arithmetic mean of direct-child counts over agents that delegate. Include initiating agents and nested parents even if their own usage falls outside the week. Repeated usage days, linked handles and transcripts do not inflate either count. An execution active in several weeks contributes in each. Weeks with no qualifying delegation are omitted; boundary weeks use only selected facts. No smoothing or cumulative counts are applied.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "week",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "nonzero": true,
+          "v": 2,
+          "metric": "average_fanout",
+          "split": "none",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          },
+          "view": "trend"
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect average delegation fan-out"
+      }
+    },
+    {
+      "id": "delegation-breadth",
+      "title": "Delegated runs by breadth",
+      "description": "Direct child runs per delegating agent over the last {days} days, including initiating agents and nested parents.",
+      "category": "delegation",
+      "idea": "models-06",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        365
+      ],
+      "unit": "runs",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "root_conversation_id",
+          "op": "!=",
+          "value": ""
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">=",
+          "value": "0"
+        },
+        {
+          "field": "delegated_run_depth",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "delegated_parent_session_id",
+          "op": "!=",
+          "value": ""
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root repository; missing repository stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. One observation per canonical delegating execution, including initiating agents and nested parents. Breadth counts distinct direct children with positive-token usage inside the window. Linked handles, child transcripts, repeated days and continuations count once. A parent's own usage need not fall inside the window. Agents with no active direct children are excluded. Descendants of a child belong to that child's observation; this does not measure simultaneous execution or maximum width at a depth.",
+      "exploration": {
+        "keys": [
+          "root_conversation_id",
+          "delegated_parent_session_id"
+        ],
+        "summaries": [
+          {
+            "id": "dg_runs",
+            "op": "formula",
+            "expression": "COUNT_DISTINCT(NULLIF([delegated_session_id],\"\"))",
+            "label": "Active delegated runs"
+          },
+          {
+            "id": "dg_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Period tokens"
+          },
+          {
+            "id": "dg_title",
+            "op": "row",
+            "field": "root_title",
+            "label": "Root task"
+          },
+          {
+            "id": "dg_repository",
+            "op": "row",
+            "field": "root_repository_name",
+            "label": "Root repository"
+          }
+        ],
+        "valueField": "dg_runs",
+        "unit": "runs",
+        "subjects": "delegating agents",
+        "action": "Inspect delegation breadth",
+        "labelFields": [
+          "dg_title",
+          "delegated_parent_session_id"
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "last_usage_at",
+              "dir": "desc",
+              "nulls": "last"
+            },
+            {
+              "field": "id",
+              "dir": "asc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "coverMetric": {
+          "id": "dg_runs",
+          "op": "count",
+          "field": "dg_runs",
+          "groupBy": [],
+          "label": "Direct child runs per delegating agent",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[dg_runs]"
+          },
+          "display": {
+            "kind": "histogram",
+            "xLabel": "Direct child runs",
+            "yLabel": "Delegating agents",
+            "xFormat": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "dg_runs",
+        "kind": "histogram"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "nonzero": false,
+          "v": 2,
+          "metric": "delegated_runs",
+          "split": "none",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          },
+          "view": "distribution",
+          "unit": "delegating_run"
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect delegation breadth"
+      }
+    },
+    {
       "id": "repository-delegated-share",
       "title": "Delegated token share",
       "description": "Delegated tokens divided by all resolved task tokens over the last {days} days, by root repository.",
@@ -22287,6 +22687,59 @@
       }
     },
     {
+      "id": "compactions-by-trigger",
+      "title": "Context compactions by trigger",
+      "description": "Recorded context compactions over the last {days} days, split by human, machine and unknown triggers.",
+      "dataset": "compactions",
+      "field": "occurred_at",
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "compactions",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "compactions_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "trigger"
+          ],
+          "groupLimit": 10000,
+          "label": "Compactions by trigger"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "compactions_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "compaction",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "compactions",
+          "split": "trigger",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false
+        },
+        "dataset": "compactions",
+        "detailAction": "Explore Compaction"
+      },
+      "action": "Explore Compaction",
+      "note": "Counts recorded boundaries. Claude records manual or automatic triggers; Codex attribution is inferred from turn position. Unknown triggers remain visible. Replayed Codex boundaries are excluded."
+    },
+    {
       "id": "message-labels-trend",
       "title": "Message labels over time",
       "description": "Stored message labels over the last {days} days.",
@@ -22947,8 +23400,8 @@
         "overview": true,
         "state": {}
       },
-      "action": "Explore Waiting and Compaction",
-      "note": "Same request population as Waiting and Compaction, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency."
+      "action": "Explore Waiting",
+      "note": "Same request population as Waiting, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency."
     },
     {
       "dataset": "model_requests",
@@ -22962,6 +23415,7 @@
       "idea": "models-01",
       "unit": "compactions",
       "id": "thinking-compactions",
+      "retired": true,
       "title": "Context compactions",
       "description": "Requests that follow a context compaction, day by day by model, over the last {days} days.",
       "where": [
@@ -22998,8 +23452,8 @@
         "open": "thinking:conversation",
         "coverWhere": true
       },
-      "action": "Explore Waiting and Compaction",
-      "note": "One compaction is a request whose stream compacted its context since the previous request. Waiting and Compaction pairs the waits, context and output before and after each compaction within one stream, model and effort."
+      "action": "Explore Waiting",
+      "note": "Legacy request-based proxy: one request whose stream compacted since the previous request. The Compaction dashboard counts boundary events directly, including multiple boundaries between requests."
     },
     {
       "dataset": "model_requests",
@@ -23166,7 +23620,7 @@
         "state": {},
         "open": "thinking:coverage"
       },
-      "action": "Explore Waiting and Compaction",
+      "action": "Explore Waiting",
       "note": "Includes missing timestamps, stale anchors, cross-stream links and excluded durations. The overview explains how timing is reconstructed and provides source-specific validation."
     },
     {
@@ -23479,7 +23933,7 @@
     },
     {
       "id": "habits-streak",
-      "title": "Your streak",
+      "title": "Your daily activity streak",
       "description": "Days in a row with a message you typed; your longest run; and your engaged time yesterday and over the last seven days.",
       "category": "human",
       "idea": "rhythm-01",
@@ -23503,7 +23957,7 @@
     },
     {
       "id": "habits-weekday-streak",
-      "title": "Your weekday streak",
+      "title": "Your weekday activity streak",
       "description": "Days in a row with a message you typed, counting weekdays only; your longest run; and your engaged time yesterday and over the last seven days.",
       "category": "human",
       "idea": "rhythm-01",
@@ -23530,7 +23984,7 @@
     {
       "id": "habits-calendar-you",
       "title": "Your active days",
-      "description": "Each square is a day of you; darker is more time.",
+      "description": "Past 17 weeks. Each square shows your engaged time; darker is more time. Open the dashboard for all 53 weeks.",
       "category": "human",
       "idea": "rhythm-01",
       "dataset": "rhythm",
@@ -23554,7 +24008,7 @@
     {
       "id": "habits-calendar-agents",
       "title": "Days with agents you started",
-      "description": "Each square is a day of agents you started; darker is more time.",
+      "description": "Past 17 weeks. Each square shows time with agents you started; darker is more time. Open the dashboard for all 53 weeks.",
       "category": "machines",
       "idea": "rhythm-03",
       "dataset": "rhythm",
@@ -23580,7 +24034,7 @@
     {
       "id": "habits-punchcard-you",
       "title": "When you work",
-      "description": "Minutes per week of you in each weekday hour, coloured by time of day.",
+      "description": "Past 90 days. Time for you in each weekday hour, in minutes per week, coloured by time of day.",
       "category": "human",
       "idea": "rhythm-01",
       "dataset": "rhythm",
@@ -23604,7 +24058,7 @@
     {
       "id": "habits-punchcard-away",
       "title": "When agents work while you're away",
-      "description": "Minutes per week of agents you started, while you're away in each weekday hour, coloured by time of day.",
+      "description": "Past 90 days. Time for agents you started, while you're away in each weekday hour, in minutes per week, coloured by time of day.",
       "category": "machines",
       "idea": "rhythm-03",
       "dataset": "rhythm",
@@ -23629,7 +24083,7 @@
     },
     {
       "id": "habits-days",
-      "title": "Your days",
+      "title": "Your daily work schedule",
       "description": "Each of the last 28 days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.",
       "category": "human",
       "idea": "rhythm-01",
@@ -23653,7 +24107,7 @@
     },
     {
       "id": "habits-pace",
-      "title": "Your pace",
+      "title": "Your work and rest patterns",
       "description": "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.",
       "category": "human",
       "idea": "rhythm-01",
@@ -23678,7 +24132,7 @@
     {
       "id": "habits-automations",
       "title": "Automatic agent runs",
-      "description": "What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
+      "description": "Past 30 days. What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.",
       "category": "machines",
       "idea": "rhythm-03",
       "dataset": "rhythm",

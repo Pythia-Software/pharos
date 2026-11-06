@@ -15,7 +15,7 @@ export const siteSections = [
   { path: "cards", route: "/cards", description: "The card library: every prebuilt question, each opening a dashboard. Filter by text, data source, topic or kind." },
   { path: "library", route: "/library", description: "Search conversations and work: text search across messages, or filter the work table." },
   { path: "analyze", route: "/analyze", description: "Dashboards per topic (tokens, tools, human words …) and query tables per dataset." },
-  { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, and Risky action notices, in separate prompt baskets." },
+  { path: "findings", route: "/findings", description: "Optimize: Efficiency findings with measured improvements, Risky action notices, and Fixes for recurring agent problems, in separate prompt baskets." },
   { path: "ask", route: "/ask", description: "Ask Pharos full screen: a new chat on its own page, without the rest of the app." },
   { path: "work", route: "/work/{work_id}", description: "One work item (a workspace) with its conversations, reader and delegation explorer." },
   { path: "settings", route: "/settings", description: "Library health and settings pages." },
@@ -26,6 +26,8 @@ export const pageDescriptions: Record<string, string> = {
   "analyze/query": "Query tables over each Analyze dataset, filtered by where terms.",
   "findings/safety/table": "Every risky action notice, filterable and groupable by resource, check, danger, location, handoff state, or recorded activity.",
   "findings/safety/settings": "Enable or disable safety discovery checks, review coverage and handoff behavior, and refresh reviews.",
+  "findings/fixes/table": "Every fix in every state, hidden ones included, filterable and groupable by kind, place, recurrence, whether the settings hide it, work items or priority.",
+  "findings/fixes/settings": "Bounds that rank quiet fixes lower and hide stale or rare ones, how Fixes and Risky actions divide agent events, and refresh.",
   "findings/table": "Every finding as a filterable table.",
   "findings/settings": "Which detectors run and how findings are ranked.",
 };

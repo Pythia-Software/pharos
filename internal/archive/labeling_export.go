@@ -295,7 +295,7 @@ func (w *jsonlWriter) close() error {
 		w.file.Close()
 		return err
 	}
-	if err := w.file.Sync(); err != nil {
+	if err := syncToDrive(w.file); err != nil {
 		w.file.Close()
 		return err
 	}

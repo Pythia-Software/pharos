@@ -1,3 +1,5 @@
+import {peopleMessageLabelCatalog} from "./people-message-labels";
+import { compactionAnalysisCatalog } from "./compaction-analysis-catalog";
 import {messageLabelsCatalog} from "./message-labels-catalog";
 import { normalizeAnalysis, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 import { conversationAnalysisCatalog } from "./conversation-analysis-catalog";
@@ -16,7 +18,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 // their catalogs with the user's settings; these are their shapes, for
 // reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
-  labels:messageLabelsCatalog,
+  compaction: compactionAnalysisCatalog, labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
   human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, habits: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog,
 };
@@ -26,10 +28,11 @@ export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
 // Without them, Carbon and Parallelism give their shapes, which read links
 // but cannot draw (useAnalysisCatalog supplies them in the page).
 export type CatalogSettings = { carbon?: CarbonAssumptions; parallelism?: ParallelismCounting };
-export function analysisCatalogFor(topic: string, settings: CatalogSettings = {}): AnalysisCatalog | undefined {
+export function analysisCatalogFor(topic: string, settings: CatalogSettings = {}, state?: AnalysisState): AnalysisCatalog | undefined {
   if (topic === "carbon") return settings.carbon ? carbonAnalysisCatalog(settings.carbon) : undefined;
   if (topic === "parallelism") return settings.parallelism ? parallelismAnalysisCatalog(settings.parallelism) : undefined;
-  return analysisCatalogs[topic];
+  const catalog=analysisCatalogs[topic];
+  return catalog&&state?peopleMessageLabelCatalog(catalog,state):catalog;
 }
 
 // A dashboard chart as it draws, whatever version or vocabulary wrote it, so
@@ -40,7 +43,7 @@ export function normalizedDashboardChart(topic: string | null, chart: string | n
   const catalog = topic ? analysisCatalogs[topic] : undefined;
   if (!catalog || !chart) return chart ?? "";
   try {
-    const { v: _, ...state } = normalizeAnalysis(catalog, JSON.parse(chart) as AnalysisState);
+    const { v: _, ...state } = normalizeAnalysis(peopleMessageLabelCatalog(catalog,JSON.parse(chart) as AnalysisState), JSON.parse(chart) as AnalysisState);
     const drawn: Record<string, unknown> = { ...state, scale: state.scale ?? "linear" };
     if (!state.selection?.values.length) delete drawn.selection;
     return canonical(drawn);

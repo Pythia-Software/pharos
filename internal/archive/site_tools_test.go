@@ -87,12 +87,22 @@ func TestBrowseSiteReachesEveryServedPageWithinItsBudget(t *testing.T) {
 		}
 		reached[path] = true
 		offset := 0
+		columns := map[string]bool{}
 		for {
 			value, text := browseText(t, catalog, map[string]any{"path": path, "offset": offset})
 			if len(text) > 3000*3 {
 				t.Errorf("%s: %d bytes over the default budget", path, len(text))
 			}
 			items, _ := value["items"].([]any)
+			if listed, ok := value["columns"].([]any); ok {
+				for _, raw := range listed {
+					column := raw.(map[string]any)["name"].(string)
+					if columns[column] {
+						t.Fatalf("%s repeated column %s", path, column)
+					}
+					columns[column] = true
+				}
+			}
 			for _, raw := range items {
 				item := raw.(map[string]any)
 				child, _ := item["path"].(string)
@@ -104,7 +114,17 @@ func TestBrowseSiteReachesEveryServedPageWithinItsBudget(t *testing.T) {
 			if !ok {
 				break
 			}
+			if int(next) <= offset {
+				t.Fatalf("%s pagination made no progress: %v", path, value)
+			}
 			offset = int(next)
+		}
+		if page, ok := strings.CutSuffix(path, "/query"); ok && len(columns) > 0 {
+			for _, column := range site.Datasets[site.Nodes[page].Dataset].Columns {
+				if !columns[firstString(column["name"])] {
+					t.Errorf("%s never lists column %v", path, column["name"])
+				}
+			}
 		}
 	}
 	routes := map[string]bool{}

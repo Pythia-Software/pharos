@@ -21,7 +21,7 @@ import (
 var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
-	"analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
+	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
@@ -55,6 +55,29 @@ func runningItems(views []opView) (map[string]bool, []string) {
 		}
 	}
 	return items, order
+}
+
+// waitingItems includes items accepted by a pass but not yet reached. A
+// manual cadence describes future scheduling, not the state of an accepted
+// Run now while its prerequisites are running.
+func waitingItems(views []opView) map[string]bool {
+	waiting := map[string]bool{}
+	for _, view := range views {
+		if view.Spec.Kind != "background.update" || !liveState(view.State) {
+			continue
+		}
+		for index, step := range view.Plan {
+			if index+1 <= view.Step.Index {
+				continue
+			}
+			for _, item := range backgroundItems {
+				if item.Label == step.Name {
+					waiting[item.ID] = true
+				}
+			}
+		}
+	}
+	return waiting
 }
 
 // stoppableItems is the operation that Stop ends for each item a stoppable
@@ -167,6 +190,8 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 		value = oldest("an.tools")
 	case "writing":
 		value = oldest("an.authorship")
+	case "writing-refine":
+		value = oldest("an.authorship.refined")
 	case "findings", "review":
 		value = oldest("findings")
 	case "preserve":
@@ -183,7 +208,7 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 	case "backup":
 		value = in.lastBackup
 	}
-	if value == "" && !plan.LastDone.IsZero() {
+	if value == "" && !plan.LastDone.IsZero() && item.ID != "writing" {
 		value = formatTime(plan.LastDone)
 	}
 	return value
@@ -224,10 +249,10 @@ func sourceDomains(config Config, other bool) []string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "power": "Waits until on outlet power"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until on outlet power"}
 
 // stateRank orders states from the one a cadence's row should show first.
-var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable"}
+var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable", "disabled"}
 
 // backgroundView is the schedule as surfaces show it.
 func (s *Server) backgroundView(ctx context.Context, views []opView, freshness []freshnessRow, at time.Time) map[string]any {
@@ -238,11 +263,19 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	costs := s.cachedCosts(ctx)
 	in := s.backgroundInputsFor(ctx, s.peekRequested())
 	plans := backgroundPlan(settings, in, at)
+	// The step details own model settings. Keep disabled models reachable in
+	// the unscheduled column without adding them to the execution plan.
+	for _, item := range backgroundItems {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+			plans = append(plans, itemPlan{ID: item.ID, Cadence: cadenceManual})
+		}
+	}
 	rows := map[string]freshnessRow{}
 	for _, row := range freshness {
 		rows[row.Domain] = row
 	}
 	live, order := runningItems(views)
+	queued := waitingItems(views)
 	stops := stoppableItems(views)
 	items := []map[string]any{}
 	byCadence := map[string][]map[string]any{}
@@ -260,6 +293,10 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
+		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents:
+			state = "disabled"
+		case in.requested[item.ID] || queued[item.ID]:
+			state = "queued"
 		case item.ID == "backup" && in.backupDestination == "":
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
@@ -276,6 +313,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "queued"
 		case plan.Missed:
 			state = "missed"
+		case item.ID == "writing" && plan.Pending:
+			state = "queued"
 		case asOf == "" && plan.Pending:
 			state = "never"
 		}
@@ -305,6 +344,10 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		}
 		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
 			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
+		}
+		if item.ID == "writing" && in.writingBacklog.Pending > 0 {
+			entry["backlog"] = in.writingBacklog
+			entry["note"] = in.writingBacklog.note(at)
 		}
 		if item.ID == "backup" && in.backupDestination != "" {
 			entry["label"] = "Back up to " + in.backupDestination
@@ -452,24 +495,13 @@ func itemChoices(item backgroundItem, settings backgroundSettings) []map[string]
 	return append(choices, map[string]any{"value": cadenceManual, "label": "Only when I ask"})
 }
 
-// A temporary move is one bucket faster or slower than the effective schedule.
-// Fixed, opt-in and manually disabled work keep their existing controls.
+// Every item can move to any of the other columns for a week. These
+// buttons offer the same choices as dragging, including without a pointer.
 func itemCadenceMoves(item backgroundItem, settings backgroundSettings) []map[string]any {
-	if !item.Adaptive {
-		return nil
-	}
-	index := slices.Index(cadences, settings.cadence(item))
-	if index < 0 {
-		return nil
-	}
 	moves := []map[string]any{}
-	for _, move := range []struct {
-		offset int
-		verb   string
-	}{{-1, "Promote"}, {1, "Demote"}} {
-		if target := index + move.offset; target >= 0 && target < len(cadences) {
-			cadence := cadences[target]
-			moves = append(moves, map[string]any{"cadence": cadence, "label": move.verb + " to " + cadenceLabels[cadence] + " for a week"})
+	for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+		if cadence != settings.cadence(item) {
+			moves = append(moves, map[string]any{"cadence": cadence, "label": "Move to " + cadenceLabels[cadence] + " for a week"})
 		}
 	}
 	return moves
@@ -650,7 +682,7 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 // postBackgroundSettings answers POST /api/background/settings: mode (on,
 // pause, manual; pause_minutes, default 60), interval_seconds, daily_at
 // ("HH:MM"), hold_when_busy, and overrides ({item: cadence, or "" for
-// automatic}), temporary_cadences ({adaptive item: cadence for seven days,
+// automatic}), temporary_cadences ({item: cadence for seven days,
 // or "" to end the temporary schedule}).
 func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	ctx := r.Context()
@@ -768,9 +800,9 @@ func (s *Server) postBackgroundSettings(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		for id, rawCadence := range values {
-			item, known := backgroundItemByID(id)
+			_, known := backgroundItemByID(id)
 			cadence, valid := rawCadence.(string)
-			if !known || !item.Adaptive || !valid || (cadence != "" && !slices.Contains(cadences, cadence)) {
+			if !known || !valid || (cadence != "" && !validBackgroundCadence(cadence)) {
 				writeError(w, fmt.Errorf("%q cannot temporarily run on %q", id, cadence), 400)
 				return
 			}
@@ -854,6 +886,8 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 			// the saved schedule is unchanged.
 			s.requestIndex()
 		case item.continuous:
+			s.Catalog.resumeLibraryRefresh()
+			run = append(run, id)
 		case item.requiresLabels && !s.Config().Labels.Enabled:
 			// Labels are off here (the broker asks every library after a
 			// download).

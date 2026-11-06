@@ -2,7 +2,8 @@ import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
 import { isTrendView, changeState, noSplit, heatmapAxis, heatmapSource, percentileLabel, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
+import { trendPeriodCount, trendQuery, trendSeries } from "./dashboard-trend-model";
+import { analysisCardCopy } from "./dashboard-card-copy";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, updateSliceValues, type LegendAction } from "./chart-selection";
 import { dashboardChartURL } from "./dashboard-chart-links";
@@ -98,7 +99,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     : "No earlier point has a value, so there is no reference level yet.");
   const bounds = timeBounds(where, catalog.time);
   const population = usePopulation(catalog, schema, where);
-  const title = `${trendTitle(catalog, view)}${population.suffix}`;
+  const title = analysisCardCopy(catalog, view, where, schema).title;
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
   // The legend's population actions filter on the series' group; a series

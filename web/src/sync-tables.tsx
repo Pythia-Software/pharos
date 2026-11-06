@@ -5,6 +5,8 @@ import { inspectBucketQuery } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, QueryBuilder, MetricsPanel, ModalSurface, defaultRenderers, type RenderRegistry } from "@pythia-software/query-table-ui";
 import { clientTableStorageAdapter } from "./storage";
+import { useLocationRevision } from "./nested-pages";
+import { useViewEntry } from "./view-state";
 import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, type SyncRecord, type SyncTable } from "./sync-table-model";
 
 declare global {
@@ -33,18 +35,25 @@ const renderers: RenderRegistry<SyncRecord> = {
 };
 
 function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: string; onInspect?: (id: string) => void }) {
+  const locationRevision = useLocationRevision();
+  const active = location.pathname === "/settings/sync";
+  const [collapsed, setCollapsed] = useViewEntry("query_layout", table.schema.name, false, active);
   const storage = useMemo(() => clientTableStorageAdapter(), []);
   // Each table owns its local view. The bounded status response is its entire
   // population; no extra catalog queries or table-specific polling is needed.
-  const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, syncUrl: false, onRefresh: () => { void window.pharosSync.refresh(); } });
+  const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, active,
+    syncUrl: true, queryParameter: `q_${table.schema.name}`, onRefresh: () => { void window.pharosSync.refresh(); } });
   const ref = useRef(api); ref.current = api;
-  const stableApi = useMemo(() => new Proxy({} as QueryTableApi<SyncRecord>, { get: (_target, key) => ref.current[key as keyof QueryTableApi<SyncRecord>] }), []);
+  useEffect(() => {
+    if (!active) return;
+    void ref.current.restoreLocation(location.href).catch(() => {}); // The native API exposes restoration errors in api.error.
+  }, [active, locationRevision]);
   // Loading until this exact query's rows have arrived (or failed).
   const loading = api.execution?.rows !== "succeeded" && api.execution?.rows !== "failed";
   const fields = api.query.grouping ? api.schema!.fields : api.computed.catalogue;
   return <div className="sync-query-table pharos-query-page" role="region" aria-label={label}>
-    <QueryBuilder compact api={stableApi} fields={fields} total={api.total} running={api.loading} defaultCollapsed />
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={fields} renderers={renderers} onInspect={(bucket, clause) => {
+    <QueryBuilder compact api={api} fields={fields} total={api.total} running={api.loading} collapsed={collapsed} onCollapsedChange={setCollapsed} />
+    <MetricsPanel api={api} aggregations={api.aggregations} fields={fields} renderers={renderers} onInspect={(bucket, clause) => {
       const query = inspectBucketQuery(api.query, bucket, clause, table.schema); if (query) api.setQuery(query);
     }} />
     <DataTable fields={api.visibleFields} rows={api.rows} query={api.query} onQueryChange={api.setQuery} renderers={renderers} rowId={api.rowId} columnDrag={api.columnDrag} total={api.total} loading={loading}
@@ -129,15 +138,15 @@ export function SyncTables() {
   if (!status?.settings) return <p className="muted" role="status">Loading capture and index history…</p>;
   const current = live ?? status;
   return <>
-    <section className="sync-panel" aria-label="Recent runs">
-      <div className="sync-section-head"><div><h3>Recent runs</h3><p className="muted">Recorded asynchronous work on this Mac, including indexing, analyses, captures, backups, and maintenance.</p></div>
+    <ViewDisclosure viewKey="sync:history" defaultOpen className="sync-panel sync-disclosure" summary="Recent runs">
+      <div className="sync-section-head"><p className="muted">Recorded asynchronous work on this Mac, including indexing, analyses, captures, backups, and maintenance.</p>
         {current.busy ? <span className="sync-result">{current.pause_reason || "Indexing in progress"}</span> : null}</div>
       <p className="muted">These tables update only when you use Run Now or their auto-refresh.</p>
       {status.operation_history_error ? <p role="alert">Could not load work history: {status.operation_history_error}</p> : null}
       <HistoryQueryTable table={history} label="Recent run history" onInspect={setSelected} />
       <p className="muted">History shows the most recent 50 recorded operations on this Mac. Short, unchanged automatic checks may not be recorded.</p>
-    </section>
-    {createPortal(<section className="sync-panel"><h3>Source status</h3><SyncQueryTable table={tables.sources} label="Source status" /><p className="muted">Needs capture means changes have been indexed but the source files have not been captured yet.</p></section>, document.getElementById("syncSourceTables")!)}
+    </ViewDisclosure>
+    {createPortal(<ViewDisclosure viewKey="sync:sources" defaultOpen className="sync-panel sync-disclosure" summary="Source status"><SyncQueryTable table={tables.sources} label="Source status" /><p className="muted">Needs capture means changes have been indexed but the source files have not been captured yet.</p></ViewDisclosure>, document.getElementById("syncSourceTables")!)}
     {createPortal(<Diagnostics status={status} tables={tables} />, document.getElementById("syncDiagnosticTables")!)}
     {selectedRun ? <RunDetails key={selected} run={selectedRun} onClose={() => setSelected(null)} /> : selectedOperation ? <OperationDetails key={selected} operation={selectedOperation} onClose={() => setSelected(null)} /> : null}
   </>;

@@ -1,3 +1,4 @@
+import { formatUSD } from "./currency";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -5,6 +6,7 @@ import "./findings.css";
 import { Icon } from "./icons";
 import { findingDetailURL, findingsRank, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
 import { SafetyPage } from "./safety";
+import { FixesPage } from "./fixes";
 import { findingsDiscoveryChanged } from "./dataset-refresh";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
 
@@ -77,7 +79,7 @@ function publish(overview: Overview) {
   latest = overview;
   subscribers.forEach(listener => listener(overview));
   updateChrome((overview.summary?.open ?? 0) + (overview.summary?.safety_open ?? 0));
-  if (discoveryChanged) window.dispatchEvent(new Event("pharos:safety-changed"));
+  if (discoveryChanged) { window.dispatchEvent(new Event("pharos:safety-changed")); window.dispatchEvent(new Event("pharos:fixes-changed")); }
 }
 async function loadOverview(): Promise<Overview> {
   const overview = await request<Overview>("/api/findings");
@@ -135,13 +137,7 @@ const lowerFirst = (text: string) => /^[A-Z]([a-z]|\s)/.test(text) && !properNou
 const num = (value: unknown) => { const n = Number(value); return Number.isFinite(n) ? n : 0; };
 
 function money(value: unknown): string {
-  const amount = num(value);
-  const size = Math.abs(amount);
-  if (size >= 1e6) return `$${amount.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`;
-  if (size >= 10) return `$${Math.round(amount).toLocaleString()}`;
-  if (size >= 0.995) return `$${amount.toFixed(2)}`;
-  if (size >= 0.005) return `$${amount.toFixed(2)}`;
-  return "$0";
+  return formatUSD(num(value));
 }
 /** Rounds to two significant figures for estimates that say "about". */
 function aboutMoney(value: unknown): string {
@@ -483,12 +479,21 @@ export function CartPanel({ cart, targets, act, onReview, safety = false }: { ca
   </aside>;
 }
 
-export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }: { group: CartGroup; copy: Copy; onClose: () => void; onCopied: () => void; safety?: boolean }) {
+export type ReviewArea = "efficiency" | "safety" | "fixes";
+type FixMode = "propose" | "change";
+
+// The prompt review before a copy. Efficiency starts measuring; Risky actions
+// and Fixes record a handoff. Fixes asks whether the agent investigates or
+// makes the change.
+export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, area: given }: { group: CartGroup; copy: Copy; onClose: () => void; onCopied: () => void; safety?: boolean; area?: ReviewArea }) {
+  const area: ReviewArea = given ?? (safety ? "safety" : "efficiency");
+  const handsOff = area !== "efficiency";
   const idsKey = group.items.filter(item => item.ticked).map(item => item.id).join("\n");
   const ids = useMemo(() => idsKey ? idsKey.split("\n") : [], [idsKey]);
-  const repository = !safety && group.target.startsWith("repo:");
-  const endpoint = safety ? "/api/findings/safety/cart" : "/api/findings/cart";
+  const repository = area === "efficiency" && group.target.startsWith("repo:");
+  const endpoint = { efficiency: "/api/findings/cart", safety: "/api/findings/safety/cart", fixes: "/api/findings/fixes/cart" }[area];
   const [handoff, setHandoff] = useState<Handoff>(group.handoff === "review" ? "diff" : group.handoff);
+  const [mode, setMode] = useState<FixMode>("propose");
   const [prompt, setPrompt] = useState<Row | null>(null);
   const [error, setError] = useState("");
   const [state, setState] = useState<"" | "copying" | "done">("");
@@ -497,11 +502,11 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
     setError("");
     // Copy stays disabled until the preview matches the choices.
     setPrompt(null);
-    request<Row>(`${endpoint}/prompt`, { target: group.target, ids, ...(repository ? { handoff } : {}) })
+    request<Row>(`${endpoint}/prompt`, { target: group.target, ids, ...(repository ? { handoff } : {}), ...(area === "fixes" ? { mode } : {}) })
       .then(body => { if (!cancelled) setPrompt(body); })
       .catch(failure => { if (!cancelled) setError(failure.message); });
     return () => { cancelled = true; };
-  }, [group.target, ids, handoff, repository, endpoint]);
+  }, [group.target, ids, handoff, repository, endpoint, mode, area]);
   const count = ids.length;
   const global = group.label.match(/· (\S+) on (.+)$/);
   const where = repository ? `an agent working in ${group.label}`
@@ -514,23 +519,26 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
       setState(""); setError("Pharos couldn't write to the clipboard, so nothing started. Select the text, copy it, and try again."); return;
     }
     try {
-      await request(`${endpoint}/copy`, { target: group.target, ids, handoff: repository ? handoff : prompt.handoff, ...(safety ? { preview_token: prompt.preview_token } : {}) });
+      await request(`${endpoint}/copy`, { target: group.target, ids, handoff: repository ? handoff : prompt.handoff, ...(handsOff ? { preview_token: prompt.preview_token } : {}), ...(area === "fixes" ? { mode } : {}) });
       setState("done");
       window.setTimeout(onCopied, 1400);
     } catch (failure) {
-      setState(""); setError(`The prompt is on your clipboard, but Pharos couldn't ${safety ? "record the handoff" : "start measuring"}: ${(failure as Error).message}. Close and review the prompt again before pasting it.`);
+      setState(""); setError(`The prompt is on your clipboard, but Pharos couldn't ${handsOff ? "record the handoff" : "start measuring"}: ${(failure as Error).message}. Close and review the prompt again before pasting it.`);
     }
   }
+  const lede = area === "safety" ? `${spelled(count, "notice")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these notices to Handed off.`
+    : area === "fixes" ? `${spelled(count, "fix", "fixes")}. Paste this into ${group.target === "global" ? "an agent on this Mac; it works on the setup every repository shares" : `an agent working in ${group.label}`}. Copying moves ${count === 1 ? "it" : "them"} to Handed off; a fix opens again if it recurs.`
+      : <>{spelled(count, "finding")}. Paste this into {where}. Copying it starts the before-and-after measurement for {count === 1 ? "it" : count === 2 ? "both" : `all ${count}`}.</>;
   return <Dialog title={`Prompt for ${group.label}`} onClose={onClose} wide footer={<>
-    <span className="findings-dialog-fine">{safety ? "Copying records a handoff. No returned report is required." : "Measured separately: each finding on its own rate."}</span>
+    <span className="findings-dialog-fine">{handsOff ? "Copying records a handoff. No returned report is required." : "Measured separately: each finding on its own rate."}</span>
     <span className="findings-dialog-buttons">
       <button type="button" className="findings-button" onClick={onClose}>Keep in cart</button>
       <button type="button" className="findings-button primary" disabled={!prompt?.prompt || state !== ""} onClick={() => void start()}>
-        {state === "done" ? <><Icon name="check" />{safety ? "Copied · handed off" : "Copied · measuring"}</> : state === "copying" ? "Copying…" : safety ? "Copy prompt and hand off" : "Copy prompt and start measuring"}
+        {state === "done" ? <><Icon name="check" />{handsOff ? "Copied · handed off" : "Copied · measuring"}</> : state === "copying" ? "Copying…" : handsOff ? "Copy prompt and hand off" : "Copy prompt and start measuring"}
       </button>
     </span>
   </>}>
-    <p className="findings-dialog-lede">{safety ? `${spelled(count, "notice")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these notices to Handed off.` : <>{spelled(count, "finding")}. Paste this into {where}. Copying it starts the before-and-after measurement for {count === 1 ? "it" : count === 2 ? "both" : `all ${count}`}.</>}</p>
+    <p className="findings-dialog-lede">{lede}</p>
     {repository ? <fieldset className="findings-handoff">
       <legend>Ask the agent to</legend>
       <div>
@@ -538,9 +546,16 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
         <label><input type="radio" name="findingsHandoff" checked={handoff === "diff"} onChange={() => setHandoff("diff")} /> Show me the diff</label>
       </div>
       <p>{group.handoff_reason} <a href="/findings?view=settings" onClick={event => { event.preventDefault(); onClose(); navigate("/findings?view=settings"); }}>Change the default</a></p>
+    </fieldset> : area === "fixes" ? <fieldset className="findings-handoff">
+      <legend>Ask the agent to</legend>
+      <div>
+        <label><input type="radio" name="fixesMode" checked={mode === "propose"} onChange={() => setMode("propose")} /> Investigate and propose</label>
+        <label><input type="radio" name="fixesMode" checked={mode === "change"} onChange={() => setMode("change")} /> Make the change</label>
+      </div>
+      <p>{mode === "propose" ? "The agent checks each problem still happens and proposes the change, with exact wording for any note; it changes nothing." : "The agent confirms each problem still happens, then makes the smallest change that stops it, on a branch, and reports what it changed."}</p>
     </fieldset> : <p className="findings-handoff-note">{group.handoff_reason}</p>}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
-    {state === "done" ? <p className="findings-success" role="status">{safety ? "Copied. These notices have been handed off. You can bring them back at any time." : <>Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</>}</p> : null}
+    {state === "done" ? <p className="findings-success" role="status">{area === "safety" ? "Copied. These notices have been handed off. You can bring them back at any time." : area === "fixes" ? "Copied. These fixes have been handed off. You can bring them back at any time." : <>Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</>}</p> : null}
     <pre className="findings-prompt" tabIndex={0} aria-label="Prompt text">{prompt?.prompt ?? (error ? "" : "Writing the prompt…")}</pre>
   </Dialog>;
 }
@@ -1068,15 +1083,17 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
 
 // ---------------------------------------------------------------- page
 
-export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?: React.ReactNode; safetyTable?: React.ReactNode }) {
+export function FindingsPage({ copy, table, safetyTable, fixesTable }: { copy: Copy; table?: React.ReactNode; safetyTable?: React.ReactNode; fixesTable?: React.ReactNode }) {
   const [area] = useViewState<string>("optimize_area", "efficiency", location.pathname === "/findings");
+  // Risky actions and Fixes are review areas with their own pages and prompts.
+  const reviewArea = area === "safety" || area === "fixes";
   const [route, setRoute] = useState<Route>(readRoute);
   const [overview, setOverview] = useState<Overview | null>(latest);
   const [error, setError] = useState("");
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [review, setReview] = useState<string>("");
   const [toast, setToast] = useState("");
-  const [rankOverride, setRankOverride] = useViewState<Rank | "">("findings_rank", "", area !== "safety" && location.pathname === "/findings" && new URLSearchParams(location.search).get("view") !== "settings");
+  const [rankOverride, setRankOverride] = useViewState<Rank | "">("findings_rank", "", !reviewArea && location.pathname === "/findings" && new URLSearchParams(location.search).get("view") !== "settings");
   const toastTimer = useRef<number>();
   const listScroll = useRef(0);
 
@@ -1096,7 +1113,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
         return next;
       });
       if (!wasOpen) {
-        const safety = new URLSearchParams(location.search).get("optimize_area") === "safety";
+        const safety = ["safety", "fixes"].includes(new URLSearchParams(location.search).get("optimize_area") ?? "");
         wasOpen = !safety;
         // A visit: remember which findings were new, then mark them seen.
         void reload().then(body => {
@@ -1117,10 +1134,10 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
 
   // Refresh while a pass is running so the page fills in when it's done.
   useEffect(() => {
-    if (area !== "safety" && (!overview?.status?.running || route.view === "settings")) return;
+    if (!reviewArea && (!overview?.status?.running || route.view === "settings")) return;
     const poll = window.setInterval(() => { if (!document.hidden && location.pathname === "/findings") void reload(); }, overview?.status?.running ? 3000 : 15000);
     return () => window.clearInterval(poll);
-  }, [overview?.status?.running, route.view, area, reload]);
+  }, [overview?.status?.running, route.view, reviewArea, reload]);
 
   const say = useCallback((message: string) => {
     setToast(message);
@@ -1137,7 +1154,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
     } catch (failure) { say(`Couldn't do that: ${(failure as Error).message}`); return false; }
   }, [reload, say]);
 
-  useEffect(()=>{if(area!=="safety" && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(findingsRank("", overview.settings?.rank).rank);},[overview?.settings?.rank,rankOverride,route.view,area]);
+  useEffect(()=>{if(!reviewArea && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(findingsRank("", overview.settings?.rank).rank);},[overview?.settings?.rank,rankOverride,route.view,reviewArea]);
   const rank: Rank = findingsRank(rankOverride, overview?.settings?.rank).rank;
   const setRank = (next: Rank) => {
     const choice = findingsRank(rankOverride, overview?.settings?.rank, next);
@@ -1148,6 +1165,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
 
   let body: React.ReactNode;
   if (area === "safety") body = <SafetyPage copy={copy} view={route.view} table={safetyTable} refreshDiscovery={reload} />;
+  else if (area === "fixes") body = <FixesPage copy={copy} view={route.view === "settings" || route.view === "table" ? route.view : ""} table={fixesTable} refreshDiscovery={reload} />;
   else if (route.view === "settings") body = <>{error ? <p className="findings-error" role="alert">{error}</p> : null}<FindingsSettings overview={overview} reload={reload} /></>;
   else if (route.view === "table") body = null;
   else if (route.finding) body = <FindingDetail id={route.finding} tab={route.tab} overview={overview} act={act} rank={rank} onReview={next => setReview(next.target)} newIds={newIds} />;
@@ -1157,12 +1175,12 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
   // The table stays mounted so its query survives visits to a finding.
   return <>
     {body}
-    {table ? <div className="findings-page findings-table" hidden={area === "safety" || route.view !== "table"}>
+    {table ? <div className="findings-page findings-table" hidden={reviewArea || route.view !== "table"}>
       <div className="view-heading findings-heading"><div><h1>Findings table</h1><p className="muted">Every finding as a row, with its state, kind of fix, likely monthly saving and verified results. Group, filter and chart them like any table.</p></div>
       </div>
       {table}
     </div> : null}
-    {group && area !== "safety" ? <ReviewDialog group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); void reload(); say("Copied. Measuring has started."); }} /> : null}
+    {group && !reviewArea ? <ReviewDialog group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); void reload(); say("Copied. Measuring has started."); }} /> : null}
     <div className={`findings-toast ${toast ? "shown" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
 }

@@ -1,9 +1,11 @@
+import {EVENT_GROUPS,eventColor,eventGroup,type AgentEventLink} from './event-link-layout';
 import {compareStates,functionRole,functionStates,shortLabel,stateColor,type LabelMessage,type LabelTool,type Taxonomy} from './conversation-labels';
 import {eventTime,type TimeRange} from './timeline-label-model';
 import {authorshipSegments,authorshipExcerpt,callerSource} from './timeline-caller-model';
+import {laneCandidates,laneMark,nearestMark,placeMarks,type HitTarget,type PlacedMark} from './ribbon-marks';
 
 export type ActivityMark={start:number;end:number;end_known:boolean;category:string;count:number;error:boolean;tool_id?:string;message_id?:string;preview?:string;preview_truncated?:boolean;status?:string;name:string};
-export type RibbonObservation={id:string;start:number;end:number;title:string;color:string;thinking:boolean;label?:string;message?:LabelMessage;mark?:ActivityMark;inferred?:boolean;authorship?:string;excerpt?:{text:string;truncated:boolean}|null;composition?:{start:number;end:number};share?:number;attribution?:'preceding'|'following'|'instant'};
+export type RibbonObservation={event?:AgentEventLink;id:string;start:number;end:number;title:string;color:string;thinking:boolean;label?:string;message?:LabelMessage;mark?:ActivityMark;inferred?:boolean;authorship?:string;excerpt?:{text:string;truncated:boolean}|null;composition?:{start:number;end:number};share?:number;attribution?:'preceding'|'following'|'instant'};
 export type RibbonNode={id:string;title:string;items:RibbonObservation[];children:RibbonNode[]};
 const isThinking=(m:LabelMessage)=>m.kind==='thinking'||m.kind==='reasoning';
 const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other',model:'Model / orchestration · inferred'};
@@ -28,6 +30,27 @@ export function labelIntervals(messages:LabelMessage[],marks:ActivityMark[],maxG
  return messages.flatMap(message=>{const at=eventTime(message);if(at===null)return [];const i=positions.get(at)!,neighbor=isThinking(message)?boundaries[i-1]:boundaries[i+1],spanning=neighbor!==undefined&&Math.abs(neighbor-at)<=maxGap;return [{message,start:spanning?Math.min(at,neighbor):at,end:spanning?Math.max(at,neighbor):at,attribution:spanning?(isThinking(message)?'preceding':'following'):'instant'} as const];});
 }
 
+/** Where a share of a message's text falls in time: the message's span on
+ * the ribbon (labelIntervals), start + share × duration, the mapping its
+ * text-origin parts use. A message with no duration, or a share that was not
+ * recorded, stays at the message's own time. */
+export function textTime(span:{start:number;end:number;at:number},share?:number|null){
+ return share==null||!Number.isFinite(share)||span.end<=span.start?span.at:span.start+(span.end-span.start)*Math.max(0,Math.min(1,share));
+}
+/** Times for agent events on a session's clock: each event at its sentence's
+ * share of its message (AgentEventLink.position), and each target at its
+ * quoted text's share of the target message, so events spread through the
+ * message the way its message modes do instead of piling at one end. A
+ * target outside these messages (another session's) uses its own time. */
+export function agentEventClock(messages:LabelMessage[],marks:ActivityMark[],neighbors=messages){
+ const spans=new Map(labelIntervals(messages,marks,30*60*1000,neighbors).map(({message,start,end})=>[message.id,{start,end,at:eventTime(message)!}]));
+ for(const m of neighbors)if(!spans.has(m.id)){const at=eventTime(m);if(at!==null)spans.set(m.id,{start:at,end:at,at});}
+ return {
+  at:(e:AgentEventLink)=>{const span=spans.get(e.message_id);return span?textTime(span,e.position):null;},
+  targetAt:(e:AgentEventLink)=>{const t=e.target;if(!t?.message_id)return null;const span=spans.get(t.message_id);if(span)return textTime(span,t.position);const at=t.at?Date.parse(t.at):NaN;return Number.isFinite(at)?at:null;},
+ };
+}
+
 /** The same origin run owns its texture, hover excerpt and drill-down span. */
 export function ribbonOriginParts(item:RibbonObservation):RibbonObservation[]{
  if(!item.message)return [];
@@ -36,7 +59,7 @@ export function ribbonOriginParts(item:RibbonObservation):RibbonObservation[]{
 }
 
 /** Thinking is a message kind, not a third function. Split it out before roles. */
-export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],inferred:{start:number;end:number}[],taxonomy:Taxonomy,range:TimeRange,detail=true,caller=false,neighbors=messages,boundaryMarks=marks):RibbonNode{
+export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],inferred:{start:number;end:number}[],taxonomy:Taxonomy,range:TimeRange,detail=true,caller=false,neighbors=messages,boundaryMarks=marks,events:AgentEventLink[]=[]):RibbonNode{
  const intervals=labelIntervals(messages,boundaryMarks,30*60*1000,neighbors);
  const labels:RibbonObservation[]=intervals.flatMap(({message,start,end,attribution})=>{if(start>range[1]||end<range[0])return [];const ids=functionStates(message,detail?'label':'family');return (ids.length?ids:['?']).map(label=>({id:JSON.stringify(['label',message.id,label]),start,end,attribution,title:shortLabel(label,taxonomy),color:stateColor(label),thinking:isThinking(message),label,message}));});
  const activities:RibbonObservation[]=[...marks.flatMap(mark=>mark.start>range[1]||Math.max(mark.start,mark.end_known?mark.end:mark.start)<range[0]?[]:[{id:JSON.stringify(['activity',mark.message_id,mark.tool_id,mark.name,mark.start,mark.end,mark.category]),start:mark.start,end:mark.end_known?Math.max(mark.start,mark.end):mark.start,title:mark.name,color:mark.error?'var(--activity-error)':`var(--activity-${mark.category})`,thinking:false,mark}]),...inferred.filter(span=>span.start<=range[1]&&span.end>=range[0]).map(span=>({id:JSON.stringify(['inferred',span.start,span.end]),...span,title:'Inferred orchestration',color:'var(--activity-model)',thinking:false,inferred:true}))];
@@ -64,16 +87,25 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
   return [group(path,`${message.role} · ${new Date(start).toLocaleTimeString()}`,parts)];
  }):[];
  const authorship=group('authorship','Text origin',originMessages);
- return group('session','Session',[labelNode,authorship,activityNode].filter(node=>node.items.length));
+ // Agent events decompose like Tool actions: group, then kind, then each event.
+ // They draw through the event overlay (shapes and arcs), not as ribbon glyphs.
+ const clock=agentEventClock(messages,boundaryMarks,neighbors);
+ const eventItems:RibbonObservation[]=events.flatMap(e=>{const at=clock.at(e);return at===null||at<range[0]||at>range[1]?[]:[{id:JSON.stringify(['event',e.id]),start:at,end:at,title:e.label,color:eventColor(e.group),thinking:e.source==='thinking',event:e}];});
+ const eventNode=group('events','Agent events',EVENT_GROUPS.flatMap(g=>{const items=eventItems.filter(item=>eventGroup(item.event!.group).key===g.key);if(!items.length)return [];const kinds=[...new Set(items.map(item=>item.title))];return [{id:'events:'+g.key,title:g.short,items,children:kinds.map(kind=>{const found=items.filter(item=>item.title===kind),id='events:'+g.key+':'+kind;return group(id,kind,found.map(item=>({id:id+':'+item.event!.id,title:item.event!.sentence,items:[item],children:[]})));})}];}));
+ // Agent events come before Tool actions: they read with the message modes they sit in.
+ return group('session','Session',[labelNode,authorship,eventNode,activityNode].filter(node=>node.items.length));
 }
-/** Count a retained event once even if it has labels, origin runs and a tool glyph. */
-export function ribbonEventCount(items:RibbonObservation[]){
- const messages=new Set(items.flatMap(item=>item.message?[item.message.id]:[]));
+/** Session summaries count source messages once across every visible layer.
+ * Agent-event rows count classifications, even when several share a message. */
+export function ribbonEventCount(items:RibbonObservation[],scope:'session'|'events'='session'){
+ if(scope==='events')return new Set(items.flatMap(item=>item.event?[item.event.id]:[])).size;
+ const messages=new Set(items.flatMap(item=>item.message?[item.message.id]:item.event?[item.event.message_id]:[]));
  const marks=new Map(items.filter(item=>item.mark).map(item=>[item.id,item.mark!]));
+ for(const mark of marks.values())if(mark.message_id&&(mark.count??1)>0)messages.add(mark.message_id);
  const inferred=new Set(items.filter(item=>item.inferred).map(item=>item.id));
- return messages.size+[...marks.values()].reduce((total,mark)=>total+Math.max(0,(mark.count??1)-(mark.message_id&&messages.has(mark.message_id)?1:0)),0)+inferred.size;
+ return messages.size+[...marks.values()].reduce((total,mark)=>total+Math.max(0,(mark.count??1)-(mark.message_id?1:0)),0)+inferred.size;
 }
-export function ribbonCounts(items:RibbonObservation[]){return {messages:new Set(items.flatMap(item=>item.message?[item.message.id]:[])).size,thinking:new Set(items.flatMap(item=>item.message&&item.thinking?[item.message.id]:[])).size,activity:items.reduce((n,item)=>n+(item.mark?.count??0),0),inferred:items.filter(item=>item.inferred).length};}
+export function ribbonCounts(items:RibbonObservation[]){return {events:new Set(items.flatMap(item=>item.event?[item.event.id]:[])).size,messages:new Set(items.flatMap(item=>item.message?[item.message.id]:[])).size,thinking:new Set(items.flatMap(item=>item.message&&item.thinking?[item.message.id]:[])).size,activity:items.reduce((n,item)=>n+(item.mark?.count??0),0),inferred:items.filter(item=>item.inferred).length};}
 /** Hit testing includes every overlapping glyph/span, including covered marks. */
 export function ribbonHits(items:RibbonObservation[],at:number,tolerance:number){
  const hits=items.filter(item=>item.start<=at+tolerance&&item.end>=at-tolerance);
@@ -84,58 +116,40 @@ export function ribbonHits(items:RibbonObservation[],at:number,tolerance:number)
  return hits.filter(item=>!item.composition||!messages.has(item.message!.id)||exact.has(item));
 }
 
-/** Partition each connected overlap group into reusable tracks. Touching
- * durations may share a track; simultaneous point observations may not. */
-export function ribbonToolTracks(items:RibbonObservation[]){
- const result=new Map<string,{slot:number;total:number}>();
- const ordered=items.filter(item=>item.mark).sort((a,b)=>a.start-b.start||b.end-a.end||a.id.localeCompare(b.id));
- let group:RibbonObservation[]=[],end=-Infinity,pointAtEnd=false;
- const finish=()=>{
-  const tracks:{end:number;point:boolean}[]=[],assigned:{item:RibbonObservation;slot:number}[]=[];
-  for(const item of group){
-   let slot=tracks.findIndex(track=>track.end<item.start||track.end===item.start&&!track.point);
-   if(slot<0)slot=tracks.length;
-   tracks[slot]={end:item.end,point:item.end===item.start};assigned.push({item,slot});
-  }
-  for(const {item,slot} of assigned)result.set(item.id,{slot,total:tracks.length});
- };
- for(const item of ordered){
-  if(group.length&&(item.start>end||item.start===end&&!pointAtEnd)){finish();group=[];end=-Infinity;pointAtEnd=false;}
-  group.push(item);
-  if(item.end>end){end=item.end;pointAtEnd=item.end===item.start;}
-  else if(item.end===end&&item.start===item.end)pointAtEnd=true;
- }
- if(group.length)finish();
- return result;
+/** Tool dots use the ribbon's shared mark placement (ribbon-marks.ts): each
+ * call takes the first lane, centre out, where its dot and duration touch no
+ * other call or event marker, so simultaneous and near-simultaneous calls sit
+ * apart whenever the row has room. x maps a time to the ribbon's pixels. */
+export const TOOL_RADIUS=3,MARK_GAP=.5;
+export function ribbonToolPlacement(items:RibbonObservation[],x:(at:number)=>number,height:number,occupied:PlacedMark[]=[],r=TOOL_RADIUS,gap=MARK_GAP){
+ const lanes=laneCandidates(height,r,gap),tools=[...new Map(items.filter(item=>item.mark).map(item=>[item.id,item])).values()];
+ return new Map(placeMarks(tools.map(item=>laneMark(item.id,x(item.start),r,lanes,item.end>item.start?x(item.end):x(item.start))),{gap,occupied}).map(m=>[m.id,m]));
+}
+export type RibbonHitTarget=HitTarget&{ids:string[]};
+/** One hit test for every mark in a ribbon: the tool dot or event marker
+ * nearest the pointer (within slack pixels) wins; otherwise the message
+ * spans under it. pointer is in the ribbon's pixels. */
+export function ribbonPointerHits<T extends RibbonHitTarget>(items:RibbonObservation[],at:number,tolerance:number,pointer:{x:number;y:number},targets:T[],slack=4):{items:RibbonObservation[];target:T|null}{
+ const target=nearestMark(targets,pointer.x,pointer.y,slack);
+ if(target){const ids=new Set(target.ids);return {items:items.filter(item=>ids.has(item.id)),target};}
+ return {items:ribbonHits(items.filter(item=>!item.mark&&!item.event),at,tolerance),target:null};
 }
 
-/** Prefer the tool track actually under the pointer, preserving every call
- * in the layout while keeping one call's hover content unambiguous. */
-export function ribbonPointerHits(items:RibbonObservation[],at:number,tolerance:number,y:number,unitsPerPixel:number,tracks=ribbonToolTracks(items)){
- const hits=ribbonHits(items,at,tolerance);
- const tools=hits.filter(item=>item.mark).map(item=>{
-  const track=tracks.get(item.id)!,center=32*(track.slot+.5)/track.total,dy=Math.abs(center-y),size=Math.min(8*unitsPerPixel,32/track.total*.75);
-  return {item,dy,dx:Math.max(item.start-at,at-item.end,0),near:dy<=Math.max(3*unitsPerPixel,size/2+unitsPerPixel)};
- }).filter(hit=>hit.near).sort((a,b)=>a.dy-b.dy||a.dx-b.dx||b.item.start-a.item.start||a.item.id.localeCompare(b.item.id));
- return tools.length?[tools[0].item]:hits.filter(item=>!item.mark);
-}
-
-/** Common modes form the backdrop. Rarer modes sit above them, then tool rails.
+/** Common modes form the backdrop. Rarer modes sit above them, then tool rails
+ * (placed by ribbonToolPlacement).
  * Counts use distinct messages, so coexisting labels do not inflate support. */
 export function ribbonLayers(items:RibbonObservation[]){
- const tracks=ribbonToolTracks(items);
  const support=new Map<string,Set<string>>();
  for(const item of items)if(item.label&&item.message){const ids=support.get(item.label)??new Set<string>();ids.add(item.message.id);support.set(item.label,ids);}
  const frequencies=[...new Set([...support.values()].map(ids=>ids.size))].sort((a,b)=>b-a);
  return [...items].sort((a,b)=>Number(!a.message)-Number(!b.message)||(support.get(b.label??'')?.size??0)-(support.get(a.label??'')?.size??0)||(b.end-b.start)-(a.end-a.start)||a.id.localeCompare(b.id)).map(item=>{
   const rank=Math.max(0,frequencies.indexOf(support.get(item.label??'')?.size??0)),height=item.message?Math.max(8,32-rank*5):item.inferred?4:8;
-  const track=tracks.get(item.id);
-  return {item,height,y:item.message?(32-height)/2:track?32*(track.slot+.5)/track.total-height/2:16-height/2,trackCount:track?.total??1};
+  return {item,height,y:item.message?(32-height)/2:16-height/2};
  });
 }
 
 /** Reveal the retained source, preserving the current workspace's timeline state. */
-export function ribbonSourceURL(item:RibbonObservation,source:{workspace:string;conversation:string;session:string},currentURL:string){
+export function ribbonSourceURL(item:Pick<RibbonObservation,'start'> & Partial<RibbonObservation>,source:{workspace:string;conversation:string;session:string},currentURL:string){
  const workspace=item.message?.work_id||source.workspace,conversation=item.message?.conversation_id||source.conversation;
  const message=item.message?.id||item.mark?.message_id,call=item.mark?.tool_id;
  if(!workspace||!conversation||!message&&!call)return null;

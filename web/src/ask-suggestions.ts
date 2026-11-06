@@ -17,12 +17,12 @@ export type AskFamily = { id: string; area: string; form: AskForm; prior: number
 export const askForms: AskForm[] = ["understand", "compare", "change", "find", "improve", "check", "learn"];
 
 export const askAreas: AskArea[] = [
-  {id:"message-labels",label:"Conversation functions",pages:["analyze/labels","analyze/query/message_labels"],signals:["labels.coverage"]},
+  {id:"message-labels",label:"Conversation functions",pages:["analyze/labels","analyze/query/message_labels","analyze/query/people_message_labels"],signals:["labels.coverage"]},
   { id: "verification", label: "Tests and builds", pages: ["analyze/calls", "analyze/time"], signals: ["verification.failures", "verification.time"] },
   { id: "tool-failures", label: "Failing tool calls", pages: ["analyze/calls", "analyze/tools", "analyze/query/tool_calls", "analyze/query/tools", "analyze/session_shape", "analyze/query/session_shape"], signals: ["tools.failures"] },
   { id: "machine-time", label: "Where agent time goes", pages: ["analyze/time", "analyze/tools"], signals: ["tools.time"] },
   { id: "thinking", label: "Reasoning and waiting", pages: ["analyze/thinking-overview", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["thinking.reasoning"] },
-  { id: "context", label: "Context pressure", pages: ["analyze/tools", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["context.compaction", "context.output"] },
+  { id: "context", label: "Context pressure", pages: ["analyze/compaction", "analyze/query/compactions", "analyze/tools", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["context.compaction", "context.output"] },
   { id: "spend", label: "Tokens and cost", pages: ["analyze/tokens", "analyze/query/usage", "cards"], signals: ["spend.tokens", "spend.change"] },
   { id: "models", label: "Model choice", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["models.mix"] },
   { id: "caching", label: "Cache reuse", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["spend.cache"] },
@@ -32,7 +32,7 @@ export const askAreas: AskArea[] = [
   { id: "repositories", label: "Repositories and activity", pages: ["home", "library", "analyze/activity"], signals: ["activity.repos"] },
   { id: "writing", label: "My writing and steering", pages: ["analyze/human", "analyze/query/writing", "analyze/query/writing_messages", "analyze/session_shape"], signals: ["writing.volume", "writing.back_and_forth"] },
   { id: "supplied-context", label: "Context I supply", pages: ["analyze/human", "analyze/query/writing_messages"], signals: ["writing.supplied"] },
-  { id: "agent-experience", label: "What agents run into", pages: ["analyze/agent_experience", "analyze/query/agent_events", "analyze/query/agent_event_messages"], signals: ["agent.friction", "agent.reactions"] },
+  { id: "agent-experience", label: "What agents run into", pages: ["analyze/agent_experience", "analyze/query/agent_events", "analyze/query/agent_event_messages", "findings/fixes", "findings/fixes/table", "findings/fixes/settings"], signals: ["agent.friction", "agent.reactions"] },
   { id: "web", label: "Sites agents visit", pages: ["analyze/tools", "analyze/query/tool_calls"], signals: ["web.hosts", "web.new_hosts"] },
   { id: "risk", label: "Risky actions", pages: ["findings/safety", "findings/safety/table", "findings/safety/settings"], signals: ["risk.safety"] },
   { id: "findings", label: "Recommended changes", pages: ["findings", "findings/table", "findings/settings"], signals: ["improve.findings", "improve.watching"] },
@@ -51,7 +51,7 @@ export const askAreas: AskArea[] = [
 export const askExcludedPages: Record<string, string> = {
   "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
   "settings/layout": "Header and navigation layout preferences.",
-  "settings/preferences": "Display preferences.",
+  "settings/preferences": "Display preferences, including agent event markers and arcs in fingerprints.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted.",
 };
 
