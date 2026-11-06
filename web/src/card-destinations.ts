@@ -1,7 +1,7 @@
 import { EMPTY_QUERY, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
-import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { cardDashboardWhere } from "./card-exploration";
 import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
@@ -30,6 +30,10 @@ const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = e
 const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
 const dashboards: Record<string, CardDashboard> = {
+  "compactions-by-trigger": engine("compaction", "trend")("compactions", "trigger"),
+ "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
+ "human-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
+ "thinking-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
   "error-signatures": calls("calls", "error_signature", { minSamples: 2 }),
   "error-reach": calls("repositories", "error_signature"),
   "cross-repo-errors": calls("calls", "repository_error"),
@@ -40,6 +44,9 @@ const dashboards: Record<string, CardDashboard> = {
   "skill-reach": skills("repositories", "skill_name", { view: "compare" }),
   "usage-work": tokens("tokens", "repository_name", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
   "delegation-depth": tokens("tokens", "delegated_run_depth", { view: "compare" }),
+  "delegation-breadth": tokens("delegated_runs", "none", { view: "distribution", unit: "delegating_run" }),
+  "task-delegated-runs": tokens("delegated_runs", "none", { view: "distribution", unit: "conversation" }),
+  "delegation-fanout-trend": tokens("average_fanout", "none", { view: "trend", period: "week", nonzero: true }),
   "model-session-costs": tokens("cost", "provider_model", { view: "distribution", unit: "conversation", scale: "logarithmic", minSamples: 3 }),
   "largest-subagent-weight": tokens("delegated_runs", "provider_model_effort", { view: "compare", unit: "conversation", reduce: "max" }),
   "session-delegation-count": tokens("delegated_runs", "provider_model_effort", { view: "distribution", unit: "conversation", scale: "logarithmic" }),
@@ -157,7 +164,7 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
 }
 
 export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
-  if (recipe.thinking) return recipe;
+  if (recipe.thinking || recipe.habits) return recipe;
   if (recipe.retired || recipe.dataset === "tl1_attempts" || !Object.hasOwn(usageDatasetTopics, recipe.dataset)) return recipe;
   const mapped = dashboardFor(recipe);
   const dashboard = mapped.chart.view === "distribution" && recipe.cover?.minSamples !== undefined ? { ...mapped, chart: { ...mapped.chart, minSamples: recipe.cover.minSamples } } : mapped;
@@ -172,6 +179,13 @@ export function parallelismRibbon(days?: number | null) {
 }
 
 export function cardDestination(recipe: QueryRecipe, query: QueryState, window?: RollingWindow): string {
+  // A Habits card is the page's address, as its "Add to Home" saves it,
+  // landing on its section.
+  if (recipe.habits) {
+    const address = new URL(usageWorkspaceURL({ mode: "dashboards", topic: "habits", dataset: "rhythm" }, new URLSearchParams(recipe.habits.view)), "http://localhost");
+    address.searchParams.set("reveal", `section:${recipe.habits.target}`);
+    return address.pathname + address.search;
+  }
   const url = queryURL(recipe.dataset, query, window), target = recipe.destination;
   if(recipe.thinking) {
     const parsed=new URL(url,"http://localhost");

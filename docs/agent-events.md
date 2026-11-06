@@ -5,8 +5,10 @@ docs, surprises, confusion, discoveries, their own mistakes, workarounds, unchec
 getting around an instruction or safeguard, and more. Each event is one sentence in an agent's visible reply or its
 thinking, with what it was about and what the agent did about it, linked to the message in the reader.
 
-It is a preview. Settings → App preferences → **Agent Experience (preview)** turns it on for a library: it lists the
-pages in Analyze and starts the pass that finds events on this Mac (below). Direct links work either way.
+It is a preview. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it on for a library: it lists the
+pages in Analyze and starts the pass that finds events on this Mac (below). `agent_events_enabled = true` in the
+library's configuration does both too, and locks the switch on; `/assets/preferences.js` tells the page so
+(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way.
 
 ## How events are found
 
@@ -69,9 +71,26 @@ sentences. Thinking is marked inside its Reasoning row, which shows a count of i
 With the Settings switch on (preference `pharos-agent-events-v1`, read as a feature flag, `agentEventsFlag`) or
 `agent_events_enabled = true` in a library's configuration, the analysis chain runs an **agent events** stage after
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
-Runtime and budget (`labels_worker`, `labels_runtime`, `labels_threads`, …), and the same power rules: each chain pass
-scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
+Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
+`agent_events_threads` (Settings → Agent events → CPU threads, shown for CPU execution; unset, `labels_threads`), and the same power rules: each chain
+pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
 `backlog` run when plugged in and stops if this Mac goes onto battery.
+
+Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
+status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again
+on the next run. Agent events prepares upcoming conversations with up to four CPU workers while the model
+scores the current window and a writer saves earlier results, one atomic transaction per conversation.
+A shared budget bounds queued candidates
+and message bookkeeping to three windows of about 512 rows, plus at most one conversation per preparation worker.
+Each preparation worker owns its builder state; results are handed off in conversation order, and a blocked
+scoring queue stops dispatching new conversations. A large conversation stays whole; its token credits are
+released after scoring, before waiting for the writer. Partial windows run as soon as preparation pauses,
+so the worker need not wait for 512 candidates. Preparation uses the separate read-only catalog pool and the
+[preparation concurrency limits](local-labeler.md#device-status-and-gpu-capacity); limited chain runs remain serial. Active runs
+check the CPU thread target every two minutes and replace CPU workers after the current scoring chunk finishes,
+keeping its results. Changing threads needs no stop or app relaunch; the shared budget and battery cap still apply.
+GPU workers keep running when the saved CPU target changes. Settings shows the expected or confirmed device
+for each model, with automatic GPU capacity; see [device status](local-labeler.md#device-status-and-gpu-capacity).
 
 - **The verifier** is a pinned download, `agent_events_model` in `internal/archive/labels/assets.json`
   (`jayhawk-68m`, version 1: the manifest, the int8 ONNX file and the tokenizer, 146 MB), unpacked into
@@ -109,10 +128,23 @@ scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continue
 changed, since what a fork inherited from its parent decides which replies are its own. A fork followed that way gets a
 dirty mark of its own, so a limited run that stops before it keeps it pending. Conversations that left the catalog lose
   their rows.
-- **How it stores.** Candidates are gathered across conversations (512 at a time), scored in batches packed by length,
-  and stored with each conversation's ledger row in one transaction. A stop between chunks keeps what was stored and
-  kills the verifier's workers, so batches queued at them do not run on; the next run resumes. A finished run leaves
-  them warm for `labels_idle_seconds`.
+- **How it stores.** Preparation, scoring windows and saving overlap (`agent_events_pipeline.go`). Candidates are
+  scored in batches packed by length, and each conversation's results, ledger row and original dirty token are
+  saved in one transaction. Preparation credits are released after scoring, separately from the bounded save queue:
+  even a conversation larger than a scoring window can be followed by inference while its save waits. Scored windows
+  release their token arrays before entering that queue; sentence spans and results remain until the transaction commits.
+  There are at most three unscored windows plus one conversation being built, and three scored windows (being saved,
+  queued, and waiting for handoff); a whole conversation may exceed one window. A stop keeps committed conversations and kills the verifier's workers, so batches queued
+  at them do not run on; the next run resumes. A finished run leaves them warm for `labels_idle_seconds`. Run stats
+  and the final progress line include preparation, inference and save time; these overlap rather than adding to
+  elapsed time. Background passes now retain those summary lines in the service log too.
+- **Progress.** The conversation count advances only after its transaction commits. The activity panel also shows
+  saved messages, successfully scored candidates, overall candidate throughput and the active preparation, scoring
+  or saving phase. Scoring identifies CPU or GPU only after the worker confirms it; GPU idle gaps retain that device
+  identity without claiming ongoing GPU use. Candidate counts update as batches return, including within a large
+  conversation, and are distinct from saved results. Counts and the throughput clock carry across the initial limited
+  pass into its backlog. After a service restart, the next pass counts the remaining work; committed results are kept.
+  No candidate-total estimate or conversation-based ETA is invented before inputs are prepared.
 - **What it refuses.** A verifier trained on another lexicon, deciding at another threshold than the datasets'
   (0.5), lacking a kind's definition or the `verdict` and `sentences` outputs.
 

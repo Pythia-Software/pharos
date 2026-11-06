@@ -2,7 +2,35 @@ import { chartSeriesStyle, otherSeriesColor } from "./chart-colors";
 import { periodBuckets, periodIndex, periodKey, periodStart, type ChartPeriod } from "./chart-period";
 import { columnScale, type ChartScale } from "./chart-scale";
 
-export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string };
+export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string; groupPath?: string[] };
+export type LegendGroup = { label: string; path: string[]; items: ChartSeries[]; groups: LegendGroup[] };
+export const legendGroupSeries = (group: LegendGroup): ChartSeries[] => [...group.items,...group.groups.flatMap(legendGroupSeries)];
+// Keep every series in its full hierarchy; identical subgroup names in
+// separate branches remain separate, and empty groups never appear.
+export function legendGroups(series: ChartSeries[]): LegendGroup {
+  const root: LegendGroup = {label:"",path:[],items:[],groups:[]};
+  for (const item of series) {
+    let node = root;
+    for (const label of item.groupPath ?? (item.group ? [item.group] : [])) {
+      let child = node.groups.find(group => group.label === label);
+      if (!child) { child = {label,path:[...node.path,label],items:[],groups:[]}; node.groups.push(child); }
+      node = child;
+    }
+    node.items.push(item);
+  }
+  const containParents = (node: LegendGroup) => {
+    for (const child of node.groups) {
+      // An accepted general label is also a series. Keep it inside the
+      // same outline as its specific descendants rather than beside it.
+      const parents = node.items.filter(item => item.groupPath && item.value && item.value.split('.').length === child.path.length && item.label === child.label && legendGroupSeries(child).some(leaf => leaf.value?.startsWith(item.value + '.')));
+      node.items = node.items.filter(item => !parents.includes(item));
+      child.items.unshift(...parents);
+      containParents(child);
+    }
+  };
+  containParents(root);
+  return root;
+}
 export type ChartBucket = { key: string; date: Date; values: Record<string, number>; parts?: Record<string, Array<[string, number]>>; detail?: string; windowSize?: number; history?: boolean };
 export const chartDisplays = ["interval", "cumulative"] as const;
 export type ChartDisplay = typeof chartDisplays[number];
@@ -10,11 +38,11 @@ export const validChartDisplay = (value: unknown): value is ChartDisplay | undef
 
 // Logarithmic timelines compare each series independently: a stack's segment
 // heights would depend on the amounts below it, rather than its own value.
-export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, percent = false, reference = 0 }: { scale: ChartScale; lines?: boolean; percent?: boolean; reference?: number }) {
-  lines ||= scale === "logarithmic" && !percent;
+export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, bars = false, grouped = false, percent = false, reference = 0 }: { scale: ChartScale; lines?: boolean; bars?: boolean; grouped?: boolean; percent?: boolean; reference?: number }) {
+  lines = !bars && (lines || scale === "logarithmic" && !percent);
   const peaks = buckets.map(bucket => {
     const values = series.map(item => bucket.values[item.key] ?? 0);
-    return lines ? Math.max(0, ...values) : values.reduce((sum, value) => sum + value, 0);
+    return lines || grouped ? Math.max(0, ...values) : values.reduce((sum, value) => sum + value, 0);
   });
   return { ...columnScale([...peaks, reference], percent ? "linear" : scale), lines };
 }
@@ -155,8 +183,8 @@ export function foldSeries(rows: Array<[string, string, number]>, byKey: Map<str
   for (const name of selected) if (!top.includes(name)) top.push(name);
   const rest = shown.filter(name => !top.includes(name));
   const styles = new Map([...new Set([...shown, ...selected])].sort().map(name => [name, chartSeriesStyle(scope, name)]));
-  if (scope === "level_band" || scope === "model_family" || scope === "provider" || scope === "effort" || scope === "model_effort") top.sort((left, right) => styles.get(left)!.order!.localeCompare(styles.get(right)!.order!, undefined, { numeric: true }));
-  const series: ChartSeries[] = top.map(name => ({ key: `s:${name}`, label: label(name), color: styles.get(name)!.color, group: styles.get(name)!.group, value: name }));
+  if (scope === "level_band" || scope === "model_family" || scope === "provider" || scope === "effort" || scope === "model_effort" || ["label","family"].includes(scope) && top.every(name => styles.get(name)?.order !== undefined)) top.sort((left, right) => styles.get(left)!.order!.localeCompare(styles.get(right)!.order!, undefined, { numeric: true }));
+  const series: ChartSeries[] = top.map(name => ({ key: `s:${name}`, label: label(name), color: styles.get(name)!.color, group: styles.get(name)!.group, ...styles.get(name)!.groupPath ? {groupPath:styles.get(name)!.groupPath} : {}, value: name }));
   if (rest.length) series.push({ key: "other", label: `Other (${rest.length})`, color: otherSeriesColor, hiddenCount: rest.length, foldedValues: rest });
   for (const [bucketKey, name, value] of inView) {
     const target = byKey.get(bucketKey)!, key = top.includes(name) ? `s:${name}` : "other";

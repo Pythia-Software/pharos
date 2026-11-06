@@ -3,9 +3,10 @@ package archive
 import (
 	"context"
 	"fmt"
-	qt "github.com/Pythia-Software/query-table/backends/go"
 	"strings"
 	"testing"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 
 	"github.com/gbdubs/pharos/internal/querytable"
 )
@@ -82,6 +83,10 @@ func TestToolCommandSearchIndex(t *testing.T) {
 	if _, err := catalog.DB.Exec("DELETE FROM tool_command_fts"); err != nil {
 		t.Fatal(err)
 	}
+	catalog.ops = newOpRegistry("service")
+	pass := catalog.beginPass(ctx, "maintenance.search.tools", triggerVersion)
+	defer pass.end(nil)
+	ctx = pass.context(ctx)
 	for {
 		more, err := catalog.indexToolSearchBatch(ctx)
 		if err != nil {
@@ -90,6 +95,10 @@ func TestToolCommandSearchIndex(t *testing.T) {
 		if !more {
 			break
 		}
+	}
+	step := operationStep(catalog.ops.views()[0])
+	if step == nil || step["unit"] != "tool call" || step["fraction"] != float64(1) || step["done"] != float64(toolSearchBatch+9) {
+		t.Fatalf("tool backfill lost its processed-call statistics: %+v", step)
 	}
 	ready, err := catalog.toolSearchReady(ctx)
 	if err != nil || !ready {
@@ -145,8 +154,8 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			}
 			execute := func(where []qt.WhereTerm) (any, error) {
 				t.Helper()
-				request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 100}}
-				rows, err := server.executeQueryV2(t.Context(), dataset, nil, schema, &request, nil)
+				request := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id"}, Where: where, Limit: 100}}
+				rows, err := server.executeQueryFixture(t.Context(), dataset, nil, schema, &request, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -154,20 +163,20 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					qt.AggSpec{ID: "mean", Op: "avg", Field: number, GroupBy: []string{"conversation_id"}},
 					qt.AggSpec{ID: "filtered", Op: "count", Where: where})
 				metrics.Where = where
-				reduced, err := server.executeQueryV2(t.Context(), dataset, nil, schema, nil, &metrics)
+				reduced, err := server.executeQueryFixture(t.Context(), dataset, nil, schema, nil, &metrics)
 				if err != nil {
 					return nil, err
 				}
 				grouping := groupRequest("conversation_id", qt.SummaryColumn{ID: "calls", Op: "count"}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: number})
 				grouping.Source = qt.WireQuery{Where: where}
-				grouping.Result.OrderBy = qt.OrderBys{{Field: "conversation_id", Dir: "asc"}}
+				grouping.Result.OrderBy = []qt.OrderBy{{Field: "conversation_id", Dir: "asc"}}
 				grouped, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, grouping)
-				return []any{rows.Rows.Total, rows.Rows.Rows, rows.Rows.Computed, reduced.Metrics, grouped.Rows, grouped.Total, grouped.SourceTotal}, err
+				return []any{rows.Rows.Total, rows.Rows.Rows, reduced.Metrics, grouped.Rows, grouped.Total, grouped.SourceTotal}, err
 			}
 			contains := func(value string, negated bool) qt.WhereClause {
 				return qt.WhereClause{Field: index.field, Op: "contains", Value: value, Negated: negated}
 			}
-			check := func() {
+			check := func(afterMutation bool) {
 				t.Helper()
 				filters := [][]qt.WhereTerm{
 					// Either branch indexed, and a branch that is not: the term
@@ -177,7 +186,13 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					{{Any: []qt.WhereClause{{All: []qt.WhereClause{contains("test", false), contains("updated", true)}}, contains("foo", false)}}},
 					{{Any: []qt.WhereClause{{All: []qt.WhereClause{contains("test", false), {Field: "conversation_id", Op: "is_not_null"}}}, contains("zzz", false)}}},
 				}
-				for _, needle := range []string{"TEST", "foo", "bar", "quotes", "kelvin", "a", "absent_82f14c", "\"qu", "  ", "\nwi", "   ", "İ"} {
+				needles := []string{"TEST", "foo", "bar", "quotes", "kelvin", "a", "absent_82f14c", "\"qu", "  ", "\nwi", "   ", "İ"}
+				if afterMutation {
+					// The full substring matrix covered the backfilled index above.
+					// Here, check changed and removed rows through each query API.
+					needles = []string{"UPDATED", "test", "a"}
+				}
+				for _, needle := range needles {
 					for _, negated := range []bool{false, true} {
 						filters = append(filters, []qt.WhereTerm{{Field: index.field, Op: "contains", Value: needle, Negated: negated}})
 					}
@@ -203,14 +218,22 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			if _, err := c.DB.Exec("DELETE FROM " + index.table); err != nil {
 				t.Fatal(err)
 			}
+			c.ops = newOpRegistry("service")
+			pass := c.beginPass(t.Context(), "maintenance.search.query", triggerVersion)
+			defer pass.end(nil)
+			progressCtx := pass.context(t.Context())
 			for {
-				more, err := c.indexQueryTextBatch(t.Context(), index)
+				more, err := c.indexQueryTextBatch(progressCtx, index)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if !more {
 					break
 				}
+			}
+			step := operationStep(c.ops.views()[0])
+			if step == nil || step["unit"] == nil || step["fraction"] != float64(1) {
+				t.Fatalf("query index backfill lost its statistics: %+v", step)
 			}
 			if dataset == "tool_calls" {
 				for {
@@ -227,7 +250,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 			if err != nil || indexed.queryText == nil {
 				t.Fatal("missing complete index", err)
 			}
-			check()
+			check(false)
 			if dataset == "tool_calls" {
 				// Upgrade a previous facts version in bounded batches, retaining
 				// scalar availability until the local calendar is complete.
@@ -262,7 +285,7 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			check()
+			check(true)
 		})
 	}
 }

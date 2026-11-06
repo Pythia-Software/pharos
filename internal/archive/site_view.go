@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"sort"
@@ -481,8 +482,26 @@ func (site *siteMap) parseURL(raw string) (siteState, error) {
 	highlights, reveal := slices.Clone(values["highlight"]), values.Get("reveal")
 	values.Del("highlight")
 	values.Del("reveal")
+	// A card's own link may land on its section (Habits cards share a page
+	// address and differ only there): try the landing as part of the card.
+	landed := func(candidate url.URL, rest url.Values) (siteState, bool) {
+		if reveal == "" || !site.cardParam("reveal") {
+			return siteState{}, false
+		}
+		rest = maps.Clone(rest)
+		rest.Set("reveal", reveal)
+		candidate.RawQuery = rest.Encode()
+		state, err := site.parseBaseURL(candidate.String())
+		return state, err == nil && state.Card != ""
+	}
 	// Preserve prebuilt-card identity and the compact arguments of existing
 	// links whenever the original parser already represents the whole view.
+	if state, ok := landed(*u, values); ok {
+		state.Highlight = highlights
+		if _, err := site.build(state); err == nil {
+			return state, nil
+		}
+	}
 	u.RawQuery = values.Encode()
 	if state, err := site.parseBaseURL(u.String()); err == nil {
 		state.Highlight, state.Reveal = highlights, reveal
@@ -523,6 +542,12 @@ func (site *siteMap) parseURL(raw string) (siteState, error) {
 		}
 		if keepCards && len(kept) == len(globals) {
 			continue
+		}
+		if state, ok := landed(candidate, rest); ok {
+			state.View, state.Highlight = kept, highlights
+			if _, err := site.build(state); err == nil {
+				return state, nil
+			}
 		}
 		candidate.RawQuery = rest.Encode()
 		if state, err := site.parseBaseURL(candidate.String()); err == nil {
@@ -781,6 +806,32 @@ func validSearchDuration(duration string) bool {
 func validateViewShape(name string, value any) error {
 	object, _ := value.(map[string]any)
 	switch name {
+	case "timeline_visibility":
+		if object == nil {
+			return fmt.Errorf("needs timeline visibility selections by section")
+		}
+		for section, value := range object {
+			if !slices.Contains([]string{"modes", "events", "tools", "origins"}, section) {
+				return fmt.Errorf("unknown timeline visibility section %q", section)
+			}
+			selection, ok := value.(map[string]any)
+			if !ok || selection == nil {
+				return fmt.Errorf("%s needs a selection object", section)
+			}
+			if _, ok := selection["excluded"].(bool); !ok {
+				return fmt.Errorf("%s.excluded needs a boolean", section)
+			}
+			encoded, err := json.Marshal(selection["values"])
+			var values []any
+			if err != nil || json.Unmarshal(encoded, &values) != nil || values == nil || len(values) > 1000 {
+				return fmt.Errorf("%s.values needs an array of at most 1000 strings", section)
+			}
+			for _, value := range values {
+				if _, ok := value.(string); !ok {
+					return fmt.Errorf("%s.values needs strings", section)
+				}
+			}
+		}
 	case "thinking":
 		return validateThinkingView(object)
 	case "thinking_filters":

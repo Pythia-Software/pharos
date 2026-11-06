@@ -16,14 +16,16 @@ export function OptimizePlaceFilter({ places, value, onChange, label, viewField 
   </label>;
 }
 
-export function OptimizeRank<T extends string>({ value, onChange, options, viewField }: {
-  value: T; onChange: (value: T) => void; options: Record<T, string>; viewField: string;
+// explanations, when given, say how each option orders the cards. They are
+// each option's tooltip, so no line of text under the row is needed.
+export function OptimizeRank<T extends string>({ value, onChange, options, explanations, viewField }: {
+  value: T; onChange: (value: T) => void; options: Record<T, string>; explanations?: Partial<Record<T, string>>; viewField: string;
 }) {
   const id = useId();
   return <div className="findings-rank" data-view-field={viewField} data-pharos-target={`control:${viewField}`}>
     <span id={id}>Rank by</span>
     <div className="findings-segmented" role="group" aria-labelledby={id}>
-      {(Object.keys(options) as T[]).map(option => <button key={option} type="button" aria-pressed={value === option} onClick={() => onChange(option)}>{options[option]}</button>)}
+      {(Object.keys(options) as T[]).map(option => <button key={option} type="button" aria-pressed={value === option} title={explanations?.[option]} onClick={() => onChange(option)}>{options[option]}</button>)}
     </div>
   </div>;
 }

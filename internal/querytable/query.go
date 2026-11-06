@@ -1,6 +1,6 @@
 // Package querytable implements the query-table wire contract for Pharos's
-// map-backed datasets. Its types and limits mirror Pythia Software query-table
-// v0.6.0. The map executor retains Pharos-specific text and regex conventions.
+// legacy host map operations. Shared stage types come from Query Table 1.0.0;
+// current remote query execution uses the released V3 backend.
 package querytable
 
 import (
@@ -36,7 +36,11 @@ type Query struct {
 }
 
 func (q *Query) UnmarshalJSON(data []byte) error {
-	wire, err := shared.DecodeSQLiteQuery(data)
+	var wire struct {
+		shared.WireQuery
+		Aggregations []Aggregation `json:"aggregations,omitempty"`
+	}
+	err := json.Unmarshal(data, &wire)
 	if err != nil {
 		return err
 	}

@@ -20,7 +20,7 @@ import (
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
 // cost allows, so it moves as it gets faster or slower. Permanent overrides
-// slow work down; a temporary override can also promote adaptive work.
+// slow work down; a temporary override can move any item between all four columns.
 
 const (
 	cadenceFrequent = "frequent"
@@ -40,6 +40,11 @@ func cadenceRank(cadence string) int {
 		return index
 	}
 	return len(cadences)
+}
+
+// validBackgroundCadence includes the fourth, unscheduled column.
+func validBackgroundCadence(cadence string) bool {
+	return cadence == cadenceManual || slices.Contains(cadences, cadence)
 }
 
 // cadenceLimit is the longest typical run, in seconds, each cadence takes.
@@ -78,16 +83,20 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
-	// requiresLabels items exist only where labels_enabled is on;
+	// requiresLabels items run only where labels_enabled is on;
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool
+	// requiresAsk items exist only where Ask Pharos is enabled on this Mac.
+	requiresAsk bool
+	// afterChain items read what the chain writes, so a pass runs them last.
+	afterChain bool
 }
 
 // backgroundItems in the order they run within a pass (runBackgroundItems),
 // which is the order Settings and the status panel list them: new data and
 // the other standalone work first, then the analysis chain's items in chain
-// order.
+// order, then work that reads the chain's results.
 var backgroundItems = []backgroundItem{
 	{ID: "conversations", Label: "New conversations", Verb: "Adding new conversations", Feeds: "Search, Home and Work pages", Cadence: cadenceFrequent, Fixed: true,
 		Kinds: []string{"index.changes.automatic"}, Why: "It reads only what changed since the last check."},
@@ -102,13 +111,13 @@ var backgroundItems = []backgroundItem{
 	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"library.upgrade"}, Why: "Runs only when a Pharos update needs it."},
 	{ID: "backup", Label: "Back up", Verb: "Backing up", Feeds: "Recovery", Cadence: cadenceDaily, OptIn: true,
-		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole catalog, so it is off unless you choose Daily."},
+		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole catalog, so it is off unless you give it a schedule."},
 	{ID: "repositories", Label: "Repositories & merges", Verb: "Linking repositories", Feeds: "Work pages and repository filters", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
-	{ID: "writing", Label: "Your writing", Verb: "Updating your writing", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceHourly, Adaptive: true,
-		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Decides which messages you wrote. Today it reads all of your messages each time."},
+	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, and Analyze → Writing", Cadence: cadenceFrequent,
+		Stages: []string{"authorship"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
 		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
@@ -117,6 +126,10 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
+	{ID: "writing-refine", Label: "Refine writing history", Verb: "Refining writing history", Feeds: "Writing classifications and copied-text evidence", Cadence: cadenceDaily, afterChain: true,
+		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
+	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
+		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks' summaries for questions worth suggesting, after the analyses they read change."},
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
@@ -143,8 +156,9 @@ type backgroundSettings struct {
 	Placements   map[string]string           `json:"placements"`
 	Temporary    map[string]temporaryCadence `json:"temporary_cadences"`
 	// Battery is what each cadence does on battery (power.go).
-	Battery batteryPolicy `json:"battery"`
-	sync    syncSettings
+	Battery               batteryPolicy `json:"battery"`
+	sync                  syncSettings
+	lastConversationCheck time.Time
 }
 
 const defaultDailyAt = "03:00"
@@ -186,12 +200,20 @@ func (c *Catalog) backgroundSettings(ctx context.Context, at time.Time) (backgro
 	}
 	for _, row := range rows {
 		id, cadence := asString(row["item"]), asString(row["cadence"])
-		item, known := backgroundItemByID(id)
+		_, known := backgroundItemByID(id)
 		until := asString(row["expires_at"])
-		if expiry, ok := parseTime(until); known && item.Adaptive && slices.Contains(cadences, cadence) && ok && at.Before(expiry) {
+		if expiry, ok := parseTime(until); known && validBackgroundCadence(cadence) && ok && at.Before(expiry) {
 			settings.Temporary[id] = temporaryCadence{Cadence: cadence, ExpiresAt: until}
 		}
 	}
+	// Settings saves may move next_at, but only a real index run completes
+	// a check. History is persisted per Mac and survives service restarts.
+	var checked string
+	err = c.reader().QueryRowContext(ctx, "SELECT finished_at FROM sync_history WHERE host_id=? ORDER BY id DESC LIMIT 1", currentHost().ID).Scan(&checked)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table") {
+		return settings, err
+	}
+	settings.lastConversationCheck, _ = parseTime(checked)
 	settings.Mode = "on"
 	if until, ok := parseTime(settings.PausedUntil); ok && at.Before(until) {
 		settings.Mode = "paused"
@@ -223,9 +245,9 @@ func (settings backgroundSettings) placed(item backgroundItem) string {
 }
 
 // cadence is where an item runs: a live temporary schedule takes precedence
-// for adaptive work; permanent overrides only slow down the placement.
+// for all work; permanent overrides only slow down the placement.
 func (settings backgroundSettings) cadence(item backgroundItem) string {
-	if temporary, ok := settings.Temporary[item.ID]; item.Adaptive && ok {
+	if temporary, ok := settings.Temporary[item.ID]; ok {
 		return temporary.Cadence
 	}
 	return settings.usual(item)
@@ -467,6 +489,9 @@ type backgroundInputs struct {
 	// findingsToday is whether today's full findings pass ran;
 	// findingsBuilt whether any did.
 	findingsToday, findingsBuilt bool
+	writingPending               bool
+	writingBacklog               authorshipBacklog
+	writingRefinedAt             string
 	upgradePending               bool
 	otherSources                 []string
 	backupDestination            string
@@ -485,11 +510,19 @@ type backgroundInputs struct {
 	agentEventsWaiting string
 	// labelerProblem is why neither can run, whatever is downloaded.
 	labelerProblem string
+	// ask is whether Ask Pharos is enabled here; suggestionsStale whether
+	// its suggestions' inputs changed since they were chosen.
+	ask, suggestionsStale bool
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	in := backgroundInputs{runs: c.backgroundRuns(ctx)}
 	in.verificationNext = c.queuedVerificationNext(ctx)
+	want, built, err := c.authorshipEstimateGenerations()
+	var backlogErr error
+	in.writingBacklog, backlogErr = c.authorshipBacklog(ctx)
+	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0
+	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
 	in.deferred, _ = c.freshnessDeferred(ctx)
 	generation, _ := c.metaValue(ctx, "findings_generation")
 	in.findingsBuilt, in.findingsToday = generation != "", generation == c.findingsGeneration()
@@ -539,7 +572,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask {
 			continue
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
@@ -563,35 +596,52 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 		}
 		switch {
 		case item.ID == "conversations":
-			if next, ok := parseTime(settings.sync.NextAt); ok {
-				plan.Next = next
-			}
+			plan = settings.conversationsPlan(quiet, at)
 		case item.continuous:
+			if plan.Cadence != cadenceFrequent {
+				plan.Pending = true
+				standaloneNext(&plan, settings, quiet, at)
+			}
 		case item.ID == "verification":
 			plan.Pending = !in.verificationNext.IsZero()
 			if plan.Pending {
-				if plan.Cadence == cadenceDaily {
-					daily()
-				} else {
-					plan.Next = maxTime(quiet, plan.LastDone.Add(hourlyEvery))
-					if !plan.LastDone.IsZero() && at.Sub(plan.LastDone) > 3*hourlyEvery {
-						plan.Next, plan.Overdue = at, true
-					}
-				}
+				standaloneNext(&plan, settings, quiet, at)
 				plan.Next = maxTime(plan.Next, in.verificationNext)
 			}
+		case item.ID == "writing":
+			row := in.deferred["authorship"]
+			plan.Pending = in.writingPending || row.generation > row.completed
+			if completed, ok := parseTime(row.completedAt); ok {
+				plan.LastDone = maxTime(plan.LastDone, completed)
+			}
+			if plan.Pending {
+				standaloneNext(&plan, settings, quiet, at)
+				if plan.Cadence == cadenceHourly {
+					plan.Next = maxTime(plan.LastDone.Add(hourlyEvery), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
+				}
+			}
+		case item.ID == "writing-refine":
+			if refined, ok := parseTime(in.writingRefinedAt); ok {
+				plan.LastDone = maxTime(plan.LastDone, refined)
+			}
+			plan.Pending = true
+			standaloneNext(&plan, settings, quiet, at)
 		case len(item.Stages) > 0:
-			plan.LastDone = time.Time{}
+			completed := time.Time{}
 			first := true
 			for _, stage := range item.Stages {
 				row := in.deferred[stage]
 				plan.Pending = plan.Pending || row.generation > row.completed
 				done, _ := parseTime(row.completedAt)
-				if first || done.Before(plan.LastDone) {
-					plan.LastDone = done
+				if first || done.Before(completed) {
+					completed = done
 				}
 				first = false
 			}
+			// A bounded pass can succeed while its backlog stays deferred.
+			// Keep that run's time for Last run and the cadence's clock;
+			// Pending still follows the deferred generations.
+			plan.LastDone = maxTime(plan.LastDone, completed)
 			switch {
 			case !plan.Pending:
 				if plan.Cadence == cadenceDaily {
@@ -610,17 +660,16 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				continue
 			}
 			plan.Pending = true
-			if plan.Cadence == cadenceHourly {
-				plan.Next = plan.LastDone.Add(hourlyEvery)
-				plan.Overdue = at.Sub(plan.LastDone) > 3*hourlyEvery
-			} else if plan.Cadence == cadenceDaily {
-				daily()
-			}
+			standaloneNext(&plan, settings, time.Time{}, at)
 		case item.ID == "review":
 			// Today's full pass, or the first one ever.
 			plan.Pending = !in.findingsToday
-			// Today's pass waits for today's daily time.
-			if plan.Pending && dailyInstant(at, settings.DailyAt).Day() == at.In(time.Local).Day() {
+			// By default today's pass waits for today's daily time.
+			if plan.Cadence != cadenceDaily {
+				if plan.Pending {
+					standaloneNext(&plan, settings, quiet, at)
+				}
+			} else if plan.Pending && dailyInstant(at, settings.DailyAt).Day() == at.In(time.Local).Day() {
 				plan.Next = maxTime(instant, quiet)
 				if at.Sub(instant) > dailyLatest {
 					plan.Next, plan.Overdue = instant, true
@@ -628,23 +677,34 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			} else {
 				plan.Next = nextDaily
 			}
+		case item.ID == "suggestions":
+			plan.Pending = in.suggestionsStale
+			switch {
+			case !plan.Pending:
+			case plan.Cadence == cadenceFrequent:
+				plan.Next = at
+			case plan.Cadence == cadenceHourly:
+				plan.Next = plan.LastDone.Add(hourlyEvery)
+			case plan.Cadence == cadenceDaily:
+				daily()
+			}
 		case item.ID == "upgrade":
 			plan.Pending = in.upgradePending
 			if plan.Pending {
-				daily()
+				standaloneNext(&plan, settings, quiet, at)
 			}
 		case item.ID == "backup":
 			if in.backupDestination == "" {
 				break
 			}
 			if last, ok := parseTime(in.lastBackup); ok {
-				plan.LastDone = last
+				plan.LastDone = maxTime(plan.LastDone, last)
 			}
 			plan.Pending = true
-			daily()
+			standaloneNext(&plan, settings, quiet, at)
 		default:
 			plan.Pending = true
-			daily()
+			standaloneNext(&plan, settings, quiet, at)
 		}
 		if value, ok := parseTime(run.finished); ok && run.err != "" && !value.Before(plan.LastDone) {
 			plan.Failed, plan.Error = true, run.err
@@ -665,13 +725,51 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 		if plan.Cadence == cadenceManual || settings.Mode != "on" {
 			plan.Next = time.Time{}
 		}
-		plan.Due = !plan.Next.IsZero() && !at.Before(plan.Next) && plan.Pending && item.ID != "conversations" && !item.continuous
-		if in.requested[item.ID] && item.ID != "conversations" && !item.continuous {
+		plan.Due = !plan.Next.IsZero() && !at.Before(plan.Next) && plan.Pending && item.ID != "conversations" && !(item.continuous && plan.Cadence == cadenceFrequent)
+		if in.requested[item.ID] && item.ID != "conversations" {
 			plan.Due = true
 		}
 		plans = append(plans, plan)
 	}
 	return plans
+}
+
+// standaloneNext schedules work with no analysis-stage completion record.
+func standaloneNext(plan *itemPlan, settings backgroundSettings, quiet, at time.Time) {
+	switch plan.Cadence {
+	case cadenceFrequent:
+		plan.Next = plan.LastDone.Add(time.Duration(max(settings.Interval, 1)) * time.Second)
+	case cadenceHourly:
+		plan.Next = maxTime(quiet, plan.LastDone.Add(hourlyEvery))
+		if !plan.LastDone.IsZero() && at.Sub(plan.LastDone) > 3*hourlyEvery {
+			plan.Next, plan.Overdue = at, true
+		}
+	case cadenceDaily:
+		instant := dailyInstant(at, settings.DailyAt)
+		if plan.LastDone.Before(instant) {
+			plan.Next = maxTime(instant, quiet)
+			plan.Missed = !plan.LastDone.IsZero() && at.Sub(instant) > backgroundMissed
+			if !plan.LastDone.IsZero() && at.Sub(instant) > dailyLatest {
+				plan.Next, plan.Overdue = instant, true
+			}
+		} else {
+			plan.Next = instant.AddDate(0, 0, 1)
+		}
+	}
+}
+
+// conversationsPlan uses the next check for Frequently and the actual last
+// check for Hourly/Daily. Settings edits cannot count as completed work.
+func (settings backgroundSettings) conversationsPlan(quiet, at time.Time) itemPlan {
+	item, _ := backgroundItemByID("conversations")
+	plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item), LastDone: settings.lastConversationCheck}
+	next, _ := parseTime(settings.sync.NextAt)
+	if plan.Cadence == cadenceFrequent {
+		plan.Next = next
+		return plan
+	}
+	standaloneNext(&plan, settings, quiet, at)
+	return plan
 }
 
 // slowerBy is how much later scheduled indexing runs on battery when
@@ -817,6 +915,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	}
 	if in.labels || in.agentEvents {
 		in.labelerProblem = config.Labels.withAssets().labelerProblem()
+	}
+	if s.askEnabled(ctx) {
+		in.ask, in.suggestionsStale = true, s.Catalog.askSuggestionsStale(ctx, time.Now())
 	}
 	return in
 }
@@ -983,7 +1084,8 @@ func backgroundSteps(ids []string) []StepPlan {
 
 // runBackgroundItems runs each item in turn, recording each one's outcome:
 // first the items that bring in new data (captures), then the chain's
-// stages together, in chain order. A stage reads what the stages before it
+// stages together, in chain order, then the items that read the chain's
+// results. A stage reads what the stages before it
 // wrote, so those with work waiting come along, read after the captures
 // wrote their inputs, unless their own item is held: set to only when you
 // ask, waiting for power, or on a slower cadence than this pass (Run now
@@ -992,9 +1094,7 @@ func backgroundSteps(ids []string) []StepPlan {
 // they run again. Findings only measure unless the daily review is in the
 // pass. It reports whether any item succeeded (and so may have changed
 // what pages show).
-func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (bool, error) {
-	var failure error
-	succeeded := false
+func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (succeeded bool, failure error) {
 	record := func(id string, started time.Time, err error) {
 		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
 		succeeded = succeeded || err == nil
@@ -1013,26 +1113,31 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 		item, _ := backgroundItemByID(id)
 		return len(item.Stages) > 0 || id == "review"
 	}
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			break
-		}
-		if chainItem(id) {
-			continue
-		}
-		item, _ := backgroundItemByID(id)
-		next(id)
-		started := time.Now()
-		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
-		err := s.runBackgroundItem(ctx, op, id)
-		if ctx.Err() != nil && err == nil {
-			err = ctx.Err()
-		}
-		record(id, started, err)
-		if err != nil && failure == nil {
-			failure = fmt.Errorf("%s: %w", item.Label, err)
+	standalone := func(after bool) {
+		for _, id := range ids {
+			item, _ := backgroundItemByID(id)
+			if ctx.Err() != nil {
+				break
+			}
+			if chainItem(id) || item.afterChain != after {
+				continue
+			}
+			next(id)
+			started := time.Now()
+			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
+			err := s.runBackgroundItem(ctx, op, id)
+			if ctx.Err() != nil && err == nil {
+				err = ctx.Err()
+			}
+			record(id, started, err)
+			if err != nil && failure == nil {
+				failure = fmt.Errorf("%s: %w", item.Label, err)
+			}
 		}
 	}
+	standalone(false)
+	// Named results: what these record reaches the caller.
+	defer standalone(true)
 	stages := map[string]bool{}
 	chainItems := []string{}
 	for _, item := range backgroundItems {
@@ -1073,6 +1178,32 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			stages[stage] = true
 		}
 	}
+	// Discovery can bring earlier analyses into this pass. Include them in
+	// its remaining steps, so a prerequisite never leaves the last finished
+	// standalone task (such as Library upgrade) looking as though it is running.
+	stageItem := func(name string) string {
+		if name == "github" {
+			return "repositories"
+		}
+		if name == "findings" && slices.Contains(ids, "review") && !slices.Contains(ids, "findings") {
+			return "review"
+		}
+		return stageItems[name]
+	}
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	for name := range stages {
+		wanted[stageItem(name)] = true
+	}
+	expanded := []string{}
+	for _, item := range backgroundItems {
+		if wanted[item.ID] {
+			expanded = append(expanded, item.ID)
+		}
+	}
+	op.Plan(backgroundSteps(expanded)...)
 	findings := findingsMeasure
 	if slices.Contains(ids, "review") {
 		findings = findingsAuto
@@ -1083,6 +1214,9 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	}
 	outcome := map[string]error{}
 	err := s.finishDeferredStages(ctx, findings, stages, func(name string, work func() error) error {
+		if id := stageItem(name); id != "" {
+			next(id)
+		}
 		for _, id := range chainItems {
 			item, _ := backgroundItemByID(id)
 			if slices.Contains(item.Stages, name) || id == "review" && name == "findings" {

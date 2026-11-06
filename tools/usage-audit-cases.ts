@@ -11,10 +11,10 @@ export function fieldsFor(document: any) {
   const names = document.fields.map((field: any) => field.name);
   const choose = (candidates: string[]) => candidates.find(field => names.includes(field));
   return {
-    time: choose(["requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
+    time: choose(["occurred_at", "requested_at", "first_usage_at", "started_at", "called_at", "first_message_at", "sent_at", "created_at", "event_at"]),
     group: choose(["provider", "root_provider", "tool_name", "repository_name", "root_model_family", "skill_name", "model"]),
     text: choose(["command", "text", "title", "arguments_json", "tool_name", "skill_name", "model", "root_model_family"]),
-    number: choose(["total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
+    number: choose(["label_depth","total_tokens", "typed_words", "user_words", "duration_ms", "call_count", "estimated_output_tokens", "content_bytes", "unit_hours", "output_tokens", "words", "human_messages"]),
     nullable: choose(["repository_name", "model", "root_model_family", "program", "error_text", "skill_name", "title"]),
   };
 }
@@ -91,6 +91,8 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     const where = conditions[i % conditions.length];
     const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: topic, analyze_data: dataset, analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }) });
     let view: any;
+    if (topic === "compaction") view = { metric: i % 2 ? "compactions" : "conversations", split: ["trigger", "provider", "trigger_provider", "harness", "model", "repository_name", "channel"][i % 7], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
+    if (topic === "labels") view = { metric: ["messages", "conversations", "labels", "observations"][i % 4], split: ["family", "label", "function_role", "source", "label_status", "repository_name", "model", "provider"][i % 8], view: ["trend", "compare", "distribution", "scatter"][i % 4], period: ["day", "week", "month"][Math.floor(i / 9)], share: i % 4 === 0, scale: scales[i % 3], rollingPeriods: [0, 3, 7][i % 3] };
     if (topic === "tokens") view = { metric: ["tokens", "cost", "percent", "percent_cost"][i % 4], split: tokenSplits[i % tokenSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "human") view = { scope: i % 2 ? "all" : "typed", split: humanSplits[i % humanSplits.length], period: periods[i % periods.length], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3], rollingPeriods: [0, 3, 7][i % 3], scale: scales[i % 3] };
     if (topic === "time" || topic === "skills") view = { metric: i % 2, split: (topic === "time" ? ["activity", "tool_category", "provider", "repository_name"] : ["skill_name", "evidence_type", "provider", "repository_name", "status"])[i % (topic === "time" ? 4 : 5)], period: ["day", "week", "month"][(i + (topic === "time" ? Math.floor(i / conditions.length) : 0)) % 3], scale: scales[i % 3] };
@@ -99,6 +101,7 @@ export function dashboardCases(topic: keyof typeof usageTopics, documents: Recor
     if (topic === "tools") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "time", "mean_time", "context_added", "context_carried"][i % 7], split: ["tool_category", "tool_name", "command_category", "program", "command_name", "mcp_server", "repository_name", "model_family", "session_kind"][i % 9], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "mcp") view = { rollingPeriods: 0, metric: ["calls", "failures", "failure_rate", "output", "mean_output", "largest_output", "bytes", "truncated", "time", "mean_time"][i % 10], split: ["tool_name", "status", "query_source"][i % 3], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "agent_experience") view = { rollingPeriods: 0, metric: ["events", "conversations", "messages", "thinking_share", "explained_share"][i % 5], split: ["family_group", "family", "source", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
+    if (topic === "habits") view = { rollingPeriods: 0, metric: ["wall_hours", "active_hours", "messages", "turns", "at_once"][i % 5], split: ["actor", "initiator", "automation", "repository_name", "provider"][i % 5], view: i % 2 ? "trend" : "compare", period: ["day", "week", "month"][i % 3] };
     if (topic === "carbon") view = { metric: i % 2 ? "energy" : "co2", split: ["type", "provider", "repository_name", "tier"][i % 4], period: periods[i % 5], hours: [1, 6, 12][i % 3], days: [1, 3, 7][i % 3] };
     if (view) params.set("analyze_chart", JSON.stringify({ ...view, display: i % 4 >= 2 ? "cumulative" : "interval" }));
     if (topic === "parallelism") {

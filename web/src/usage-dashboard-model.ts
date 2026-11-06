@@ -135,3 +135,38 @@ export function toolDashboardWhere(where: WhereTerm[], bounds: { from?: Date; to
     { field: "day", op: "matches_regex", value: dayBoundaryPattern(end, "before") }];
   return [...kept, days.length === 1 ? days[0] : days.length ? { any: days } : { field: "day", op: "=", value: "No days in selected range" }];
 }
+
+export type AuthorshipStatus = {
+  built_at: string | null; running: boolean; stale: boolean; error: string | null;
+  complete_at?: string | null; refined_at?: string | null; refinement_pending?: boolean;
+  provisional_messages?: number; pending_messages?: number; deferred_messages?: number; refining?: boolean;
+  pending_recent_messages?: number; pending_historical_messages?: number;
+  oldest_pending_sent_at?: string | null; oldest_pending_queued_at?: string | null;
+};
+
+// A completed worker turn can leave a backlog. Describe coverage separately
+// from progress, so polling never presents a recent attempt as caught up.
+export function authorshipStatusText(status: AuthorshipStatus): string {
+  const pending = status.pending_messages ?? 0;
+  const complete = status.complete_at === undefined ? status.built_at : status.complete_at;
+  const parts = [status.error ? `Writing update failed: ${status.error}`
+    : status.refining ? "Refining writing history… Recent estimates may change."
+    : status.running ? "Updating writing estimates…"
+    : pending || status.stale || status.deferred_messages ? "Writing estimates are catching up."
+    : complete ? `Writing estimates current as of ${new Date(complete).toLocaleString()}.`
+    : "Waiting for writing estimates."];
+  if (pending) {
+    parts.push(`${pending.toLocaleString()} messages await an estimate.`);
+    if (status.pending_recent_messages !== undefined && status.pending_historical_messages !== undefined) {
+      parts.push(`${status.pending_recent_messages.toLocaleString()} recent; ${status.pending_historical_messages.toLocaleString()} historical.`);
+    }
+    if (status.oldest_pending_queued_at) parts.push(`Oldest pending work queued ${new Date(status.oldest_pending_queued_at).toLocaleString()}.`);
+    if (status.oldest_pending_sent_at) parts.push(`Oldest pending message sent ${new Date(status.oldest_pending_sent_at).toLocaleString()}.`);
+    if (status.complete_at) parts.push(`Last caught up ${new Date(status.complete_at).toLocaleString()}.`);
+  }
+  if (status.provisional_messages) parts.push(`${status.provisional_messages.toLocaleString()} messages have provisional estimates.`);
+  if (status.deferred_messages) parts.push(`${status.deferred_messages.toLocaleString()} large messages await overnight refinement.`);
+  if (status.refined_at) parts.push(`History refined ${new Date(status.refined_at).toLocaleString()}.`);
+  if (status.refinement_pending) parts.push("Historical refinement is scheduled overnight.");
+  return parts.join(" ");
+}

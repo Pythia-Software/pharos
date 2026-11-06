@@ -22,6 +22,12 @@ import (
 const (
 	FakeWorkerEnv = "PHAROS_LABELER_FAKE_WORKER"
 	FakeCountEnv  = "PHAROS_LABELER_FAKE_COUNT"
+	// FakeHelloEnv optionally records each worker's handshake as JSONL.
+	FakeHelloEnv = "PHAROS_LABELER_FAKE_HELLO"
+	// FakeMaxTokensEnv optionally imposes a backend padded-token limit.
+	FakeMaxTokensEnv  = "PHAROS_LABELER_FAKE_MAX_TOKENS"
+	FakeDeviceEnv     = "PHAROS_LABELER_FAKE_DEVICE"
+	FakeDeviceFileEnv = "PHAROS_LABELER_FAKE_DEVICE_FILE"
 )
 
 // FakeProb is the fake model: (sum of the row's real token ids + j) mod 100
@@ -98,13 +104,27 @@ func FakeWorker(mode string) int {
 	}
 	var hello labeler.Hello
 	_ = json.Unmarshal(payload, &hello)
+	if path := os.Getenv(FakeHelloEnv); path != "" {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return 2
+		}
+		_ = json.NewEncoder(file).Encode(hello)
+		_ = file.Close()
+	}
 	if mode == "refuse" {
 		fmt.Fprintln(os.Stderr, "cannot open the model file")
 		writeJSON(labeler.FrameError, labeler.ErrorReply{Code: labeler.ErrCodeModel, Message: "no model at " + hello.Model, Fatal: true})
 		return 3
 	}
 	ready := labeler.Ready{Protocol: labeler.ProtocolVersion, Worker: labeler.WorkerInfo{Name: "fake", Version: "1", Runtime: "none"}}
+	ready.Worker.Device = os.Getenv(FakeDeviceEnv)
+	if path := os.Getenv(FakeDeviceFileEnv); path != "" {
+		device, _ := os.ReadFile(path)
+		ready.Worker.Device = strings.TrimSpace(string(device))
+	}
 	ready.Limits.MaxBatch, ready.Limits.MaxSeq = 64, max(512, hello.MaxSeq)
+	ready.Limits.MaxTokens, _ = strconv.Atoi(os.Getenv(FakeMaxTokensEnv))
 	writeJSON(labeler.FrameReady, ready)
 	if mode == "deaf" {
 		time.Sleep(time.Hour) // until killed
@@ -135,6 +155,9 @@ func FakeWorker(mode string) int {
 			req, err := labeler.DecodeRun(payload)
 			if err == nil {
 				err = labeler.ValidateRun(req, hello.RunInputs(), hello.VocabSize, 64, ready.Limits.MaxSeq)
+			}
+			if err == nil && ready.Limits.MaxTokens > 0 && req.Inputs[0].Elements() > ready.Limits.MaxTokens {
+				err = fmt.Errorf("batch exceeds %d padded tokens", ready.Limits.MaxTokens)
 			}
 			if err != nil {
 				writeJSON(labeler.FrameError, labeler.ErrorReply{ID: req.ID, Code: labeler.ErrCodeBadRequest, Message: err.Error()})
