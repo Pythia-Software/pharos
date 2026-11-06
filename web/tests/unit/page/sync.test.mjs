@@ -1,8 +1,8 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { resultLabel, sourceNames, syncTables, runTables } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
-import { applyQuery, EMPTY_QUERY } from "@pythia-software/query-table-core";
+import { applyQuery, EMPTY_QUERY, isFilterable, isSortable, isMeasurable, isGroupable, opsForField } from "@pythia-software/query-table-core";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
@@ -54,7 +54,7 @@ test("empty-library status keeps polling until the first content arrives", async
   assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 3);
 });
 
-test("settings history stays still during activity polls and refreshes on request or navigation", async () => {
+test("settings tables stay still during activity polls and refresh on request or navigation", async () => {
   for (const library_empty of [false, true]) {
     let reads = 0, activityReads = 0;
     const timers = [];
@@ -69,19 +69,20 @@ test("settings history stays still during activity polls and refreshes on reques
     });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(reads, 1);
-    const history = script.window.pharosSync.status().history;
+    const tables = script.window.pharosSync.tableStatus();
     await timers.shift()();
-    assert.equal(activityReads, 2, "activity keeps polling while the table is static");
+    assert.equal(activityReads, 2, "activity keeps polling while the tables are static");
     assert.equal(reads, 2);
-    assert.equal(script.window.pharosSync.status().source_states[0].attempted_at, 2, "source status stays live");
-    assert.equal(script.window.pharosSync.status().history, history, "automatic polling retains the same history snapshot");
+    assert.equal(script.window.pharosSync.status().source_states[0].attempted_at, 2, "the live status follows the poll");
+    assert.equal(script.window.pharosSync.tableStatus(), tables, "automatic polling retains the same table snapshot");
     await script.window.pharosSync.refresh();
-    assert.equal(reads, 3, "manual Refresh loads a new snapshot");
-    assert.equal(script.window.pharosSync.status().history[0].run_id, "run-3");
+    assert.equal(reads, 3, "Run Now loads a new snapshot");
+    assert.equal(script.window.pharosSync.tableStatus().history[0].run_id, "run-3");
+    assert.equal(script.window.pharosSync.tableStatus().source_states[0].attempted_at, 3);
     script.window.dispatchEvent(new script.window.Event("pharos:route"));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(reads, 4, "returning to the page loads a new snapshot");
-    assert.equal(script.window.pharosSync.status().history[0].run_id, "run-4");
+    assert.equal(script.window.pharosSync.tableStatus().history[0].run_id, "run-4");
     assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 4);
   }
 });
@@ -177,6 +178,31 @@ test('run history queries use measured values across the entire retained history
   assert.equal(history.rows[5].cpu_seconds, 5);
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'finished_at', op: '>=', value: new Date(reference - 60000).toISOString() }] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id).sort(), ['run-0', 'run-1']);
+});
+
+test('work history queries include analyses and backups alongside indexing', () => {
+  const operations = [
+    { id: 'index', label: 'Index changes', kind: 'index.changes.manual', state: 'succeeded', started_at: new Date(reference - 20000).toISOString(), ended_at: new Date(reference).toISOString() },
+    { id: 'analysis', label: 'Update findings', kind: 'analysis.findings', state: 'succeeded', started_at: new Date(reference - 120000).toISOString(), ended_at: new Date(reference - 60000).toISOString() },
+    { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
+  ];
+  const history = operationHistoryTable(operations);
+  for (const schema of Object.values(syncSchemas)) {
+    for (const field of schema.fields) {
+      assert.ok(isFilterable(field), `${schema.name}.${field.name} is offered in the filter picker`);
+      assert.ok(opsForField(field)?.length, `${schema.name}.${field.name} offers typed filter conditions`);
+      assert.ok(isSortable(field), `${schema.name}.${field.name} is offered in the sort picker`);
+      assert.ok(isMeasurable(field), `${schema.name}.${field.name} is offered in the metric editor`);
+      assert.ok(isGroupable(field), `${schema.name}.${field.name} is offered in the grouping editor`);
+    }
+  }
+  assert.deepEqual(history.rows.map(row => row.work), ['Index changes', 'Update findings', 'Back up']);
+  const result = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'seconds', op: '>=', value: 60 }], orderBy: [{ field: 'seconds', dir: 'desc' }] }, history.schema);
+  assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
+  assert.equal(history.rows[2].result, 'Failed');
+  assert.equal(history.rows[2].error, 'Drive unavailable');
+  const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{field:'started_at',op:'>=',value:new Date(reference - 120000).toISOString()}] }, history.schema);
+  assert.deepEqual(recent.rows.map(row => row.id), ['index', 'analysis']);
 });
 
 test('run results distinguish postponed verification from errors and indexing failures', () => {

@@ -16,6 +16,10 @@ import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, cloudScheduledStatus, rootConversation, workID, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
+const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
+  unpriced_models: [{ model: 'unpriced-preview-model-with-a-long-reported-name', tokens: 5000 }],
+  prompt: 'Research unpriced-preview-model-with-a-long-reported-name.\nEdit pricing/cost_changes.json with sourced prices.' };
+
 const markdownLinkText = `## Implementation links
 
 [GitHub pull request](https://github.com/gbdubs/pharos/pull/42) · [Project documentation](https://example.com/docs)
@@ -34,10 +38,11 @@ const markdownLinkAPI = {
   ]},
   "GET /api/markdown-link": ({query}) => {
     const href=query.get("href");
-    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12"};
+    if(href==="internal/archive/api.go:12")return {status:"file",detail:"File available on this Mac",href:"/api/markdown-link?open=1&href=internal/archive/api.go%3A12",path:"/workspace/internal/archive/api.go",launchable:false};
     if(href==="http://localhost:5173/")return {status:"server",detail:"Local server returned HTTP 200"};
     return {status:"unavailable",detail:href.startsWith('http')?"Local server unavailable on this Mac":"File unavailable on this Mac"};
   },
+  "POST /api/markdown-link": ({query}) => ({opened:"/workspace/"+query.get("href").split(":")[0],revealed:false}),
 };
 const work = `/work/${workID}`;
 // The root session's last reply, which the card previews as its latest response.
@@ -70,7 +75,7 @@ const humanPromptParts = [
 ];
 function classifiedPrompt(id, parts) {
   let end=0;
-  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
+  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,provisional:true,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
 }
 const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
 const authoredTurnMessages = [authoredPrompt,
@@ -82,7 +87,8 @@ const authoredTurnMessages = [authoredPrompt,
   {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
   {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1.",
     labels:{segment:"AR",ids:["C","C.report","C.report.completion"],probs:{"C.report.completion":0.93}},
-    agent_events:[{kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[],response:[]}]},
+    agent_events:[{id:"e-review",kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[],response:[],
+      target:{method:"overlap",message_id:"human-mixed",role:"user",kind:"message",start:authoredPrompt.text.indexOf("keep my written"),end:authoredPrompt.text.indexOf("keep my written")+"keep my written instructions easy to spot".length,text:"keep my written instructions easy to spot",shared:["written","instructions"],score:5.1}}]},
   classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
   {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
 ];
@@ -121,6 +127,16 @@ const recordKeyword = { field: "command", draft: {
 const askSelection = {provider:"Codex",model:"test-model",effort:"Low"};
 const askProviders = [{id:"Codex",models:[{id:"test-model",label:"Test Model",efforts:["Default","Low","High"],default:true}]}];
 const askSession = {id:"saved-chat",createdAt:Date.now()-60000,updatedAt:Date.now(),selection:askSelection,draft:"",conversation:[{id:"question-1",prompt:"Where am I wasting time?",cli:"Codex",model:"test-model",modelLabel:"Test Model",effort:"Low",status:"multiple",message:"",elapsedMs:6000,reply:"Here are two useful views to explore.",cards:[{id:"tools",title:"Which tools keep me waiting?",kind:"Analyze",description:"Inspect recorded tool time and the original calls.",href:"/analyze?analyze_topic=tools"},{id:"findings",title:"Opportunities to save time",kind:"Findings",description:"Review recurring failures and repeated instructions.",href:"/findings"}]}]};
+// The caller comes back after most of an hour with nothing running: the
+// Timeline skips the gap (a cut on every row) and Agent events is expanded.
+const fixtureSpan = defaultApi["GET /api/work/:id/delegation"]({ query: new URLSearchParams() });
+const resumedAt = fixtureSpan.start + 3600000;
+const idleTimelineAPI = {
+  "GET /api/work/:id/delegation": request => { const value = defaultApi["GET /api/work/:id/delegation"](request); return { ...value, end: resumedAt + 60000, rows: value.rows.map(row => row.depth === 0 ? { ...row, end: resumedAt + 60000 } : row) }; },
+  "GET /api/work/:id/parallel": request => { const value = defaultApi["GET /api/work/:id/parallel"](request); return { ...value, lanes: value.lanes.map(lane => lane.session !== "s-root" || !lane.messages || resumedAt < value.start || resumedAt > value.end ? lane : { ...lane, messages: [...lane.messages, { id: "m-back", role: "user", kind: "message", created_at: new Date(resumedAt).toISOString(), text: "Back again: carry on.", authorship: [{ category: "typed", bytes: 21 }] }] }) }; },
+};
+const idleTimelineDisclosures = encodeURIComponent(JSON.stringify({ "delegation-labels:s-root:session": true, "delegation-labels:s-root:events": true }));
+
 const askAPI = {
  "GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:askProviders},
  "GET /api/ask/models":askProviders[0],
@@ -136,8 +152,29 @@ const overTimeReady = 'section[aria-label="Over time"][aria-busy="false"] .usage
 const storageBreakdown = defaultApi["GET /api/health/storage/breakdown"];
 const compactableBreakdown = { ...storageBreakdown, catalog_free_bytes: 31e9, compact_needs_bytes: 70e9,
   parts: storageBreakdown.parts.flatMap(part => part.key === "catalog_database" ? [{ ...part, bytes: 63e9 }, { key: "catalog_free", label: "Free space in the catalog", bytes: 31e9 }] : [part]) };
+const backgroundTaskStatus = { ...busyStatus,
+  operations: [{ ...busyStatus.operations[0], kind: 'background.update', variant: 'frequent', label: 'Frequent update', priority: 'background',
+    step: { index: 2, count: 3, name: 'Your writing', unit: null, done: 0, total: null },
+    children: [{id: 'chain', kind: 'analysis.chain', label: 'Update analyses', state: 'running', children: [
+      {id: 'authorship', kind: 'analysis.authorship', label: 'Classify your writing', state: 'running', children: [
+        {id: 'rebuild', kind: 'analysis.authorship', label: 'Classify your writing', state: 'running',
+          step: {name: 'classifying authorship', unit: 'message', done: 601, total: 42918, fraction: 601 / 42918}, children: []},
+      ]},
+    ]}] }, {id: 'label-index', kind: 'maintenance.labels.query', label: 'Index message labels', state: 'running', priority: 'background',
+      step: {name: 'Indexing message labels', unit: 'conversation', done: 1200, total: null}, children: []},
+    {id: 'agent-events', kind: 'analysis.agent_events', label: 'Find earlier agent events', state: 'running', priority: 'background',
+      step: {name: 'finding agent events', unit: 'conversation', done: 310, total: 21123, fraction: 310 / 21123,
+        detail: 'Scoring on GPU · 21,887 messages saved · 68,992 candidates scored · 36 candidates/s overall'}, children: []}],
+  background: { ...idleStatus.background,
+    items: idleStatus.background.items.map(item => item.id === 'writing' ? { ...item, state: 'running', state_label: 'Updating now' } : item),
+    cadences: idleStatus.background.cadences.map(cadence => cadence.id === 'frequent' ? { ...cadence, state: 'running', state_label: 'Updating now' } : cadence),
+  },
+  attention: [],
+};
 const ROUTES = [
-  {name:"Waiting and Compaction",url:"/analyze?analyze_topic=thinking-overview&analyze_data=model_requests",ready:'.thinking-dashboard[aria-busy="false"] .thinking-overview-stats'},
+  {name:"Compaction comparison",url:"/analyze?"+new URLSearchParams({analyze_topic:"compaction",analyze_data:"compactions",analyze_chart:JSON.stringify({view:"compare",metric:"compactions",split:"trigger_provider"})}),ready:analysisReady},
+  {name:"Compaction",url:"/analyze?analyze_topic=compaction&analyze_data=compactions",ready: `.usage-compaction-dashboard ${overTimeReady}`},
+  {name:"Waiting",url:"/analyze?analyze_topic=thinking-overview&analyze_data=model_requests",ready:'.thinking-dashboard[aria-busy="false"] .thinking-overview-stats'},
   ...['time','heatmap','histogram','reasoning','wait-box','calendar'].map(view=>({name:'Thinking '+view,url:'/analyze?'+new URLSearchParams({analyze_topic:'thinking-detail',analyze_data:'model_requests',thinking:JSON.stringify({view,groupBy:'model_effort'})}),ready:'.thinking-dashboard[aria-busy="false"] .thinking-population'})),
   {name:'Library settings expanded',url:'/settings/libraries',ready:'#library-settings-current h3',managedLibrary:{id:'local',name:'Pending history',config:'/Users/test/Libraries/Pending/library.toml'},open:async page=>{
     await page.locator('#library-settings-transfer-panel summary').click();
@@ -209,6 +246,7 @@ const ROUTES = [
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
+  {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history:not([hidden])"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
@@ -242,7 +280,9 @@ const ROUTES = [
   })),
   // The unified activity panel, idle and busy, in the browser and in the app
   // (other libraries).
-  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
+  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true],
+    ['partial rates', {...busyStatus, resources: {...busyStatus.resources, cpu_partial: true, disk_partial: true, gpu: {...busyStatus.resources.gpu, partial: true}}}, false],
+  ].map(([state, snapshot, managed]) => ({
     name: `Unified activity panel ${state}`, url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
     managedLibrary: managed ? {id: 'local', name: 'Pending history', config: '/Users/test/Libraries/Pending/library.toml'} : null,
     api: managed ? {'GET /api/app/status/stream': eventStream(managedStatus(snapshot)), 'GET /api/app/status': managedStatus(snapshot)}
@@ -253,8 +293,32 @@ const ROUTES = [
       // Every cadence row open, its items listed.
       const closed = page.locator('#pharosStatusPanel .pharos-status-cadences details:not([open]) summary');
       while (await closed.count()) await closed.first().click();
+      const oneLine = await page.locator('.pharos-status-load').evaluate(row => {
+        const cells = [...row.children].map(cell => cell.getBoundingClientRect());
+        return cells.every(cell => Math.abs(cell.top - cells[0].top) < 1) && row.scrollWidth <= row.clientWidth;
+      });
+      assert.ok(oneLine, 'the resource metrics fit on one line');
+      if (state === 'partial rates') {
+        for (const id of ['cpu', 'gpu', 'io']) {
+          const cell = page.locator(`#pharosStatusPanel [data-key="load:${id}"]`);
+          assert.match(await cell.innerText(), /≥/, 'the undercount qualifier is visible');
+          assert.match(await cell.getAttribute('title'), /may undercount/, 'hover explains partial measurements');
+        }
+      }
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
+  { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
+    api: {'GET /api/status/stream': eventStream(backgroundTaskStatus), 'GET /api/status': backgroundTaskStatus},
+    open: page => activateHeaderTool(page, 'pharosDrive'), shown: '#pharosStatusPanel .pharos-status-position-track',
+    check: async page => {
+      const measured = page.getByRole('progressbar', {name: 'Classify your writing progress', exact: true});
+      const unmeasured = page.getByRole('progressbar', {name: 'Index message labels progress', exact: true});
+      await measured.waitFor();
+      await unmeasured.waitFor();
+      assert.notEqual(await measured.getAttribute('aria-valuenow'), null, 'measured progress is accessible');
+      assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
+    },
+  },
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
@@ -275,6 +339,7 @@ const ROUTES = [
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
   { name: "Search nested reviews and human writing", url: "/library", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written" },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
+  { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
   { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
   ...["turn", "sub-agent", "accordion", "summary", "preview"].map(selection => ({
     name: `Search conversation outline ${selection}`, url: "/library", api: conversationResultAPI, ready: ".conversation-result-card",
@@ -315,6 +380,8 @@ const ROUTES = [
     }, shown: ".conversation-outline",
   })),
   { name: "Search compact conversation previews", url: "/library", api: conversationResultAPI, ready: ".conversation-result-preview" },
+  { name: "Search workspace fingerprints", url: "/library?view=table&q_library="+encodeQuery({...EMPTY_QUERY,select:[{field:'title',width:300},{field:'fingerprint',width:180}],limit:5}), ready: '.message-label-fingerprint svg' },
+  { name: "Analyze conversation fingerprints", url: "/analyze?analyze_mode=query&analyze_data=usage&q_usage="+encodeQuery({...EMPTY_QUERY,select:[{field:'fingerprint',width:180}],limit:5}), ready: '.message-label-fingerprint svg' },
   { name: "Search display switch", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "Search content editor", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
   { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
@@ -322,8 +389,16 @@ const ROUTES = [
   // Older Analyze and Tools links open what replaced their pages.
   { name: "Analyze legacy link", url: '/analyze?analyze_view=carbon&analyze_chart={"metric":"energy"}', ready: ".usage-dashboard #carbonSummary" },
   { name: "Tools legacy link", url: "/tools?tools_view=summary", ready: ".usage-workspace-table .qt-row" },
+  { name: "Writing estimates awaiting refinement", url: "/analyze?analyze_topic=human", ready: '[aria-label="Human Words summary"][aria-busy="false"]' },
   { name: "Conversations dashboard", url: "/analyze?analyze_topic=activity", ready: '.dashboard-stats[aria-label="Conversations summary"][aria-busy="false"]' },
+  {name:'Message Labels dashboard',url:'/analyze?analyze_mode=dashboards&analyze_topic=labels&analyze_data=message_labels',ready:'.usage-labels-dashboard .usage-chart'},
+  {name:'Message Labels specific hierarchy',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend',metric:'messages',split:'label'})}),ready:'.usage-labels-dashboard .usage-chart'},
+  {name:'Message Labels bars',url:'/analyze?'+new URLSearchParams({analyze_topic:'labels',analyze_chart:JSON.stringify({view:'trend_bar',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard .usage-chart'},
+  {name:'Message Labels comparison',url:'/analyze?'+new URLSearchParams({analyze_mode:'dashboards',analyze_topic:'labels',analyze_data:'message_labels',analyze_chart:JSON.stringify({view:'compare',metric:'messages',split:'family'})}),ready:'.usage-labels-dashboard'},
+  {name:'Message label conversation cards',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels',ready:'.message-label-result-card'},
+  {name:'Message label conversation rows',url:'/analyze?analyze_mode=query&analyze_data=message_labels&analyze_topic=labels&label_results=table',ready:'.qt-row'},
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  { name: "Human Words component shares", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "compare", metric: "words", split: "category", compareAs: "share" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations' },
   // One route per chart kind and dashboard component; the numbers each
   // topic draws are covered by the dashboard parity and analysis unit tests.
   {
@@ -345,6 +420,7 @@ const ROUTES = [
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
   { name: "Tokens and Cost trend ratio", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }))}`,
+    api: { 'GET /api/pricing': missingPrices },
     ready: '.usage-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") },
   { name: "Analyze workspace custom intervals", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "hours", hours: 6, rollingPeriods: 37 }))}`, ready: ".usage-dashboard .usage-period-custom input" },
@@ -356,6 +432,7 @@ const ROUTES = [
   // cycle) not drawn above.
   { name: "MCP dashboard weekday cycle", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }))}`, ready: `.usage-mcp-dashboard ${analysisReady}`,
     check: async page => assert.deepEqual(await page.locator(".usage-mcp-dashboard [role=alert], .usage-mcp-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Analyze habits dashboard", url: "/analyze?analyze_topic=habits&habits_day=" + new Date(Date.now() - 86400000).toISOString().slice(0, 10), ready: ".habits-panel .habits-day" },
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
@@ -390,11 +467,16 @@ const ROUTES = [
   })),
   { name: "Analyze query recovery", url: "/analyze?analyze_mode=query&analyze_data=usage&q_usage=invalid", ready: ".query-recovery", open: page => page.getByRole("button", { name: "Reset table", exact: true }).click(), shown: ".usage-workspace-table .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
-  { name: "Safety reviews", url: "/findings?optimize_area=safety", ready: ".safety-card" },
-  { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .qt-row" },
+  { name: "Safety notices", url: "/findings?optimize_area=safety", ready: ".safety-check-card", open: page => page.locator(".safety-check-card input[type=checkbox]").first().check(), shown: ".safety-check-cards .safety-selection-toolbar" },
+  { name: "Safety table", url: "/findings?optimize_area=safety&view=table", ready: ".safety-table .findings-cart li", open: page => page.locator(".safety-table .qt-row input[type=checkbox]").first().check(), shown: ".safety-selection-toolbar" },
   { name: "Safety settings", url: "/findings?optimize_area=safety&view=settings", ready: ".safety-check" },
   { name: "Safety evidence", url: "/findings?optimize_area=safety&safety_case=safety_sample", ready: ".safety-detail", open: async page => { await page.locator('.safety-evidence summary').click(); }, shown: '.safety-evidence[open] pre' },
-  { name: "Safety prompt", url: "/findings?optimize_area=safety", ready: ".safety-card", open: async page => { await page.getByRole('button', { name: 'Review prompt (1 ticked)' }).click(); }, shown: '.findings-dialog' },
+  { name: "Safety prompt", url: "/findings?optimize_area=safety", ready: ".safety-check-card", open: async page => { await page.getByRole('button', { name: 'Review prompt (1 notice)' }).click(); }, shown: '.findings-dialog' },
+  { name: "Fixes", url: "/findings?optimize_area=fixes&fixes_hidden=1&disclosures=%7B%22fixes%3Amaybe%22%3Atrue%7D", ready: ".fixes-card", open: page => page.locator(".fixes-card input[type=checkbox]").first().check(), shown: ".fixes-cards .safety-selection-toolbar" },
+  { name: "Fixes prompt", url: "/findings?optimize_area=fixes", ready: ".fixes-card", open: async page => { await page.getByRole("button", { name: "Review prompt (1 fix)" }).click(); }, shown: ".findings-dialog input[name=fixesMode]" },
+  { name: "Fix detail", url: "/findings?optimize_area=fixes&fixes_item=fix_sample", ready: ".fixes-detail .fixes-quotes", open: async page => { await page.locator(".fixes-members summary").click(); }, shown: ".fixes-members[open] .fixes-quotes" },
+  { name: "Fixes settings", url: "/findings?optimize_area=fixes&view=settings", ready: ".fixes-bounds select" },
+  { name: "Fixes table", url: "/findings?optimize_area=fixes&view=table", ready: ".safety-table .findings-cart li", open: page => page.locator(".safety-table .qt-row input[type=checkbox]").first().check(), shown: ".safety-selection-toolbar" },
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
@@ -452,12 +534,18 @@ const ROUTES = [
   ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
-  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#labelsEnabled", api: {
+  { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
-      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker." } },
-  } },
-  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Your writing" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
+      status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker.",
+      notice: `The configured labeling worker /Applications/${'LongApplicationName'.repeat(12)}/Contents/MacOS/pharos-labeler-ort is missing. Reinstall Pharos.`,
+      execution: {device:'unavailable', status:'GPU unavailable', detail:`Cannot load /Applications/${'LongApplicationName'.repeat(12)}/Contents/MacOS/mlx/libpharos_mlx.dylib`, confirmed:false} },
+      agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled).", notice:"Enabled in this library's configuration." } },
+  }, open: async page => {
+    await page.locator('[data-view-key="background:labels"]').click();
+    await page.locator('[data-view-key="background:agent_events"]').click();
+  }, shown: '#background-detail-labels:not([hidden])' },
+  { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
@@ -476,7 +564,8 @@ const ROUTES = [
   } },
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
-  { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
+  { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
+  { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
@@ -502,7 +591,7 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 320, height: 640 }];
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [{
-  bug: "Query Table 0.9.7 fit-to-screen floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
+  bug: "Query Table 1.0.0 screen fitting still floors a column at its wrapping host link measured on one line, so Analyze's fitted tables scroll at desktop widths; docs/handoffs/query-table-fit-wrapping-links.md",
   when: (route, viewport) => /^Analyze workspace query (usage|writing_messages|agent_events)$/.test(route.name) && viewport.width >= 1024,
   match: /^fitted table still scrolls sideways: \d+px wide in \d+px$/,
 }];
@@ -514,7 +603,10 @@ for (const width of [1440, 320]) test(`Search filter suggestions stay readable a
   const app = await open(t, {
     url: `/library?${new URLSearchParams({ q_library: encodeQuery(query) })}`,
     viewport: { width, height: 844 }, ready: "#queryTableLibrary .qt-qb",
-    api: { "GET /api/query/library/distinct": ({ query }) => ({ values: values.filter(value => value.includes(query.get("q") ?? "")), hasMore: false }) },
+    api: { "POST /api/query/library/query-v3": request => {
+      const result = defaultApi["* /api/query/:dataset/:operation"]({ ...request, params: { dataset: "library", operation: "query-v3" } });
+      return request.body.distinct ? { ...result, distinct: { values: values.filter(value => value.includes(request.body.distinct.search)), hasMore: false, hasNull: false } } : result;
+    } },
   });
   const { page } = app;
   const edit = page.getByRole("button", { name: /^Edit filter: Repository/ });
@@ -736,7 +828,6 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     ...askAPI,
     'POST /api/ask/session':({body,state})=>state.suggestionDraft={...askSession,...body,conversation:[]},
     'GET /api/ask/session':({query,state})=>state.suggestionDraft||{...askSession,id:query.get('id'),conversation:[]},
-    'GET /api/query/library/distinct':({query})=>query.get('field')==='repository_name'?{values:['pharos','query-table'],hasMore:false}:undefined,
   }});
   const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
   const viewport=page.getByRole('region',{name:'Browse prompt suggestions',exact:true});
@@ -749,18 +840,32 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
     }));
     assert.equal(clipped,false,'suggestion questions fit their cards');
   };
+  const distinctHint=async()=>{
+    const {hint,visible,questions}=await page.evaluate(()=>({
+      hint:document.getElementById('pharos-question').dataset.placeholder,
+      visible:[...document.querySelectorAll('.pharos-suggestion[data-reading] .pharos-idea-text')].map(label=>label.textContent),
+      questions:[...document.querySelectorAll('.pharos-idea-text')].map(label=>label.textContent),
+    }));
+    assert.ok(questions.includes(hint)&&!visible.includes(hint),'the placeholder uses a question outside the visible suggestion cards');
+  };
   for(const width of [320,2133]){
     await page.setViewportSize({width,height:1070});await settled();
     assert.deepEqual(await layoutProblems(page),[]);
     await readable();
+    await distinctHint();
     await shot(`expanded-${width}`);
   }
   for(let step=0;step<2;step++){
     await suggestions.getByRole('button',{name:'Next suggestions',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('.pharos-idea-viewport').hasAttribute('data-moving'));
     await readable();
+    await distinctHint();
   }
   await suggestions.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.pharos-idea-announcement')?.textContent==='Prompt suggestions refreshed.');
+  assert.ok(calls.some(call=>call.path==='/api/ask/suggestions'&&call.query.get('seed')==='1'),'Refresh asks the library for another slate');
   await readable();
+  await distinctHint();
   const card=viewport.locator('[data-reading]').filter({hasText:'repository'}).first();
   const prompt=await card.locator('.pharos-idea-text').textContent();
   await card.click();
@@ -784,19 +889,120 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
 });
 
-test("Background Processing items drag to another schedule for a week", { skip }, async t => {
-  const { page, calls } = await open(t, { url: '/settings/sync', ready: '#backgroundSchedule .bg-col' });
-  const writing = page.locator('#backgroundSchedule .bg-item[data-item="writing"]');
-  const response = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/background/settings');
-  await writing.dragTo(page.locator('#backgroundSchedule .bg-col[data-cadence="frequent"]'));
-  await response;
-  const saved = calls.find(call => call.method === 'POST' && call.path === '/api/background/settings');
-  assert.deepEqual(saved?.body, { temporary_cadences: { writing: 'frequent' } });
-  assert.equal(await page.locator('#backgroundSchedule .bg-item[data-item="findings"]').getAttribute('draggable'), null, 'only adaptive work moves');
+test("Background Processing items drag between all four columns for a week", { skip }, async t => {
+  let document = structuredClone(defaultApi['GET /api/background']);
+  let heldRead = null, heldSave = null;
+  const { page, calls } = await open(t, { url: '/settings/sync', viewport: { width: 1800, height: 1800 }, ready: '#backgroundSchedule .bg-col', api: {
+    'GET /api/background': () => {
+      if (!heldRead) return document;
+      heldRead.started.resolve();
+      return heldRead.reply.promise;
+    },
+    'POST /api/background/settings': async ({ body }) => {
+      if (heldSave) await heldSave.promise;
+      for (const [id, cadence] of Object.entries(body.temporary_cadences)) {
+        const item = document.view.items.find(item => item.id === id);
+        item.cadence = cadence || item.usual_cadence;
+        item.column = item.cadence;
+        item.temporary_cadence = cadence ? { cadence, expires_at: new Date(Date.now() + 7 * 86400000).toISOString() } : null;
+      }
+      document.view.cadences = document.view.cadences.map(column => ({ ...column,
+        items: document.view.items.filter(item => item.cadence === column.id).map(item => item.id) }));
+      document.view.unscheduled = document.view.items.filter(item => item.cadence === 'manual').map(item => item.id);
+      return document;
+    },
+  } });
+  const schedule = page.locator('#backgroundSchedule');
+  // A poll already in flight must not undo a move, even when it finishes
+  // after the save. Hold responses by condition, without timing assumptions.
+  const stale = structuredClone(document);
+  heldRead = {started: Promise.withResolvers(), reply: Promise.withResolvers()};
+  await page.evaluate(() => { window.scheduleRefresh = window.pharosBackground.refresh(true); });
+  await heldRead.started.promise;
+  heldSave = Promise.withResolvers();
+  // Move the backup out first; the fourth column remains a destination for enabled work.
+  const backup = schedule.locator('.bg-item[data-item="backup"]');
+  await backup.locator('.bg-grip').dragTo(schedule.locator('.bg-col[data-cadence="daily"]'));
+  await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
+  assert.ok(document.view.unscheduled.includes('backup'), 'the task moves before the server answers');
+  // Cadence runs resolve membership on the server, which still has the old
+  // schedule. Task runs use an explicit ID and can remain available.
+  const cadenceRuns = schedule.locator('.bg-col-head .bg-run');
+  for (const run of await cadenceRuns.all()) assert.ok(await run.isDisabled());
+  assert.ok(await schedule.getByRole('button', {name: 'Run Update writing estimates now', exact: true}).isEnabled());
+  await cadenceRuns.evaluateAll(buttons => buttons.forEach(button => button.click()));
+  assert.ok(!calls.some(call => call.method === 'POST' && call.path === '/api/background/run'), 'no cadence runs before the move is saved');
+  const saved = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/background/settings'));
+  heldSave.resolve();
+  heldSave = null;
+  await saved;
+  await page.waitForFunction(() => !document.querySelector('#backgroundSchedule [data-item="backup"] .bg-state').textContent.includes('Saving'));
+  assert.ok(await schedule.locator('.bg-col[data-cadence="daily"] .bg-col-head .bg-run').isEnabled(), 'cadence runs resume after saving');
+  heldRead.reply.resolve(stale);
+  await page.evaluate(() => window.scheduleRefresh);
+  heldRead = null;
+  await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
+  for (const id of document.view.items.filter(item => item.state !== 'disabled').map(item => item.id)) {
+    for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
+      const item = schedule.locator(`.bg-item[data-item="${id}"]`);
+      await item.locator('.bg-grip').dragTo(schedule.locator(`.bg-col[data-cadence="${cadence}"]`));
+      await schedule.locator(`.bg-col[data-cadence="${cadence}"] .bg-item[data-item="${id}"]`).waitFor();
+    }
+  }
+  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings'
+    && call.body?.temporary_cadences?.conversations === 'manual'), 'fixed items accept the manual column');
   // A redraw keeps keyboard focus on the item's run button.
   await page.getByRole('button', { name: 'Run Findings now', exact: true }).focus();
   await page.evaluate(() => window.pharosBackground.render());
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Run Findings now');
+});
+
+test("Background Processing shares the busy switch across Hourly and Daily and shows work history", { skip }, async t => {
+  let holdWhenBusy = true;
+  const { page, calls, settled, shot } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row', api: {
+    'POST /api/background/settings': ({ body }) => {
+      holdWhenBusy = body.hold_when_busy;
+      return { ...defaultApi['GET /api/background'], settings: { ...defaultApi['GET /api/background'].settings, hold_when_busy: holdWhenBusy } };
+    },
+  } });
+  const schedule = page.locator('#backgroundSchedule');
+  assert.equal(await schedule.getByText('What it costs').count(), 0);
+  assert.equal(await schedule.getByText('Be considerate').count(), 0);
+  const hourly = schedule.locator('.bg-col[data-cadence="hourly"]').getByRole('switch', { name: 'Hold while busy' });
+  const daily = schedule.locator('.bg-col[data-cadence="daily"]').getByRole('switch', { name: 'Hold while busy' });
+  assert.ok(await hourly.isVisible());
+  assert.ok(await daily.isVisible());
+  assert.equal(await schedule.locator('.bg-mode').getByRole('switch').count(), 0);
+  await hourly.uncheck();
+  await settled();
+  assert.equal(await daily.isChecked(), false);
+  assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings' && call.body?.hold_when_busy === false));
+  await daily.check();
+  await settled();
+  assert.equal(await hourly.isChecked(), true);
+  assert.equal(calls.filter(call => call.method === 'POST' && call.path === '/api/background/settings' && 'hold_when_busy' in call.body).length, 2);
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
+  await history.getByRole('button', { name: 'Add filter', exact: true }).click();
+  await page.getByRole('button', { name: /^Work(?:\s|$)/ }).click();
+  await history.getByRole('combobox', { name: 'Value for Work', exact: true }).fill('Back up');
+  await page.waitForFunction(() => document.querySelectorAll('#syncHistoryTables .qt-row').length === 1);
+  assert.ok(await history.getByText('Back up', { exact: true }).isVisible());
+  assert.equal(await page.getByRole('region', { name: 'Source status', exact: true }).locator('.qt-row').count(), 2, 'history filters leave other tables alone');
+  await history.getByRole('button', { name: 'Remove Work filter', exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll('#syncHistoryTables .qt-row').length === 3);
+  await history.getByRole('button', { name: 'Add filter', exact: true }).click();
+  await page.getByRole('button', { name: 'Started started_at', exact: true }).click();
+  await history.getByRole('combobox', { name: 'Value for Started', exact: true }).fill(defaultApi['GET /api/operations'].journal.recent[0].started_at);
+  await page.waitForFunction(() => document.querySelectorAll('#syncHistoryTables .qt-row').length === 1);
+  await history.getByRole('button', { name: 'Remove Started filter', exact: true }).click();
+  await history.getByRole('button', { name: 'Add sort', exact: true }).click();
+  await page.getByRole('button', { name: /^Elapsed(?:\s|$)/ }).click();
+  await page.waitForFunction(() => document.querySelectorAll('#syncHistoryTables .qt-row').length === 3);
+  assert.equal(await page.getByLabel('Last run cost').count(), 0);
+  await shot('background-processing');
+  await history.scrollIntoViewIfNeeded();
+  await shot('work-history');
 });
 
 test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
@@ -889,6 +1095,17 @@ test('pages without section menus use the full window', { skip }, async t => {
   await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
+});
+
+for(const width of [725,390])test(`Timeline axis clocks fit zoomed windows at ${width}px`,{skip},async t=>{
+  const start=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()}).start;
+  const url=work+'?'+new URLSearchParams({explorer:'timeline',delegation_start:String(start),delegation_end:String(start+30000)});
+  const app=await open(t,{url,viewport:{width,height:850},ready:'.lt-session-root'}),{page}=app;
+  await page.waitForFunction(()=>{
+    const labels=[...document.querySelectorAll('.delegation-axis time')].map(element=>element.getBoundingClientRect());
+    return labels.length>1&&labels.every((rect,i)=>!i||rect.left>=labels[i-1].right);
+  });
+  assert.deepEqual(await layoutProblems(page),[]);
 });
 
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {
@@ -984,6 +1201,98 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
   assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
 });
 
+
+test("clipped labels reveal hidden text and stop repeating it when they fit", { skip }, async t => {
+  const names = ["repository/shared-prefix-branch-name/feature-one", "repository/shared-prefix-branch-name/feature-two"];
+  const {page} = await open(t, {url: "/cards?cards=library&card_search=human-repository-words-trend", ready: ".query-chart-legend",
+    api: {"* /api/query/:dataset/:operation": call => {
+      const response = defaultApi["* /api/query/:dataset/:operation"](call);
+      if (!response?.metrics) return response;
+      return {...response, metrics: response.metrics.map(metric => {
+        const clause = call.body?.metrics?.find(clause => clause.id === metric.id);
+        if (!clause?.groupBy?.includes("repository_name") || !clause.groupBy.includes("day")) return metric;
+        const days = [...new Set(metric.buckets.map(bucket => bucket.keys[clause.groupBy.indexOf("day")]))];
+        const buckets = days.flatMap(day => names.map(name => ({keys: clause.groupBy.map(field => field === "day" ? day : name), value: 42, count: 1})));
+        return {...metric, buckets, groupCount: buckets.length};
+      })};
+    }},
+  });
+  const legend = page.locator(".query-chart-legend").first();
+  await legend.evaluate(element => {element.closest('.query-card').style.transform = 'rotate(2deg)';});
+  await legend.evaluate(element => {element.style.width = "160px";});
+  for (const name of names) {
+    const item = legend.locator("[data-chart-tooltip-label]").filter({hasText: name});
+    await item.hover();
+    await page.waitForFunction(name => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(name), name);
+  }
+  await legend.evaluate(element => {element.style.width = "100%";element.style.gridTemplateColumns = "1fr";});
+  await legend.locator("[data-chart-tooltip-label]").first().hover();
+  await page.waitForFunction(() => !document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])'));
+
+  // Classic labels, session names and inline work-preview parts use the same
+  // opt-in runtime; exercise single-line, ancestor and multiline clipping.
+  await page.evaluate(() => {
+    const host = document.createElement("div");host.id = "overflow-fixture";
+    host.style.cssText = "position:fixed;top:120px;left:10px;width:90px;z-index:20000;background:white";
+    host.innerHTML = '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span data-overflow-title>Repository with a hidden branch suffix</span></div><div data-overflow-title style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">A session title that wraps across several lines and has a hidden final suffix</div>';
+    document.body.append(host);
+  });
+  const labels = page.locator("#overflow-fixture [data-overflow-title]");
+  for (const label of await labels.all()) {
+    await label.hover({position: {x: 4, y: 4}});
+    assert.equal(await label.getAttribute("title"), await label.textContent(), "clipped text is available on hover");
+  }
+  // Resize while still hovered: the last label now fits, so help disappears.
+  await page.locator("#overflow-fixture").evaluate(element => {element.style.width = "1200px";});
+  await page.waitForFunction(() => !document.querySelector("#overflow-fixture > [data-overflow-title]").hasAttribute("title"));
+  for (const label of await labels.all()) {
+    await label.hover({position: {x: 4, y: 4}});
+    assert.equal(await label.getAttribute("title"), null);
+  }
+});
+
+test("Card Library timeline ticks fit full dollar amounts", { skip }, async t => {
+  let suppliedLargeCosts = false;
+  const app = await open(t, {
+    url: "/cards?cards=library&card_search=cumulative-api-cost&card_window=30",
+    ready: ".query-timeline-ticks > span",
+    api: { "* /api/query/:dataset/:operation": call => {
+      const response = defaultApi["* /api/query/:dataset/:operation"](call);
+      if (call.params.dataset !== "usage" || !response?.metrics) return response;
+      const cost = call.body?.metrics?.find(metric => metric.field === "cost_usd" && metric.groupBy?.includes("day"));
+      if (!cost) return response;
+      suppliedLargeCosts = response.metrics.some(metric => metric.id === cost.id && metric.buckets.length);
+      return { ...response, metrics: response.metrics.map(metric => metric.id !== cost.id ? metric : {
+        ...metric, buckets: metric.buckets.map(bucket => ({ ...bucket, value: 1_250_000 / metric.buckets.length })),
+      }) };
+    } },
+  });
+  assert.ok(suppliedLargeCosts, "the fixture supplied six- and seven-figure cost ticks");
+  const chart = app.page.locator('[data-card-id="cumulative-api-cost"] .query-cover-timeline');
+  await chart.waitFor();
+  for (const width of [1440, 320]) {
+    await app.page.setViewportSize({ width, height: 900 });
+    await chart.scrollIntoViewIfNeeded();
+    const problems = await chart.evaluate(chart => {
+      const clip = chart.closest(".query-card-open").getBoundingClientRect();
+      const plot = chart.querySelector(".query-cover-columns").getBoundingClientRect();
+      const dates = chart.querySelector(".query-timeline-dates > span").getBoundingClientRect();
+      const ticks = [...chart.querySelectorAll(".query-timeline-ticks > span")].map(tick => tick.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+      const problems = [];
+      for (const tick of ticks) {
+        if (tick.left < clip.left || tick.right > clip.right) problems.push("a dollar tick is clipped by its card");
+        if (tick.right > plot.left) problems.push("a dollar tick overlaps the plot");
+      }
+      if (ticks.some((tick, index) => index && tick.top < ticks[index - 1].bottom)) problems.push("dollar ticks overlap each other");
+      if (Math.abs(dates.left - plot.left) > 1) problems.push("dates do not align with the plot");
+      if (plot.width <= 0) problems.push("the gutter leaves no room for the plot");
+      return problems;
+    });
+    assert.deepEqual(problems, [], `timeline at ${width}px`);
+    assert.deepEqual(await layoutProblems(app.page), []);
+    await app.shot(`full-dollar-timeline-${width}`);
+  }
+});
 
 // IndexedDB and painting saved charts during navigation require a real browser.
 test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
@@ -1089,6 +1398,39 @@ test("Older card dashboard restores durable sources before rendering", { skip },
   await app.settled();
 });
 
+test('Tokens and Cost keeps missing pricing actionable across refresh, chart views and reload', { skip }, async t => {
+  let pricing = defaultApi['GET /api/pricing'];
+  const app = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-query-destinations a',
+    api: { 'GET /api/pricing': () => pricing } });
+  const { page, settled } = app;
+  const notice = page.getByRole('region', { name: 'Missing model prices' });
+  await settled();
+  assert.equal(await notice.count(), 0);
+  pricing = missingPrices;
+  const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
+  await refresh.focus();
+  await refresh.press('Enter');
+  await notice.waitFor();
+  assert.ok(await refresh.evaluate(element => document.activeElement === element), 'loading pricing moved focus');
+  await page.evaluate(() => { window.pharosCopyText = async text => { window.copiedPricingPrompt = text; }; });
+  await notice.getByRole('button', { name: 'Copy refresh prices prompt' }).click();
+  await notice.getByRole('status').waitFor();
+  assert.equal(await page.evaluate(() => window.copiedPricingPrompt), missingPrices.prompt);
+  await notice.locator('summary').click();
+  const prompt = page.getByRole('textbox', { name: 'Pricing refresh prompt' });
+  assert.equal(await prompt.inputValue(), missingPrices.prompt);
+  await page.reload();
+  await prompt.waitFor();
+  assert.equal(await prompt.inputValue(), missingPrices.prompt, 'the expanded prompt restores after reload');
+  await page.getByRole('combobox', { name: 'View', exact: true }).selectOption('compare');
+  await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor();
+  assert.ok(await notice.isVisible(), 'comparison views keep the pricing notice');
+  pricing = defaultApi['GET /api/pricing'];
+  await refresh.click();
+  await notice.waitFor({ state: 'hidden' });
+  await settled();
+});
+
 test('Older card dashboard restoration cannot overwrite a later route', { skip }, async t => {
   let release, started;
   const gate = new Promise(resolve => { release = resolve; }), requested = new Promise(resolve => { started = resolve; });
@@ -1116,6 +1458,13 @@ test("Markdown local destinations become navigable only after availability is co
   const source=page.getByRole("link",{name:"Source file",exact:true});
   assert.ok(await source.getAttribute("href"));
   assert.equal(await source.getAttribute("aria-disabled"),null);
+  // The Mac app's context menu reads the resolved path for Open With.
+  assert.equal(await source.getAttribute("data-file-path"),"/workspace/internal/archive/api.go");
+  // A confirmed file opens in its Mac app instead of loading in the browser.
+  await source.click();
+  await page.waitForFunction(()=>document.querySelector('#feedbackToast.visible'));
+  assert.ok(app.calls.some(call=>call.method==='POST'&&call.path==='/api/markdown-link'&&call.query.get('href')==='internal/archive/api.go:12'));
+  assert.equal(page.context().pages().length,1);
   assert.equal(await page.getByRole("link",{name:"Running dev server",exact:true}).getAttribute("href"),"http://localhost:5173/");
   for(const name of ["Missing file","Stopped dev server"]){
     const link=page.getByRole("link",{name,exact:true});

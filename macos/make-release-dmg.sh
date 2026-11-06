@@ -11,7 +11,7 @@ if [ "$#" -ne 3 ] || [ ! -d "$APP" ] || [ -e "$OUTPUT" ]; then
     echo "Usage: $0 APP OUTPUT.dmg X.Y.Z (OUTPUT must not exist)" >&2
     exit 2
 fi
-for command in hdiutil tiffutil swift uvx; do
+for command in hdiutil tiffutil python3 swiftc xcrun uvx; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 
@@ -25,7 +25,8 @@ fi
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-swift "$ROOT/macos/make-update-background.swift" "$WORK/background" "$VERSION"
+/bin/sh "$ROOT/macos/swift-toolchain.sh" compile "$ROOT/macos/make-update-background.swift" -o "$WORK/make-update-background"
+"$WORK/make-update-background" "$WORK/background" "$VERSION"
 tiffutil -cathidpicheck "$WORK/background.png" "$WORK/background@2x.png" \
     -out "$WORK/background.tiff"
 

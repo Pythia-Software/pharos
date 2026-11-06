@@ -174,7 +174,7 @@ test("human writing projects escaped JSON text and survives message normalizatio
   assert.equal(reader.humanWritingMask(ambiguous, display), '', 'ambiguous source text must not invent attribution');
 });
 
-test("local labels name a message's most specific labels and mark the text they describe", () => {
+test("local labels describe the whole message while writing and event marks keep their own spans", () => {
   const taxonomy = [{ id: 'P.control', name: 'Steer ongoing work' }, { id: 'P.control.continue', name: 'Continue', definition: 'Keep going.' },
     { id: 'P.request.work', name: 'Request work' }];
   const typed = 'Sync to main, then **continue**.', source = '<context>Pasted notes</context>\n' + typed;
@@ -185,17 +185,13 @@ test("local labels name a message's most specific labels and mark the text they 
   assert.equal(view.family, 'P.control', 'the likeliest specific label picks the hue');
   assert.deepEqual(plain(view.labels.map(label => [label.id, label.title, label.prob])), [['P.control.continue', 'Control · Continue', 0.98], ['P.request.work', 'Request work', 0.37]]);
   assert.equal(view.segmentName, 'Typed text');
-  // A person's typed pieces carry the labels; pasted context does not.
-  assert.equal(reader.labelMask(message, source), reader.humanWritingMask(message, source));
-  // An agent's message is labeled as a whole, through its formatting.
+  // Labels are card metadata; they do not create text-level marks.
+  assert.equal(reader.humanWritingMask(message, source).includes('1'), true);
   const reply = { role: 'assistant', kind: 'message', text: 'All **checks** pass.', labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} } };
-  const marked = elements(reader.markdownTree(reply.text, 0, reader.labelMask(reply, reply.text))).filter(item => item.tag === 'mark');
-  assert.ok(marked.length && marked.every(item => item.className === 'labeled-text'));
-  assert.equal(marked.map(text).join(''), 'All checks pass.');
+  assert.equal(reader.humanWritingMask(reply, reply.text), '');
   assert.equal(reader.messageLabelView(reply).labels[0].title, 'Report · C.report.completion', 'unnamed labels fall back to their ids, prefixed by family');
   // Unlabeled messages mark nothing; a root alone has no family.
   assert.equal(reader.messageLabelView({ role: 'assistant', text: 'Done.' }), null);
-  assert.equal(reader.labelMask({ role: 'assistant', text: 'Done.' }, 'Done.'), '');
   const root = reader.messageLabelView({ labels: { ids: ['C'], probs: {} } });
   assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
 });
@@ -251,8 +247,9 @@ test("agent events mark each event's sentence by group and its context, in UTF-1
     ['agent-event event-friction event-at-0', "The 🚧 endpoint doesn't support pagination."],
     ['agent-event event-choices event-at-1', "I'll work around it by fetching one day at a time."],
   ]);
-  // Hovering a mark names the events of its own sentence, wherever Markdown
-  // cut it: a piece as short as "not" names no other sentence's events.
+  // Hovering a mark names the events of its own sentence, Markdown inside it
+  // included: "It is **not** done." is one mark around the bold, and names no
+  // other sentence's events.
   const [first, second] = marksOf(view);
   assert.deepEqual(plain(reader.eventsAtMark(view, first).map(event => event.kind)), ['missing_capability', 'obstacle']);
   assert.deepEqual(plain(reader.eventsAtMark(view, second).map(event => event.kind)), ['workaround']);
@@ -261,7 +258,8 @@ test("agent events mark each event's sentence by group and its context, in UTF-1
     { kind: 'unverified', label: 'Unchecked claim', group: 'Choices you may not see', probability: 0.8, sentence: [20, 35], subject: [], response: [] },
     { kind: 'deferred', label: 'Deferred', group: 'Choices you may not see', probability: 0.7, sentence: [0, 19], subject: [], response: [] }] });
   const notMarks = elements(reader.markdownTree(notMessage.text, 0, reader.eventMask(notMessage.text, notView, ''))).filter(item => item.tag === 'mark');
-  const notPiece = notMarks.find(item => text(item) === 'not');
+  const notPiece = notMarks.find(item => text(item) === 'It is not done.');
+  assert.ok(notPiece?.children.some(child => child.tag === 'strong'), 'the bold sits inside the mark');
   assert.deepEqual(plain(reader.eventsAtMark(notView, notPiece).map(event => event.kind)), ['deferred']);
   // Context that is no event's sentence is marked lighter and names the
   // events it is context of; the likelier of two events on a sentence picks
@@ -295,4 +293,24 @@ test("missing classification, automated prompts and invalid ranges do not imply 
     { role: 'user', text: 'Old spans.', authorship: { typed_words: 2, spans: [{ category: 'typed', excerpt: 'Old spans.' }] } },
     { role: 'user', text: 'Invalid.', authorship: { spans: [{ category: 'typed', start: -1, end: 200 }] } },
   ]) assert.equal(reader.hasHumanWriting(message), false, JSON.stringify(message));
+});
+
+// A highlight across inline code, emphasis or a link is one <mark>: an
+// element the highlight covers whole moves inside it; one it starts or ends
+// inside keeps its own piece.
+test("a highlight crossing inline markdown is one mark", () => {
+  const body = "Before. hello world `this is markdown` another *thing* [link](https://example.com) done. After.";
+  const said = "hello world `this is markdown` another *thing* [link](https://example.com) done.";
+  const event = { id: "x", kind: "obstacle", label: "Obstacle", group: "Friction", probability: 0.9, sentence: [body.indexOf(said), body.indexOf(said) + said.length], subject: [], response: [] };
+  const view = reader.messageEventView({ role: "assistant", kind: "message", text: body, agent_events: [event] });
+  const tree = markdownTree(body, 0, reader.eventMask(body, view, "")), marks = elements(tree).filter(element => element.tag === "mark");
+  assert.equal(marks.length, 1);
+  assert.equal(html(marks[0]), '<mark class="agent-event event-friction event-at-0">hello world <code>this is markdown</code> another <em>thing</em> <a class="markdown-link" href="https://example.com" rel="noreferrer noopener" target="_blank">link</a> done.</mark>');
+  // A target ending inside the code: the covered text is one piece, the code keeps its own.
+  const prompt = "Keep `the drawer only` path.", start = prompt.indexOf("Keep"), end = prompt.indexOf(" only");
+  const mask = reader.eventTargetMask(prompt, [{ range: [start, end], links: ["e"] }], "");
+  assert.equal(html(markdownTree(prompt, 0, mask)), '<div class="markdown-content"><p><mark class="event-target event-target-at-0">Keep </mark><code><mark class="event-target event-target-at-0">the drawer</mark> only</code> path.</p></div>');
+  // Adjacent different highlights stay apart.
+  const both = "one `two` three", split = "1".repeat(4) + "2".repeat(11);
+  assert.deepEqual(elements(markdownTree(both, 0, split)).filter(element => element.tag === "mark").map(mark => mark.className), ["human-written", "labeled-text"]);
 });

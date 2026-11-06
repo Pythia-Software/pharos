@@ -26,7 +26,8 @@ func TestFindingFixKind(t *testing.T) {
 }
 
 // The findings query table carries the Findings view's own values: its open
-// rows match /api/findings?state=open, and its results sum to the summary.
+// rows match /api/findings?state=open, and all results sum to the summary,
+// including verified results whose findings no longer qualify to reopen.
 func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 	ctx := context.Background()
 	fixture, id, plan, now := copiedFinding(t)
@@ -70,7 +71,7 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 	var rows struct {
 		Rows []map[string]any `json:"rows"`
 	}
-	call(http.MethodPost, "/api/query/findings/rows-v2", qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile,
+	call(http.MethodPost, "/api/query/findings/rows-v2", queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile,
 		WireQuery: qt.WireQuery{Select: fields, Where: []qt.WhereTerm{{Field: "state", Op: "=", Value: "open"}}, Limit: 100}}, &rows)
 	if len(rows.Rows) != len(overview.Findings) {
 		t.Fatalf("%d open rows, %d open cards", len(rows.Rows), len(overview.Findings))
@@ -100,24 +101,26 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 		t.Fatalf("regressed win: %v", row)
 	}
 
-	// The Net savings card's sums, before and after the finding is
-	// dismissed: the summary keeps a dismissed finding's results.
+	// The Net savings card's sums stay aligned with the summary after a
+	// quiet finding becomes inactive, and after it is dismissed.
 	results := func() {
 		t.Helper()
 		var summary struct {
 			Summary struct {
-				Open  int            `json:"open"`
-				Saved findingSavings `json:"saved"`
+				Open      int            `json:"open"`
+				Regressed int            `json:"regressed"`
+				Saved     findingSavings `json:"saved"`
 			} `json:"summary"`
 		}
 		call(http.MethodGet, "/api/findings?state=summary", nil, &summary)
-		var metrics qt.SQLiteMetricsV2Result
+		var metrics queryFixtureMetricsResult
 		call(http.MethodPost, "/api/query/findings/metrics", metricRequest(
 			qt.AggSpec{ID: "usd", Expression: "SUM([saved_usd])"}, qt.AggSpec{ID: "added", Expression: "SUM([saved_added_usd])"},
 			qt.AggSpec{ID: "net", Expression: "SUM([saved_net_usd])"}, qt.AggSpec{ID: "tokens", Expression: "SUM([saved_tokens])"},
-			qt.AggSpec{ID: "weeks", Expression: "MAX([saved_weeks])"}, qt.AggSpec{ID: "open", Expression: "COUNT()", Where: []qt.WhereTerm{{Field: "state", Op: "=", Value: "open"}}}), &metrics)
+			qt.AggSpec{ID: "weeks", Expression: "MAX([saved_weeks])"}, qt.AggSpec{ID: "open", Expression: "COUNT()", Where: []qt.WhereTerm{{Field: "state", Op: "=", Value: "open"}}},
+			qt.AggSpec{ID: "regressed", Expression: "COUNT()", Where: []qt.WhereTerm{{Field: "regressed", Op: "=", Value: "true"}}}), &metrics)
 		saved := summary.Summary.Saved
-		want := []float64{saved.USD, saved.AddedUSD, saved.USD - saved.AddedUSD, saved.Tokens, float64(saved.Weeks), float64(summary.Summary.Open)}
+		want := []float64{saved.USD, saved.AddedUSD, saved.USD - saved.AddedUSD, saved.Tokens, float64(saved.Weeks), float64(summary.Summary.Open), float64(summary.Summary.Regressed)}
 		for index, metric := range metrics.Metrics {
 			if metric.Error != "" || len(metric.Buckets) != 1 || metric.Buckets[0].Error != "" {
 				t.Fatalf("%s: %+v", metric.ID, metric)
@@ -131,6 +134,20 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 		}
 	}
 	results()
+	later := fixture.catalog.clock().AddDate(0, 0, findingRecentDays)
+	fixture.catalog.now = func() time.Time { return later }
+	results()
+	call(http.MethodGet, "/api/findings?state=open", nil, &overview)
+	for _, card := range overview.Findings {
+		if card["id"] == id {
+			t.Fatal("inactive finding is still recommended")
+		}
+	}
+	call(http.MethodPost, "/api/query/findings/rows-v2", queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile,
+		WireQuery: qt.WireQuery{Select: fields, Where: []qt.WhereTerm{{Field: "id", Op: "=", Value: id}}, Limit: 1}}, &rows)
+	if len(rows.Rows) != 1 || rows.Rows[0]["state"] != findingHidden || floatOr(rows.Rows[0]["saved_tokens"]) <= 0 {
+		t.Fatalf("inactive finding lost its queryable history: %v", rows.Rows)
+	}
 	if err := fixture.catalog.FindingAction(ctx, id, map[string]any{"action": "dismiss", "reason": "not_real"}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +161,7 @@ func TestFindingsQueryTableEmpty(t *testing.T) {
 	spawned := false
 	catalog.background = func(OperationSpec, func(context.Context, *Op) error) bool { spawned = true; return true }
 	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/findings/rows-v2",
-		qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state"}, Limit: 10}})
+		queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state"}, Limit: 10}})
 	var result struct {
 		Rows []map[string]any `json:"rows"`
 	}

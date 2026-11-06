@@ -315,12 +315,13 @@ async function runCase(item) {
             kind = 'api';
             const handshake = await api(`/api/query/${native.dataset}/capabilities`);
             const schema = core.loadSchema(documents[native.dataset]);
-            const request = native.query.grouping ? core.toQueryRequestV3(native.query, schema, handshake.queryCapabilities, handshake.computedExecution) : core.toServerQueryV2(native.query, schema, handshake.computedExecution);
+            const request = core.toQueryRequestV3(native.query, schema, handshake.queryCapabilities, handshake.computedExecution);
+            request.hostState=native.query.hostState;
             const fields = native.dataset === 'tool_calls' ? ['command','file_path'] : native.dataset === 'writing_messages' ? ['text'] : native.dataset === 'mcp_calls' ? ['arguments_json','error_text'] : [];
-            const budget = !native.query.grouping && request.where.some(term => ('any' in term ? term.any : [term]).some(clause => fields.includes(clause.field)));
+            const budget = !native.query.grouping && request.result.where.some(term => ('any' in term ? term.any : [term]).some(clause => fields.includes(clause.field)));
             const params = new URLSearchParams(native.params);
             if (budget) params.set('interactive_search', '1');
-            const response = await api(`/api/query/${native.dataset}/${native.query.grouping ? 'query-v3' : 'rows-v2'}${params.size ? `?${params}` : ''}`, request);
+            const response = await api(`/api/query/${native.dataset}/query-v3${params.size ? `?${params}` : ''}`, request);
             const failures = (response.metrics ?? []).filter(metric => metric.error).map(metric => metric.error);
             if (failures.length) throw new Error(failures.join('; '));
           }
@@ -354,7 +355,7 @@ async function runCase(item) {
               const href = await link.getAttribute('href'), native = sourceQuery(href);
               result.rowActionURL = href;
               const handshake = await api('/api/query/tool_calls/capabilities');
-              const response = await api('/api/query/tool_calls/rows-v2', core.toServerQueryV2(native.query, core.loadSchema(documents.tool_calls), handshake.computedExecution));
+              const response = await api('/api/query/tool_calls/query-v3', core.toQueryRequestV3(native.query, core.loadSchema(documents.tool_calls), handshake.queryCapabilities, handshake.computedExecution));
               const full = await api(`/api/query/tools/item?id=${encodeURIComponent(String(row.id))}`);
               result.rowActionEvidence = { fullRowFound: Boolean(full.row), projectedFields: Object.keys(row), sourceCount: Number(full.row?.call_count), destinationTotal: response.total };
               if (!full.row) throw new Error('Source summary identity could not be resolved');

@@ -48,7 +48,7 @@ func TestBackgroundIORunsAtUtility(t *testing.T) {
 		// A daemon pass's batch, a stage begun inline, and its child, which
 		// takes the parent's class.
 		pass := catalog.beginPass(context.Background(), "maintenance.search.text", triggerVersion)
-		pass.runIO(func() {})
+		pass.runIO(context.Background(), func(context.Context) {})
 		pass.worked(1)
 		pass.end(nil)
 		ctx, chain := server.begin(context.Background(), OperationSpec{Kind: "analysis.refresh", Trigger: triggerChained})

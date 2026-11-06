@@ -8,7 +8,9 @@ Query Table **0.9.8** supplies portable native property inspectors. Search, Filt
 
 - `web/src/view-contract.ts` defines host fields, URL names, page scope, types/domains, descriptions, target families, opt-outs and dependency gaps.
 - `web/src/view-state.ts` supplies `useViewState`, `useViewEntry`, the classic-script bridge and content-disclosure binding. URL values are the source of truth. Back/Forward and in-app navigation use the same reader. Active pages write effective defaults, including false and empty values, so a copied view overrides another browser's preferences. Route-scoped writes are rejected after navigation, even if a component is still mounted. Viewer-dependent disclosure defaults are captured together in one frame; fixed defaults stay implicit and do not accumulate per rendered row. Opt into viewer-dependent capture with `ViewDisclosure captureInitial` or `useViewEntry(..., active, {captureInitial:true})`. Explicitly changed row disclosures remain addressable after paging.
+- Query Table writes each table edit to `q_<dataset>` with `replaceState`. A table can opt into history steps with `QuerySurface queryHistory` (`web/src/query-history.ts`): each change to filters, sorts, grouping, metrics, columns or paging becomes its own Back/Forward entry, rapid edits within a second coalesce into one, and column widths never count. Restorations from Back/Forward or in-app links are recorded into their entry, never pushed over it. Only the Risky actions table opts in.
 - Existing native query/chart/host-search codecs remain with their owners. `delegatedViewFields` explicitly identifies those owners. Query Table is consumed through published APIs, without local patches.
+- Background processing tables use native `q_<schema>` query parameters (for example, `q_sync_operations`) and `query_layout` entries keyed by schema name. Filters, sorts, columns, grouping, metrics and paging restore independently for each retained snapshot; the query editor starts expanded.
 - `web/src/site-map.ts` exports the contract to `assets/site-map.json`. `site_view.go` reads this same data for validation/building/parsing; it does not maintain a second field catalog.
 - `docs/view-controls.json` is the reviewed ledger of actual JSX, every classic script, the static shell and standalone HTML fragments. It includes controls that are buttons or disclosures, not just inputs. `web/view-controls.mjs` discovers these from source.
 
@@ -51,7 +53,7 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Surface | Portable state |
 |---|---|
 | Layout settings | `menuBarPreferences`, `headerSettings`, `quickStatsSettings` |
-| Capture/index settings | `sync:separate`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
+| Capture/index settings | `sync:history`, `sync:sources`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
 | Background schedule items | `background:<item ID>`; several rows may open together |
 | Connected cloud schedules | `cloud:schedule:<destination ID>`; IDs survive renaming and reordering |
 | Library health and app location | `library:drive-health`, `library:application` |
@@ -60,13 +62,32 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Query ideas, layouts and retained row payloads | `query:<dataset>:ideas`, `query:<dataset>:layout`, and `row:<dataset>:<row ID>:<field>` |
 | Workspace and conversation content | `work:<work ID>:archive`, `work:<work ID>:files`; the reader's existing `reader_expanded`, `reader_collapsed` and `reader_content` codecs cover turns, source details, tools, structured payloads and prose |
 | Other host content | `machine:methodology`, `authored:message:<message ID>`, `feedback:logs:<submission ID>`, and the existing Findings/Delegation disclosures |
-| Sidebar branches and Parallelism conversation list | Existing `nav_expanded` and `analyze_parallelism.showConversations` owners remain authoritative |
+| Sidebar branches and Parallelism conversation list | Existing `nav_expanded` and `analyze_parallelism.showConversations` owners remain authoritative. Top-level navigation groups default open; deeper groups default open along the current page's path. Explicit branch choices override those defaults. |
 
 Draft controls are explicitly classified as editing: source/library onboarding; create/open/restore/copy/move library forms; the unapplied cloud setup/download wizard; and editable feedback attachments/Ask activity within the chat editor. Their drafts and action steps are not reconstructed from a disclosure URL. Transient pickers, tooltips, overflow menus and chart popovers retain their explicit transient classification. Query Table owns its published native state; its existing documented dependency gaps remain blockers.
 
 `check-view-controls` now rejects native accordions, summaries, and `aria-expanded` controls classified only as `settings`. JSX expansion attributes and classic `setAttribute("aria-expanded", ...)` sites are included in the inventory. Static HTML `data-view-field` bindings are discovered directly, so settings values cannot accidentally hide a missing view binding in the review ledger. New controls still require individual review.
 
+## Timeline Key
+
+The timeline Key uses the dashboard legend menu: show only a value or category,
+add/remove values, show everything except a value or category, or reset that
+section. Hidden values stay in the Key with muted, desaturated swatches so they
+can be restored. Sender, Receiver and message-mode families apply to all of
+their displayed labels, with mixed selection indicated on the parent.
+
+`timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
+selections. Each optional section has `{values: string[], excluded: boolean}`;
+an absent section or empty values shows everything in that section. Values use
+stable message-label IDs (`?` for uncategorized), event-group keys, tool-category
+IDs (`error` for failed calls), or caller-source IDs. The selection filters
+ribbon spans, event arcs and markers, counts and inspection targets together.
+Original timing, zoom, idle compression and retained records remain unchanged.
+Caller-source filtering preserves each run's original portion of the message.
+
 ## Agent interface
+
+On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
 
 Ask Pharos uses the existing MCP CLI-style interface:
 
@@ -89,7 +110,7 @@ For example:
 
 A native `query` includes its filters/time predicates; give it without `filters`, `days` or `card`. It carries ordered columns/widths, sort, grouping, summaries, metrics, page size/offset, item properties and host search. Host-state parameter mirrors must agree. Advanced Search uses `view.search_state` with a complete `TextSearchDraft`; Analyze record search uses `view.record_keyword`.
 
-Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`. **Create card** saves that canonical dashboard URL to the Home collection, including chart, filters, Today/timezone, Carbon assumptions and Parallelism counting/gap settings. Card names/descriptions and the creation dialog are authoring data/drafts; they do not add view parameters. One dashboard URL can hold several charts (Parallelism draws its ribbon above its catalog chart): each chart has its own **Create card** button, the dialog chooses among them, and the card stores its choice as `dashboardTarget` beside the URL rather than in it. Custom card previews resolve the saved URL and run the dashboard’s analysis/trend models again.
+Home card links open full dashboards directly with `analyze_chart` and `analyze_filters`. Collected-card source queries and cover metadata remain in storage for previews and editing, and are removed from navigation links. There is no expanded-card page. Dashboard Today links may pin an IANA zone with `analyze_timezone`. **Create card** saves that canonical dashboard URL to the Home collection, including chart, filters, Today/timezone, Carbon assumptions and Parallelism counting/gap settings. Card names, descriptions, categories and calls to action, and the creation dialog, are authoring data/drafts; they do not add view parameters. One dashboard URL can hold several charts (Parallelism draws its ribbon above its catalog chart): each chart has its own **Create card** button, the dialog chooses among them, and the card stores its choice as `dashboardTarget` beside the URL rather than in it. Custom card previews resolve the saved URL and run the dashboard’s analysis/trend models again.
 
 Analyze query pages accept `options.return_topic` (`analyze_topic`) independently of their dataset so a supporting query returns to the dashboard that opened it.
 
@@ -107,7 +128,7 @@ Targets include the page, controls, named sections, card definition IDs, message
 
 `reveal=detail:{"rowId":"id","field":"arguments_json","path":"$[\"events\"][41][\"text\"]"}` invokes the published semantic registry. The page selects the dataset; preserve numeric versus string IDs. Field and path are optional. The target loads exact details and materializes a selected property/JSONPath without changing the population, filters, sort or pagination. Missing records/properties/paths report unavailable. Reveal waits for restoration and the initial row execution, so a temporary fallback cannot consume the landing. Navigation aborts pending work; completed landings survive temporary provider withdrawal, so background refresh does not repeat scrolling. This family is reveal-only because the upstream registry has no highlight-only or multi-target API. Native marks use Pharos reveal styling and Clear highlights hides them.
 
-In the Mac app, the page's context menu adds **Copy Page Link** and **Highlight _Card/Message/…_** to WebKit's Back/Forward/Reload, followed by **Open Logs**, **Send Feedback…** and **Annotate…** (`window.pharosPageAction`). Annotating, from there or from Send feedback, also puts the annotation toolbar's button in the header so it can be turned off. Highlight names the innermost element under the pointer whose target reference resolves back to it (`pharosView.contextTarget`), and adds it to the URL without scrolling: as `reveal` when the link has no landing, otherwise as another `highlight`. Choosing it again (**Remove Highlight**) removes it, promoting the first highlight to the landing.
+In the Mac app, the page's context menu adds **Copy Page Link** and **Highlight _Card/Message/…_** to WebKit's Back/Forward/Reload, followed by **Open Logs**, **Send Feedback…** and **Annotate…** (`window.pharosPageAction`). Annotating, from there or from Send feedback, also puts the annotation toolbar's button in the header so it can be turned off. Highlight names the innermost element under the pointer whose target reference resolves back to it (`pharosView.contextTarget`), and adds it to the URL without scrolling: as `reveal` when the link has no landing, otherwise as another `highlight`. Choosing it again (**Remove Highlight**) removes it, promoting the first highlight to the landing. On a Markdown link to a local file the service has found (`data-file-path`), WebKit's link items give way to Finder's: **Open** (left out when the service says opening would run the file), **Open With** (the default app, the others that claim the type, and **Other…**), **Show in Finder** and **Copy Path**. A plain click opens the file in its default app through `POST /api/markdown-link`, or shows a script or installer in Finder.
 
 Components register target resolvers with `window.pharosView.register`. Rendering can expose `data-pharos-target`, `data-view-field` or an existing semantic identity attribute. Registration and DOM mutation signals handle delayed content. Navigation cancels stale scheduled landings. A background refresh reapplies highlighting without repeatedly scrolling. Targets unavailable under the current tab/query are reported and never silently widen its data scope.
 
