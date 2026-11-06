@@ -1,3 +1,4 @@
+import {peopleLabelBreakdowns} from "./people-message-labels";
 import {  branchesOf, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { mapTermPredicates } from "./where-terms";
 import writing from "../../schemas/writing.schema.json";
@@ -58,6 +59,7 @@ function legacy(state: AnalysisState): AnalysisState {
 export const humanAnalysisCatalog: AnalysisCatalog = {
   dataset: "writing_messages", time: { first: "sent_at", last: "sent_at" }, measures,
   breakdowns: {
+    ...peopleLabelBreakdowns("writing_messages"),
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
     ...single([["source_kind", "App"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
   },

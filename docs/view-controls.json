@@ -3002,6 +3002,25 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "60980fd60c4b63b2:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "attachMessageRaw",
+      "tag": "button",
+      "control": "'button', 'message-raw-button', icon('code')",
+      "contract": "reader",
+      "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
+    },
+    {
+      "key": "646b5551286d46a0:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "attachMessageRaw",
+      "tag": "aria-expanded",
+      "control": "button",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
+    },
+    {
       "key": "b9d31ba372bfa501:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "closePreview",
@@ -3208,25 +3227,6 @@
       "owner": "mount",
       "tag": "select",
       "control": "'select', 'conversation-selector'",
-      "contract": "action",
-      "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
-    },
-    {
-      "key": "0f8141ea4b1c2254:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "narrativeEvent",
-      "tag": "aria-expanded",
-      "control": "button",
-      "disclosure": true,
-      "contract": "reader",
-      "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
-    },
-    {
-      "key": "31ea544c956cc4d8:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "narrativeEvent",
-      "tag": "button",
-      "control": "'button', 'message-raw-button', icon('code')",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
     },

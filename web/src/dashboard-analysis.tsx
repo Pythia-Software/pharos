@@ -58,7 +58,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
   const unitOptions: Array<[string, string, string?]> = [[records, catalog.records.plural, view.view === "scatter" ? "A scatter pairs two measures of each conversation, session or run." : view.view === "distribution" && !measure.value ? "This measure has no value per record." : undefined],
     ...Object.entries(catalog.units).map(([id, item]): [string, string] => [id, item.plural])];
   const minimum = sampleThresholds.includes(view.minSamples) ? sampleThresholds : [...sampleThresholds, view.minSamples].sort((a, b) => a - b);
-  const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`]),
+  const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, item.views && !item.views.includes(view.view) ? "Use Over time or Compare groups" : item.measures && !item.measures.includes(view.metric) ? "Choose a message-count metric" : trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`]),
     ...trend ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, limits.component(id)]) : []];
   const count = trendPeriodCount(view);
   const content = <>

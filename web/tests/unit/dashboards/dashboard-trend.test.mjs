@@ -679,3 +679,48 @@ test('message-label conversation results preserve the native source definition a
  assert.equal(labelResultsMode({...query,hostState:cards}),'cards');assert.equal(labelResultsMode({...query,hostState:table}),'table');assert.throws(()=>host.normalize({version:1,params:{label_results:['bad']}}));
  const params=new URLSearchParams({label_chart:JSON.stringify({measure:'count',scale:'logarithmic',smoothing:3,resolution:'label'}),label_audience:'thinking',label_repository:'r',label_focus:'P.request'}),url=new URL(messageLabelLegacyURL(params),'http://localhost');assert.equal(url.searchParams.get('analyze_topic'),'labels');const filters=core.decodeQueryStrict(url.searchParams.get('analyze_filters'));assert.ok(filters.where.some(c=>c.field==='source'&&c.value==='thinking'));assert.equal(JSON.parse(url.searchParams.get('analyze_chart')).rollingPeriods,3);assert.equal(url.searchParams.has('label_lab'),false);
 });
+
+import {humanAnalysisCatalog} from '../../../src/human-analysis-catalog';
+import {habitsAnalysisCatalog} from '../../../src/habits-analysis-catalog';
+import {peopleMessageLabelCatalog} from '../../../src/people-message-labels';
+
+test('People message-label groups and shares add up to their message population',()=>{
+ const at='2026-10-01T12:00:00Z', date=at.slice(0,10), time=Date.parse('2026-10-02');
+ for(const [source,scope] of [[humanAnalysisCatalog,'human'],[conversationAnalysisCatalog,'activity'],[habitsAnalysisCatalog,'habits']]){
+  const state={view:'trend',metric:'messages',split:'message_family',period:'day',share:true};
+  const catalog=peopleMessageLabelCatalog(source,state);
+  assert.equal(catalog.dataset,'people_message_labels');
+  // The service supplies one winning label or coverage row per message.
+  const data=[['a','P.request.work.implement','P.request'],['b','P.control.redirect','P.control'],['c','?','?']].map(([message_id,label,family],i)=>({id:scope+i,message_id,label,family,people_scope:scope,typed_words:1,day:date,sent_at:at,event_at:at,started_at:at}));
+  data.push({...data[0],id:'wrong-scope',message_id:'outside',people_scope:'outside'});
+  const query=trendQuery(catalog,state,[],{now:time});
+  const results=core.evaluateMetrics(data,query.query,schemas.people_message_labels,{now:time}).metrics;
+  const shares=results.find(x=>x.id==='trend').buckets;
+  assert.equal(shares.find(x=>x.keys.includes('P.request')).value,1);
+  assert.equal(shares.reduce((sum,bucket)=>sum+bucket.value,0),3,'every matching message belongs to exactly one group');
+  const built=trendSeries(catalog,state,query,results,{now:time});
+  assert.equal(built.error,undefined);assert.equal(built.additive,true);assert.equal(built.lines,false,'exclusive labels can stack');
+  const bucket=built.buckets.find(b=>b.values['s:P.request']>0);
+  assert.ok(Math.abs(bucket.values['s:P.request']-1/3)<1e-8);
+  assert.ok(Math.abs(Object.values(bucket.values).reduce((sum,value)=>sum+value,0)-1)<1e-8,'shares sum to 100%, including Uncategorized');
+  const compare=analysisQuery(catalog,{...state,view:'compare',compareAs:'share'},[],{now:time});
+  const compared=core.evaluateMetrics(data,compare.query,schemas.people_message_labels,{now:time}).metrics[0].buckets;
+  assert.equal(compared.find(b=>b.keys.includes('P.request')).value,1);
+  assert.equal(compared.reduce((sum,b)=>sum+b.value,0),3);
+  assert.equal(normalizeAnalysis(catalog,{...state,view:'compare',compareAs:'share'}).compareAs,'share');
+  assert.equal(normalizeAnalysis(catalog,{...state,display:'cumulative'}).display,'cumulative');
+  if(scope==='human')for(const split of ['message_family','message_label']){
+   const filtered=data.map(row=>({...row,text:row.message_id==='a'?'Please fix the parser':'Please review the renderer'}));
+   const where=[{field:'text',op:'contains',value:'parser'}];
+   for(const query of [trendQuery(catalog,{...state,split},where,{now:time}),analysisQuery(catalog,{...state,split,view:'compare'},where,{now:time})]){
+    const metrics=core.evaluateMetrics(filtered,query.query,schemas.people_message_labels,{now:time}).metrics;
+    assert.ok(metrics.every(metric=>metric.error===undefined));
+    assert.equal(metrics[0].buckets.reduce((sum,b)=>sum+b.value,0),1,'text filters keep the original Human Words population');
+   }
+  }
+  assert.equal(peopleMessageLabelCatalog(source,{...state,metric:source===humanAnalysisCatalog?'typed':source===habitsAnalysisCatalog?'wall_hours':'output'}),source,'labels never attribute time, words or tokens');
+ }
+ const typed=peopleMessageLabelCatalog(humanAnalysisCatalog,{metric:'typed_messages',split:'message_label'});
+ const query=trendQuery(typed,{metric:'typed_messages',split:'message_label',period:'day'},[],{now:time});
+ assert.ok(query.query.where.some(term=>term.field==='typed_words'&&term.op==='>'));
+});

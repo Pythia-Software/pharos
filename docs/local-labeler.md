@@ -464,20 +464,17 @@ from `readerHighlightOptions` in `reader-model.js`), in the full reader and in
 a library card's Browse preview. A library that has labeling on offers
 Message labels on every conversation:
 
-- **On**, each labeled message's text is highlighted in its family's hue:
-  Report, Control, Deliberation, Input, Feedback, Request, Frame, Difficulty
-  (`LABEL_FAMILIES` in `reader-model.js`, the reference categorical palette's
-  eight hues in that order, stepped for each theme). A message labeled only at
-  a root (asks or steers, responds or reports) is grey. The family is that
-  of the message's likeliest specific label; a legend lists the families the
-  conversation uses. Where labels and human writing cover the same text, the
-  label's hue wins; an agent event's sentence keeps its event hue.
-- **What is highlighted** is the text the labels describe: a person's typed
-  pieces when authorship finds them, otherwise the whole message
-  (`labelMask`). Pasted or quoted context in a typed message stays plain.
-- **Hovering** highlighted text shows the item's segment in words (typed
-  text, agent reply…) and its most specific labels, each with its family,
-  the model's probability and the taxonomy's definition (`messageLabelView`).
+- **On**, each labeled message's whole card is tinted in its likeliest
+  specific label's family hue: Report, Control, Deliberation, Input, Feedback,
+  Request, Frame or Difficulty. Root-only labels use grey. User prompts,
+  agent replies and expanded reasoning all use this treatment; pasted context
+  remains inside the same message card. Message labels never create text marks.
+- **Agent events** keep their sentence-level marks on top of the card tint,
+  controlled independently by the Agent events checkbox. Human writing retains
+  its own span-level highlighting when enabled.
+- **Hovering the card** shows its most specific accepted labels, their
+  probabilities and taxonomy definitions. Hovering an agent-event mark takes
+  precedence and shows that event instead.
 - **The setting** is view state, `reader_labels` in the URL (beside
   `reader_writing` and `reader_events`), so a copied link keeps it; the last
   choice is saved as the fallback for links without it. A checkbox only
@@ -485,8 +482,9 @@ Message labels on every conversation:
 - A conversation with a dirty mark, or never built, says "Still labeling
   this conversation" or "Not labeled yet" (the checkbox is disabled until
   it has labels).
-- **Only prose messages** are highlighted. Thinking and delegations render as
-  activity rows and are labeled but not shown yet.
+- **Reasoning** expands into a message card with its labels, sentence events
+  and raw source disclosure. Delegations remain activity rows. Timeline
+  inspection quotes also tint their whole retained message excerpt.
 
 `WorkConversation` attaches them (`messageLabelsAttacher` in `labels.go`):
 each message's `labels` (`segment`, `ids` in the model's order, `probs` for
@@ -1090,8 +1088,8 @@ every output, as LAPWING did.
   which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the
   worker's start-up again (about 0.5 s: process, 152 MB model, its SHA-256).
-- **Only the conversation reader shows labels**: no query table or MCP tool
-  reads them yet, and the reader leaves thinking and delegations plain. Hues
+- **Label presentation**: the reader, timelines and Message Labels/People
+  query surfaces show stored labels; delegations remain activity rows. Hues
   are told apart by the legend and hover as well as colour, but past three
   families on screen some pairs are hard to separate for colour-blind
   readers. Labels are not in the freshness
