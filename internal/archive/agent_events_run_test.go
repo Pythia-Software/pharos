@@ -278,7 +278,13 @@ func TestAgentEventsLiveThreadTarget(t *testing.T) {
 			hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
 			t.Setenv(labelertest.FakeHelloEnv, hellos)
 			var observed []int
-			stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{ThreadTarget: func() LabelerSettings {
+			var reportedDevice atomic.Bool
+			ctx := withWorkProgress(t.Context(), func(work activityWork) {
+				if device != "" && strings.Contains(work.Detail, strings.ToUpper(device)) {
+					reportedDevice.Store(true)
+				}
+			})
+			stats, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{ThreadTarget: func() LabelerSettings {
 				if catalog.labelers != nil {
 					threads, _, _ := catalog.labelers.Usage()
 					if len(observed) == 0 || observed[len(observed)-1] != threads {
@@ -305,6 +311,9 @@ func TestAgentEventsLiveThreadTarget(t *testing.T) {
 			if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, want) {
 				t.Fatalf("worker thread targets: %v", threads)
 			}
+			if device != "" && !reportedDevice.Load() {
+				t.Fatalf("progress never reported the confirmed %s device", device)
+			}
 			again, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
 			if err != nil || !again.Complete || again.MessagesScored != 0 {
 				t.Fatalf("changing cores left work pending: %+v %v", again, err)
@@ -316,7 +325,9 @@ func TestAgentEventsLiveThreadTarget(t *testing.T) {
 func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	catalog := agentEventsCatalog(t)
 	labels, settings := agentEventsTestSettings(t)
-	first, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Limit: 1})
+	var current atomic.Pointer[activityWork]
+	ctx := withWorkProgress(t.Context(), func(work activityWork) { current.Store(&work) })
+	first, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: 1})
 	if err != nil || !first.Cut || first.Complete {
 		t.Fatalf("a limited run: %+v %v", first, err)
 	}
@@ -325,9 +336,21 @@ func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages WHERE conversation_id='c-events'`).Scan(&newest); err != nil || newest == 0 {
 		t.Fatalf("the limited run skipped the newest conversation (%v)", err)
 	}
-	rest, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{})
+	initial := *current.Load()
+	var resumed atomic.Pointer[activityWork]
+	ctx = withWorkProgress(t.Context(), func(work activityWork) {
+		resumed.CompareAndSwap(nil, &work)
+		current.Store(&work)
+	})
+	rest, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{progressBase: first.progress})
 	if err != nil || !rest.Complete || rest.MessagesScored == 0 {
 		t.Fatalf("the rest: %+v %v", rest, err)
+	}
+	if start, end := resumed.Load(), current.Load(); start.Done != initial.Done || start.Total != initial.Total || end.Done != end.Total || end.Total != initial.Total {
+		t.Fatalf("handoff reset progress: initial=%+v resumed=%+v end=%+v", initial, start, end)
+	}
+	if rest.progress.messages != first.MessagesScored+rest.MessagesScored || rest.progress.candidates != first.Candidates+rest.Candidates {
+		t.Fatalf("handoff lost message or candidate counts: %+v", rest.progress)
 	}
 	dry, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true, DryRun: true})
 	if err != nil || dry.MessagesScored != 0 || dry.MessagesUnchanged != first.MessagesScored+rest.MessagesScored {
@@ -550,78 +573,97 @@ func TestAgentEventsStopKillsTheWorkers(t *testing.T) {
 // conversation must be prepared during the first inference, and scored while
 // the first save is still blocked. The ledger/model tests above cover outputs.
 func TestAgentEventsPipelineOverlapsStages(t *testing.T) {
-	override(t, &agentEventsChunkRows, 3)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	inferring, prepared := make(chan struct{}), make(chan struct{})
-	writing, scoredDuringWrite := make(chan struct{}), make(chan struct{})
-	releaseWrite := make(chan struct{})
-	jobs := []*agentEventsConversation{{id: "first"}, {id: "second"}, {id: "third"}}
-	stats := &AgentEventsRunStats{}
-	pipeline := agentEventsPipeline{
-		stats: stats, progress: func(string, ...any) {},
-		build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
-			if job.id == "second" {
-				select {
-				case <-inferring:
-				case <-ctx.Done():
-					return nil, ctx.Err()
+	for _, rows := range []int{1, 20} {
+		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
+			override(t, &agentEventsChunkRows, 3)
+			var committed atomic.Int64
+			ctx, cancel := context.WithTimeout(withWorkProgress(t.Context(), func(w activityWork) { committed.Store(int64(w.Done)) }), 5*time.Second)
+			defer cancel()
+			inferring, prepared := make(chan struct{}), make(chan struct{})
+			writing, scoredDuringWrite := make(chan struct{}), make(chan struct{})
+			releaseWrite := make(chan struct{})
+			jobs := []*agentEventsConversation{{id: "first"}, {id: "second"}, {id: "third"}}
+			stats := &AgentEventsRunStats{}
+			pipeline := agentEventsPipeline{
+				stats: stats, progress: func(string, ...any) {},
+				build: func(job *agentEventsConversation) (*agentEventsConversation, error) {
+					if job.id == "second" {
+						select {
+						case <-inferring:
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+						close(prepared)
+					}
+					job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, rows)}}
+					for i := range job.messages[0].rows {
+						job.messages[0].rows[i] = labelrt.Framed{IDs: []int32{1, 2}, Extra: map[string][]labelrt.Span{labelrt.SegmentSpans: {{Start: 0, End: 2}}}}
+					}
+					return job, nil
+				},
+				infer: func(conversations []*agentEventsConversation) error {
+					switch conversations[0].id {
+					case "first":
+						close(inferring)
+						select {
+						case <-prepared:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					case "second":
+						select {
+						case <-writing:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+						close(scoredDuringWrite)
+					}
+					for _, conversation := range conversations {
+						conversation.messages[0].hash = "scored"
+					}
+					return nil
+				},
+				store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) error {
+					for _, row := range conversation.messages[0].rows {
+						if row.IDs != nil || len(row.Extra[labelrt.SegmentSpans]) == 0 {
+							return errors.New("save retained token IDs or lost sentence spans")
+						}
+					}
+					if conversation.messages[0].hash != "scored" {
+						return errors.New("saved an unscored conversation")
+					}
+					if conversation.id == "first" {
+						close(writing)
+						select {
+						case <-releaseWrite:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}
+					written.Stored++
+					return nil
+				},
+			}
+			done := make(chan error, 1)
+			go func() { done <- pipeline.run(ctx, cancel, jobs) }()
+			select {
+			case <-scoredDuringWrite:
+				if committed.Load() != 0 {
+					t.Error("progress advanced before the first save committed")
 				}
-				close(prepared)
+				close(releaseWrite)
+			case err := <-done:
+				t.Fatalf("pipeline ended before overlapping stages: %v", err)
+			case <-ctx.Done():
+				t.Fatal("preparation, inference and persistence did not overlap")
 			}
-			job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, 1)}}
-			return job, nil
-		},
-		infer: func(conversations []*agentEventsConversation) error {
-			switch conversations[0].id {
-			case "first":
-				close(inferring)
-				select {
-				case <-prepared:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			case "second":
-				select {
-				case <-writing:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				close(scoredDuringWrite)
+			if err := <-done; err != nil || stats.ConversationsBuilt != 3 || stats.Candidates != 3*rows || stats.Stored != 3 {
+				t.Fatalf("overlapping stages: %+v %v", stats, err)
 			}
-			for _, conversation := range conversations {
-				conversation.messages[0].hash = "scored"
+			if committed.Load() != 3 {
+				t.Fatalf("committed progress = %d, want 3", committed.Load())
 			}
-			return nil
-		},
-		store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) error {
-			if conversation.messages[0].hash != "scored" {
-				return errors.New("saved an unscored conversation")
-			}
-			if conversation.id == "first" {
-				close(writing)
-				select {
-				case <-releaseWrite:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			written.Stored++
-			return nil
-		},
-	}
-	done := make(chan error, 1)
-	go func() { done <- pipeline.run(ctx, cancel, jobs) }()
-	select {
-	case <-scoredDuringWrite:
-		close(releaseWrite)
-	case err := <-done:
-		t.Fatalf("pipeline ended before overlapping stages: %v", err)
-	case <-ctx.Done():
-		t.Fatal("preparation, inference and persistence did not overlap")
-	}
-	if err := <-done; err != nil || stats.ConversationsBuilt != 3 || stats.Candidates != 3 || stats.Stored != 3 {
-		t.Fatalf("overlapping stages: %+v %v", stats, err)
+		})
 	}
 }
 
@@ -661,9 +703,11 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 					t.Fatal("the backlog work list retained prepared message rows")
 				}
 			}
-			// Three windows of rows/bookkeeping, plus one conversation being
-			// built. An oversized conversation occupies the whole budget.
-			limit := 12/min(2+rows, 12) + 1
+			// Three unscored windows, one conversation being built, and
+			// three scored windows at the bounded writer. Each scored
+			// window can retain one oversized conversation, without tokens.
+			perWindow := max(1, (4+1+rows)/(2+rows))
+			limit := 12/min(2+rows, 12) + 1 + 3*perWindow
 			if got := peak.Load(); got > int32(limit) || retained.Load() != 0 {
 				t.Fatalf("retained %d conversations (peak %d), limit %d", retained.Load(), got, limit)
 			}
@@ -730,7 +774,7 @@ func TestAgentEventsFailedSaveRollsBackAndResumes(t *testing.T) {
 		SELECT RAISE(ABORT,'injected save failure'); END`)
 	opts := AgentEventsRunOptions{Conversations: []string{"c-events"}}
 	stats, err := catalog.RunAgentEvents(t.Context(), labels, settings, opts)
-	if err == nil || !strings.Contains(err.Error(), "injected save failure") || stats.Stored != 0 || stats.Events != 0 {
+	if err == nil || !strings.Contains(err.Error(), "injected save failure") || stats.Stored != 0 || stats.Events != 0 || stats.progress.conversations != 0 || stats.progress.messages != 0 {
 		t.Fatalf("failed save: %+v %v", stats, err)
 	}
 	for _, table := range []string{"agent_events", "agent_event_messages", "agent_events_conversations"} {

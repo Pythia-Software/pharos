@@ -205,6 +205,11 @@ function nodeCases(map: SiteMap) {
   for (const [key, value] of Object.entries(delegationRouteValues(route))) if (value) reader.searchParams.set(key, value);
   reader.searchParams.set("explorer", "timeline");
   add("work", reader.pathname + reader.search, { work_id: "workspace-1", conversation: "conversation-2", ...route, collapsed: [...route.collapsed].sort(), tab: "timeline" });
+  for (const scope of ["self", "all"]) {
+    const hierarchy = { ...route, mode: "hierarchy" as const, sort: "tokens", scope, direction: "desc", collapsed: [], selected: "", range: null };
+    const params = new URLSearchParams(Object.entries(delegationRouteValues(hierarchy)).filter(([, value]) => value));
+    add("work", `/work/workspace-1?${params}`, {work_id: "workspace-1", ...hierarchy, tab: "table"});
+  }
   return cases;
 }
 

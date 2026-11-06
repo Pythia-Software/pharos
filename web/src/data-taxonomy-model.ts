@@ -11,6 +11,7 @@ export type DataEntity = keyof typeof dataEntities;
 
 export const dataSources = {
   message_labels:{label:"Message label observations",entity:"messages",grain:"One most-specific accepted label per retained message, or one coverage observation. Messages can have several labels."},
+  compactions: { label: "Context Compaction Events", entity: "agents", grain: "One recorded compaction boundary, with human, machine or unknown trigger attribution" },
   model_requests: {label:"Individual Model Requests",entity:"agents",grain:"One retained usage-bearing response event, with linked post-tool timing evidence when available"},
   library: { label: "Workspaces", entity: "workspaces", grain: "One workspace" },
   usage: { label: "Agent Session Token Usage by Day, Model & Effort", entity: "agents", grain: "Daily tokens for one agent session, with a separate row for each model and effort level" },

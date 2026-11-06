@@ -21,11 +21,11 @@ const view = (library = {}, extra = {}) => ({
 
 test("each top-level operation is one line: label, step N of M, its measured amount and a range, with the step's name apart", () => {
   const line = plain(panel.operationLine(operation("a", {
-    step: { index: 3, count: 6, name: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
+    step: { index: 3, count: 6, name: "Claude Code", detail: "Saving prepared inputs", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
     time: { state: "estimating", label: "server range" },
   })));
   assert.deepEqual(line.primary, ["step 3 of 6", "812 MB of 2.0 GB"]);
-  assert.deepEqual(line.secondary, ["Claude Code"]);
+  assert.deepEqual(line.secondary, ["Claude Code", "Saving prepared inputs"]);
   assert.equal(line.time, "server range");
   assert.equal(line.fraction, 0.41);
   assert.match(line.tooltip, /Detail a/);

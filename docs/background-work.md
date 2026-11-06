@@ -797,7 +797,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `scheduled-frequent` / `scheduled-hourly` / `scheduled-daily` (`scheduled`: work waits for its background item's cadence, §11), `late` (behind: it has waited longer than its cadence's window, 30 min, 3 h or 30 h, since `sync_deferred.pending_since`), `deferred-by-schedule` (behind: background updates are off or paused, or the item is set to only when you ask), `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
 | `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
 | `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
-| `an.authorship` | latest of `authorship_quick_at`, `authorship_built_at` | both visible and exact generations lag inputs, or queued messages remain | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
+| `an.authorship` | `authorship_complete_at` | both visible and exact generations lag inputs, or queued messages remain | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
 | `an.authorship.refined` | `authorship_refined_at` | exact `authorship_generation` lags inputs | scheduled daily / late / running | `analysis.authorship.refine` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
 | `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
@@ -1240,6 +1240,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   whole `eject` document and the journal rows.
 - `step.fraction` is present only when `unit` is real and `total` known.
   There is no overall percentage.
+- Optional `step.detail` describes concurrent stages or secondary counts without
+  starting another step. The panel shows it beside the phase; the journal retains
+  it as `detail_json.step_detail`, including for another process's operation.
 - `time` reuses the forecast states of
   [Progress and time estimates](progress-estimates.md). A range is shown
   only for `estimating`, or `provisional` marked as early ("about 3–6 min,
@@ -1697,7 +1700,7 @@ the same schedule from one declaration (`backgroundItems`):
 | Preserve originals | capture this Mac, then index every Mac's captures | Daily | `background.capture/preserve` |
 | Repositories & merges | the chain's GitHub, identities and Git stages | Frequently, adaptive | the three stages |
 | Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
-| Update writing estimates | bounded queued-message pass, with exact suffix reuse when cheap | Frequently | `analysis.authorship` |
+| Update writing estimates | bounded recent/history lanes with reserved capacity, durable per-message outcomes, and exact suffix reuse when cheap | Frequently | `analysis.authorship` |
 | Refine writing history | full historical classifier after the chain | Daily | `analysis.authorship.refine` |
 | Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
 | Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |

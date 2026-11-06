@@ -203,11 +203,16 @@ func TestWorkerProgressReachesOperationAndObserver(t *testing.T) {
 	var observed activityWork
 	ctx = withWorkProgress(ctx, func(w activityWork) { observed = w })
 	ctx, child := parent.childFrom(ctx, OperationSpec{Kind: "analysis.git"})
-	reportWork(ctx, "Checking repositories", "repository", 2, 5)
+	reportWork(ctx, "Checking repositories", "repository", 2, 5, "Scanning local Git history")
 	view := reg.views()[slices.IndexFunc(reg.views(), func(v opView) bool { return v.ID == child.ID() })]
 	step := operationStep(view)
-	if step == nil || step["fraction"] != 0.4 || observed.Done != 2 || observed.Total != 5 {
+	if step == nil || step["fraction"] != 0.4 || step["detail"] != observed.Detail || observed.Detail == "" || observed.Done != 2 || observed.Total != 5 {
 		t.Fatalf("worker progress lost its stage or observer: step=%+v observer=%+v", step, observed)
+	}
+	previousIndex := view.Step.Index
+	reportWork(ctx, "Checking repositories", "repository", 2, 5, "Saving repository links")
+	if changed := child.view().Step; changed.Index != previousIndex || changed.Detail != observed.Detail {
+		t.Fatalf("a detail update lost its step: %+v", changed)
 	}
 	child.Finish(nil)
 	revision := reg.currentRevision()

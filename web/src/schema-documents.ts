@@ -1,5 +1,6 @@
 // Runtime timestamp validation and the generated agent/Go contract share these schemas.
 import messageLabelsDocument from "../../schemas/message_labels.schema.json";
+import compactionsDocument from "../../schemas/compactions.schema.json";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
@@ -21,7 +22,7 @@ import agentEventMessagesDocument from "../../schemas/agent_event_messages.schem
 
 export const schemaDocuments = {
   message_labels:messageLabelsDocument,
-  model_requests: modelRequestsDocument, library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,
+  compactions: compactionsDocument, model_requests: modelRequestsDocument, library: libraryDocument, usage: usageDocument, writing: writingDocument, conversation_activity: conversationActivityDocument,
   writing_messages: writingMessagesDocument, mcp_calls: mcpCallsDocument, tools: toolsDocument, tool_calls: toolCallsDocument,
   skill_usages: skillUsagesDocument, tl1_attempts: tl1AttemptsDocument, parallelism: parallelismDocument, rhythm: rhythmDocument, findings: findingsDocument, safety: safetyDocument, fixes: fixesDocument,
   agent_events: agentEventsDocument, agent_event_messages: agentEventMessagesDocument,

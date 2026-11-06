@@ -65,6 +65,10 @@
     },
     {
       "file": "web/src/delegation.tsx",
+      "field": "delegation_scope"
+    },
+    {
+      "file": "web/src/delegation.tsx",
       "field": "delegation_tint"
     },
     {
@@ -358,6 +362,10 @@
     {
       "file": "web/src/delegation.tsx",
       "field": "timeline_idle"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_visibility"
     }
   ],
   "controls": [
@@ -2311,6 +2319,15 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "html:305cae4f2d4663e4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"fingerprintEvents\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"fingerprintEventsTitle\" aria-describedby=\"fingerprintEventsDescription\" aria-checked=\"true\">",
+      "contract": "settings",
+      "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
+    },
+    {
       "key": "html:6451dc20ca7284f0:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -4121,7 +4138,7 @@
       "control": "aria-label={name} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => { if (event.key !== \"ArrowDown\" && event.key !== \"ArrowUp\") return; event.preventDefault(); firstFocus.current = event.key === \"ArrowUp\" ? -1 : 0; setOpen(true); }}",
       "disclosure": true,
       "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard owner and are persisted as analyze_chart.selection; opening or navigating the menu is not a durable disclosure."
+      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
     },
     {
       "key": "072b3e8bd51c0252:0",
@@ -4130,7 +4147,7 @@
       "tag": "div",
       "control": "id={menuId} aria-label={`Filter ${name}`} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
       "contract": "transient",
-      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard owner and are persisted as analyze_chart.selection; opening or navigating the menu is not a durable disclosure."
+      "reason": "Leaf and category legend menus share transient open/keyboard-focus state. Selection actions delegate to the dashboard or timeline owner and persist as analyze_chart.selection or timeline_visibility; opening or navigating the menu is not a durable disclosure."
     },
     {
       "key": "0f737b763b98a950:0",
@@ -4139,7 +4156,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"toggle\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "1d7ed15ec5b22f13:0",
@@ -4148,7 +4165,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"only\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "dd11cf44075d571a:0",
@@ -4157,7 +4174,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"exclude\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "f1cb74ebedc04532:0",
@@ -4166,7 +4183,7 @@
       "tag": "button",
       "control": "onClick={() => choose(\"clear\")}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
       "key": "f416fb38a053b52a:0",
@@ -4896,13 +4913,23 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "3fadb452ccf35c80:0",
+      "key": "32e691eb55fa82aa:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
       "tag": "button",
-      "control": "onClick={() => sortColumn(m.id, family)}",
+      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
       "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+      "reason": "Timeline navigation stores explorer, selected session, time range, page and one-level event disclosures in the URL."
+    },
+    {
+      "key": "4f3f7a77f415da74:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "select",
+      "control": "data-view-field=\"delegation_scope\" aria-label=\"Session metric scope\" value={scope} onChange={event => { setScope(event.target.value); resetPage(); }}",
+      "binding": "delegation_scope",
+      "contract": "view.delegation_scope",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "5e44639993755813:0",
@@ -4981,15 +5008,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "c26a1ddf974ec6cc:1",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "cbf5b8d632cafc7c:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -4999,6 +5017,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound by the shared view-state primitive."
+    },
+    {
+      "key": "f3d7994222b73250:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => sortColumn(m.id, scope)}",
+      "contract": "delegation",
+      "reason": "Sorts by delegation_sort and delegation_direction using the visible delegation_scope in hierarchy and ranking."
     },
     {
       "key": "ff29b2efe4cabcbf:0",
@@ -5031,40 +5058,13 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "8de83645e3ca7611:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "select",
-      "control": "aria-label=\"Session comparison metric\" value={`${family}:${spec.id}`} onChange={event => { const [scope, id] = event.target.value.split(\":\"); choose(id, scope); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "8f5f28f1365fa426:0",
+      "key": "91f945dc32916f3b:0",
       "file": "web/src/delegation.tsx",
       "owner": "InboxSessions",
       "tag": "button",
-      "control": "onClick={() => sortColumn(spec.id, family)} aria-label={`Sort ${spec.label}${ranked ? `, currently ${direction === \"desc\" ? \"descending\" : \"ascending\"}` : \"\"}`}",
+      "control": "aria-label={`View timeline for ${n.label}`} onClick={() => openTimeline(n)}",
       "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "e068e146ae91f3e0:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "e107c41cc7c05263:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "InboxSessions",
-      "tag": "button",
-      "control": "onClick={hierarchy}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+      "reason": "Opens the full-width session timeline from the compact navigator, preserving the selected session range and one-level event disclosures in its URL."
     },
     {
       "key": "3531eb64a70fc13d:0",
@@ -5083,6 +5083,16 @@
       "control": "aria-label={`${collapsed.has(n.id) ? \"Expand\" : \"Collapse\"} ${n.label}`} onClick={() => toggle(n)}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "7b1a9d77b035e6c8:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "ParallelActivity",
+      "tag": "TimelineLegend",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "Timeline Key actions update timeline_visibility with useViewState; filtering changes presentation after time attribution and keeps hidden entries available in the Key."
     },
     {
       "key": "7f941cc59b40ccf4:0",
@@ -6483,6 +6493,15 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
+      "key": "324f4dc732c26954:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "CompactFingerprint",
+      "tag": "g",
+      "control": "aria-label={`Ribbon segment ${i+1}, ${ribbonMessageTitle(first,last,conversation.messages.length)}, extra overlapping branches ${token.parallelism}`} onFocus={event=>inspector.show(event.currentTarget,segmentCard(i))} onBlur={inspector.leave} onKeyDown={event=>{if(!['Enter',' '].includes(event.key))return;event.preventDefault();event.stopPropagation();inspector.pin(event.currentTarget,segmentCard(i,true),undefined,true);}}",
+      "contract": "transient",
+      "reason": "Keyboard pinning opens transient fingerprint inspection without changing the URL; the source message is revealed only through its navigation link."
+    },
+    {
       "key": "913a5acc7dd39995:0",
       "file": "web/src/label-compact-fingerprint.tsx",
       "owner": "CompactFingerprint",
@@ -6492,6 +6511,15 @@
       "reason": "One tab stop for the fingerprint's agent events, through the ribbons' shared useRibbonPointer: arrow keys browse events, Enter pins the card with its link focused. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
     },
     {
+      "key": "890267854bf30643:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "SegmentCard",
+      "tag": "PageLink",
+      "control": "onClick={event=>{event.stopPropagation();close();}}",
+      "contract": "action",
+      "reason": "Navigate to the pinned fingerprint source using the canonical conversation, message, session and reveal parameters; closing the popover is transient."
+    },
+    {
       "key": "3a87ee725d738e75:0",
       "file": "web/src/label-ribbon-inspector.tsx",
       "owner": "useRibbonInspector",
@@ -6499,15 +6527,6 @@
       "control": "id={id} onPointerDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()} aria-label={card.pinned?'Ribbon segment details':undefined} onPointerEnter={keep} onPointerLeave={leave}",
       "contract": "transient",
       "reason": "The inspection popup owns only hover, focus and click-pinning. Its event boundary prevents source links from starting a brush or activating the containing row."
-    },
-    {
-      "key": "0a29a56c9ed06f02:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "RecursiveRibbonRow",
-      "tag": "button",
-      "control": "aria-label={`Open session ${fullName}`} onClick={event=>{event.preventDefault();event.stopPropagation();props.openSession?.();}}",
-      "contract": "delegation",
-      "reason": "Session identity opens or switches the canonical conversation and delegation_session via openNode, independently of the ViewDisclosure event tree. The outline is displayed on its metadata line; the accessible name retains the complete identity. Remains available in sidebar preview."
     },
     {
       "key": "487e42bdd4ef7739:0",
@@ -7450,6 +7469,15 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
+      "key": "99295ff8758bf7a1:0",
+      "file": "web/src/session-identity.tsx",
+      "owner": "SessionIdentity",
+      "tag": "button",
+      "control": "aria-label={`Open session ${[outline, name].filter(Boolean).join(\" · \")}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
+      "contract": "delegation",
+      "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
+    },
+    {
       "key": "85efc2b35d82ffac:0",
       "file": "web/src/sync-tables.tsx",
       "owner": "Diagnostics",
@@ -8059,6 +8087,17 @@
       "reason": "Refresh retries a read without changing the applied view."
     },
     {
+      "key": "ff2a2d2e22b3d073:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"thinking:compaction-waits\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "d6018b26f8871d02:0",
       "file": "web/src/timeline-columns.tsx",
       "owner": "handle",
@@ -8593,6 +8632,16 @@
       "disclosure": true,
       "contract": "view.sidebar_visible",
       "reason": "Workspace session pane visibility uses the shared sidebar_visible URL field."
+    },
+    {
+      "key": "12e75abb01435e45:0",
+      "file": "web/src/workspace-inbox.ts",
+      "owner": "update",
+      "tag": "aria-expanded",
+      "control": "close",
+      "disclosure": true,
+      "contract": "view.sidebar_visible",
+      "reason": "The sessions sidebar collapse control writes the shared sidebar_visible URL field, paired with the reopen control."
     },
     {
       "key": "d91066140391c046:0",

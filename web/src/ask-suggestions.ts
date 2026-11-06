@@ -22,7 +22,7 @@ export const askAreas: AskArea[] = [
   { id: "tool-failures", label: "Failing tool calls", pages: ["analyze/calls", "analyze/tools", "analyze/query/tool_calls", "analyze/query/tools"], signals: ["tools.failures"] },
   { id: "machine-time", label: "Where agent time goes", pages: ["analyze/time", "analyze/tools"], signals: ["tools.time"] },
   { id: "thinking", label: "Reasoning and waiting", pages: ["analyze/thinking-overview", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["thinking.reasoning"] },
-  { id: "context", label: "Context pressure", pages: ["analyze/tools", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["context.compaction", "context.output"] },
+  { id: "context", label: "Context pressure", pages: ["analyze/compaction", "analyze/query/compactions", "analyze/tools", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["context.compaction", "context.output"] },
   { id: "spend", label: "Tokens and cost", pages: ["analyze/tokens", "analyze/query/usage", "cards"], signals: ["spend.tokens", "spend.change"] },
   { id: "models", label: "Model choice", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["models.mix"] },
   { id: "caching", label: "Cache reuse", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["spend.cache"] },
@@ -51,7 +51,7 @@ export const askAreas: AskArea[] = [
 export const askExcludedPages: Record<string, string> = {
   "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
   "settings/layout": "Header and navigation layout preferences.",
-  "settings/preferences": "Display preferences.",
+  "settings/preferences": "Display preferences, including agent event markers and arcs in fingerprints.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted.",
 };
 

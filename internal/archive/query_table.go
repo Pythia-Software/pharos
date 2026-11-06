@@ -458,7 +458,7 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 		c.ensureAuthorship()
 		return nil
 	}
-	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
+	if dataset == "compactions" || dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "message_labels" {
 		return nil // imported (agent_events.go); nothing to bring up to date
 	}
 	if dataset == "model_requests" {

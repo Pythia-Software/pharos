@@ -1112,6 +1112,26 @@ func TestAuthorshipDiffStoreAndInterruptedChunks(t *testing.T) {
 			t.Fatalf("surplus %s=%d (%v)", table, n, err)
 		}
 	}
+	// Inputs can change after the full pass has read them. Its progress
+	// must not overwrite the last time it actually caught up.
+	execSQL(t, c.DB, `UPDATE meta SET value='2026-08-01T00:00:00Z' WHERE key='authorship_complete_at'`)
+	changed := false
+	concurrent := withWorkProgress(t.Context(), func(work activityWork) {
+		if work.Phase == "saving authorship" && !changed {
+			changed = true
+			execSQL(t, c.DB, `UPDATE messages SET text='A newer request arrived during refinement' WHERE id='m1'`)
+		}
+	})
+	if err := c.RefineAuthorship(concurrent); err != nil {
+		t.Fatal(err)
+	}
+	if complete, _ := c.metaValue(t.Context(), "authorship_complete_at"); !changed || complete != "2026-08-01T00:00:00Z" || !c.authorshipQuickPending() {
+		t.Fatalf("concurrent source edit claimed completion: changed=%v complete=%s pending=%v", changed, complete, c.authorshipQuickPending())
+	}
+	if err := c.RefineAuthorship(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
 }
 
 func TestAuthorshipReplyPagesReleaseReadStatements(t *testing.T) {
@@ -1690,6 +1710,36 @@ func TestAuthorshipContinuationIsTheRootsExecution(t *testing.T) {
 }
 
 func TestAuthorshipQuickEstimatesAndDailyRefinement(t *testing.T) {
+	t.Run("recent writing precedes imported history", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		c.now = func() time.Time { return time.Date(2026, 9, 2, 12, 30, 0, 0, time.UTC) }
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-02')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('older','c','older','user','message','Please inspect the parser','2026-09-01T12:00:00.000Z','older')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('recent','c','recent','user','message','Please fix the grammar','2026-09-02T12:00:00.000Z','recent')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('backfill','c','backfill','user','message','Please review the lexer','2026-08-01T12:00:00.000Z','backfill')`)
+		override(t, &authorshipQuickLimit, 1)
+		for _, id := range []string{"recent", "older", "backfill"} {
+			want, _, err := c.authorshipGenerations()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+				t.Fatal(err)
+			}
+			var typed, pending int
+			if err := c.DB.QueryRow(`SELECT typed_words FROM message_authorship WHERE message_id=?`, id).Scan(&typed); err != nil || typed == 0 {
+				t.Fatalf("%s was held behind the backlog: typed=%d err=%v", id, typed, err)
+			}
+			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_pending WHERE message_id=?`, id).Scan(&pending); err != nil || pending != 0 {
+				t.Fatalf("%s remains queued: %d %v", id, pending, err)
+			}
+		}
+		if c.authorshipQuickPending() {
+			t.Fatal("older history was dropped instead of completing in later passes")
+		}
+	})
 	c, _ := testCatalog(t)
 	if err := c.ensureLabelsSchema(t.Context()); err != nil {
 		t.Fatal(err)
@@ -1787,7 +1837,7 @@ func TestAuthorshipQuickEstimatesAndDailyRefinement(t *testing.T) {
 	}
 	// Requeued unchanged input and new agent output cannot downgrade refined evidence.
 	message("later", "assistant", "The next result is available", "2026-09-01T12:40:00.000Z")
-	execSQL(t, c.DB, `INSERT INTO authorship_pending VALUES('copied','retry')`)
+	execSQL(t, c.DB, `INSERT INTO authorship_pending(message_id,revision) VALUES('copied','retry')`)
 	execSQL(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','findings')`)
 	update()
 	if got := count(`sync_deferred WHERE name IN ('labels','findings') AND generation>completed_generation`); got != 0 {
@@ -1805,6 +1855,10 @@ func TestAuthorshipQuickEstimatesAndDailyRefinement(t *testing.T) {
 	update()
 	if got := count("message_authorship"); got != 1 {
 		t.Fatalf("deleted/ineligible messages still counted: %d", got)
+	}
+	var disposition string
+	if err := c.DB.QueryRow(`SELECT disposition FROM authorship_message_state WHERE message_id='local'`).Scan(&disposition); err != nil || disposition != authorshipIneligible {
+		t.Fatalf("ineligible outcome: %s %v", disposition, err)
 	}
 	var typed int
 	if err := c.DB.QueryRow(`SELECT typed_words FROM message_authorship WHERE message_id='copied'`).Scan(&typed); err != nil || typed != 4 {
@@ -1864,6 +1918,7 @@ func TestAuthorshipQuickEstimatesAndDailyRefinement(t *testing.T) {
 
 func TestAuthorshipQuickPreservesConcurrentEditsAndCancellation(t *testing.T) {
 	c, _ := testCatalog(t)
+	c.now = func() time.Time { return authorAt(60) }
 	count := func(table string) int {
 		t.Helper()
 		var n int
@@ -1919,7 +1974,7 @@ func TestAuthorshipQuickPreservesConcurrentEditsAndCancellation(t *testing.T) {
 }
 
 func TestAuthorshipQuickDeadlineAndExactSuffix(t *testing.T) {
-	c, _ := testCatalog(t)
+	c, config := testCatalog(t)
 	execTx(t, c.DB,
 		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('c','w','codex','local','c','codex','2026-09-01T12:00:00.000Z')`,
@@ -1932,14 +1987,30 @@ func TestAuthorshipQuickDeadlineAndExactSuffix(t *testing.T) {
 	execSQL(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','findings')`)
 	want, _, _ := c.authorshipGenerations()
 	// Exhausting our own budget is successful deferral; it publishes nothing.
+	progress, _ := c.metaValue(t.Context(), "authorship_quick_at")
+	complete, _ := c.metaValue(t.Context(), "authorship_complete_at")
+	server := testServer(t, config, c)
+	execSQL(t, c.DB, `INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('authorship',2,1,'2026-09-02') ON CONFLICT(name) DO UPDATE SET generation=2,completed_generation=1`)
+
 	func() {
 		override(t, &authorshipQuickBudget, -time.Second)
-		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+		if err := server.finishDeferredStages(t.Context(), findingsMeasure, map[string]bool{"authorship": true}, nil); err != nil {
 			t.Fatal(err)
 		}
+		var generation, acknowledged int
+		if err := c.DB.QueryRow(`SELECT generation,completed_generation FROM sync_deferred WHERE name='authorship'`).Scan(&generation, &acknowledged); err != nil || generation == acknowledged {
+			t.Fatalf("unfinished estimates acknowledged: %d %d %v", generation, acknowledged, err)
+		}
+
 	}()
 	if !c.authorshipQuickPending() {
 		t.Fatal("expired budget dropped queued input")
+	}
+	if got, _ := c.metaValue(t.Context(), "authorship_quick_at"); got != progress {
+		t.Fatal("a zero-progress turn advanced progress time")
+	}
+	if got, _ := c.metaValue(t.Context(), "authorship_complete_at"); got != complete {
+		t.Fatal("an expired turn claimed completion")
 	}
 	authorshipQuickBudget = 10 * time.Second
 	mode := ""
@@ -1961,6 +2032,10 @@ func TestAuthorshipQuickDeadlineAndExactSuffix(t *testing.T) {
 		}
 	}
 	var provisional int
+	var retained int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_message_state WHERE message_id IN ('m','next') AND disposition='counted'`).Scan(&retained); err != nil || retained != 2 {
+		t.Fatalf("exact suffix lost earlier completion outcomes: %d %v", retained, err)
+	}
 	if err := c.DB.QueryRow(`SELECT provisional FROM authorship_message_state WHERE message_id='next'`).Scan(&provisional); err != nil || provisional != 0 {
 		t.Fatalf("exact suffix is provisional: %d %v", provisional, err)
 	}
@@ -1981,7 +2056,7 @@ func TestAuthorshipQuickDefersLargeMessagesToDaily(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err := c.AuthorshipStats(t.Context())
-	if err != nil || stats["deferred_messages"] != 1 || stats["provisional_messages"] != 0 || stats["refinement_pending"] != true {
+	if err != nil || stats["deferred_messages"] != 1 || stats["provisional_messages"] != 0 || stats["refinement_pending"] != true || stats["complete_at"] != nil {
 		t.Fatalf("deferred input status: %v %v", stats, err)
 	}
 	var count int
@@ -1992,10 +2067,183 @@ func TestAuthorshipQuickDefersLargeMessagesToDaily(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err = c.AuthorshipStats(t.Context())
-	if err != nil || stats["deferred_messages"] != 0 || stats["refinement_pending"] != false {
+	if err != nil || stats["deferred_messages"] != 0 || stats["refinement_pending"] != false || stats["complete_at"] == nil {
 		t.Fatalf("daily did not cover oversized input: %v %v", stats, err)
 	}
 	if err := c.DB.QueryRow(`SELECT typed_words FROM message_authorship WHERE message_id='m'`).Scan(&count); err != nil || count != 5 {
 		t.Fatalf("daily lost the full message: %d %v", count, err)
+	}
+}
+
+func TestAuthorshipQuickUpgradeRetainsExcludedMirrors(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('native','codex','local','native','Native','2026-09-01'),('mirror','conductor','local','mirror','Mirror','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('native','native','codex','local','native'),('mirror','mirror','codex','local','mirror')`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('native','mirror','mirror',1,'{}')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('native','native','native','user','message','Please fix the parser','2026-09-01T12:00:00.000Z','native'),('mirror','mirror','mirror','user','message','Please fix the parser','2026-09-01T12:00:00.000Z','mirror')`)
+	if err := c.RefineAuthorship(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce schema 22: suppressed history had no outcome and bootstrap
+	// queued it because it had no counting row. Retain the existing estimate.
+	execTx(t, c.DB,
+		`DROP TRIGGER authorship_quick_insert_v2`, `DROP TRIGGER authorship_quick_update_v2`, `DROP TRIGGER authorship_quick_delete_v2`,
+		`DROP INDEX authorship_pending_time`, `DROP INDEX authorship_pending_age`,
+		`ALTER TABLE authorship_pending DROP COLUMN sent_at`, `ALTER TABLE authorship_pending DROP COLUMN queued_at`,
+		`DELETE FROM authorship_message_state WHERE disposition='suppressed'`,
+		`DROP INDEX authorship_disposition`,
+		`ALTER TABLE authorship_message_state DROP COLUMN disposition`, `ALTER TABLE authorship_message_state DROP COLUMN representative_id`,
+		`INSERT INTO authorship_pending(message_id,revision) VALUES('mirror','old-backlog')`,
+		`UPDATE meta SET value='1' WHERE key='authorship_quick_initialized'`,
+		`UPDATE meta SET value='22' WHERE key='schema_version'`)
+	upgraded, err := OpenCatalog(c.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upgraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var schema int
+	if err := c.DB.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&schema); err != nil || schema != catalogSchemaVersion {
+		t.Fatalf("schema upgrade: %d %v", schema, err)
+	}
+	check := func(id, outcome string, counted bool) {
+		t.Helper()
+		var disposition string
+		var row bool
+		if err := c.DB.QueryRow(`SELECT disposition FROM authorship_message_state WHERE message_id=?`, id).Scan(&disposition); err != nil || disposition != outcome {
+			t.Fatalf("%s outcome=%s err=%v", id, disposition, err)
+		}
+		if err := c.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_authorship WHERE message_id=?)`, id).Scan(&row); err != nil || row != counted {
+			t.Fatalf("%s counted=%v err=%v", id, row, err)
+		}
+	}
+	check("native", authorshipCounted, true)
+	check("mirror", authorshipSuppressed, false)
+	if c.authorshipQuickPending() {
+		t.Fatal("upgrade mistook excluded history for unknown writing")
+	}
+	// Bootstrap is restartable and does not enqueue intentionally absent rows.
+	execSQL(t, c.DB, `DELETE FROM meta WHERE key='authorship_quick_initialized'`)
+	if err := c.ensureQuickAuthorshipState(); err != nil || c.authorshipQuickPending() {
+		t.Fatalf("repeated bootstrap: %v", err)
+	}
+	update := func() {
+		t.Helper()
+		want, _, err := c.authorshipGenerations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execSQL(t, c.DB, `UPDATE messages SET text='Please inspect the new grammar' WHERE id='mirror'`)
+	update()
+	check("mirror", authorshipSuppressed, false)
+	// Removing a relationship restores the previously excluded copy.
+	execTx(t, c.DB, `DELETE FROM conversation_identity_links`, `DELETE FROM meta WHERE key='authorship_quick_initialized'`)
+	if err := c.ensureQuickAuthorshipState(); err != nil {
+		t.Fatal(err)
+	}
+	update()
+	check("mirror", authorshipCounted, true)
+	// A change of representative reconsiders both the old and new copies.
+	execTx(t, c.DB,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('native','mirror','mirror',1,'{}')`,
+		`UPDATE workspaces SET source_kind='conductor' WHERE id='native'`,
+		`UPDATE workspaces SET source_kind='codex' WHERE id='mirror'`)
+	update()
+	check("native", authorshipSuppressed, false)
+	check("mirror", authorshipCounted, true)
+	if err := c.RefineAuthorship(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	check("native", authorshipSuppressed, false)
+	check("mirror", authorshipCounted, true)
+}
+
+func TestAuthorshipQuickLanesProgressUnderNewWriting(t *testing.T) {
+	c, _ := testCatalog(t)
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return at }
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-11-05')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`)
+	message := func(id string, sent time.Time) {
+		t.Helper()
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES(?,'c',?,'user','message',?,?,?)`, id, id, "Please inspect the grammar "+id, formatTime(sent), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		message(fmt.Sprintf("history%d", i), at.Add(-48*time.Hour))
+	}
+	override(t, &authorshipQuickLimit, 5)
+	for pass := 1; pass <= 3; pass++ {
+		// More recent work arrives before every pass, so newest-first alone
+		// would leave historical work waiting indefinitely.
+		for i := 0; i < 5; i++ {
+			message(fmt.Sprintf("live%d-%d", pass, i), at.Add(time.Duration(pass)*time.Minute))
+		}
+		want, _, _ := c.authorshipGenerations()
+		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+			t.Fatal(err)
+		}
+		var historical, all int
+		if err := c.DB.QueryRow(`SELECT COUNT(*),SUM(message_id LIKE 'history%') FROM message_authorship`).Scan(&all, &historical); err != nil {
+			t.Fatal(err)
+		}
+		if historical != pass || all != pass*5 {
+			t.Fatalf("pass %d: history=%d all=%d", pass, historical, all)
+		}
+		backlog, err := c.authorshipBacklog(t.Context())
+		if err != nil || backlog.Recent != pass || backlog.Historical != 3-pass || backlog.OldestQueued == "" {
+			t.Fatalf("pass %d backlog=%+v err=%v", pass, backlog, err)
+		}
+	}
+}
+
+func TestAuthorshipQuickHistoryInterruptionKeepsRecentProgress(t *testing.T) {
+	c, _ := testCatalog(t)
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return at }
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-11-05')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`)
+	for id, sent := range map[string]time.Time{"recent": at.Add(-time.Hour), "history": at.Add(-48 * time.Hour)} {
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES(?,'c',?,'user','message',?,?,?)`, id, id, "Please inspect the grammar "+id, formatTime(sent), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	batches := 0
+	ctx = withWorkProgress(ctx, func(work activityWork) {
+		if work.Phase == "estimating your writing" && work.Done == 1 {
+			batches++
+			if batches == 2 {
+				cancel()
+			}
+		}
+	})
+	want, _, _ := c.authorshipGenerations()
+	if err := c.UpdateAuthorship(ctx, want); err != context.Canceled {
+		t.Fatalf("historical cancellation: %v", err)
+	}
+	var recent, historical bool
+	if err := c.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_authorship WHERE message_id='recent'),EXISTS(SELECT 1 FROM message_authorship WHERE message_id='history')`).Scan(&recent, &historical); err != nil || !recent || historical {
+		t.Fatalf("recent=%v history=%v err=%v", recent, historical, err)
+	}
+	reopened, err := OpenCatalog(c.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.now = c.now
+	want, _, _ = reopened.authorshipGenerations()
+	if err := reopened.UpdateAuthorship(t.Context(), want); err != nil || reopened.authorshipQuickPending() {
+		t.Fatalf("history restart: %v", err)
 	}
 }

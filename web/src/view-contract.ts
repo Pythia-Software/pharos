@@ -5,6 +5,7 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import {validTimelineVisibility} from "./timeline-visibility";
 import { syncSchemas } from "./sync-table-model";
 // One contract for host-owned view state. Query Table owns q_* and its
 // composite controls; the site map exports this contract verbatim to agents.
@@ -12,6 +13,7 @@ export type ViewField = { param: string; pages: string[]; kind: "text" | "boolea
 const field = (param: string, pages: string[], kind: ViewField["kind"], description: string, values?: readonly string[], fallback?: unknown): ViewField => ({ param, pages, kind, description, ...(values ? { values } : {}), ...(fallback !== undefined ? { default: fallback } : {}) });
 export const viewFields: Record<string, ViewField> = {
   label_results: field("label_results",["analyze/query/message_labels"],"enum","Native Query Table host presentation, saved with the query. Cards and rows share filters, grouping and pagination.",["cards","table"],"cards"),
+  timeline_visibility: field("timeline_visibility",["work"],"json","Timeline Key visibility by section: modes (message label IDs, including ? for uncategorized), events (friction, learning, second-look, choices), tools (action categories or error), origins (caller text source IDs). Each optional section is {values:string[],excluded:boolean}; absent or empty values shows everything in that section. Selections only hide visualization elements, preserving the clock and underlying records.",undefined,{}),
   timeline_columns: field("timeline_columns",["work"],"json","Timeline text column widths in CSS pixels: {execution,events,time:0}. Session and Events resize; the clock always fills the remaining space. Older fixed time widths are ignored. All rows share these widths.",undefined,{execution:175,events:165,time:0}),
   reader_view: field("reader_view",["work"],"enum","Single-agent conversation presentation. Conversation retains the standard transcript; Timeline shows recursive message-mode and tool-action ribbons.",["conversation","timeline"],"conversation"),
   thinking_filters: field("analyze_filters",["analyze/thinking-overview","analyze/thinking-detail"],"text","Additional native Model Requests population filters. The dashboard range and model controls intersect these filters; dates are replaced when Range changes."),
@@ -22,7 +24,7 @@ export const viewFields: Record<string, ViewField> = {
   find_regex: field("find_regex", ["*"], "boolean", "Page Find term is a JavaScript regular expression. Default off (literal)."),
   nav_collapsed: field("nav_collapsed", ["*"], "boolean", "Collapse the application sidebar."),
   nav_expanded: field("nav_expanded", ["*"], "json", "Expanded sidebar branches by section and page ID."),
-  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety","fixes"]),
+  guide_dataset: field("guide_dataset", ["*"], "enum", "Data Guide source dataset.", ["compactions","model_requests","library","usage","conversation_activity","writing","writing_messages","tool_calls","tools","skill_usages","mcp_calls","tl1_attempts","parallelism","rhythm","findings","safety","fixes"]),
   history_collapsed: field("history_collapsed", ["*"], "strings", "Collapsed History groups by displayed calendar date."),
   history_search: field("history_search", ["*"], "text", "Applied History drawer text filter."),
   guide_open: field("guide_open", ["*"], "boolean", "Show the Data Guide."),
@@ -65,6 +67,7 @@ export const viewFields: Record<string, ViewField> = {
   safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
+  delegation_scope: field("delegation_scope", ["work"], "enum", "Session metric scope in the hierarchy and ranking: self or self plus all children.", ["all", "self"], "all"),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
   delegation_tint: field("delegation_tint", ["work"], "enum", "Tint session metric cells.", ["all", "sort", "off"]),
   delegation_expanded: field("delegation_expanded", ["work"], "strings", "Session IDs with detailed parallel lanes expanded."),
@@ -181,6 +184,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
       const scope=restored.draft.scope;
       if(Object.entries(emptyTextSearch().scope).some(([key,value])=>Array.isArray(value)?scope[key as keyof typeof scope].length!==0:scope[key as keyof typeof scope]!==value))throw new Error("Record keywords cannot carry message scope filters.");
     }
+    if(field.param==="timeline_visibility"&&!validTimelineVisibility(value))throw new Error("Invalid timeline visibility state.");
     if(field.param==="thinking"&&!validateThinking(value))throw new Error("Invalid Thinking dashboard state.");
     return value;
   }

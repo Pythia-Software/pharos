@@ -118,6 +118,7 @@ var errOperationSkipped = errors.New("operation skipped")
 type opStep struct {
 	Index  int
 	Name   string
+	Detail string
 	Source string
 	Unit   string
 	Done   float64
@@ -710,7 +711,7 @@ func (op *Op) SetDone(n int64) {
 // progress mirrors a measured progress report (an activityWork, a SyncRun's
 // phase) into the operation: a new phase or source starts a new step, and
 // the same one updates its counts. It allocates nothing when nothing changed.
-func (op *Op) progress(phase, source, unit string, done, total float64, known bool) {
+func (op *Op) progress(phase, source, unit string, done, total float64, known bool, details ...string) {
 	if !op.lock() {
 		return
 	}
@@ -724,17 +725,23 @@ func (op *Op) progress(phase, source, unit string, done, total float64, known bo
 	if op.state == opQueued {
 		op.transitionLocked(opRunning)
 	}
+	detail := ""
+	if len(details) > 0 {
+		detail = details[0]
+	}
 	if op.step.Name != phase || op.step.Source != source {
 		op.stepLocked(phase, source, unit, total)
 		op.step.Done = done
+		op.step.Detail = detail
 		op.unlock(false)
 		return
 	}
-	if op.step.Unit == unit && op.step.Done == done && op.step.Total == total {
+	if op.step.Unit == unit && op.step.Done == done && op.step.Total == total && op.step.Detail == detail {
 		op.reg.mu.Unlock()
 		return
 	}
 	op.step.Unit, op.step.Done, op.step.Total = unit, done, total
+	op.step.Detail = detail
 	op.unlock(false)
 }
 
@@ -744,7 +751,7 @@ func (op *Op) mirrorWork(w activityWork) {
 		return
 	}
 	measured := w.measured()
-	op.progress(w.Phase, w.Source, measured.Unit, measured.Done, measured.Total, measured.TotalKnown || measured.Total > 0)
+	op.progress(w.Phase, w.Source, measured.Unit, measured.Done, measured.Total, measured.TotalKnown || measured.Total > 0, w.Detail)
 }
 
 // Block moves a running operation to blocked with a reason code (§8.3) and

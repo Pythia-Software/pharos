@@ -272,6 +272,7 @@
     const name = step?.name && step.name !== operation.label && step.name !== current.label ? step.name : '';
     if (name && (!pass || current !== operation)) secondary.push(name);
     if (step?.source && step.source !== name) secondary.push(step.source);
+    if (step?.detail) secondary.push(step.detail);
     if (state.state !== 'running' && state.detail) secondary.push(state.detail);
     if (current.started_at) secondary.push(`${span(current.started_at, now)} elapsed`);
     const fraction = Number.isFinite(step?.fraction) ? step.fraction : null;

@@ -51,6 +51,7 @@ const labelPalette:Record<string,string>={
  'C.report.completion':'#f1c13d','C.report.limitation':'#d7a02f',
 };
 export function stateColor(id:string):string {
+  if(id==='no-match')return 'transparent';
   if(['?','none','unknown'].includes(id))return 'color-mix(in srgb,var(--muted) 30%,transparent)';
   const parts=id.split('.');
   while(parts.length){const color=labelPalette[parts.join('.')];if(color)return color;parts.pop();}
