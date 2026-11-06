@@ -1,3 +1,4 @@
+import { capabilities } from "../../support/query-server.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, decodeQuery, loadSchema } from "@pythia-software/query-table-core";
@@ -157,7 +158,8 @@ for (const firstDays of [7, 30]) test(`mixed-window directory loads stay complet
   ];
   const workspaces = rows.map(message => ({ id: message.work_id, location: `/repo/${message.work_id}`, repository_name: "repo" }));
   global.fetch = async (url, init) => {
-    const request = JSON.parse(init.body);
+    if (url.endsWith("capabilities")) return Response.json(capabilities());
+    const request = JSON.parse(init.body).result;
     calls.push({ url, request });
     if (url.includes("writing_messages")) {
       const from = Date.parse(request.where[0].value), days = (now - from) / day - 30;
@@ -193,7 +195,8 @@ test("the loader shares bounded paged evidence and honors additional source filt
   const prior = global.fetch, calls = [];
   const rows = Array.from({ length: 501 }, (_, index) => row(String(index), "Some words", { typed_words: index === 500 ? 100 : 2, repository_name: index === 500 ? "target" : "other" }));
   global.fetch = async (_url, init) => {
-    const request = JSON.parse(init.body); calls.push(request);
+    if (_url.endsWith("capabilities")) return Response.json(capabilities());
+    const request = JSON.parse(init.body).result; calls.push(request);
     return new Response(JSON.stringify({ total: rows.length, rows: rows.slice(request.offset, request.offset + request.limit) }), { status: 200 });
   };
   t.after(() => { global.fetch = prior; });
@@ -213,8 +216,8 @@ test("the loader shares bounded paged evidence and honors additional source filt
 test("oversized or incomplete evidence produces an error instead of a partial score", async t => {
   const prior = global.fetch;
   t.after(() => { global.fetch = prior; });
-  global.fetch = async () => new Response(JSON.stringify({ total: 20001, rows: [] }), { status: 200 });
+  global.fetch = async url => url.endsWith("capabilities") ? Response.json(capabilities()) : new Response(JSON.stringify({ total: 20001, rows: [] }), { status: 200 });
   await assert.rejects(createHumanStudyLoader(now, schema)("volume", EMPTY_QUERY, 7), /exceeds 20,000/);
-  global.fetch = async () => new Response(JSON.stringify({ total: 2, rows: [row("a", "Only one")] }), { status: 200 });
+  global.fetch = async url => url.endsWith("capabilities") ? Response.json(capabilities()) : new Response(JSON.stringify({ total: 2, rows: [row("a", "Only one")] }), { status: 200 });
   await assert.rejects(createHumanStudyLoader(now, schema)("volume", EMPTY_QUERY, 7), /incomplete/);
 });

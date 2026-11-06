@@ -207,6 +207,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.YieldPollSeconds = floatValue(root, "yield_poll_seconds", config.YieldPollSeconds)
 	config.Labels = labelerSettingsFrom(root, base)
 	config.AgentEvents = agentEventSettingsFrom(root, base)
+	config.Labels = config.AgentEvents.withPeer(config.Labels)
 	for index := range config.Sources {
 		config.Sources[index].File = path
 	}
@@ -262,8 +263,10 @@ func parseTOMLScalar(value string) any {
 		}
 		return value[1 : len(value)-1]
 	}
-	if parsed, err := strconv.ParseBool(value); err == nil {
-		return parsed
+	// TOML's booleans are true and false only: ParseBool would also read 1
+	// and 0 (labels_workers = 1, agent_events_days = 0) as booleans.
+	if value == "true" || value == "false" {
+		return value == "true"
 	}
 	if parsed, err := strconv.ParseInt(strings.ReplaceAll(value, "_", ""), 10, 64); err == nil {
 		return parsed

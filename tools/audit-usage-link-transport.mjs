@@ -61,14 +61,15 @@ for (const entry of queries.values()) {
   const { dataset, query } = entry;
   if (!handshakes.has(dataset)) handshakes.set(dataset, await api(`/api/query/${dataset}/capabilities`));
   const schema = core.loadSchema(JSON.parse(readFileSync(`schemas/${dataset}.schema.json`, 'utf8')));
-  const request = core.toServerQueryV2(query, schema, handshakes.get(dataset).computedExecution);
+  const request = core.toQueryRequestV3(query, schema, handshakes.get(dataset).queryCapabilities, handshakes.get(dataset).computedExecution);
+  request.hostState=query.hostState;
   // The host applies its short exact-search budget whenever these fields
   // occur in a predicate, independent of the search panel being open.
   const budgetFields = dataset === 'tool_calls' ? ['command', 'file_path'] : dataset === 'writing_messages' ? ['text'] : dataset === 'mcp_calls' ? ['arguments_json', 'error_text'] : [];
-  const budgeted = request.where.some(term => ('any' in term ? term.any : [term]).some(clause => budgetFields.includes(clause.field)));
+  const budgeted = request.result.where.some(term => ('any' in term ? term.any : [term]).some(clause => budgetFields.includes(clause.field)));
   const params = new URLSearchParams(entry.params);
   if (budgeted) params.set('interactive_search', '1');
-  const path = `/api/query/${dataset}/rows-v2${params.size ? `?${params}` : ''}`;
+  const path = `/api/query/${dataset}/query-v3${params.size ? `?${params}` : ''}`;
   const started = performance.now();
   const result = { ...entry, path, ok: false, ms: 0 };
   try {

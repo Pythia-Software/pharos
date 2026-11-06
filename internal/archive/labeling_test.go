@@ -512,7 +512,7 @@ func TestLabelingPrepareDryRunAndInterruption(t *testing.T) {
 	}
 
 	// A catalog newer than this build, or older than the tool ledger, is refused.
-	for _, version := range []string{"22", "6"} {
+	for _, version := range []string{fmt.Sprint(catalogSchemaVersion + 1), "6"} {
 		if _, err := catalog.DB.Exec(`UPDATE meta SET value=? WHERE key='schema_version'`, version); err != nil {
 			t.Fatal(err)
 		}
