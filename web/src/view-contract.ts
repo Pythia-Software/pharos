@@ -60,6 +60,7 @@ export const viewFields: Record<string, ViewField> = {
   safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
+  delegation_scope: field("delegation_scope", ["work"], "enum", "Session metric scope in the hierarchy and ranking: self or self plus all children.", ["all", "self"], "all"),
   delegation_column_order: field("delegation_column_order", ["work"], "strings", "Metric column ordering, including hidden columns."),
   delegation_tint: field("delegation_tint", ["work"], "enum", "Tint session metric cells.", ["all", "sort", "off"]),
   delegation_expanded: field("delegation_expanded", ["work"], "strings", "Session IDs with detailed parallel lanes expanded."),

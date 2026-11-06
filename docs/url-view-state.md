@@ -87,6 +87,8 @@ Caller-source filtering preserves each run's original portion of the message.
 
 ## Agent interface
 
+On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
+
 Ask Pharos uses the existing MCP CLI-style interface:
 
 - `browse_site({path:"<page>/view"})` lists host view fields, their types, URL parameters and descriptions, plus dependency gaps. `<page>/view/<field>` includes structured templates and domains for complex fields.

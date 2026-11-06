@@ -13,6 +13,10 @@ export function messageAllocation(m:LabelMessage,taxonomy:Taxonomy):Allocation[]
  });});
 }
 export type RibbonToken={ids:string[];count:number;depth:number;parallelism:number;messages:LabelMessage[]};
+/** The message at a share of a column, including a compressed column. */
+export function fingerprintMessageAt(token:Pick<RibbonToken,'messages'>,share=.5):LabelMessage|undefined{
+ return token.messages[Math.min(token.messages.length-1,Math.max(0,Math.floor(share*token.messages.length)))];
+}
 export type RibbonShare={id:string;colorID:string;weight:number;share:number;depth:number;parent:string|null;terminal:boolean};
 export function ribbonSegment(messages:LabelMessage[],taxonomy:Taxonomy=[]){
  const known=new Map(taxonomy.map(t=>[t.id,t]));
@@ -23,7 +27,7 @@ export function ribbonSegment(messages:LabelMessage[],taxonomy:Taxonomy=[]){
   terminals.add(allocation.ids.at(-1)!);
  }
  const rows:RibbonShare[]=[],visit=(id:string,depth:number,parent:string|null)=>{
-  const colorID=id.endsWith('~other')?id.slice(0,-6):['all','uncategorized','unlabeled','no-match'].includes(id)?'?':id;
+  const colorID=id.endsWith('~other')?id.slice(0,-6):['all','uncategorized','unlabeled'].includes(id)?'?':id;
   rows.push({id,colorID,weight:weights.get(id)??0,share:messages.length?(weights.get(id)??0)/messages.length:0,depth,parent,terminal:terminals.has(id)});
   const ids=[...(children.get(id)??[])].sort((a,b)=>Number(a.endsWith('~other'))-Number(b.endsWith('~other'))||Number(a==='uncategorized')-Number(b==='uncategorized')||Number(b==='unlabeled')-Number(a==='unlabeled')||compareStates(a,b));
   for(const child of ids)visit(child,depth+1,id);
@@ -36,7 +40,7 @@ export function conversationRibbon(c:LabelConversation,limit=40):RibbonToken[]{
  const intervals=[...sessions.keys()].flatMap(id=>{const times=[...c.messages.filter(m=>(m.session_id??mainSession(c))===id).map(eventTime).filter((at):at is number=>at!==null),...(c.activity??[]).filter(t=>t.session_id===id).flatMap(t=>[t.start,t.end].flatMap(value=>{const at=value?Date.parse(value):NaN;return Number.isFinite(at)?[at]:[];}))];return times.length?[{start:Math.min(...times),end:Math.max(...times)}]:[];});
  const extraAt=(at:number|null)=>at===null?0:Math.max(0,intervals.filter(s=>s.start<=at&&s.end>=at).length-1);
  const events=c.messages.map((m,index)=>({m,index,at:eventTime(m)})).sort((a,b)=>a.at===null?b.at===null?a.index-b.index:1:b.at===null?-1:a.at-b.at||a.index-b.index);
- const runs:RibbonToken[]=[];for(const {m,at} of events){const ids=functionStates(m,'label'),depth=sessions.get(m.session_id??mainSession(c))?.depth??0,parallelism=extraAt(at),last=runs.at(-1),known=ids.length?ids:['?'];if(last&&last.ids.join('|')===known.join('|')&&last.depth===depth&&last.parallelism===parallelism){last.count++;last.messages.push(m);}else runs.push({ids:known,count:1,depth,parallelism,messages:[m]});}
+ const runs:RibbonToken[]=[];for(const {m,at} of events){const ids=functionStates(m,'label'),depth=sessions.get(m.session_id??mainSession(c))?.depth??0,parallelism=extraAt(at),last=runs.at(-1),known=ids.length?ids:[m.chunks?'no-match':'?'];if(last&&last.ids.join('|')===known.join('|')&&last.depth===depth&&last.parallelism===parallelism){last.count++;last.messages.push(m);}else runs.push({ids:known,count:1,depth,parallelism,messages:[m]});}
  if(runs.length<=limit)return runs;
  const result:RibbonToken[]=[];for(let i=0;i<limit;i++){const chunk=runs.slice(Math.floor(i*runs.length/limit),Math.floor((i+1)*runs.length/limit));if(chunk.length)result.push({ids:[...new Set(chunk.flatMap(r=>r.ids))].sort(compareStates),count:chunk.reduce((n,r)=>n+r.count,0),depth:Math.max(...chunk.map(r=>r.depth)),parallelism:Math.max(...chunk.map(r=>r.parallelism)),messages:chunk.flatMap(r=>r.messages)});}return result;
 }

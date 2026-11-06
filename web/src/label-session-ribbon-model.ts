@@ -149,7 +149,7 @@ export function ribbonLayers(items:RibbonObservation[]){
 }
 
 /** Reveal the retained source, preserving the current workspace's timeline state. */
-export function ribbonSourceURL(item:RibbonObservation,source:{workspace:string;conversation:string;session:string},currentURL:string){
+export function ribbonSourceURL(item:Pick<RibbonObservation,'start'> & Partial<RibbonObservation>,source:{workspace:string;conversation:string;session:string},currentURL:string){
  const workspace=item.message?.work_id||source.workspace,conversation=item.message?.conversation_id||source.conversation;
  const message=item.message?.id||item.mark?.message_id,call=item.mark?.tool_id;
  if(!workspace||!conversation||!message&&!call)return null;

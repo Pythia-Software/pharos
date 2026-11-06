@@ -41,6 +41,8 @@
 .lt-tool-preview pre{font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:hidden;margin:8px 0 0}
 
 .lt-ribbon-inspector.is-pinned{pointer-events:auto;overflow:auto;overscroll-behavior:contain}
+.lt-ribbon-inspector.is-scrollable{pointer-events:auto;overflow:auto;overscroll-behavior:contain}
+.lt-ribbon-inspector>.event-link-cards{flex-shrink:0}
 .lt-observation-source{display:block;color:inherit;text-decoration:none;border-radius:3px}
 .lt-observation-source:hover,.lt-observation-source:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .lt-observation-source>span:last-child{display:block;margin-top:6px;color:var(--accent);font-size:10px}
