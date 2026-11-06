@@ -924,11 +924,23 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 	// VS Code saves every call as complete; one the person denied or skipped
 	// (or whose result they did not approve) did not succeed, whatever it
 	// was shown as.
-	declined := vscodeDeclined(item["isConfirmed"])
+	declined, actor := vscodeDeclined(item)
 	if declined != "" {
-		details["status"], details["confirmation"] = "declined", declined
+		details["confirmation"] = declined
+		note := "This tool call was " + declined
+		switch actor {
+		case "user":
+			details["status"], note = "declined", "The user "+declined+" this tool call"
+		case "":
+			// Without an actor saved it was most likely the person, who
+			// may also have stopped the request.
+			details["status"] = "declined"
+		default:
+			// A hook or VS Code's risk assessment decided, not the person.
+			details["blocked_by"], note = actor, "A "+strings.ReplaceAll(actor, "_", " ")+" "+declined+" this tool call"
+		}
 		if content == nil || content == "" {
-			content = "The user " + declined + " this tool call"
+			content = note
 		}
 	}
 	// A finished call whose output was not kept still finished; what VS Code
@@ -979,18 +991,32 @@ func vscodeModelID(name string) string {
 // vscodeDeclined is how a call's saved confirmation turned it down
 // ("denied", "skipped"), or "" if it ran: false or ToolConfirmKind Denied (0)
 // or Skipped (5). A release before 1.104 saved a boolean; none means
-// confirmed.
-func vscodeDeclined(confirmed any) string {
-	if confirmed == false {
-		return "denied"
-	}
+// confirmed. The actor is who decided: "user", "hook" or "risk_assessment"
+// as a newer release saves it (source), or "" when not saved. A release
+// that saved none hid a call a preToolUse hook denied, so a hidden denied
+// call is a hook's.
+func vscodeDeclined(item map[string]any) (string, string) {
+	confirmed := item["isConfirmed"]
+	decision := ""
 	switch kind, ok := number64(mapValueDefault(confirmed)["type"]); {
-	case ok && kind == 0:
-		return "denied"
+	case confirmed == false, ok && kind == 0:
+		decision = "denied"
 	case ok && kind == 5:
-		return "skipped"
+		decision = "skipped"
+	default:
+		return "", ""
 	}
-	return ""
+	switch source := firstString(mapValueDefault(confirmed)["source"]); source {
+	case "user", "hook":
+		return decision, source
+	case "riskAssessment":
+		return decision, "risk_assessment"
+	case "":
+		if decision == "denied" && firstString(item["presentation"]) == "hidden" {
+			return decision, "hook"
+		}
+	}
+	return decision, ""
 }
 
 // vscodeMCPPrefixUnsafe is what VS Code replaces with _ in a server's name
@@ -1010,7 +1036,9 @@ func vscodeToolName(item map[string]any) string {
 		return id
 	}
 	tool := rest
+	// VS Code also replaces dots throughout the ID.
 	prefix := vscodeMCPPrefixUnsafe.ReplaceAllString(strings.ToLower(firstString(source["serverLabel"], source["label"])), "_")
+	prefix = strings.ReplaceAll(prefix, ".", "_")
 	// The prefix is cut to at most 13 characters, shorter beside a second
 	// server of the same name's number.
 	for n := len(prefix); n > 0; n-- {
@@ -1027,7 +1055,8 @@ func vscodeToolName(item map[string]any) string {
 // vscodeDisabled reports whether an undone request is disabled whole, and
 // otherwise the position in its response from which an undo stop disabled
 // it (-1 for none). VS Code cuts the response at the stop, or just before
-// the code fence opening the block the stop precedes.
+// the code fence opening the block the stop precedes (not a standalone
+// block's, which has none).
 func vscodeDisabled(request map[string]any, items []any) (bool, int) {
 	disablement := mapValue(request["shouldBeRemovedOnSend"])
 	if request["isHidden"] == true {
@@ -1051,7 +1080,7 @@ func vscodeDisabled(request map[string]any, items []any) (bool, int) {
 		if firstString(item["kind"]) != "undoStop" || firstString(item["id"]) != stop {
 			continue
 		}
-		if kind(index+1) == "codeblockUri" && (kind(index-1) == "" || kind(index-1) == "markdownContent") {
+		if kind(index+1) == "codeblockUri" && mapValueDefault(items[index+1])["isStandalone"] != true && (kind(index-1) == "" || kind(index-1) == "markdownContent") {
 			index--
 		}
 		return false, index
