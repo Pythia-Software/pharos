@@ -21,7 +21,7 @@ export function PercentileControl({ value, onChange, limit, title }: {
     document.addEventListener("keydown", escape);
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", outside); document.removeEventListener("keydown", escape); };
   }, [open]);
-  const shown = value.length ? value.map(level => level === "mean" ? "Mean" : level).join(", ") : "Off";
+  const shown = value.length ? value.map(level => level === "mean" ? "Mean" : level === "p50" ? "Median" : `${level.slice(1)}th`).join(", ") : "Off";
   const toggle = (level: PercentileLevel) => onChange(percentileLevels.filter(item => item === level ? !value.includes(level) : value.includes(item)));
   return <div className="usage-chart-field usage-chart-picker percentile-control" ref={root}>
     <span className="usage-preset-label">%ile</span>
