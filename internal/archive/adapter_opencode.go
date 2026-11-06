@@ -107,6 +107,9 @@ type opencodeSession struct {
 	// watermark is the latest time_updated of the session and its rows, and
 	// rows their count, which falls when an undo deletes messages.
 	watermark, rows int64
+	// usage is the session's cost and token totals, which usage no message
+	// records, such as title generation's, raises without time_updated.
+	usage string
 }
 
 // open opens a database for reading in one transaction.
@@ -127,22 +130,29 @@ func (a *opencodeAdapter) open(database string) (*sql.DB, *sql.Tx, error) {
 	return db, tx, nil
 }
 
-func (a *opencodeAdapter) sessions(database string) ([]opencodeSession, error) {
+// sessions lists a database's sessions, and as unread the sessions it holds
+// only in the 1.x schema.
+func (a *opencodeAdapter) sessions(database string) (sessions []opencodeSession, unread error, err error) {
 	db, tx, err := a.open(database)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer db.Close()
 	defer tx.Rollback()
 	tables, err := tableNames(tx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !tables["session_v2"] || !tables["session_message"] {
 		if tables["session"] && tables["message"] {
-			return nil, fmt.Errorf("OpenCode database %s uses the schema of releases before 2.0, which Pharos does not read yet", a.original(database))
+			return nil, fmt.Errorf("OpenCode database %s uses the schema of releases before 2.0, which Pharos does not read yet", a.original(database)), nil
 		}
-		return nil, nil
+		return nil, nil, nil
+	}
+	if tables["session"] && tables["message"] {
+		if unread, err = a.legacySessions(tx, database); err != nil {
+			return nil, nil, err
+		}
 	}
 	parts := "0, 0"
 	if tables["session_part"] {
@@ -150,29 +160,58 @@ func (a *opencodeAdapter) sessions(database string) ([]opencodeSession, error) {
 	}
 	fork := "''"
 	if columns, err := tableColumns(tx, "session_v2"); err != nil {
-		return nil, err
+		return nil, nil, err
 	} else if columns["fork_session_id"] {
 		fork = "COALESCE(s.fork_session_id,'')"
 	}
 	rows, err := tx.QueryContext(a.context(), `SELECT s.id, COALESCE(s.parent_id,''), `+fork+`, s.time_updated,
 		(SELECT COALESCE(MAX(time_updated),0) FROM session_message m WHERE m.session_id=s.id),
-		(SELECT COUNT(*) FROM session_message m WHERE m.session_id=s.id), `+parts+`
+		(SELECT COUNT(*) FROM session_message m WHERE m.session_id=s.id), `+parts+`,
+		COALESCE(s.cost,0)||':'||COALESCE(s.tokens_input,0)||':'||COALESCE(s.tokens_output,0)||':'||COALESCE(s.tokens_reasoning,0)||':'||COALESCE(s.tokens_cache_read,0)||':'||COALESCE(s.tokens_cache_write,0)
 		FROM session_v2 s ORDER BY s.id`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	sessions := []opencodeSession{}
+	sessions = []opencodeSession{}
 	for rows.Next() {
 		var session opencodeSession
 		var updated, messagesUpdated, messages, partsUpdated, partCount int64
-		if err := rows.Scan(&session.id, &session.parent, &session.fork, &updated, &messagesUpdated, &messages, &partsUpdated, &partCount); err != nil {
-			return nil, err
+		if err := rows.Scan(&session.id, &session.parent, &session.fork, &updated, &messagesUpdated, &messages, &partsUpdated, &partCount, &session.usage); err != nil {
+			return nil, nil, err
 		}
 		session.watermark, session.rows = max(updated, messagesUpdated, partsUpdated), messages+partCount
 		sessions = append(sessions, session)
 	}
-	return sessions, rows.Err()
+	return sessions, unread, rows.Err()
+}
+
+// legacySessions reports the sessions a 1.x release wrote to a database
+// after OpenCode moved its sessions to the 2.x schema, which OpenCode moves
+// once, under the same IDs, and never again. A session deleted since in 2.x
+// stays in the 1.x tables, so only those newer than every session that was
+// moved are counted.
+func (a *opencodeAdapter) legacySessions(tx *sql.Tx, database string) (error, error) {
+	columns, err := tableColumns(tx, "session")
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT COUNT(*) FROM session s WHERE NOT EXISTS (SELECT 1 FROM session_v2 v WHERE v.id=s.id)`
+	if columns["time_created"] {
+		query += ` AND s.time_created > COALESCE((SELECT MAX(l.time_created) FROM session l JOIN session_v2 v ON v.id=l.id),-1)`
+	}
+	var count int64
+	if err := tx.QueryRowContext(a.context(), query).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	sessions := "sessions"
+	if count == 1 {
+		sessions = "session"
+	}
+	return fmt.Errorf("OpenCode database %s holds %d %s only in the schema of releases before 2.0, written after OpenCode moved its sessions to 2.x, which Pharos does not read yet", a.original(database), count, sessions), nil
 }
 
 // planParts plans one group per session that started its own work, holding
@@ -185,9 +224,11 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 	plan := &sourceWorkPlan{continueOnError: true}
 	var failures []error
 	for _, database := range databases {
-		sessions, err := a.sessions(database)
+		sessions, unread, err := a.sessions(database)
+		if err != nil || unread != nil {
+			failures = append(failures, errors.Join(unread, err))
+		}
 		if err != nil {
-			failures = append(failures, err)
 			continue
 		}
 		byID := map[string]opencodeSession{}
@@ -236,7 +277,7 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 			sort.SliceStable(members, func(i, j int) bool { return levels[members[i].id] < levels[members[j].id] })
 			parts := make([]sourcePart, 0, len(members))
 			for _, member := range members {
-				signal := fmt.Sprintf("%d:%d", member.watermark, member.rows)
+				signal := fmt.Sprintf("%d:%d:%s", member.watermark, member.rows, member.usage)
 				// A fork's copies are read by what its source still holds.
 				if source, ok := byID[member.fork]; ok && member.fork != "" {
 					signal += fmt.Sprintf(":fork:%d:%d", source.watermark, source.rows)
@@ -449,8 +490,9 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 		return inherited != "" && message.id == inherited+"_"+strconv.FormatInt(message.seq, 10)
 	}
 	messages = slices.DeleteFunc(messages, func(message row) bool { return copied(message) && held[message.seq] })
-	// What the session totals beyond its messages: requests whose messages
-	// an undo deleted, and title generation, which no message records.
+	// What the session totals beyond its messages and compactions: requests
+	// whose messages an undo deleted, title generation, and a summary made
+	// ahead that no compaction took, which no message records.
 	sums := map[string]float64{}
 	for _, message := range messages {
 		data := message.data
@@ -510,11 +552,30 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				add(result)
 			}
 		case "compaction":
-			// The boundary token accounting resets carried context at.
-			item := base
-			item.Role, item.Kind = "system", "metadata"
-			item.Text = jsonText(map[string]any{"type": "compaction", "summary": firstNonNil(data["summary"], mapValueDefault(data["native"])["messages"])})
-			add(item)
+			// A compaction that ended is a request of its own, with its
+			// model and usage, which the session's totals hold too; a copy
+			// in a fork is its source's.
+			if tokens := mapValue(data["tokens"]); tokens != nil && !copied(message) {
+				item := base
+				item.Model = defaultString(firstString(mapValueDefault(data["model"])["id"]), conversation.Model)
+				add(opencodeUsage(item, message.id, tokens, sums))
+			}
+			switch firstString(data["status"]) {
+			case "completed":
+				// Only a compaction that completed replaces the context later
+				// requests read: the boundary where token accounting resets
+				// carried context. One that failed left the context as it was.
+				item := base
+				item.Role, item.Kind = "system", "metadata"
+				item.Text = jsonText(map[string]any{"type": "compaction", "summary": firstNonNil(data["summary"], mapValueDefault(data["native"])["messages"])})
+				add(item)
+			case "failed":
+				item := base
+				item.NativeID, item.Role, item.Kind = message.id+":error", "system", "error"
+				failure := mapValueDefault(data["error"])
+				item.Text = "Compaction failed: " + firstString(failure["message"], failure["type"], "unknown error")
+				add(item)
+			}
 		case "assistant":
 			model := mapValueDefault(data["model"])
 			base.Model = defaultString(firstString(model["id"]), conversation.Model)
@@ -558,14 +619,7 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				add(item)
 			}
 			if tokens := mapValue(data["tokens"]); tokens != nil && !copied(message) {
-				usage := opencodeTokenUsage(tokens)
-				for key, value := range usage {
-					sums[key] += value
-				}
-				item := base
-				item.NativeID, item.Role, item.Kind, item.RawText = message.id+":usage", "system", "metadata", ""
-				item.Text = jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": message.id})
-				add(item)
+				add(opencodeUsage(base, message.id, tokens, sums))
 			}
 		}
 	}
@@ -584,6 +638,18 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 		return nil, session, nil
 	}
 	return conversation, session, nil
+}
+
+// opencodeUsage is a request's usage record, which sums counts toward the
+// session's totals.
+func opencodeUsage(base MessageRecord, id string, tokens map[string]any, sums map[string]float64) MessageRecord {
+	usage := opencodeTokenUsage(tokens)
+	for key, value := range usage {
+		sums[key] += value
+	}
+	base.NativeID, base.Role, base.Kind, base.RawText = id+":usage", "system", "metadata", ""
+	base.Text = jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": id})
+	return base
 }
 
 // tool adds a tool part's call and, once it has run, its result.
@@ -628,7 +694,18 @@ func (a *opencodeAdapter) tool(base MessageRecord, part map[string]any, add func
 	if failure := firstString(state["error"]); failure != "" {
 		details["error"] = failure
 	}
-	payload := map[string]any{"tool": name, "content": firstNonNil(state["content"], state["output"]), "is_error": status == "error"}
+	// A delegation's result names the session it ran in, the subagent's
+	// conversation.
+	if child := firstString(metadata["sessionID"]); delegated && child != "" {
+		details["agent_id"] = child
+	}
+	content := firstNonNil(state["content"], state["output"])
+	// A failure, such as a permission OpenCode or the person refused, can
+	// hold no content but its error.
+	if failure := mapValue(state["error"]); content == nil && failure != nil {
+		content = firstString(failure["message"], failure["type"])
+	}
+	payload := map[string]any{"tool": name, "content": content, "is_error": status == "error"}
 	if len(details) > 0 {
 		payload["details"] = details
 	}

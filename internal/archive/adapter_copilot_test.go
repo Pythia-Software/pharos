@@ -479,12 +479,12 @@ func TestCopilotSessionsAreCapturedIndexedElsewhereAndFollowed(t *testing.T) {
 // split into two messages; a subagent that starts another; a compaction; a
 // tool the person ran; and a request whose effort a later report corrects.
 const copilotNewerEvents = `{"type":"session.start","data":{"sessionId":"sess-n","copilotVersion":"1.0.105","reasoningEffort":"high","context":{"cwd":"/work/n"}},"id":"n1","timestamp":"2026-11-04T10:00:00.000Z"}
-{"type":"user.message","data":{"content":"Inspect this","messageId":"u1","attachments":[{"type":"selection","displayName":"q.sql","filePath":"/work/n/q.sql","text":"SELECT secret_column FROM t","selection":{"start":{"line":0,"character":0},"end":{"line":0,"character":27}}}]},"id":"n2","timestamp":"2026-11-04T10:00:01.000Z"}
+{"type":"user.message","data":{"content":"Inspect this","messageId":"u1","attachments":[{"type":"selection","displayName":"q.sql","filePath":"/work/n/q.sql","text":"SELECT secret_column FROM t","selection":{"start":{"line":0,"character":0},"end":{"line":0,"character":27}}},{"type":"github_reference","url":"https://github.com/o/r/issues/7","referenceType":"issue","number":7,"title":"Query is slow","state":"open"},{"type":"blob","mimeType":"image/png","data":"iVBORw0KGgo="}]},"id":"n2","timestamp":"2026-11-04T10:00:01.000Z"}
 {"type":"user.message","data":{"content":"Use the PDF tools as follows.","messageId":"u-skill","source":"skill-pdf"},"id":"n3","timestamp":"2026-11-04T10:00:01.500Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":100,"outputTokens":60,"apiCallId":"api-1"}},"id":"n4","timestamp":"2026-11-04T10:00:02.000Z"}
 {"type":"assistant.message","data":{"messageId":"m1","apiCallId":"api-1","chunkIndex":0,"chunkCount":2,"model":"gpt-6-luna","content":"First,","toolRequests":[{"toolCallId":"c1","name":"bash","arguments":{"command":"ls"}}]},"id":"n5","timestamp":"2026-11-04T10:00:02.100Z"}
 {"type":"assistant.message","data":{"messageId":"m2","apiCallId":"api-1","chunkIndex":1,"chunkCount":2,"model":"gpt-6-luna","content":"then","toolRequests":[{"toolCallId":"c2","name":"bash","arguments":{"command":"pwd"}}]},"id":"n6","timestamp":"2026-11-04T10:00:02.200Z"}
-{"type":"tool.execution_complete","data":{"toolCallId":"c1","success":true,"result":{"content":"q.sql"}},"id":"n7","timestamp":"2026-11-04T10:00:03.000Z"}
+{"type":"tool.execution_complete","data":{"toolCallId":"c1","success":true,"result":{"content":"q.sql","detailedContent":"q.sql\nschema.sql"}},"id":"n7","timestamp":"2026-11-04T10:00:03.000Z"}
 {"type":"tool.execution_complete","data":{"toolCallId":"c2","success":true,"result":{"content":"/work/n"}},"id":"n8","timestamp":"2026-11-04T10:00:03.100Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-luna","inputTokens":200,"outputTokens":10,"apiCallId":"api-2"}},"id":"n9","timestamp":"2026-11-04T10:00:04.000Z"}
 {"type":"assistant.message","data":{"messageId":"m3","apiCallId":"api-2","model":"gpt-6-luna","content":"","toolRequests":[{"toolCallId":"c3","name":"task","arguments":{"prompt":"Check q.sql"}}]},"id":"n10","timestamp":"2026-11-04T10:00:04.100Z"}
@@ -503,7 +503,9 @@ const copilotNewerEvents = `{"type":"session.start","data":{"sessionId":"sess-n"
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":300,"outputTokens":20,"apiCallId":"api-5"}},"id":"n23","timestamp":"2026-11-04T10:00:11.000Z"}
 {"type":"assistant.message","data":{"messageId":"m6","apiCallId":"api-5","model":"gpt-6-sol","content":"Reset."},"id":"n24","timestamp":"2026-11-04T10:00:11.100Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":20,"reasoningEffort":"low","apiCallId":"api-6"}},"id":"n25","timestamp":"2026-11-04T10:00:12.000Z"}
-{"type":"assistant.message","data":{"messageId":"m7","apiCallId":"api-6","model":"gpt-6-sol","content":"Done.","toolRequests":[{"toolCallId":"c7","name":"bash","arguments":{"command":"make"}}]},"id":"n27","timestamp":"2026-11-04T10:00:12.200Z"}
+{"type":"assistant.message","data":{"messageId":"m7","apiCallId":"api-6","model":"gpt-6-sol","content":"Done.","toolRequests":[{"toolCallId":"c7","name":"bash","arguments":{"command":"make"}},{"toolCallId":"c8","name":"search-md-read_markdown_file","arguments":{"path":"a.md"}},{"toolCallId":"c9","name":"docs-search","mcpServerName":"docs","mcpToolName":"search","arguments":{"query":"x"}}]},"id":"n27","timestamp":"2026-11-04T10:00:12.200Z"}
+{"type":"tool.execution_start","data":{"toolCallId":"c8","toolName":"search-md-read_markdown_file","mcpServerName":"Search Markdown","mcpConfigServerName":"search-md","mcpToolName":"read_markdown_file","arguments":{"path":"a.md"}},"id":"n28","timestamp":"2026-11-04T10:00:12.300Z"}
+{"type":"tool.execution_complete","data":{"toolCallId":"c8","success":true,"result":{"content":"# A"}},"id":"n29","timestamp":"2026-11-04T10:00:12.400Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":30,"reasoningEffort":"high","apiCallId":"api-6"}},"id":"n26","timestamp":"2026-11-04T10:00:13.000Z"}
 `
 
@@ -526,6 +528,17 @@ func TestCopilotNewerEventShapes(t *testing.T) {
 	// autopilot's input.
 	if session.Purpose != "Inspect this" || !strings.Contains(byID["u1:attachment:0"].Text, "SELECT secret_column FROM t") || byID["u1:attachment:0"].Kind != "attachment" {
 		t.Fatalf("purpose %q, selection %+v", session.Purpose, byID["u1:attachment:0"])
+	}
+	// An attached issue keeps what identifies it; a blob, not its bytes.
+	if issue := byID["u1:attachment:1"].Text; !strings.Contains(issue, `"url":"https://github.com/o/r/issues/7"`) || !strings.Contains(issue, `"number":7`) || !strings.Contains(issue, "Query is slow") {
+		t.Fatalf("issue attachment = %s", issue)
+	}
+	if blob := byID["u1:attachment:2"].Text; !strings.Contains(blob, "image/png") || strings.Contains(blob, "iVBORw0KGgo=") {
+		t.Fatalf("blob attachment = %s", blob)
+	}
+	// The full output is kept beside the content the model was sent.
+	if result := byID["result:c1"].Text; !strings.Contains(result, `"content":"q.sql"`) || !strings.Contains(result, `"detailed_content":"q.sql\nschema.sql"`) {
+		t.Fatalf("result with detailed output = %s", result)
 	}
 	if skill := byID["u-skill"]; skill.Kind != "context" || skill.Role != "system" {
 		t.Fatalf("skill input = %+v", skill)
@@ -556,6 +569,21 @@ func TestCopilotNewerEventShapes(t *testing.T) {
 	// The person's own run took no request's output.
 	if spent, ran := cost["c5"]; cost["c1"] != 30 || cost["c2"] != 30 || !ran || spent != 0 {
 		t.Fatalf("tool costs %v", cost)
+	}
+	// MCP calls name their server, whether the request or, in older
+	// releases, only the call's start records it (by its configured key
+	// when the start names it beside its display name).
+	servers := map[string]string{}
+	for _, call := range calls {
+		if call.Category == "mcp" {
+			servers[call.CallID] = call.MCPServer + "/" + call.ToolName
+		}
+	}
+	if servers["c8"] != "search-md/mcp__search-md__read_markdown_file" || servers["c9"] != "docs/mcp__docs__search" || len(servers) != 2 {
+		t.Fatalf("MCP calls %v", servers)
+	}
+	if result := byID["result:c8"].Text; !strings.Contains(result, `"tool":"mcp__search-md__read_markdown_file"`) {
+		t.Fatalf("MCP result = %s", result)
 	}
 	if compaction := byID["n17"]; !isCompactionMarker(compaction) || !strings.Contains(compaction.Text, "Inspected q.sql.") {
 		t.Fatalf("compaction = %+v", compaction)
