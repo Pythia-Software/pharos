@@ -48,7 +48,9 @@ var cursorCLICaptureTables = map[string]captureTable{
 }
 
 // cursorCLIMetaKeys are the keys of a chat's metadata that are read.
-var cursorCLIMetaKeys = []string{"agentId", "latestRootBlobId", "name", "createdAt", "mode", "lastUsedModel"}
+// subagentInfo is a Task subagent's lineage: parentAgentId,
+// rootParentAgentId, toolCallId and typeName.
+var cursorCLIMetaKeys = []string{"agentId", "latestRootBlobId", "name", "createdAt", "mode", "lastUsedModel", "subagentInfo"}
 
 func cursorCLIMetaColumns() string {
 	columns := []string{}
@@ -276,13 +278,14 @@ func (a *cursorCLIAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []so
 // context meter, and the folder the chat was run in.
 type cursorCLIRoot struct {
 	messages            []string
+	turns               []string
 	contextUsed, window int64
 	folder              string
 }
 
 // cursorCLIParseRoot reads a root (protoFields): field 1 lists its
-// messages' blob IDs, 5 the context meter (tokens used, then the window)
-// and 9 the folder's URI. A blob that is not a root, as it lists no message
+// messages' blob IDs, 5 the context meter (tokens used, then the window),
+// 8 its turns' blob IDs (cursorCLITurnTimes) and 9 the folder's URI. A blob that is not a root, as it lists no message
 // or anything but message IDs, is reported as nil.
 func cursorCLIParseRoot(data []byte) *cursorCLIRoot {
 	fields := protoFields(data)
@@ -306,7 +309,76 @@ func cursorCLIParseRoot(data []byte) *cursorCLIRoot {
 	if folder, ok := protoLast(fields[9]).([]byte); ok {
 		root.folder = string(folder)
 	}
+	for _, value := range fields[8] {
+		if id, ok := value.([]byte); ok && len(id) == 32 {
+			root.turns = append(root.turns, hex.EncodeToString(id))
+		}
+	}
 	return root
+}
+
+// cursorCLITimes are when a chat's turns record their parts happened: each
+// prompt and reply by its text, in order for a text sent again, and each
+// call's start and end by its ID.
+type cursorCLITimes struct {
+	prompts, replies map[string][]string
+	calls            map[string][2]string
+}
+
+// next is the first time not yet taken for text in queue.
+func (t cursorCLITimes) next(queue map[string][]string, text string) string {
+	key := strings.TrimSpace(text)
+	list := queue[key]
+	if len(list) == 0 {
+		return ""
+	}
+	queue[key] = list[1:]
+	return list[0]
+}
+
+// cursorCLITurnTimes reads the turns roots list. A turn blob's field 1
+// holds the prompt's blob ID (1) and its steps' (2). The prompt's blob holds
+// its text (1) and when it was sent (25, in ms); a step is a reply {1 text,
+// 2 started}, a tool call {57 call ID, 59 started, 60 ended}, or thinking.
+func cursorCLITurnTimes(blobs map[string][]byte, roots []*cursorCLIRoot) cursorCLITimes {
+	times := cursorCLITimes{prompts: map[string][]string{}, replies: map[string][]string{}, calls: map[string][2]string{}}
+	at := func(values []any) string {
+		if ms, ok := protoLast(values).(uint64); ok && ms > 0 {
+			return cursorCLITime(int64(ms))
+		}
+		return ""
+	}
+	blob := func(value any) map[int][]any {
+		id, _ := value.([]byte)
+		return protoFields(blobs[hex.EncodeToString(id)])
+	}
+	seen := map[string]bool{}
+	for _, root := range roots {
+		for _, id := range root.turns {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			turn := protoFields(protoBytes(protoFields(blobs[id])[1]))
+			prompt := blob(protoLast(turn[1]))
+			if text, sent := strings.TrimSpace(string(protoBytes(prompt[1]))), at(prompt[25]); text != "" && sent != "" {
+				times.prompts[text] = append(times.prompts[text], sent)
+			}
+			for _, value := range turn[2] {
+				step := blob(value)
+				if reply := protoFields(protoBytes(step[1])); len(reply) > 0 {
+					if text, started := strings.TrimSpace(string(protoBytes(reply[1]))), at(reply[2]); text != "" && started != "" {
+						times.replies[text] = append(times.replies[text], started)
+					}
+				} else if call := protoFields(protoBytes(step[2])); len(call) > 0 {
+					if id := string(protoBytes(call[57])); id != "" {
+						times.calls[id] = [2]string{at(call[59]), at(call[60])}
+					}
+				}
+			}
+		}
+	}
+	return times
 }
 
 // cursorCLIBlobID is the ID of a blob holding data: its sha256.
@@ -417,6 +489,20 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	} else if root == nil {
 		root = &cursorCLIRoot{}
 	}
+	// A message no root lists was listed by a root since deleted, whose
+	// place for it is lost: what was indexed of the chat is kept.
+	listed := map[string]bool{}
+	for _, candidate := range append([]*cursorCLIRoot{root}, older...) {
+		for _, blob := range candidate.messages {
+			listed[blob] = true
+		}
+	}
+	for id := range blobs {
+		if isMessage(id) && !listed[id] {
+			lost = true
+		}
+	}
+	times := cursorCLITurnTimes(blobs, append([]*cursorCLIRoot{root}, older...))
 	// When each prompt was sent, from the time the CLI stamps on it.
 	started := cursorCLITime(firstNonNil(meta["createdAt"], extra["createdAtMs"]))
 	sent := map[string]string{}
@@ -463,6 +549,17 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	agent := defaultString(meta["agentId"], filepath.Base(filepath.Dir(chat.store)))
 	origin := a.original(chat.store)
 	conversation := ConversationRecord{NativeID: agent, Provider: "cursor", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cursor-cli", StartedAt: started}
+	// A Task subagent is a chat of its own, naming the chat that started it;
+	// its prompts are that agent's. One started by a subagent is at least
+	// two levels down.
+	lineage := mapValueDefault(cursorJSON(meta["subagentInfo"]))
+	parent := firstString(lineage["parentAgentId"])
+	if parent != "" {
+		conversation.ParentNativeID, conversation.AgentDepth, conversation.AgentPath = parent, 1, firstString(lineage["typeName"])
+		if top := firstString(lineage["rootParentAgentId"]); top != "" && top != parent {
+			conversation.AgentDepth = 2
+		}
+	}
 	context := map[string]any{}
 	if root.contextUsed > 0 {
 		context["context_tokens_used"] = root.contextUsed
@@ -475,11 +572,17 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	}
 	// model is the conversation's, from what is selected; current is the
 	// one each reply ran on, unknown again where what was rewound begins.
-	at, model, current := started, "", ""
-	add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
+	// floor is the latest time placed so far, so a part the turns record no
+	// time for is never placed before one they do.
+	at, model, current, floor := started, "", "", ""
+	add := func(item MessageRecord) {
+		item.CreatedAt = max(item.CreatedAt, floor)
+		floor = item.CreatedAt
+		conversation.Messages = append(conversation.Messages, item)
+	}
 	for n, message := range messages {
 		if !message.selected && (n == 0 || messages[n-1].selected) {
-			current = ""
+			current, floor = "", ""
 		}
 		data := blobs[message.blob]
 		var value map[string]any
@@ -507,12 +610,25 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 			if strings.HasPrefix(strings.TrimSpace(text), "<user_info>") || strings.TrimSpace(text) == "" {
 				continue
 			}
+			// A compaction's summary is sent as a user message the CLI wrote.
+			if mapValueDefault(mapValueDefault(value["providerOptions"])["cursor"])["isSummary"] == true {
+				item := base
+				item.Role, item.Kind = "system", "metadata"
+				item.Text = jsonText(map[string]any{"type": "compaction", "summary": text})
+				add(item)
+				continue
+			}
 			prompt, sent := cursorCLIPrompt(text)
-			if sent != "" {
+			if recorded := times.next(times.prompts, prompt); recorded != "" {
+				base.CreatedAt = recorded
+			} else if sent != "" {
 				base.CreatedAt = sent
 			}
 			item := base
 			item.Role, item.Kind, item.Text = "user", "message", prompt
+			if parent != "" {
+				item.Role, item.Sender = agentRole, "agent:"+parent
+			}
 			add(item)
 		case "assistant":
 			for index, part := range parts {
@@ -534,11 +650,13 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				case "text":
 					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
 						item.Role, item.Kind, item.Text = "assistant", "message", text
+						item.CreatedAt = defaultString(times.next(times.replies, text), item.CreatedAt)
 						add(item)
 					}
 				case "tool-call":
 					name := firstString(part["toolName"])
 					item.CallID, item.Role, item.Kind = firstString(part["toolCallId"]), "assistant", "tool_call"
+					item.CreatedAt = defaultString(times.calls[item.CallID][0], item.CreatedAt)
 					if matchesFold(name, "task") {
 						item.Kind = "delegation"
 					}
@@ -547,7 +665,8 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				}
 			}
 		case "tool":
-			outcome := mapValueDefault(mapValueDefault(mapValueDefault(mapValueDefault(value["providerOptions"])["cursor"])["highLevelToolCallResult"])["output"])
+			high := mapValueDefault(mapValueDefault(mapValueDefault(value["providerOptions"])["cursor"])["highLevelToolCallResult"])
+			outcome := mapValueDefault(high["output"])
 			for index, part := range parts {
 				part := mapValueDefault(part)
 				if firstString(part["type"]) != "tool-result" {
@@ -556,10 +675,12 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				name := firstString(part["toolName"])
 				item := base
 				item.NativeID, item.CallID, item.Role, item.Kind = message.id+":"+strconv.Itoa(index), firstString(part["toolCallId"]), "tool", "tool_result"
+				item.CreatedAt = defaultString(times.calls[item.CallID][1], item.CreatedAt)
 				if matchesFold(name, "task") {
 					item.Kind = "delegation_result"
 				}
-				payload := map[string]any{"tool": name, "content": part["result"], "is_error": false}
+				// The CLI flags a failed call on the result or on its outcome.
+				payload := map[string]any{"tool": name, "content": part["result"], "is_error": part["isError"] == true || len(parts) == 1 && (high["isError"] == true || outcome["error"] != nil)}
 				// What the CLI ran, when the message holds one result.
 				if len(parts) == 1 {
 					details := map[string]any{}
