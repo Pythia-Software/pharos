@@ -67,6 +67,22 @@ test('saved Parallel activity links open the native Timeline and retain the sele
  assert.equal(await copy.page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');
 });
 
+test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
+ const show=page.getByRole('button',{name:'Show workspace sessions',exact:true}),hide=page.getByRole('button',{name:'Hide workspace sessions',exact:true});
+ const divider=page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true});
+ assert.equal(await divider.getAttribute('aria-valuenow'),'460');
+ await hide.click();await page.reload();await show.waitFor();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('sidebar_visible'),'0');
+ await show.click();await divider.waitFor();assert.equal(await divider.getAttribute('aria-valuenow'),'460');
+ await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('sidebar_visible','0');url.searchParams.set('sidebar_width','340');history.pushState(null,'',url);dispatchEvent(new PopStateEvent('popstate'));});
+ await show.waitFor();await page.goBack();await hide.waitFor();await app.settled();
+ assert.equal(await divider.getAttribute('aria-valuenow'),'460');
+ await page.goForward();await show.waitFor();await show.click();await app.settled();
+ assert.equal(await divider.getAttribute('aria-valuenow'),'340');
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+});
+
 for(const width of [1440,390])test(`workspace Timeline beside a reader expands before editing at ${width}px`,{skip},async t=>{
  const root=`delegation-labels:caller:${workID}:`,disclosures=Object.fromEntries(['session','authorship','authorship:m-1'].map(id=>[root+id,true]));
  const params=new URLSearchParams({explorer:'timeline',conversation:rootConversation,message:'m-1',disclosures:JSON.stringify(disclosures),timeline_columns:JSON.stringify({execution:205,events:185,time:480})});
