@@ -155,6 +155,14 @@ test("a column's run button waits while it runs; Only when you ask's while one o
   const next = plain(background.scheduleModel(running, at));
   assert.equal(next.columns[1].running, true);
   assert.equal(next.unscheduledRunnable, false);
+  const disabled = { ...document, view: { ...document.view, unscheduled: ['backup', 'labels'], items: [
+    ...document.view.items.map(item => item.id === 'backup' ? { ...item, state: 'unavailable' } : item),
+    {id: 'labels', label: 'Message labels', state: 'disabled', state_label: 'Off'},
+  ] } };
+  const off = plain(background.scheduleModel(disabled, at));
+  assert.equal(off.unscheduledRunnable, false);
+  assert.equal(off.unscheduled.find(item => item.id === 'labels').text, 'Off');
+  assert.equal(off.unscheduled.find(item => item.id === 'labels').dot, 'paused');
 });
 
 test("state lines: an age and the next time when current, the retry when failed, the run when missed", () => {

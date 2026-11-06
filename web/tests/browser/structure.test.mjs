@@ -534,13 +534,16 @@ const ROUTES = [
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
   }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
   { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
-  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#agentEventsEnabled", api: {
+  { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
       status: "On, waiting for the labeling model: partly downloaded (64 of 142 MB, resumed on the next attempt). The labeling worker is missing; install a Pharos build that includes it, or configure a local worker.",
       notice: `The configured labeling worker /Applications/${'LongApplicationName'.repeat(12)}/Contents/MacOS/pharos-labeler-ort is missing. Reinstall Pharos.`,
       execution: {device:'unavailable', status:'GPU unavailable', detail:`Cannot load /Applications/${'LongApplicationName'.repeat(12)}/Contents/MacOS/mlx/libpharos_mlx.dylib`, confirmed:false} },
       agent_events: { enabled: true, can_change: false, status: "On in this library's configuration (agent_events_enabled).", notice:"Enabled in this library's configuration." } },
-  } },
+  }, open: async page => {
+    await page.locator('[data-view-key="background:labels"]').click();
+    await page.locator('[data-view-key="background:agent_events"]').click();
+  }, shown: '#background-detail-labels:not([hidden])' },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
@@ -903,11 +906,11 @@ test("Background Processing items drag between all four columns for a week", { s
     },
   } });
   const schedule = page.locator('#backgroundSchedule');
-  // Empty the fourth column first: it must remain a destination for every item.
+  // Move the backup out first; the fourth column remains a destination for enabled work.
   const backup = schedule.locator('.bg-item[data-item="backup"]');
   await backup.locator('.bg-grip').dragTo(schedule.locator('.bg-col[data-cadence="daily"]'));
   await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
-  for (const id of document.view.items.map(item => item.id)) {
+  for (const id of document.view.items.filter(item => item.state !== 'disabled').map(item => item.id)) {
     for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
       const item = schedule.locator(`.bg-item[data-item="${id}"]`);
       await item.locator('.bg-grip').dragTo(schedule.locator(`.bg-col[data-cadence="${cadence}"]`));

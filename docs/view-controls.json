@@ -2328,17 +2328,6 @@
       "reason": "Library-wide fingerprint event display preference, persisted independently of a page URL and applied immediately to every fingerprint."
     },
     {
-      "key": "html:6451dc20ca7284f0:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "details",
-      "control": "<details class=\"sync-separate\" data-view-key=\"sync:separate\" data-view-field=\"disclosures\">",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "html:6f2936f3f335b6b5:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -2436,16 +2425,6 @@
       "control": "<button id=\"quickStatsReset\" type=\"button\">",
       "contract": "settings",
       "reason": "Resets saved Quick Stats layout preferences; a settings action."
-    },
-    {
-      "key": "html:ffbaafa6f1041afb:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "summary",
-      "control": "<summary>",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Summary of sync:separate, bound to the shared disclosures map."
     },
     {
       "key": "html:02b02da5220640ae:0",
@@ -7534,6 +7513,28 @@
       "control": "onCollapsedChange={setCollapsed}",
       "contract": "native-query",
       "reason": "Native Query Table serializes filters, sorting, columns, grouping, metrics and pagination in q_<schema>; query_layout binds editor collapse state by schema identity."
+    },
+    {
+      "key": "71595d876aafc489:0",
+      "file": "web/src/sync-tables.tsx",
+      "owner": "SyncTables",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"sync:history\" defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "b2abf8395c453635:0",
+      "file": "web/src/sync-tables.tsx",
+      "owner": "SyncTables",
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"sync:sources\" defaultOpen",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "7c0248af1a26259f:0",
