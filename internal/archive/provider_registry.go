@@ -202,9 +202,12 @@ func init() {
 				Defaults: func(r *probeRun, home string) { r.copilot(filepath.Join(home, ".copilot"), "default location") },
 				Folder:   (*probeRun).copilot,
 				NewSources: func(home string, config Config) int {
-					dir := filepath.Join(home, ".copilot")
-					info, err := os.Stat(filepath.Join(dir, "session-state"))
-					return newProbeSource(home, config, "copilot", dir, err == nil && info.IsDir())
+					found := 0
+					for _, dir := range probeFolderDirs(home, ".copilot", []probeEnv{{Name: "COPILOT_HOME"}}) {
+						info, err := os.Stat(filepath.Join(dir, "session-state"))
+						found += newProbeSource(home, config, "copilot", dir, err == nil && info.IsDir())
+					}
+					return found
 				},
 			},
 		},
@@ -222,9 +225,12 @@ func init() {
 				},
 				Folder: (*probeRun).opencode,
 				NewSources: func(home string, config Config) int {
-					dir := filepath.Join(home, ".local", "share", "opencode")
-					databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases()
-					return newProbeSource(home, config, "opencode", dir, err == nil && len(databases) > 0)
+					found := 0
+					for _, dir := range probeFolderDirs(home, ".local/share/opencode", []probeEnv{{Name: "XDG_DATA_HOME", Sub: "opencode"}}) {
+						databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases()
+						found += newProbeSource(home, config, "opencode", dir, err == nil && len(databases) > 0)
+					}
+					return found
 				},
 			},
 		},
@@ -240,9 +246,12 @@ func init() {
 				Defaults: func(r *probeRun, home string) { r.cline(filepath.Join(home, ".cline", "data"), "default location") },
 				Folder:   (*probeRun).cline,
 				NewSources: func(home string, config Config) int {
-					dir := filepath.Join(home, ".cline", "data")
-					info, err := os.Stat(filepath.Join(dir, "sessions"))
-					return newProbeSource(home, config, "cline", dir, err == nil && info.IsDir())
+					found := 0
+					for _, dir := range probeFolderDirs(home, ".cline/data", []probeEnv{{Name: "CLINE_DATA_DIR"}, {Name: "CLINE_DIR", Sub: "data"}}) {
+						info, err := os.Stat(filepath.Join(dir, "sessions"))
+						found += newProbeSource(home, config, "cline", dir, err == nil && info.IsDir())
+					}
+					return found
 				},
 			},
 		},

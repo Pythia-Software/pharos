@@ -629,10 +629,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 				}
 				prose.WriteString(text)
 			case "inlineReference":
-				name := firstString(item["name"])
-				if name == "" {
-					name = path.Base(firstString(mapValueDefault(item["inlineReference"])["path"]))
-				}
+				name := vscodeInlineReference(item)
 				if name != "" && name != "." && name != "/" {
 					flushThought()
 					if proseAt < 0 {
@@ -674,6 +671,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 				if started != nil {
 					child := subagent(callID)
 					child.conversation.AgentNickname, child.prompt, child.reply = started.conversation.AgentNickname, started.prompt, started.reply
+					child.conversation.Model, child.parent = started.conversation.Model, firstString(call.item["subAgentInvocationId"])
 				}
 			}
 		}
@@ -721,9 +719,25 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		HarnessVersionFirst: versionFirst, HarnessVersionLast: version, Model: model, StartedAt: started, EndedAt: ended, Messages: messages}
 	record := &WorkspaceRecord{SourceID: sessionID, SourceKind: "vscode-copilot", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended,
 		Location: location, Repository: repository, Metadata: metadata, Conversations: []ConversationRecord{conversation}}
+	depth := func(id string) int {
+		levels := 1
+		for seen := map[string]bool{id: true}; children[id] != nil && children[id].parent != "" && !seen[children[id].parent]; levels++ {
+			id = children[id].parent
+			seen[id] = true
+		}
+		return levels
+	}
 	for _, childID := range childOrder {
 		agent := children[childID]
 		child := &agent.conversation
+		// A subagent started by another is that one's child, and its prompt
+		// is that one's.
+		if agent.parent != "" {
+			child.ParentNativeID, child.AgentDepth = agent.parent, depth(childID)
+			if agent.prompt != nil {
+				agent.prompt.Sender = "agent:" + agent.parent
+			}
+		}
 		if agent.prompt != nil {
 			child.Messages = append([]MessageRecord{*agent.prompt}, child.Messages...)
 		}
@@ -736,6 +750,13 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		child.Provider, child.Account, child.Origin, child.Coverage = "vscode-copilot", a.config.Account, origin, "complete"
 		child.Harness, child.HarnessVersionFirst, child.HarnessVersionLast = "vscode-copilot", versionFirst, version
 		child.StartedAt, child.EndedAt = child.Messages[0].CreatedAt, child.Messages[len(child.Messages)-1].CreatedAt
+		// A subagent may run on another model than the request that started
+		// it; its calls are that model's.
+		if child.Model != "" {
+			for index := range child.Messages {
+				child.Messages[index].Model = child.Model
+			}
+		}
 		record.Conversations = append(record.Conversations, *child)
 	}
 	return record
@@ -757,6 +778,9 @@ func (a *vscodeCopilotAdapter) variant() string {
 type vscodeSubagent struct {
 	conversation  ConversationRecord
 	prompt, reply *MessageRecord
+	// parent is the subagent that started this one, when subagents may
+	// start their own; otherwise the session.
+	parent string
 }
 
 // vscodeToolMessages are a tool call and its result. A subagent's call also
@@ -783,6 +807,13 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 		case subagent:
 			input = map[string]any{"agentName": data["agentName"], "description": data["description"], "prompt": data["prompt"]}
 		}
+	}
+	// A call the rounds do not name (one inside a subagent, or still
+	// running) keeps its input in the tool's data (an MCP tool's rawInput),
+	// and its output and failure in the details of its result.
+	resultDetails := mapValueDefault(item["resultDetails"])
+	if raw := data["rawInput"]; input == nil && raw != nil {
+		input = raw
 	}
 	call := base
 	call.NativeID, call.Role, call.Kind, call.CallID = fmt.Sprintf("%s:block:%d", requestID, position), "assistant", "tool_call", callID
@@ -815,6 +846,11 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 			content = text
 		}
 	}
+	if content == nil || content == "" {
+		if output := vscodeResultDetailsText(resultDetails["output"]); output != "" {
+			content = output
+		}
+	}
 	// A finished call whose output was not kept still finished; what VS Code
 	// showed for it is its result.
 	if (content == nil || content == "") && item["isComplete"] == true {
@@ -828,7 +864,7 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 		if subagent {
 			result.Kind = "delegation_result"
 		}
-		payload := map[string]any{"tool": name, "content": content, "is_error": false}
+		payload := map[string]any{"tool": name, "content": content, "is_error": resultDetails["isError"] == true}
 		if len(details) > 0 {
 			payload["details"] = details
 		}
@@ -838,7 +874,7 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 	if !subagent || callID == "" {
 		return messages, nil
 	}
-	started := &vscodeSubagent{conversation: ConversationRecord{AgentNickname: firstString(data["agentName"])}}
+	started := &vscodeSubagent{conversation: ConversationRecord{AgentNickname: firstString(data["agentName"]), Model: vscodeModelID(firstString(data["modelName"]))}}
 	if text := vscodeText(data["prompt"]); strings.TrimSpace(text) != "" {
 		prompt := base
 		prompt.NativeID, prompt.Role, prompt.Kind, prompt.Sender, prompt.Text, prompt.Model = callID+":prompt", agentRole, "message", "agent:"+sessionID, text, ""
@@ -850,6 +886,68 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 		started.reply = &reply
 	}
 	return messages, started
+}
+
+// vscodeModelID is the model ID for the name VS Code shows for it, as a
+// subagent's modelName records ("Claude Haiku 4.5" is claude-haiku-4.5).
+func vscodeModelID(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), "-"))
+}
+
+// vscodeResultDetailsText is the text of a result's saved output parts:
+// embedded text, and the place of a referenced resource.
+func vscodeResultDetailsText(value any) string {
+	parts, _ := value.([]any)
+	texts := []string{}
+	for _, raw := range parts {
+		part := mapValueDefault(raw)
+		switch firstString(part["type"]) {
+		case "embed":
+			if part["isText"] == true {
+				texts = append(texts, asString(part["value"]))
+			}
+		case "ref":
+			if uri := vscodeURIText(mapValueDefault(part["uri"])); uri != "" {
+				texts = append(texts, uri)
+			}
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
+// vscodeInlineReference is how a reply names what it refers to: the
+// reference's name, a symbol's name, or the file of a URI or a Location
+// (a web address whole), as VS Code writes it as text.
+func vscodeInlineReference(item map[string]any) string {
+	if name := firstString(item["name"]); name != "" {
+		return name
+	}
+	reference := mapValueDefault(item["inlineReference"])
+	if uri := mapValue(reference["uri"]); uri != nil {
+		reference = uri
+	} else if name := firstString(reference["name"]); name != "" {
+		return name
+	}
+	if scheme := firstString(reference["scheme"]); scheme == "http" || scheme == "https" {
+		return vscodeURIText(reference)
+	}
+	return path.Base(firstString(reference["path"]))
+}
+
+// vscodeURIText is a serialized URI as text.
+func vscodeURIText(uri map[string]any) string {
+	if external := firstString(uri["external"]); external != "" {
+		return external
+	}
+	scheme, location := firstString(uri["scheme"]), firstString(uri["path"])
+	if scheme == "" || scheme == "file" {
+		return location
+	}
+	text := scheme + "://" + firstString(uri["authority"]) + location
+	if query := firstString(uri["query"]); query != "" {
+		text += "?" + query
+	}
+	return text
 }
 
 // vscodeText is text VS Code keeps as a string or a list of strings.
@@ -911,20 +1009,17 @@ type vscodeUsage struct {
 // by scope "last_round": a lower bound, never a sum of these alternatives.
 func vscodeTokenUsage(request map[string]any, served string) []vscodeUsage {
 	meta := mapValueDefault(mapValueDefault(request["result"])["metadata"])
-	totals := mapValueDefault(request["modelTotals"])
-	names := make([]string, 0, len(totals))
-	for name := range totals {
-		names = append(names, name)
-	}
-	sort.SliceStable(names, func(i, j int) bool {
-		return names[i] == served && names[j] != served || (names[i] == served) == (names[j] == served) && names[i] < names[j]
-	})
+	// The request's response.usage.modelTotals: a list of each model's
+	// {model, inputTokens, cachedTokens, outputTokens}.
+	totals, _ := request["modelTotals"].([]any)
 	usages := []vscodeUsage{}
-	for _, name := range names {
-		if counts := vscodeModelTotals(mapValueDefault(totals[name])); len(counts) > 0 {
+	for _, raw := range totals {
+		total := mapValueDefault(raw)
+		if name, counts := firstString(total["model"]), vscodeModelTotals(total); name != "" && len(counts) > 0 {
 			usages = append(usages, vscodeUsage{model: name, counts: counts})
 		}
 	}
+	sort.SliceStable(usages, func(i, j int) bool { return usages[i].model == served && usages[j].model != served })
 	if len(usages) > 0 {
 		return usages
 	}

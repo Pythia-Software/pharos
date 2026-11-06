@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -226,6 +227,23 @@ var probeTempDirs = func() []string {
 	dirs := []string{temporary}
 	if resolved, err := filepath.EvalSymlinks(temporary); err == nil && resolved != temporary {
 		dirs = append(dirs, resolved)
+	}
+	return dirs
+}
+
+// probeFolderDirs are where the status looks for a tool not yet chosen: its
+// default folder under home, and those its variables move it to, when
+// Pharos was started with them set. The status runs on every page load, so
+// it reads its own environment rather than starting a login shell; a guided
+// probe reads the shell's too.
+func probeFolderDirs(home, folder string, env []probeEnv) []string {
+	dirs := []string{filepath.Join(home, filepath.FromSlash(folder))}
+	for _, variable := range env {
+		if value := os.Getenv(variable.Name); value != "" {
+			if dir := filepath.Join(resolvePath(home, value), variable.Sub); !slices.Contains(dirs, dir) {
+				dirs = append(dirs, dir)
+			}
+		}
 	}
 	return dirs
 }
