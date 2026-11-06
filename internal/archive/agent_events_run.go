@@ -826,6 +826,8 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		if err := s.Catalog.refreshFixesSoon(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
 		}
+		// The Agent events dashboard's facts (agent_event_facts.go).
+		s.Catalog.refreshAgentEventFactsLogged(ctx, true)
 	}
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
@@ -867,6 +869,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 			if err := s.Catalog.refreshFixes(ctx, false); err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
 			}
+			s.Catalog.refreshAgentEventFactsLogged(ctx, false)
 		}
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():

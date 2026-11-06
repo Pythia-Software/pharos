@@ -96,6 +96,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosAgentEventsSchema(), nil
 	case "agent_event_messages":
 		return PharosAgentEventMessagesSchema(), nil
+	case "agent_event_rates":
+		return PharosAgentEventRatesSchema(), nil
 	}
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }
@@ -620,7 +622,7 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		required = []string{"conversation_id", "started_at"}
 	case "skill_usages":
 		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
-	case "agent_events", "agent_event_messages", "message_labels", "compactions":
+	case "agent_events", "agent_event_messages", "agent_event_rates", "message_labels", "compactions":
 		required = []string{"workspace_id", "conversation_id", "message_id"}
 	}
 	if len(required) == 0 {

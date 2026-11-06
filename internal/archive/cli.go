@@ -483,6 +483,9 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		if stats != nil {
 			_ = printJSON(stats)
 		}
+		if err == nil && !*dryRun {
+			catalog.refreshAgentEventFactsLogged(ctx, false)
+		}
 		return err
 	}
 	if len(args) == 2 && args[0] == "import" {
@@ -490,7 +493,17 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		if err != nil {
 			return err
 		}
+		catalog.refreshAgentEventFactsLogged(ctx, false)
 		return printJSON(result)
+	}
+	if len(args) == 1 && args[0] == "facts" {
+		// The Agent events dashboard's projection (agent_event_facts.go),
+		// which the background pass otherwise refreshes after it runs.
+		rebuilt, err := catalog.refreshAgentEventFacts(ctx)
+		if err != nil {
+			return err
+		}
+		return printJSON(map[string]int{"conversations_rebuilt": rebuilt})
 	}
 	if len(args) == 1 && args[0] == "fetch" {
 		// The verifier, and the runtime unless one is configured or bundled.
@@ -505,7 +518,7 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		}
 		return printJSON(status)
 	}
-	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | import FILE}")
+	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | facts | import FILE}")
 }
 
 // applyRepositoryMergesCLI: pharos repositories --merge --apply.
