@@ -1809,6 +1809,10 @@ the same schedule from one declaration (`backgroundItems`):
   carries `typical`, the middle of its recent runs ("Typically 2–3 h",
   between the runs a quarter of the way in from each end), which leads its
   line in Settings.
+  For labels and agent events, `as_of` uses the newer of the last successful
+  background pass and deferred-stage completion. A bounded pass
+  updates Last run and starts the cadence's clock even while its backlog
+  remains pending; pending generations still determine whether work remains.
   `GET /api/background` adds the settings, the placement rule and the last
   24 hours' cost (measured for scheduled indexing and journaled passes,
   else projected from the items' costs; Frequently counts scheduled
