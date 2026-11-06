@@ -465,6 +465,7 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 	base := MessageRecord{Model: conversation.Model, CreatedAt: started, Selected: true}
 	add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
 	locator := func(native string) string { return fmt.Sprintf("%s#%s:%s", origin, id, native) }
+	seen := map[string]int{}
 	usage := thread["request_token_usage"]
 	sums := map[string]float64{}
 	addUsage := func(native string, tokens any) {
@@ -491,7 +492,7 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 		}
 	}
 	if legacy {
-		a.legacyMessages(messages, firstString(thread["version"]), usage, base, locator, add, addUsage)
+		a.legacyMessages(messages, firstString(thread["version"]), usage, base, locator, add, addUsage, seen)
 	} else {
 		// A turn's usage follows its last message, under the prompt that
 		// started it.
@@ -556,7 +557,7 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 					add(reasoningRecord(record, "", "", "redacted"))
 				} else if use := mapValue(content["ToolUse"]); use != nil {
 					call := firstString(use["id"])
-					a.tool(record, call, firstString(use["name"]), zedToolInput(firstNonNil(use["input"], use["raw_input"])), mapValue(results[call]), add)
+					a.tool(record, call, firstString(use["name"]), zedToolInput(firstNonNil(use["input"], use["raw_input"])), mapValue(results[call]), add, seen)
 				}
 			}
 		}
@@ -582,7 +583,7 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 // legacyMessages reads the messages of releases before Zed's agent: each with
 // an ID, a role, its segments, and its tool calls with their results; a
 // request's usage is kept by the message's position.
-func (a *zedAdapter) legacyMessages(messages []any, version string, usage any, base MessageRecord, locator func(string) string, add func(MessageRecord), addUsage func(string, any)) {
+func (a *zedAdapter) legacyMessages(messages []any, version string, usage any, base MessageRecord, locator func(string) string, add func(MessageRecord), addUsage func(string, any), seen map[string]int) {
 	requests := sliceOf(usage)
 	// A call's ID names its result only in its own message: a provider can
 	// give a later call the same ID.
@@ -636,7 +637,7 @@ func (a *zedAdapter) legacyMessages(messages []any, version string, usage any, b
 			record := item
 			record.NativeID = native + ":tool:" + strconv.Itoa(part)
 			call := firstString(use["id"])
-			a.tool(record, call, firstString(use["name"]), use["input"], results[call], add)
+			a.tool(record, call, firstString(use["name"]), use["input"], results[call], add, seen)
 		}
 		if index < len(requests) && role == "assistant" {
 			addUsage(native, requests[index])
@@ -670,7 +671,8 @@ func zedTerminalOutcome(content string, input any) map[string]any {
 	// What follows the command a header names. Zed names it as it was
 	// given, so a fence in the command is not where the output begins.
 	ending := ""
-	if command := firstString(mapValueDefault(input)["command"]); command != "" {
+	// Zed names the command untrimmed.
+	if command, _ := mapValueDefault(input)["command"].(string); command != "" {
 		lead := `Command "` + command + `" `
 		if at := strings.Index(content, lead); at >= 0 && at < len(header) {
 			ending = content[at+len(lead):]
@@ -701,8 +703,15 @@ func zedTerminalOutcome(content string, input any) map[string]any {
 	return nil
 }
 
-// tool records a tool call and its result.
-func (a *zedAdapter) tool(base MessageRecord, call, name string, input any, result map[string]any, add func(MessageRecord)) {
+// tool records a tool call and its result. A call's ID is its message's
+// alone, so a later call reusing one is told apart by its occurrence (seen
+// counts each ID in the thread), as one call in the tool ledger.
+func (a *zedAdapter) tool(base MessageRecord, call, name string, input any, result map[string]any, add func(MessageRecord), seen map[string]int) {
+	if call != "" {
+		if seen[call]++; seen[call] > 1 {
+			call += "#" + strconv.Itoa(seen[call])
+		}
+	}
 	delegated := matchesFold(name, "spawn_agent")
 	record := base
 	record.CallID, record.Role, record.Kind = call, "assistant", "tool_call"
