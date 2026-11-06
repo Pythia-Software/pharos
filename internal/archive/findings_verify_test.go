@@ -77,6 +77,34 @@ func TestFindingUnchangedMovesToTheNextChange(t *testing.T) {
 	if !strings.Contains(firstString(detail["prompt"]), "This is attempt 2") {
 		t.Fatalf("the prompt says an earlier change didn't help:\n%s", detail["prompt"])
 	}
+	// Time alone must retire the recommendation between detector passes,
+	// without deleting its prior attempt or claiming the change worked.
+	later := fixture.catalog.clock().AddDate(0, 0, findingRecentDays)
+	fixture.catalog.now = func() time.Time { return later }
+	detail, err := fixture.catalog.FindingDetail(context.Background(), id)
+	if err != nil || detail["state"] != findingHidden || detail["reopened"] == nil {
+		t.Fatalf("quiet finding: state=%v reopened=%v err=%v", detail["state"], detail["reopened"], err)
+	}
+	overview, err := fixture.catalog.FindingsOverview(context.Background(), findingOpen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, card := range overview["findings"].([]map[string]any) {
+		if card["id"] == id {
+			t.Fatal("quiet finding is still recommended")
+		}
+	}
+	// A fresh recurrence can qualify again using the same finding ID.
+	for day := 0; day < findingRecentDays; day++ {
+		fixture.conversation(dayTime(later.Format("2006-01-02")).AddDate(0, 0, -day), true)
+	}
+	if err := fixture.catalog.RefreshFindings(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	detail, err = fixture.catalog.FindingDetail(context.Background(), id)
+	if err != nil || detail["state"] != findingOpen || detail["attempt"] != 2 {
+		t.Fatalf("recurring finding: state=%v attempt=%v err=%v", detail["state"], detail["attempt"], err)
+	}
 }
 
 func TestFindingWorseAsksToUndo(t *testing.T) {
@@ -104,9 +132,13 @@ func TestFindingWorseAsksToUndo(t *testing.T) {
 }
 
 func TestFindingInconclusiveWithoutWork(t *testing.T) {
-	fixture, _, plan, now := copiedFinding(t)
+	fixture, id, plan, now := copiedFinding(t)
 	if result := closeWindow(t, fixture, plan, now, nil); result.Status != interventionInconclusive {
 		t.Fatalf("no work after the copy is inconclusive: %q", result.Status)
+	}
+	detail, err := fixture.catalog.FindingDetail(context.Background(), id)
+	if err != nil || detail["state"] != findingHidden {
+		t.Fatalf("an inconclusive result without recent evidence must not reopen: state=%v err=%v", detail["state"], err)
 	}
 }
 
@@ -119,6 +151,12 @@ func TestFindingNotAppliedWithdraws(t *testing.T) {
 	detail, _ := fixture.catalog.FindingDetail(ctx, id)
 	if detail["state"] != findingOpen || detail["watching"] != nil || detail["attempt"] != 1 {
 		t.Fatalf("withdrawn: state=%v watching=%v attempt=%v", detail["state"], detail["watching"], detail["attempt"])
+	}
+	later := fixture.catalog.clock().AddDate(0, 0, findingRecentDays)
+	fixture.catalog.now = func() time.Time { return later }
+	detail, err := fixture.catalog.FindingDetail(ctx, id)
+	if err != nil || detail["state"] != findingHidden {
+		t.Fatalf("expired recommendation without a detector pass: state=%v err=%v", detail["state"], err)
 	}
 }
 

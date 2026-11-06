@@ -167,9 +167,8 @@ func (view *findingView) state(row *findingRow) string {
 			case latest.Status == interventionImproved && latest.RegressedAt == "":
 				return findingWon
 			}
-			// Unchanged, worse, inconclusive, and regressed findings reopen
-			// with their next attempt, whatever the gate says now.
-			return findingOpen
+			// A completed attempt does not establish that the problem is
+			// still happening. Reopen only through the current gate below.
 		}
 	}
 	if row.Hidden || !row.Active || view.detectorOff(row.Detector) || !row.Stats.passes(view.thresh) {
