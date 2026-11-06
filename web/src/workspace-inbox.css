@@ -78,7 +78,7 @@ body:has(#detail.active .conversation-timeline-active) :is(.conversation-map,.co
 .workspace-inbox.compact .delegation-category-label { font-size: 9px; }
 .workspace-inbox.compact .delegation-definitions { font-size: 10px; }
 .delegation-inbox-list { margin-top: 10px; }
-.delegation-inbox-heading,.delegation-inbox-row { display: grid; grid-template-columns: minmax(0,1fr) 62px 72px; align-items: center; column-gap: 5px; }
+.delegation-inbox-heading,.delegation-inbox-row { display: grid; grid-template-columns: minmax(0,1fr) 62px 72px 48px; align-items: center; column-gap: 5px; }
 .delegation-inbox-heading { padding: 7px 4px; color: var(--muted); font-size: 10px; border-bottom: 1px solid var(--line); }
 .delegation-inbox-heading > :not(:first-child) { text-align: right; }
 .delegation-inbox-row { position: relative; min-height: 46px; border-bottom: 1px solid var(--line); box-sizing: border-box; padding-right: 4px; cursor: pointer; }

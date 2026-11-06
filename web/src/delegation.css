@@ -303,7 +303,7 @@
   font-variant-numeric: tabular-nums;
 }
 .delegation-table :is(th, td) {
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
   text-align: right;
   white-space: nowrap;
@@ -337,14 +337,22 @@
   box-shadow: inset 0 -1px color-mix(in srgb, var(--line) 65%, transparent);
   cursor: pointer;
 }
-.delegation-table .delegation-family {
-  font-family: var(--serif);
-  font-size: var(--fs-sm);
-  text-align: center;
-  padding: 7px;
+.delegation-timeline-button {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
 }
-.delegation-table .family-all {
-  border-left: 2px solid var(--line);
+.delegation-timeline-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.delegation-timeline-button:disabled {
+  opacity: .5;
+  cursor: default;
 }
 .delegation-table .delegation-label-cell {
   text-align: left;
@@ -1010,6 +1018,7 @@
   }
   .delegation-table .delegation-label-cell {
     max-width: 250px;
+    position: static;
   }
   .delegation-name {
     max-width: 180px;

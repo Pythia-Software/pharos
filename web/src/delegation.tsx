@@ -145,12 +145,33 @@ const categories: Record<string, string> = {
 const defaultColumns = [
   "tokens",
   "cost",
+  "messages",
   "calls",
+  "events",
   "errors",
   "files",
+  "filesRead",
   "clock",
   "toolTime",
 ];
+/** Upgrade saved column choices once, keeping custom order and hidden metrics. */
+export function addSessionColumns(saved: string[]) {
+  const next = [...saved];
+  for (const [id, anchor] of [["messages", "calls"], ["events", "calls"], ["filesRead", "files"]]) {
+    if (next.includes(id)) continue;
+    const index = next.indexOf(anchor);
+    next.splice(index < 0 ? next.length : index + (id === "messages" ? 0 : 1), 0, id);
+  }
+  return next;
+}
+/** Open the session's immediate event groups; deeper groups start closed. */
+export function sessionTimelineState(node: Session, disclosures: Record<string, boolean>) {
+  if (node.start == null || node.end == null || !Number.isFinite(node.start) || !Number.isFinite(node.end)) return null;
+  const prefix = `delegation-labels:${node.id}:`;
+  const next = Object.fromEntries(Object.entries(disclosures).filter(([key]) => !key.startsWith(prefix)));
+  next[`${prefix}session`] = true;
+  return { range: [node.start, Math.max(node.start + 1, node.end)] as Range, disclosures: next };
+}
 export const tintStrength = (value: number, maximum: number) =>
   maximum > 0 && value > 0
     ? Math.pow(
@@ -325,7 +346,7 @@ function ColumnPicker({
     <ViewDisclosure viewKey="delegation:columns" className="delegation-columns" summary={<>Columns · {columns.length}</>} summaryTarget="control:delegation_columns">
       <div>
         <p>
-          Choose columns. Drag handles to change their order in both families.
+          Choose columns. Drag handles to change their order.
         </p>
         <div
           className="delegation-column-list"
@@ -429,18 +450,21 @@ export function DelegationExplorer({
   const [readerView, setReaderView] = useViewState("reader_view", "conversation", active);
   const [mode, setMode] = useState<DelegationRoute["mode"]>(initial.mode);
   const [sort, setSort] = useState(initial.sort),
-    [scope, setScope] = useState(initial.scope),
     [direction, setDirection] = useState(initial.direction);
+  const [scope, setScope] = useViewState("delegation_scope", "all", active);
+  const [, setDisclosures] = useViewState<Record<string, boolean>>("disclosures", {}, active);
   const [tint, setTint] = useViewState<Tint>("delegation_tint",
     preferences().get("pharos-delegation-tint", "all"),active,
   );
   const [columns, setColumns] = useViewState<string[]>("delegation_columns", () => {
     const prefs = preferences();
     const saved = prefs.get("pharos-delegation-columns", defaultColumns);
-    if (prefs.get("pharos-delegation-files-column-added", false)) return saved;
-    const next = [...new Set([...saved, "files"])];
+    if (prefs.get("pharos-delegation-session-columns-added", false)) return saved;
+    const next = addSessionColumns(prefs.get("pharos-delegation-files-column-added", false) ? saved : [...new Set([...saved, "files"])]);
     prefs.set("pharos-delegation-files-column-added", true);
+    prefs.set("pharos-delegation-session-columns-added", true);
     prefs.set("pharos-delegation-columns", next);
+    prefs.set("pharos-delegation-column-order", addSessionColumns(prefs.get("pharos-delegation-column-order", next)));
     return next;
   },active);
   const [columnOrder, setColumnOrder] = useViewState<string[]>("delegation_column_order",
@@ -479,7 +503,6 @@ export function DelegationExplorer({
       setTab(route.tab);
       setMode(route.mode);
       setSort(route.sort);
-      setScope(route.scope);
       setDirection(route.direction);
       setCollapsed(new Set(route.collapsed));
       livePages.current.reset();
@@ -615,6 +638,26 @@ export function DelegationExplorer({
     url.searchParams.delete("sessions");
     history.replaceState(null, "", url);
     window.dispatchEvent(new Event("pharos:uri-changed"));
+  }
+  function openTimeline(n: Session) {
+    const state = sessionTimelineState(n, {});
+    if (!state) return;
+    setDisclosures(previous => sessionTimelineState(n, previous)!.disclosures);
+    setRange(state.range);
+    setSelected(n.id);
+    // Keep the session on its hierarchy page, including when opened from rank.
+    setPageIndex(String(Math.floor(n.order / 40)));
+    setCollapsed(new Set());
+    setTab("timeline");
+    const url = new URL(location.href);
+    url.searchParams.set("explorer", "timeline");
+    url.searchParams.set("delegation_session", n.id);
+    url.searchParams.set("delegation_start", String(state.range[0]));
+    url.searchParams.set("delegation_end", String(state.range[1]));
+    url.searchParams.delete("delegation_collapsed");
+    history.replaceState(history.state, "", url);
+    window.dispatchEvent(new Event("pharos:uri-changed"));
+    if (splitReader) openOverview?.();
   }
   function toggle(n: Session) {
     resetPage();
@@ -874,6 +917,13 @@ export function DelegationExplorer({
           {!single && data && tab === "table" && !compact && (
             <>
               <span className="delegation-controls-spacer" />
+              <select data-view-field="delegation_scope" aria-label="Session metric scope" value={scope} onChange={event => {
+                setScope(event.target.value);
+                resetPage();
+              }}>
+                <option value="self">Self</option>
+                <option value="all">Self + children</option>
+              </select>
               <select
                 data-view-field="delegation_tint" aria-label="Cell tint"
                 value={tint}
@@ -927,6 +977,7 @@ export function DelegationExplorer({
                   collapsed={collapsed}
                   toggle={toggle}
                   openNode={openNode}
+                  openTimeline={openTimeline}
                 />
               ) : !single && tab === "table" ? (
                 <>
@@ -938,68 +989,17 @@ export function DelegationExplorer({
                       <table className="delegation-table">
                         <thead>
                           <tr>
-                            <th rowSpan={2} className="delegation-label-cell">
-                              <button
-                                onClick={showHierarchy}
-                                title="Show the session hierarchy"
-                              >
-                                Session
-                              </button>
+                            <th className="delegation-label-cell">
+                              <button onClick={showHierarchy} title="Show the session hierarchy">Session</button>
                             </th>
-                            {specs.length > 0 && (
-                              <>
-                                <th
-                                  colSpan={specs.length}
-                                  className="delegation-family"
-                                >
-                                  Self
-                                </th>
-                                <th
-                                  colSpan={specs.length}
-                                  className="delegation-family family-all"
-                                >
-                                  Self + children
-                                </th>
-                              </>
-                            )}
-                          </tr>
-                          <tr>
-                            {["self", "all"].flatMap((family) =>
-                              specs.map((m, i) => (
-                                <th
-                                  key={`${family}:${m.id}`}
-                                  className={
-                                    family === "all" && i === 0
-                                      ? "family-all"
-                                      : ""
-                                  }
-                                  title={m.definition}
-                                  aria-sort={
-                                    mode === "rank" &&
-                                    sort === m.id &&
-                                    scope === family
-                                      ? direction === "desc"
-                                        ? "descending"
-                                        : "ascending"
-                                      : "none"
-                                  }
-                                >
-                                  <button
-                                    onClick={() => sortColumn(m.id, family)}
-                                    title="Click to sort descending, then ascending, then return to hierarchy"
-                                  >
-                                    {m.label}
-                                    {mode === "rank" &&
-                                    sort === m.id &&
-                                    scope === family
-                                      ? direction === "desc"
-                                        ? " ↓"
-                                        : " ↑"
-                                      : ""}
-                                  </button>
-                                </th>
-                              )),
-                            )}
+                            {specs.map(m => (
+                              <th key={m.id} title={m.definition} aria-sort={mode === "rank" && sort === m.id ? direction === "desc" ? "descending" : "ascending" : "none"}>
+                                <button onClick={() => sortColumn(m.id, scope)} title="Click to sort descending, then ascending, then return to hierarchy">
+                                  {m.label}{mode === "rank" && sort === m.id ? direction === "desc" ? " ↓" : " ↑" : ""}
+                                </button>
+                              </th>
+                            ))}
+                            <th>Timeline</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1045,8 +1045,8 @@ export function DelegationExplorer({
                                     ><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
                                   </div>
                                 </td>
-                                {["self", "all"].flatMap((family) =>
-                                  specs.map((m, i) => {
+                                {specs.map((m) => {
+                                    const family = scope;
                                     const metric = (
                                       family === "self" ? n.self : n.all
                                     )[m.id];
@@ -1065,11 +1065,6 @@ export function DelegationExplorer({
                                     return (
                                       <td
                                         key={`${family}:${m.id}`}
-                                        className={
-                                          family === "all" && i === 0
-                                            ? "family-all"
-                                            : ""
-                                        }
                                         style={{
                                           background: strength
                                             ? `color-mix(in srgb, var(--delegation-tint) ${strength * 34}%, var(--panel))`
@@ -1086,8 +1081,10 @@ export function DelegationExplorer({
                                           )}
                                       </td>
                                     );
-                                  }),
-                                )}
+                                  })}
+                                <td>
+                                  <button type="button" className="delegation-timeline-button" aria-label={`View timeline for ${n.label}`} disabled={!sessionTimelineState(n, {})} onClick={() => openTimeline(n)} title="Show this session’s time span with its event rows expanded">View</button>
+                                </td>
                               </tr>
                             );
                           })}
@@ -1181,19 +1178,20 @@ export function DelegationExplorer({
   );
 }
 
-function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
+function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, openTimeline }: {
   rows: Session[];
   data: Analysis;
   shown: string;
   collapsed: Set<string>;
   toggle: (node: Session) => void;
   openNode: (node: Session) => void;
+  openTimeline: (node: Session) => void;
 }) {
   const branches = timelineSessionBranches(rows);
   // Self usage keeps each session comparable; parallel children do not inflate its run time.
   const metrics = ["cost", "clock"].map(id => data.metrics.find(spec => spec.id === id)).filter((spec): spec is Spec => !!spec);
   return <div className="delegation-inbox-list" role="table" aria-label="Session hierarchy and usage">
-    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}</div>
+    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}<span role="columnheader">Timeline</span></div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
         <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} outline={n.outline} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · ${n.effort || "unknown"}`} />
@@ -1203,6 +1201,7 @@ function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
         const value = n.self[spec.id];
         return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={value ? cellTitle(value, spec) : "No retained evidence"}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</span>;
       })}
+      <span role="cell"><button type="button" className="delegation-timeline-button" aria-label={`View timeline for ${n.label}`} disabled={!sessionTimelineState(n, {})} onClick={() => openTimeline(n)}>View</button></span>
     </div>)}
     {!rows.length && <p>No retained sessions.</p>}
   </div>;
