@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
@@ -268,4 +269,170 @@ func TestSteeringCuesOnlyMatchAuthoredSpans(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPeopleMessageLabelsChooseHighestConfidenceAndKeepMissingCoverage(t *testing.T) {
+	c, config := testCatalog(t)
+	c.now = func() time.Time { return time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC) }
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('people-work','claude','local','people-work','People work','2026-09-01');
+ INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage,started_at,ended_at) VALUES('people-conv','people-work','claude','local','people-conv','complete','2026-09-01T12:00:00Z','2026-09-01T12:40:00Z');
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES
+ ('people-a','people-conv','a','user','message','Please fix the importer for quoted lines','a','2026-09-01T12:00:00Z'),
+ ('people-reply','people-conv','reply','assistant','message','I will inspect the parser','r','2026-09-01T12:01:00Z'),
+ ('people-b','people-conv','b','user','message','Please verify the old fixtures as well','b','2026-09-01T12:20:00Z'),
+ ('people-c','people-conv','c','user','message','Keep the public file format unchanged','c','2026-09-01T12:40:00Z'),
+ ('people-machine','people-conv','machine','user','message','<system_instruction>Only harness instructions here.</system_instruction>','m','2026-09-01T12:41:00Z')`)
+	if err := c.RebuildAuthorship(t.Context(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := c.peopleMessageLabelRows(t.Context(), fieldSet("message_id", "label_status"), []querytable.WhereTerm{{Field: "people_scope", Op: "=", Value: "human"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 4 || c.hasLabelsLedger() {
+		t.Fatalf("reading missing labels changed coverage or started inference: %v", before)
+	}
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('people-test','["P","P.request","P.request.a","P.request.b","P.control","P.control.redirect","P.frame"]');
+ INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES
+ ('people-a','people-conv','H-typed',63,x'00000000',1,1,'a','people-test','test','2026-09-01'),
+ ('people-b','people-conv','H-typed',0,x'00000000',1,1,'b','people-test','test','2026-09-01');
+ INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('people-conv','test',4,'2026-09-01');
+ DELETE FROM message_labels_dirty`)
+	srv := testServer(t, config, c)
+	query := func(scope string, extra ...qt.WhereTerm) qt.QueryResultV3 {
+		t.Helper()
+		result, _, err := srv.executeQueryV3(t.Context(), "people_message_labels", nil, PharosPeopleMessageLabelsSchema(), qt.QueryRequestV3{
+			Version: 3, Profile: qt.SQLiteExpressionProfile, Now: c.clock().UnixMilli(), Result: qt.WireQuery{Limit: 50, Where: append([]qt.WhereTerm{{Field: "people_scope", Op: "=", Value: scope}}, extra...)},
+			Metrics: []qt.AggSpec{{ID: "families", Op: "count", Field: "message_id", GroupBy: []string{"family"}}, {ID: "messages", Op: "count", Field: "message_id", GroupBy: []string{}}, {ID: "labels", Op: "count", Field: "message_id", GroupBy: []string{"label"}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	for _, sample := range []struct {
+		name, label, family string
+		probs               []float32
+	}{
+		// Ancestors and the unaccepted frame label have higher scores;
+		// only accepted most-specific labels may win.
+		{"request", "P.request.b", "P.request", []float32{1, .999, .7, .9, .99, .8, 1}},
+		{"control", "P.control.redirect", "P.control", []float32{1, .999, .7, .8, .99, .9, 1}},
+		{"tied", "P.control.redirect", "P.control", []float32{1, .999, .9, .9, .99, .9, 1}},
+		{"missing scores", "P.control.redirect", "P.control", nil},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			if _, err := c.DB.ExecContext(t.Context(), `UPDATE message_labels SET probs=? WHERE message_id='people-a'`, encodeLabelProbs(sample.probs)); err != nil {
+				t.Fatal(err)
+			}
+			for _, scope := range []string{"human", "activity", "habits"} {
+				result := query(scope)
+				want := int64(3)
+				if scope == "human" {
+					want = 4
+				}
+				if integer(result.Metrics[1].Buckets[0].Value) != want || result.SourceTotal != want {
+					t.Fatalf("%s message population changed: %+v", scope, result)
+				}
+				for _, dimension := range []int{0, 2} {
+					counts, sum := map[string]int64{}, int64(0)
+					for _, bucket := range result.Metrics[dimension].Buckets {
+						value := integer(bucket.Value)
+						counts[firstString(bucket.Keys[0])] = value
+						sum += value
+					}
+					winner := sample.family
+					if dimension == 2 {
+						winner = sample.label
+					}
+					if counts[winner] != 1 || counts["?"] != want-1 || sum != want {
+						t.Fatalf("%s groups did not partition messages under %s: %v", scope, winner, counts)
+					}
+				}
+			}
+		})
+	}
+	filtered := query("human", qt.WhereTerm{Field: "text", Op: "contains", Value: "quoted"})
+	if integer(filtered.Metrics[1].Buckets[0].Value) != 1 {
+		t.Fatalf("message text filter changed population: %+v", filtered.Metrics)
+	}
+	rows, err := c.peopleMessageLabelRows(t.Context(), nil, []querytable.WhereTerm{{Field: "people_scope", Op: "=", Value: "human"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]string{}
+	for _, row := range rows {
+		status[firstString(row["message_id"])] = firstString(row["label_status"])
+		if row["source_conversation_id"] != "people-conv" {
+			t.Fatalf("lost source: %+v", row)
+		}
+	}
+	if status["people-b"] != "no_match" || status["people-c"] != "unlabeled" {
+		t.Fatalf("missing coverage disappeared: %v", status)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('people-conv','changed')`)
+	rows, err = c.peopleMessageLabelRows(t.Context(), nil, []querytable.WhereTerm{{Field: "people_scope", Op: "=", Value: "human"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row["label_status"] != "unlabeled" {
+			t.Fatalf("stale classification stayed accepted: %+v", row)
+		}
+	}
+	t.Run("bounded V3 sources", func(t *testing.T) {
+		c, config := testCatalog(t)
+		c.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
+		execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('bounded','claude','local','bounded','Bounded messages','2026-09-11');
+ INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage,started_at,ended_at) VALUES('bounded','bounded','claude','local','bounded','complete','2026-08-01T12:00:00Z','2026-09-10T12:40:00Z');
+ INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES
+ ('old-a','bounded','old-a','user','message','Please inspect the previous importer implementation','a','2026-08-01T12:00:00Z'),
+ ('old-b','bounded','old-b','user','message','Preserve the file format from the previous implementation','b','2026-08-02T12:00:00Z'),
+ ('recent','bounded','recent','user','message','Please check the parser and preserve its existing output','c','2026-09-10T12:30:00Z')`)
+		if err := c.RebuildAuthorship(t.Context(), "test"); err != nil {
+			t.Fatal(err)
+		}
+		// Both unrelated scopes and old messages exceed this budget. A
+		// narrow request must prune them before the engine stages rows.
+		override(t, &queryV3MaxPopulation, 1)
+		server := testServer(t, config, c)
+		for _, scope := range []string{"human", "activity", "habits"} {
+			field := map[string]string{"human": "sent_at", "activity": "event_at", "habits": "started_at"}[scope]
+			where := []qt.WhereTerm{{Field: "people_scope", Op: "=", Value: scope}, {Field: field, Op: ">=", Value: "-24h"}, {Field: field, Op: "<", Value: "+0s"}}
+			if scope == "habits" {
+				// A message sent at 12:30 belongs to the 12:00 hour.
+				where[2] = qt.WhereTerm{Field: field, Op: "<=", Value: "2026-09-10T12:00:00Z"}
+			}
+			for _, mode := range []string{"metrics", "grouped", "distinct"} {
+				t.Run(scope+"/"+mode, func(t *testing.T) {
+					q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: c.clock().UnixMilli(), Result: qt.WireQuery{Where: where, Limit: 1}}
+					switch mode {
+					case "metrics":
+						q.Metrics = []qt.AggSpec{{ID: "messages", Op: "count", Field: "message_id"}}
+					case "grouped":
+						q.Rows, q.Source.Where, q.Result.Where = true, where, nil
+						q.Grouping = &qt.GroupingDefinition{Keys: []string{"family"}, Summaries: []qt.SummaryColumn{{ID: "message_total", Op: "count"}}}
+						q.Result.Select = []string{"family", "message_total"}
+					case "distinct":
+						q.Source.Where, q.Result.Where = where, nil
+						q.Distinct = &qt.DistinctRequestV3{Field: "family", Limit: 1}
+					}
+					result, _, err := server.executeQueryV3(t.Context(), "people_message_labels", nil, PharosPeopleMessageLabelsSchema(), q)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if mode == "distinct" {
+						if result.Distinct == nil || len(result.Distinct.Values) != 1 {
+							t.Fatalf("missing scoped distinct values: %+v", result)
+						}
+					} else if result.SourceTotal != 1 {
+						t.Fatalf("scope/window changed the message population: %+v", result)
+					}
+				})
+			}
+		}
+	})
 }

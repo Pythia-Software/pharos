@@ -92,22 +92,26 @@ main > #home { padding-bottom:28px; }
 .dashboard-card-anchor>.dashboard-card-actions { position:absolute; top:-5px; right:0; flex-direction:row-reverse; background:var(--bg); }
 .dashboard-card-anchor>.qt-metric .qt-metric-head { padding-right:34px; }
 .home-editor h2 { margin:0 0 17px; font:400 24px Charter,Georgia,serif; }
-/* Create dashboard card: the dialog holds the card itself, edited in place. */
+/* Card editors (Create dashboard card, Home's editor): the dialog holds the card itself, edited in place. */
 /* Its preview makes it tall: centre it and let it scroll within the viewport. */
-.dashboard-card-editor { width:400px; margin:auto; max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; }
+.card-editor { width:400px; margin:auto; max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; }
 .dashboard-card-targets { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 16px; padding:0; border:0; }
 .dashboard-card-targets legend { margin-bottom:6px; padding:0; font-size:12px; color:var(--muted); }
 .home-editor .dashboard-card-targets label { display:flex; align-items:center; gap:6px; margin:0; padding:6px 10px; border:1px solid var(--line); border-radius:5px; background:var(--bg); color:var(--ink); font-size:12px; cursor:pointer; }
 .home-editor .dashboard-card-targets label:has(input:checked) { border-color:var(--gold); color:var(--gold); }
 .home-editor .dashboard-card-targets input { display:inline; width:auto; margin:0; accent-color:var(--gold); }
-.dashboard-card-stage { display:flex; justify-content:center; padding:16px; border-radius:7px; background:color-mix(in srgb,var(--bg) 60%,transparent); }
-.dashboard-card-stage .query-card { cursor:default; }
+.card-editor-stage { display:flex; justify-content:center; padding:16px; border-radius:7px; background:color-mix(in srgb,var(--bg) 60%,transparent); }
+.card-editor-stage .query-card { cursor:default; }
 .query-card-editing { cursor:default; }
 .home-editor .query-card-editing :is(.query-title,.query-description) { display:block; width:100%; margin:0; padding:2px 4px; border:1px dashed color-mix(in srgb,var(--muted) 45%,transparent); border-radius:4px; background:transparent; color:inherit; font-family:inherit; resize:none; }
 .home-editor .query-card-editing .query-title { margin:-3px -5px 0; width:calc(100% + 10px); font-size:13px; font-weight:600; line-height:1.3; }
 .home-editor .query-card-editing .query-description { margin:3px -5px 0; width:calc(100% + 10px); min-height:0; font-size:11px; line-height:1.35; color:color-mix(in srgb,var(--muted) 80%,var(--ink)); }
-.home-editor .query-card-editing :is(.query-title,.query-description):hover { border-color:var(--muted); }
-.home-editor .query-card-editing :is(.query-title,.query-description):focus { outline:none; border-style:solid; border-color:var(--gold); background:color-mix(in srgb,var(--bg) 50%,transparent); }
+.home-editor .query-card-editing :is(.query-category,.query-action) { display:block; width:auto; min-width:0; margin:-2px -4px; padding:1px 3px; border:1px dashed color-mix(in srgb,var(--muted) 45%,transparent); border-radius:4px; background:transparent; color:var(--query-tone); font:inherit; font-weight:500; }
+.home-editor .query-card-editing .query-action { flex:1; }
+.home-editor .query-card-editing .query-category { position:relative; z-index:1; }
+.home-editor .query-card-editing .query-category option { color:var(--ink); background:var(--panel); }
+.home-editor .query-card-editing :is(.query-title,.query-description,.query-category,.query-action):hover { border-color:var(--muted); }
+.home-editor .query-card-editing :is(.query-title,.query-description,.query-category,.query-action):focus { outline:none; border-style:solid; border-color:var(--gold); background:color-mix(in srgb,var(--bg) 50%,transparent); }
 .home-editor label { display:block; margin:13px 0; font-size:12px; color:var(--muted); }
 .home-editor input,.home-editor textarea,.home-editor select { display:block; width:100%; box-sizing:border-box; padding:9px 10px; margin-top:5px; background-color:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:5px; font:14px "Avenir Next",Avenir,sans-serif; }
 .home-editor textarea { min-height:80px; resize:vertical; }

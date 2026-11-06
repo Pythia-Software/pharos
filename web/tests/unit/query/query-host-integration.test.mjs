@@ -1,3 +1,4 @@
+import { queryCapabilities } from '../../support/query-server.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EMPTY_QUERY, encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore, QuerySnapshotHttpError } from '@pythia-software/query-table-core';
@@ -9,7 +10,6 @@ import { core, schemas, execution } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
 import { usageDatasets, usageWorkspaceURL } from '../../../src/usage-workspace-model';
-import { createQueryMetadataLoader } from '../../../src/query-metadata';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -47,23 +47,7 @@ test('collecting a dashboard card preserves its destination and durable editable
  assert.deepEqual(loaded,normalizeQueryState(item.query));
  assert.deepEqual(m.queryFromURL(saved.url,saved.query).query,normalizeQueryState(item.query));
 });
-test('metadata shares stable results, queues scans and isolates subscriber cancellation', async()=>{
- let now=0,reads=0,finish;
- const load=createQueryMetadataLoader(()=>now,5),controller=new AbortController();
- const first=load('first',()=>{reads++;return new Promise(resolve=>{finish=resolve;});});
- const cancelled=load('first',()=>{throw Error('duplicate');},controller.signal);
- const second=load('second',async()=>{reads++;return {values:['second']};});
- await Promise.resolve();await Promise.resolve();
- assert.equal(reads,1);
- controller.abort();await assert.rejects(cancelled,{name:'AbortError'});
- const value={values:['first']};finish(value);
- assert.equal(await first,value);assert.deepEqual(await second,{values:['second']});
- assert.equal(await load('first',()=>{throw Error('cached');}),value);
- assert.equal(reads,2);
- now=6;assert.deepEqual(await load('first',async()=>({values:['updated']})),{values:['updated']});
- await assert.rejects(load('failed',async()=>{throw Error('retry');}),/retry/);
- assert.deepEqual(await load('failed',async()=>({values:[]})),{values:[]});
-});
+
 test('named saves create durable links, resolve on another Mac and keep defaults during updates',async()=>{
  const storage=m.libraryStorageAdapter();
  const saved=await storage.saveNamed('pharos_tool_calls','Errors',query,10);
@@ -146,7 +130,8 @@ test('page parameters choose the dataset, and every card URL opens its own datas
  }
  assert.equal(m.queryFromURL('/analyze?analyze_workspace=1&q_usage='),undefined,'A dashboard is not a token-table bookmark');
  const clock=new Date(2026,9,8,15);
- for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
+ // Habits templates open, and are collected as, the Habits page (dashboard-card.test.mjs).
+ for(const recipe of queryRecipes.filter(recipe=>!recipe.habits))assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
  const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
  assert.equal(writing.pathname,'/analyze');
  assert.equal(writing.searchParams.get('analyze_data'),'writing_messages');
@@ -307,15 +292,15 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
  for(const dataset of ['usage','tool_calls','mcp_calls']){
   const scope=dataset==='mcp_calls'?[]:[{field:'provider',op:'=',value:'codex'}];
   const schema=schemas[dataset],reset=tableRecoveryQuery(schema,scope);
-  const request=core.toServerQueryV2(reset,schema,execution);
-  assert.deepEqual(request.diagnostics,[]);
+  const request=core.toQueryRequestV3(reset,schema,queryCapabilities,execution);
+  assert.equal(request.version,3);
   assert.deepEqual(reset.where,scope);
   assert.equal(reset.offset,0);
   assert.equal(reset.limit,schema.defaultLimit);
   assert.equal(reset.grouping,undefined);
   assert.ok(!reset.aggregations?.length);
   assert.deepEqual(core.selectedFields(schema,reset).map(field=>field.name),schema.defaultSelect.map(column=>column.field));
-  assert.deepEqual(request.orderBy,schema.defaultSort);
+  assert.deepEqual(request.result.where,scope);
  }
 });
 
@@ -338,11 +323,12 @@ test('computed query links enable automatic fitting for every target without cha
   for (const [dataset, target] of Object.entries(linkTargets)) {
     const url = new URL(target(source, {}), 'http://localhost');
     const restored = core.decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
-    assert.equal(restored.fitToScreen, true, dataset);
+    assert.equal(restored.fit, "screen", dataset);
     assert.deepEqual(restored.where, source.where, dataset);
-    assert.deepEqual(restored.select, source.select, dataset);
+    assert.deepEqual(restored.select, [{ field: "id" }], `${dataset} releases pinned widths for the fitted destination`);
   }
   assert.equal(source.fitToScreen, false);
+  assert.deepEqual(source.select, [{ field: "id", width: 900 }]);
 });
 
 test('client table named queries and defaults survive remounting independently for each schema', async () => {

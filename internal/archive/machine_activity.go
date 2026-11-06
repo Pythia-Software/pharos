@@ -13,7 +13,9 @@ import (
 // are rebuilt rather than silently retaining an earlier function's results.
 var machineCallIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS tool_calls_operation_v1_page_idx ON tool_calls(machine_operation_key(tool_name,mcp_server,program,subcommand),started_at DESC,id DESC)`,
-	`CREATE INDEX IF NOT EXISTS tool_calls_activity_v1_page_idx ON tool_calls(machine_activity(tool_category,command_category,tool_name,mcp_server,program),started_at DESC,id DESC)`,
+	// v2 reads listings (ls, tree, du) as read.
+	`DROP INDEX IF EXISTS tool_calls_activity_v1_page_idx`,
+	`CREATE INDEX IF NOT EXISTS tool_calls_activity_v2_page_idx ON tool_calls(machine_activity(tool_category,command_category,tool_name,mcp_server,program),started_at DESC,id DESC)`,
 }
 
 // Families use the shell parser's program and named subcommand, not a regex
@@ -51,7 +53,7 @@ func machineActivity(toolCategory, commandCategory, tool, server, program string
 		return "setup"
 	case "vcs":
 		return "git"
-	case "read", "search":
+	case "read", "search", "list":
 		return "read"
 	case "file-write":
 		return "edit"

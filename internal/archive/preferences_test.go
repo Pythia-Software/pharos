@@ -24,7 +24,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || !strings.HasPrefix(response.Body.String(), "window.pharosPreferenceValues={};window.pharosPreviewScope=\"") {
 		t.Fatalf("empty library: %d %q", response.Code, response.Body.String())
 	}
-	body := `{"set":{"pharos-theme":"light","pharos-show-nav-button":true,"pharos-bookmarks-v1":[{"id":"a","url":"/x</script>","title":"T"}]}}`
+	body := `{"set":{"pharos-theme":"light","pharos-show-nav-button":true,"pharos-fingerprint-events":false,"pharos-bookmarks-v1":[{"id":"a","url":"/x</script>","title":"T"}]}}`
 	if response := preferencesCall(t, server, http.MethodPost, "/api/preferences", body); response.Code != http.StatusOK {
 		t.Fatalf("set: %d %s", response.Code, response.Body.String())
 	}
@@ -37,7 +37,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	if response.Header().Get("Content-Type") != "text/javascript; charset=utf-8" ||
 		!strings.HasPrefix(script, "window.pharosPreferenceValues={") ||
 		!strings.Contains(script, `"pharos-theme":"dark"`) || strings.Contains(script, "pharos-show-nav-button") ||
-		!strings.Contains(script, `"pharos-bookmarks-v1":[{`) {
+		!strings.Contains(script, `"pharos-bookmarks-v1":[{`) || !strings.Contains(script, `"pharos-fingerprint-events":false`) {
 		t.Fatalf("script: %q", script)
 	}
 	// The preview cache scope survives requests/restarts and separates catalogs
@@ -45,10 +45,25 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	previewScope := func(server *Server) string {
 		response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", "")
 		_, scope, ok := strings.Cut(response.Body.String(), "window.pharosPreviewScope=")
-		if !ok || len(strings.Trim(scope, "\";")) != 64 {
+		scope, _, _ = strings.Cut(scope, ";")
+		if !ok || len(strings.Trim(scope, "\"")) != 64 {
 			t.Fatalf("missing opaque preview scope: %s", response.Body.String())
 		}
 		return scope
+	}
+	// A configuration that turns Agent Experience on says so beside the
+	// preferences, which do not record it.
+	configured := func(server *Server) string {
+		_, flags, _ := strings.Cut(preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", "").Body.String(), "window.pharosConfiguredFlags=")
+		return flags
+	}
+	if flags := configured(server); flags != "{};" {
+		t.Fatalf("configured flags without agent_events_enabled: %q", flags)
+	}
+	enabled := config
+	enabled.AgentEvents.Enabled = true
+	if flags := configured(testServer(t, enabled, catalog)); flags != `{"`+agentEventsFlag+`":true};` {
+		t.Fatalf("configured flags with agent_events_enabled: %q", flags)
 	}
 	scope := previewScope(server)
 	if scope != previewScope(testServer(t, config, catalog)) {
@@ -59,7 +74,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 		t.Fatal("different libraries share preview snapshots")
 	}
 	values := libraryStatusCall(t, server, "/api/preferences")["values"].(map[string]any)
-	if values["pharos-theme"] != "dark" || len(values) != 2 {
+	if values["pharos-theme"] != "dark" || values["pharos-fingerprint-events"] != false || len(values) != 3 {
 		t.Fatalf("values: %#v", values)
 	}
 }

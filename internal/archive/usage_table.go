@@ -2,6 +2,8 @@ package archive
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"maps"
 	"regexp"
 	"strings"
@@ -17,7 +19,7 @@ var usageTokenFields = []string{
 }
 
 func queryFieldsFor(dataset string, names ...string) libraryFields {
-	if dataset != "usage" && dataset != "parallelism" {
+	if dataset != "usage" && dataset != "parallelism" && dataset != "rhythm" && dataset != "people_message_labels" {
 		return libraryFieldsFor(names...)
 	}
 	return fieldSet(names...)
@@ -166,6 +168,7 @@ func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribu
 			row["root_model_family"] = modelFamily(firstString(root["model"]))
 			row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
 			row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[session])
+			row["delegated_parent_session_id"] = nilIfEmpty(lineage.delegatedParents[session])
 			if depth, known := lineage.delegatedDepth[session]; known {
 				row["delegated_run_depth"] = depth
 				if depth > 0 {
@@ -301,12 +304,12 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []qt.Wher
 	if err != nil {
 		return nil, err
 	}
-	return selectUsageHours(daily, hourly, where)
+	return selectUsageHours(ctx, daily, hourly, where)
 }
 
 // selectUsageHours is the hourly rows of the daily rows matching where's row
 // filters, that match its timestamp and hour filters.
-func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
+func selectUsageHours(ctx context.Context, daily, hourly []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
 	var rowWhere, hourWhere []qt.WhereTerm
 	for _, term := range where {
 		timeOnly := true
@@ -325,7 +328,7 @@ func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]m
 			rowWhere = append(rowWhere, term)
 		}
 	}
-	matched, err := filterUsageRows(daily, rowWhere)
+	matched, err := filterUsageRows(ctx, daily, rowWhere)
 	if err != nil {
 		return nil, err
 	}
@@ -339,27 +342,53 @@ func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]m
 			kept = append(kept, row)
 		}
 	}
-	return filterUsageRows(kept, hourWhere)
+	return filterUsageRows(ctx, kept, hourWhere)
 }
 
 // filterUsageRows keeps the Usage rows matching where, with Query Table's
-// in-memory filter: the rows its SQLite adapter would select from a staged
-// copy of them.
-func filterUsageRows(rows []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
+// public source planner over a staged copy.
+func filterUsageRows(ctx context.Context, rows []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
 	if len(where) == 0 {
 		return rows, nil
 	}
-	filter, err := qt.CompileRowFilter(where, PharosUsageSchema(), qt.SQLiteOptions{})
+	// V3 owns typed NULL, datetime and boolean semantics. Stage only identity
+	// and filter inputs, then keep the original fact objects for hourly expansion.
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
 	}
-	kept := []map[string]any{}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	schema := PharosUsageSchema()
+	d := queryV3Dataset(schema)
+	fields := append(whereFields(where), schema.IDField)
+	d.SourceSQL, err = stageQueryRowsWithBudget(ctx, tx, "usage_filter", rows, schema, d.MaxPopulation, fields)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := d.SourcePlan(ctx, qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: qt.WireQuery{Select: []string{schema.IDField}, Where: where, Limit: 1}}, qt.PlanOptions{})
+	if err != nil {
+		return nil, err
+	}
+	matches, err := queryMapsContext(ctx, tx, plan.SQL, plan.Args...)
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) > d.MaxPopulation {
+		return nil, fmt.Errorf("usage filter exceeds source population budget")
+	}
+	alias := recordIdentityColumn(plan.Columns, schema.IDField)
+	ids := map[string]bool{}
+	for _, row := range matches {
+		ids[firstString(row[alias])] = true
+	}
+	kept := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		match, err := filter.Match(row)
-		if err != nil {
-			return nil, err
-		}
-		if match {
+		if ids[firstString(row[schema.IDField])] {
 			kept = append(kept, row)
 		}
 	}

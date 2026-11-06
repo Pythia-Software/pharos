@@ -1,59 +1,21 @@
 // DOM-free interaction rules shared by the composer and its unit tests.
-// Interleave subjects so each carousel page offers different ways into the
-// archive. {scope} is optional; comparisons deliberately stay library-wide.
-const askIdeaCatalog = [
-  {topic:'prompting',text:'What instructions am I repeating{scope}?'},
-  {topic:'errors',text:'Which errors recur across conversations{scope}?'},
-  {topic:'usage',text:'Where did most tokens go this week{scope}?'},
-  {topic:'memory',text:'Find past conversations that explain a design decision{scope}.'},
-  {topic:'tools',text:'Which commands keep failing{scope}?'},
-  {topic:'models',text:'How has my mix of models changed this month?'},
-  {topic:'prompting',text:'What did I have to correct more than once{scope}?'},
-  {topic:'context',text:'Which tool outputs fill the most context{scope}?'},
-  {topic:'delegation',text:'How much token usage comes from subagents{scope}?'},
-  {topic:'memory',text:'Find an earlier fix for a recurring test failure{scope}.'},
-  {topic:'tools',text:'Which commands account for the most recorded tool time{scope}?'},
-  {topic:'cost',text:'How does the API cost equivalent vary by model?'},
-  {topic:'prompting',text:'What could I turn into reusable project instructions{scope}?'},
-  {topic:'errors',text:'Which files have the most failed edits{scope}?'},
-  {topic:'usage',text:'Which repositories use the most tokens?'},
-  {topic:'memory',text:'What approaches have I already tried for flaky tests{scope}?'},
-  {topic:'context',text:'Which tool outputs get truncated{scope}?'},
-  {topic:'activity',text:'When do my agent sessions overlap the most?'},
-  {topic:'prompting',text:'Where am I writing the most explanations{scope}?'},
-  {topic:'skills',text:'Which skills have recorded invocations or loads{scope}?'},
-  {topic:'usage',text:'How has my cache reuse changed this month?'},
-  {topic:'memory',text:'Find conversations where I revisited the same decision{scope}.'},
-  {topic:'errors',text:'Which test commands fail most often{scope}?'},
-  {topic:'models',text:'Which models have the most recorded tool errors?'},
-  {topic:'findings',text:'Which recurring problems have findings I could act on{scope}?'},
-  {topic:'tools',text:'Which files do agents read repeatedly{scope}?'},
-  {topic:'cost',text:'Which conversations have the highest API cost equivalent{scope}?'},
-  {topic:'memory',text:'Find my longest conversations{scope}.'},
-  {topic:'context',text:'Which conversations have the most compactions{scope}?'},
-  {topic:'activity',text:'What changed in my work this week?'},
-  {topic:'prompting',text:'Find examples where a clearer prompt helped me change course{scope}.'},
-  {topic:'skills',text:'Which skill loads have recorded errors{scope}?'},
-  {topic:'usage',text:'How do input and output tokens compare across models?'},
-  {topic:'memory',text:'What have I already learned about slow builds{scope}?'},
-  {topic:'tools',text:'Which searches am I repeating{scope}?'},
-  {topic:'cost',text:'How has my estimated carbon footprint changed this month?'},
-  {topic:'findings',text:'Which findings are being watched for improvement{scope}?'},
-  {topic:'tools',text:'Which MCP methods do I use most{scope}?'},
-  {topic:'activity',text:'How does my activity differ across machines?'},
-  {topic:'memory',text:'Find work where I switched approaches after a failure{scope}.'},
-  {topic:'tools',text:'Which documentation hosts do agents consult most{scope}?'},
-  {topic:'usage',text:'Which days had unusually high token usage this month?'},
-];
-function askPromptSuggestions({repositories=[],variation=0}={}) {
-  const names=[...new Set(repositories.filter(name=>typeof name==='string'&&name.trim()))];
-  let eligible=0,scoped=0;
-  return askIdeaCatalog.map(idea=>{
-    // Keep a mixture of broad and scoped questions, even with many repos.
-    const qualify=idea.text.includes('{scope}')&&eligible++%2===1&&names.length>1;
-    const repository=qualify?names[(scoped++ + variation)%names.length]:'';
-    return idea.text.replace('{scope}',qualify?' in the “'+repository+'” repository':'');
-  });
+// The library chooses suggestions (GET /api/ask/suggestions,
+// docs/ask-suggestions.md); keep only well-formed, distinct questions.
+function askSuggestionItems(list) {
+  const seen=new Set();
+  return (Array.isArray(list)?list:[]).flatMap(item=>{
+    const text=typeof item?.text==='string'?item.text.trim():'';
+    if(typeof item?.id!=='string'||!text||seen.has(text))return [];
+    seen.add(text);
+    return [{id:item.id,text}];
+  }).slice(0,12);
+}
+
+// While the first suggestions are still being chosen, ask again after 20 s,
+// doubling up to every five minutes: a busy library can take longer than any
+// fixed number of tries.
+function askSuggestionRetryDelay(attempt) {
+  return Math.min(300000,20000*2**Math.max(0,attempt));
 }
 
 async function askReadResponse(response, onProgress) {
@@ -147,9 +109,11 @@ function askOmittedNote(omitted = 0) {
   if (!omitted) return '';
   return omitted === 1 ? 'One suggested view could not be opened, so it is left out.' : `${omitted} suggested views could not be opened, so they are left out.`;
 }
+// Home and the full-screen page show the chat inline and name it in ask_chat.
+function askChatPage(pathname) { return ['/', '/home', '/ask'].includes(pathname); }
 function askChatURL(href, id) {
   const url = new URL(href);
-  if (!['/', '/home'].includes(url.pathname)) return url.href;
+  if (!askChatPage(url.pathname)) return url.href;
   if (id) url.searchParams.set('ask_chat', id);
   else url.searchParams.delete('ask_chat');
   return url.href;
@@ -157,7 +121,16 @@ function askChatURL(href, id) {
 // History links must work independently of the page hosting the overlay.
 function askHistoryURL(href, id) {
   const url = new URL(href);
-  return askChatURL(['/', '/home'].includes(url.pathname) ? url.href : new URL('/', url).href, id);
+  return askChatURL(askChatPage(url.pathname) ? url.href : new URL('/', url).href, id);
+}
+function askFullscreenURL(href, id) { return askChatURL(new URL('/ask', href).href, id); }
+// Leaving full screen returns to the page it was opened from: Home shows the
+// chat inline, and any other page reopens it in the dialog.
+function askFullscreenExit(href, from, id) {
+  let target = new URL('/', href);
+  try { const url = new URL(from, href); if (typeof from === 'string' && url.origin === target.origin && url.pathname !== '/ask') target = url; } catch {}
+  const home = ['/', '/home'].includes(target.pathname);
+  return {href: home ? askChatURL(target.href, id) : target.href, presentation: home ? 'home' : 'modal'};
 }
 // Search results are matched against complete chats on the server. Their
 // summaries cannot be searched again without dropping later-message matches.
@@ -204,10 +177,11 @@ function askRestorePresentation(href, saved) {
   const url = new URL(href), id = url.searchParams.get('ask_chat');
   if (id && id !== saved.id) return null;
   if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
-  return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
+  if (saved.presentation === 'page' && url.pathname !== '/ask') return null;
+  return ['home', 'modal', 'floating', 'dismissed', 'page'].includes(saved.presentation) ? saved.presentation : null;
 }
 function askShowBrowseHint({pending=false,browsing=false,presentation='home',hint=true}) {
-  return pending&&hint&&!browsing&&['home','modal'].includes(presentation);
+  return pending&&hint&&!browsing&&['home','modal','page'].includes(presentation);
 }
 // Dismissing the browse hint or choosing picture in picture skips the hint for
 // the next questions, so only people who never browse keep seeing it.

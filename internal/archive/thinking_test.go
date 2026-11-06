@@ -39,6 +39,7 @@ func seedThinking(t *testing.T, c *Catalog) {
 		}
 		exec(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,input_tokens,output_tokens,reasoning_output_tokens) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, fmt.Sprint("request-", i), "conv-0", "session-0", fmt.Sprint("response-", i), i, stamp(at), model, "high", 1000+i*100, 100, 50)
 	}
+	exec(`UPDATE model_requests SET speed=CASE id WHEN 'request-1' THEN 'fast' ELSE 'standard' END,service_tier=CASE id WHEN 'request-1' THEN 'priority' WHEN 'request-8' THEN 'default' END,speed_source=CASE WHEN id IN ('request-1','request-8') THEN 'service_tier' ELSE 'assumed_standard' END`)
 	anchors := map[int]float64{1: 10, 2: 35, 3: 30, 4: 70, 5: 101, 6: 119.95, 7: 150, 8: 1000, 9: 1690, 10: 1799.9}
 	for i, at := range anchors {
 		stream := "session-0"
@@ -82,6 +83,9 @@ func TestThinkingProjection(t *testing.T) {
 	}
 	if *byID["request-1"].Gap != 10 || *byID["request-8"].Gap != 600 || byID["request-10"].Gap == nil || *byID["request-10"].Gap != .1 {
 		t.Fatal("exact boundary durations", byID)
+	}
+	if byID["request-1"].Speed != "fast" || byID["request-8"].Speed != "standard" || byID["request-9"].Speed != "standard" {
+		t.Fatal("speed must retain known modes and missing evidence", byID)
 	}
 	// Seeded rows are marked and derived by the query; stored rows must match.
 	if pending, err := c.requestTimingsPending(t.Context()); err != nil || !pending {
@@ -154,6 +158,48 @@ func TestThinkingProjection(t *testing.T) {
 	rows, err := thinkingRequestDataset.Rows(context.Background(), c.reader(), querytable.Query{Select: []string{"id", "gap_seconds"}, Limit: 20}, schema)
 	if err != nil || rows.Total != 12 {
 		t.Fatal("native query and dashboard population differ", rows, err)
+	}
+
+	for _, field := range []string{"service_tier", "speed_source"} {
+		selected, err := thinkingRequestDataset.Rows(t.Context(), c.reader(), querytable.Query{Select: []string{"id", "speed", field}, Where: []querytable.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}, Limit: 20}, schema)
+		want := map[string]string{"service_tier": "priority", "speed_source": "service_tier"}[field]
+		if err != nil || selected.Total != 1 || selected.Rows[0][field] != want {
+			t.Fatalf("native inference field %s: %+v %v", field, selected, err)
+		}
+	}
+	for _, by := range []string{"speed", "model_speed", "model_effort_speed"} {
+		selected, err := thinkingRequestDataset.Rows(t.Context(), c.reader(), querytable.Query{Select: []string{"id", "speed", by}, Where: []querytable.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}, Limit: 20}, schema)
+		if err != nil || selected.Total != 1 || selected.Rows[0]["speed"] != "fast" {
+			t.Fatalf("native speed breakdown %s: %+v %v", by, selected, err)
+		}
+		opts, err := readThinkingOptions(url.Values{"groupBy": {by}, "overview": {"1"}}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		grouped, err := aggregateThinking(t.Context(), records, opts)
+		if err != nil || grouped.Retained != 12 || len(grouped.Groups) < 2 {
+			t.Fatalf("speed groups %s: %+v %v", by, grouped, err)
+		}
+	}
+	v3Schema, err := sqliteQuerySchema("model_requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metric := metricRequest(qt.AggSpec{ID: "speeds", Op: "count", GroupBy: []string{"speed", "speed_source"}})
+	resultBySpeed, err := server.executeQueryFixture(t.Context(), "model_requests", nil, v3Schema, nil, &metric)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buckets := resultBySpeed.Metrics.Metrics[0].Buckets
+	if len(buckets) != 3 {
+		t.Fatalf("speed and classification source must group independently: %+v", buckets)
+	}
+	total := int64(0)
+	for _, bucket := range buckets {
+		total += integer(bucket.Value)
+	}
+	if total != 12 {
+		t.Fatalf("native speed grouping lost requests: %+v", buckets)
 	}
 	validation, err := c.thinkingValidation(context.Background(), thinkingOptions{}, records)
 	if err != nil {
@@ -517,5 +563,29 @@ func TestThinkingFitCacheIsolation(t *testing.T) {
 	}
 	if fits != 4 {
 		t.Fatal("fit cohorts must be bounded and distinguish updated inputs", fits)
+	}
+}
+
+func TestThinkingSpeedMigration(t *testing.T) {
+	c, _ := testCatalog(t)
+	seedThinking(t, c)
+	if err := c.refreshRequestTimings(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the pre-speed stored projection, including its covering index.
+	if _, err := c.DB.Exec(`DROP INDEX model_request_timings_requested_idx;
+ ALTER TABLE model_request_timings DROP COLUMN speed;
+ UPDATE meta SET value='timings-v1' WHERE key='model_request_timings_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureRequestTimings(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.refreshRequestTimings(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var speed string
+	if err := c.DB.QueryRow("SELECT speed FROM model_request_timings WHERE id='request-1'").Scan(&speed); err != nil || speed != "fast" {
+		t.Fatalf("migrated speed %q: %v", speed, err)
 	}
 }

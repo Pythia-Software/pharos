@@ -36,7 +36,9 @@ var delegationMetrics = []delegationMetricSpec{
 	{"tokens", "Tokens", "tokens", "Reconciled session usage. Cache is a subset of input; reasoning is a subset of output."},
 	{"cost", "API cost", "usd", "API-rate estimate on the date of use, not billing. Partial values are lower bounds."},
 	{"calls", "Tool calls", "count", "Distinct retained tool invocations."}, {"errors", "Errors", "count", "Reported tool failures; not the outcome of the agent."},
+	{"events", "Agent events", "count", "Retained agent events at the display probability threshold, attributed through session message membership. Unprocessed messages may contain additional events."},
 	{"files", "Files Edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
+	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
 	{"messages", "Messages", "count", "Retained session message membership."}, {"requests", "Requests", "count", "Distinct retained model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
 	{"total", "Session spans", "ms", "Sum of session evidence envelopes. Parallel and inactive time accumulate."},
@@ -98,6 +100,9 @@ type delegationNode struct {
 	fileCalls      int
 	fileKnown      int
 	filesPartial   bool
+	readFiles      map[string]bool
+	readCalls      int
+	readKnown      int
 }
 type delegationSpan struct {
 	Start float64 `json:"start"`
@@ -353,7 +358,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 				}
 			}
 		}
-		for _, key := range []string{"calls", "errors", "messages", "requests", "turns", "toolSum"} {
+		for _, key := range []string{"calls", "errors", "messages", "events", "requests", "turns", "toolSum"} {
 			n.Self[key] = delegationNumber(0, "observed", 0, 0)
 		}
 		s.Nodes = append(s.Nodes, n)
@@ -527,6 +532,24 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			bump(n, "toolSum", v)
 		}
 		category, _ := toolCategory(name, "tool_call")
+		// Listing tools share the read category and retain directory paths.
+		// Exclude them from both path counts and read-coverage accounting.
+		listing := command.String == "list"
+		switch strings.ToLower(name) {
+		case "ls", "list_dir", "list_directory":
+			listing = true
+		}
+		if !listing && (cat == "read" || category == "read" || command.String == "read") && status != "error" {
+			n.readCalls++
+			key := delegationFileKey(file.String, absolute.String, repoPath.String, repoID.String, cid)
+			if status == "ok" && key != "" {
+				if n.readFiles == nil {
+					n.readFiles = map[string]bool{}
+				}
+				n.readFiles[key] = true
+				n.readKnown++
+			}
+		}
 		if (cat == "edit" || cat == "write" || category == "edit") && status != "error" {
 			n.fileCalls++
 			key := delegationFileKey(file.String, absolute.String, repoPath.String, repoID.String, cid)
@@ -615,6 +638,45 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		bump(n, "turns", float64(turns))
 		point(n, delegationTime(start.String))
 		point(n, delegationTime(end.String))
+	}
+	// Count the same retained events shown by the reader and timeline. Stream
+	// only identities; alias memberships must not count an event twice.
+	events, err := tx.QueryContext(ctx, `SELECT e.id,e.conversation_id,am.agent_session_id
+ FROM conversations c JOIN agent_events e ON e.conversation_id=c.id
+ JOIN messages m ON m.id=e.message_id
+ LEFT JOIN agent_session_messages am ON am.message_id=m.id
+ WHERE c.workspace_id=? AND e.probability>=?`, workspace, agentEventThreshold)
+	if err != nil {
+		return nil, err
+	}
+	seenEvents := map[string]map[int64]bool{}
+	for events.Next() {
+		eventCount++
+		if eventCount > 500000 {
+			events.Close()
+			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
+		}
+		var id int64
+		var cid string
+		var sid sql.NullString
+		if err = events.Scan(&id, &cid, &sid); err != nil {
+			events.Close()
+			return nil, err
+		}
+		if n := owner(sid.String, cid); n != nil {
+			if seenEvents[n.ID] == nil {
+				seenEvents[n.ID] = map[int64]bool{}
+			}
+			if !seenEvents[n.ID][id] {
+				bump(n, "events", 1)
+				seenEvents[n.ID][id] = true
+			}
+		}
+	}
+	err = events.Err()
+	events.Close()
+	if err != nil {
+		return nil, err
 	}
 	book, err := c.loadPriceBookFrom(ctx, tx)
 	if err != nil {
@@ -710,6 +772,15 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			n.Self["files"] = delegationNumber(float64(len(n.editedFiles)), quality, n.fileKnown, n.fileCalls)
 		} else {
 			n.Self["files"] = delegationMetric{Quality: "unknown", Total: n.fileCalls}
+		}
+		if n.readCalls == 0 || n.readKnown > 0 {
+			quality := "observed"
+			if n.readKnown < n.readCalls {
+				quality = "partial"
+			}
+			n.Self["filesRead"] = delegationNumber(float64(len(n.readFiles)), quality, n.readKnown, n.readCalls)
+		} else {
+			n.Self["filesRead"] = delegationMetric{Quality: "unknown", Total: n.readCalls}
 		}
 		n.Self["episodes"] = delegationNumber(float64(len(n.episodes)), "inferred", len(n.episodes), len(n.episodes))
 		if n.ExternalChild != nil && n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
@@ -886,10 +957,14 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 			quality = "partial"
 		}
 		switch spec.ID {
-		case "files":
+		case "files", "filesRead":
 			files := map[string]bool{}
 			for _, n := range nodes {
-				for key := range n.editedFiles {
+				paths := n.editedFiles
+				if spec.ID == "filesRead" {
+					paths = n.readFiles
+				}
+				for key := range paths {
 					files[key] = true
 				}
 			}
@@ -924,10 +999,12 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 	}
 	return result
 }
-func delegationCategory(name, cat, command string) string {
+
+// delegationCategory groups a call by its tool, or for a shell call by what
+// its primary command does, so "cat" and "rg" read and "git" is Git.
+func delegationCategory(name, cat, commandCategory string) string {
 	name = strings.ToLower(name)
 	cat = strings.ToLower(cat)
-	command = strings.ToLower(command)
 	switch {
 	case name == "wait_agent" || name == "wait" || name == "taskoutput":
 		return "wait"
@@ -935,13 +1012,14 @@ func delegationCategory(name, cat, command string) string {
 		return "poll"
 	case cat == "agent" || strings.Contains(name, "delegate") || strings.Contains(name, "spawn") || name == "task":
 		return "delegate"
-	case cat == "read" || cat == "search" || strings.Contains(name, "read") || strings.Contains(name, "search") || strings.Contains(name, "glob"):
+	case cat == "read" || cat == "search" || commandCategory == "read" || commandCategory == "search" || commandCategory == "list" ||
+		strings.Contains(name, "read") || strings.Contains(name, "search") || strings.Contains(name, "glob"):
 		return "read"
-	case cat == "edit" || cat == "write" || strings.Contains(name, "patch") || strings.Contains(name, "write") || name == "edit":
+	case cat == "edit" || cat == "write" || commandCategory == "file-write" || strings.Contains(name, "patch") || strings.Contains(name, "write") || name == "edit":
 		return "write"
-	case strings.Contains(command, "git") || strings.Contains(name, "git"):
+	case commandCategory == "vcs" || strings.Contains(name, "git"):
 		return "git"
-	case cat == "network" || strings.Contains(name, "web") || strings.Contains(name, "fetch"):
+	case cat == "network" || commandCategory == "network" || strings.Contains(name, "web") || strings.Contains(name, "fetch"):
 		return "network"
 	case cat == "shell" || cat == "command" || strings.Contains(name, "exec") || name == "bash" || strings.Contains(name, "terminal"):
 		return "run"
@@ -1182,15 +1260,18 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 }
 
 type delegationMark struct {
-	Start     float64 `json:"start"`
-	End       float64 `json:"end"`
-	EndKnown  bool    `json:"end_known"`
-	Category  string  `json:"category"`
-	Count     int     `json:"count"`
-	Error     bool    `json:"error"`
-	ToolID    string  `json:"tool_id,omitempty"`
-	MessageID string  `json:"message_id,omitempty"`
-	Name      string  `json:"name"`
+	Start            float64 `json:"start"`
+	End              float64 `json:"end"`
+	EndKnown         bool    `json:"end_known"`
+	Category         string  `json:"category"`
+	Count            int     `json:"count"`
+	Error            bool    `json:"error"`
+	ToolID           string  `json:"tool_id,omitempty"`
+	MessageID        string  `json:"message_id,omitempty"`
+	Name             string  `json:"name"`
+	Preview          string  `json:"preview,omitempty"`
+	PreviewTruncated bool    `json:"preview_truncated,omitempty"`
+	Status           string  `json:"status,omitempty"`
 }
 
 func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request, snapshot *delegationSnapshot) {
@@ -1230,6 +1311,16 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	lanes := []map[string]any{}
+	var messageLanes map[string]map[string]any
+	var taxonomy []map[string]any
+	if q.Get("labels") == "1" {
+		var err error
+		messageLanes, taxonomy, err = s.Catalog.delegationTimelineMessages(r.Context(), snapshot, ids, start, end)
+		if err != nil {
+			writeError(w, err, 500)
+			return
+		}
+	}
 	width := min(1600, max(100, queryInt(r, "width", 900)))
 	bucket := (end - start) / float64(width/4)
 	for _, id := range ids {
@@ -1259,7 +1350,7 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 			knots = append(knots, *t.Start, stop)
 			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name}
 			// Small neighboring calls share a mark. Errors retain their own reference.
-			if stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error {
+			if q.Get("labels") != "1" && stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error {
 				key := fmt.Sprintf("%s:%d", t.Category, int((*t.Start-start)/bucket))
 				if existing := groups[key]; existing != nil {
 					existing.End = max(existing.End, stop)
@@ -1287,6 +1378,12 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		if truncated {
 			marks = marks[:2400]
 		}
+		if q.Get("labels") == "1" {
+			if err := s.Catalog.delegationToolPreviews(r.Context(), n.WorkspaceID, marks); err != nil {
+				writeError(w, err, 500)
+				return
+			}
+		}
 		sort.Float64s(knots)
 		phases := []delegationSpan{}
 		for i := 1; i < len(knots); i++ {
@@ -1300,7 +1397,15 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 				phases = append(phases, delegationSpan{a, b})
 			}
 		}
-		lanes = append(lanes, map[string]any{"session": n.ID, "marks": marks, "model_inferred": phases, "episodes": n.episodes, "truncated": truncated})
+		lane := map[string]any{"session": n.ID, "marks": marks, "model_inferred": phases, "episodes": n.episodes, "truncated": truncated}
+		for key, value := range messageLanes[n.ID] {
+			lane[key] = value
+		}
+		lanes = append(lanes, lane)
 	}
-	writeJSON(w, map[string]any{"snapshot": snapshot.ID, "start": start, "end": end, "lanes": lanes, "inference": "Model/orchestration between nearby retained observations (at most 90 seconds); not measured processing or streaming. Blank time is unclassified."}, 200)
+	body := map[string]any{"snapshot": snapshot.ID, "start": start, "end": end, "lanes": lanes, "inference": "Model/orchestration between nearby retained observations (at most 90 seconds); not measured processing or streaming. Blank time is unclassified."}
+	if messageLanes != nil {
+		body["taxonomy"] = taxonomy
+	}
+	writeJSON(w, body, 200)
 }

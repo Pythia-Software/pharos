@@ -521,7 +521,7 @@ func TestParallelismSettingsAndHTTP(t *testing.T) {
 	for _, operation := range []string{"rows-v2", "query-v3"} {
 		body := `{"version":2,"profile":"qt-sqlite-v1","select":["id","counting","gap_minutes"],"limit":1}`
 		if operation == "query-v3" {
-			body = `{"version":3,"profile":"qt-sqlite-v1","rows":true,"result":{"select":["id","counting","gap_minutes"],"limit":1}}`
+			body = fmt.Sprintf(`{"version":3,"profile":"qt-sqlite-v1","now":%d,"rows":true,"source":{},"result":{"select":["id","counting","gap_minutes"],"limit":1}}`, time.Now().UnixMilli())
 		}
 		response := queryExplorationCall(server, config.APIToken, http.MethodPost, "/api/query/parallelism/"+operation+"?"+url.Values{"parallelism_settings": {`{"gap":15,"counting":"agent"}`}}.Encode(), body)
 		if response.Code != 200 || !strings.Contains(response.Body.String(), `"agent"`) {

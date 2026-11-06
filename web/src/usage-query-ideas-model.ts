@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
@@ -40,6 +41,8 @@ const skills = [count("idea_evidence", "Evidence records"), distinct("conversati
 const mcp = [sum("call_count", "Calls"), sum("error_count", "Failed calls"), ratio("idea_failure_rate", "SUM([error_count])/NULLIF(SUM([call_count]),0)", "Failure rate", true), sum("estimated_output_tokens", "Estimated output tokens"), sum("truncated_count", "Truncated responses"), duration("duration_ms", "Server time")];
 // Counting method and turn-gap assumptions must stay separate. Unit hours are
 // additive; elapsed occupancy is repeated across units and must not be summed.
+// Rhythm: wall hours add up within one actor; messages and turns per actor.
+const rhythm = [sum("elapsed_hours", "Wall hours"), sum("active_hours", "Active hours"), sum("messages", "Typed messages"), sum("turns", "Turns started"), distinct("unit_id", "Conversations")];
 const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id", "Units"), { id: "idea_peak", op: "max" as const, field: "level", label: "Peak recorded concurrency" }];
 
 // Agent events: each row is one event; agent_event_messages: one row per message read.
@@ -47,6 +50,8 @@ const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
+  people_message_labels:[], message_labels:[],
+  compactions: [idea("compactions", "triggers", "Compare", "Compactions by trigger and service", "Recorded boundary events by trigger and service", ["trigger", "provider"], [count("idea_compactions", "Compactions")])],
   model_requests: [idea("model_requests","models","Compare","Timing coverage by model","Retained requests and usable post-tool gaps by model",["model"],[count("idea_requests","Retained requests"),count("idea_timed","Usable gaps","gap_seconds")])],
   tl1_attempts: [],
   usage: [...usageGroupPresets.map(preset => ({ preset, section: "Group by" })), ...usageComparisonPresets.map(preset => ({ preset, section: "Compare" }))].map(({ preset, section }) => finish("usage", { ...preset, id: `usage:${preset.label}`, section })),
@@ -100,6 +105,11 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("mcp_calls", "output", "Compare", "Response size and truncation", "Compare estimated output, bytes and truncated responses for each Pharos tool", ["tool_name"], [sum("estimated_output_tokens", "Estimated output tokens"), sum("response_bytes", "Response bytes"), ...mcp.filter(column => column.field !== "estimated_output_tokens")]),
     idea("mcp_calls", "sources", "Compare", "Requested archive sources", "Compare explicit source filters from retained Pharos request arguments", ["query_source"], mcp),
   ],
+  rhythm: [
+    idea("rhythm", "actors", "Compare", "Time by actor", "Compare your engaged hours with your agents' time with you, unattended and automated", ["actor"], rhythm),
+    idea("rhythm", "weeks", "Over time", "Weekly rhythm", "Wall hours per week for you and each kind of agent time", ["week", "actor"], rhythm, "idea_elapsed_hours", true),
+    idea("rhythm", "automations", "Compare", "Automations", "Turns and agent hours each schedule, script or orchestration started", ["initiator", "automation"], rhythm, "idea_turns"),
+  ],
   parallelism: [
     idea("parallelism", "repos", "Compare", "Activity by repository", "Compare additive unit hours, keeping counting and gap assumptions separate", ["counting", "gap_minutes", "repository_name"], occupancy),
     idea("parallelism", "weeks", "Over time", "Weekly activity", "Agent/workspace hours per week with each counting method and gap separate", ["week", "counting", "gap_minutes"], occupancy, "idea_unit_hours", true),
@@ -122,7 +132,7 @@ export function queryIdeaPatch(idea: QueryIdea) {
   const patch = usageTablePresetPatch(idea);
   return { ...patch, id: idea.id, owns: [...patch.owns, "metrics" as const], query: { ...patch.query, aggregations: idea.metrics ?? [] } };
 }
-export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return { ...applyPatch(query, queryIdeaPatch(idea)), fitToScreen: true }; }
+export function applyQueryIdea(query: QueryState, idea: QueryIdea): QueryState { return fitQueryToScreen(applyPatch(query, queryIdeaPatch(idea))); }
 export function queryIdeaMatches(query: QueryState, idea: QueryIdea): boolean {
   return Boolean(query.grouping && matchPatch({ ...query, where: [] }, { ...queryIdeaPatch(idea), owns: ["grouping"] }).status === "active");
 }

@@ -24,7 +24,7 @@ type conductorAdapter struct {
 	selected map[string]bool
 }
 
-const conductorExtractor = "conductor-v13-origins"
+const conductorExtractor = "conductor-v14-inference-speed"
 
 // conductorPartExtractor versions the parser for per-session part states
 // (source_item_states). It changes separately from conductorExtractor, which
@@ -506,7 +506,11 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	delegated := map[string]bool{}
 	currentModel := firstString(session["model"])
 	currentEffort := conductorSessionEffort(session)
+	currentInference, _ := inferenceSetting(session)
 	for index, message := range rows {
+		if config, found := inferenceSetting(message); found {
+			currentInference = config
+		}
 		field, text := "none", ""
 		for _, candidate := range []string{"content", "full_message", "text"} {
 			if mcols[candidate] {
@@ -550,6 +554,13 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			var envelope map[string]any
 			if json.Unmarshal([]byte(messageText(message[candidate])), &envelope) == nil {
 				currentEffort = updatedEffort(currentEffort, envelope, mapValue(envelope["payload"]), mapValue(envelope["message"]))
+				if firstString(envelope["type"]) == "turn_context" {
+					payload := mapValue(envelope["payload"])
+					if payload == nil {
+						payload = envelope
+					}
+					currentInference, _ = inferenceSetting(payload)
+				}
 			}
 		}
 		parsed := conductorEvents(baseID, role, text, createdAt, locator, delegated)
@@ -569,6 +580,9 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			if alternative != text && json.Unmarshal([]byte(alternative), &envelope) == nil && hasUsageEvidence(envelope) {
 				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, Model: currentModel, Effort: currentEffort, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
 			}
+		}
+		for i := range parsed {
+			parsed[i] = withInference(parsed[i], currentInference)
 		}
 		messages = append(messages, parsed...)
 	}
