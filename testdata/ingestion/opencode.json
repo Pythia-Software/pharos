@@ -272,7 +272,7 @@
               "NativeID": "result:call_3",
               "Role": "tool",
               "Kind": "delegation_result",
-              "Text": "{\"content\":[{\"text\":\"\\u003csubagent sessionID=\\\"ses_child\\\" state=\\\"completed\\\"\\u003eLooks fine.\\u003c/subagent\\u003e\",\"type\":\"text\"}],\"details\":{\"duration_ms\":4900},\"is_error\":false,\"tool\":\"subagent\"}",
+              "Text": "{\"content\":[{\"text\":\"\\u003csubagent sessionID=\\\"ses_child\\\" state=\\\"completed\\\"\\u003eLooks fine.\\u003c/subagent\\u003e\",\"type\":\"text\"}],\"details\":{\"agent_id\":\"ses_child\",\"duration_ms\":4900},\"is_error\":false,\"tool\":\"subagent\"}",
               "Model": "big-pickle",
               "Effort": "",
               "CreatedAt": "2026-11-03T15:33:29.000Z",

@@ -306,6 +306,22 @@
               "Selected": true
             },
             {
+              "NativeID": "e0000000-0000-4000-8000-000000000009/compaction:8",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"summary\":\"Earlier work summary\",\"type\":\"compaction\"}",
+              "Model": "claude-sonnet-4-5",
+              "Effort": "",
+              "CreatedAt": "2026-11-04T16:17:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/Zed/threads/threads.db#d0000000-0000-4000-8000-000000000001:e0000000-0000-4000-8000-000000000009/compaction:8",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
               "NativeID": "usage:thread",
               "Role": "system",
               "Kind": "metadata",
@@ -443,6 +459,22 @@
             },
             {
               "NativeID": "message:1:1",
+              "Role": "assistant",
+              "Kind": "metadata",
+              "Text": "{\"reason\":\"redacted\",\"type\":\"reasoning_unavailable\"}",
+              "Model": "",
+              "Effort": "",
+              "CreatedAt": "2026-11-04T16:17:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/Zed/threads/threads.db#d0000000-0000-4000-8000-000000000003:message:1",
+              "RawText": "{\"id\":\"message:1\",\"type\":\"zed_message\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "message:1:2",
               "Role": "assistant",
               "Kind": "message",
               "Text": "It parses flags.",
