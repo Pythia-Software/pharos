@@ -165,6 +165,52 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a pass reads one copy, and leaves none however it ends", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "shared.db")
+		sqliteNotes(t, path, "WAL")
+		sqliteHolder(t, path, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
+		copied := 0
+		override(t, &sqliteCopyHook, func(string) { copied++ })
+		pass, cancel := context.WithCancel(context.Background())
+		ctx, end := withSQLiteCopyShare(pass)
+		for range 2 {
+			db, err := openSourceSQLite(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := sqliteBodies(t, db); got != "first,second" {
+				t.Fatalf("read %q", got)
+			}
+			db.Close()
+		}
+		if copied != 1 {
+			t.Fatalf("one pass made %d copies", copied)
+		}
+		// A cancelled open fails, and its pass's copy goes with it.
+		cancel()
+		if db, err := openSourceSQLite(ctx, path); err == nil {
+			db.Close()
+			t.Fatal("a cancelled open read the pass's copy")
+		}
+		assertNoCopies(t, copies)
+		end()
+		// Once the pass ends, its context copies as outside one.
+		db, err := openSourceSQLite(context.WithoutCancel(ctx), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		assertNoCopies(t, copies)
+		// A pass that ends while an open is copying leaves the copy to its
+		// database.
+		ctx, end = withSQLiteCopyShare(context.Background())
+		override(t, &sqliteCopyHook, func(string) { end() })
+		if db, err = openSourceSQLite(ctx, path); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		assertNoCopies(t, copies)
+	})
 	t.Run("a symlinked database is copied with the WAL beside the file it names", func(t *testing.T) {
 		real := filepath.Join(t.TempDir(), "real.db")
 		sqliteNotes(t, real, "WAL")

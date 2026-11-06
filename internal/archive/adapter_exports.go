@@ -254,6 +254,22 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	// belongs to, and its tool; replies marks the replies.
 	read, calls, tools, kinds := map[string]string{}, map[string]string{}, map[string]string{}, map[string]string{}
 	replies := map[string]bool{}
+	// onward is the reply a reply runs on into: of the tool's replies
+	// after it, the one on the current branch, else the first. Another is
+	// an alternative to it, which no branch holds both of.
+	onward := func(parent string) string {
+		first := ""
+		for _, child := range children[parent] {
+			if author := mapValue(mapValue(conversation.Mapping[child].Message)["author"]); firstString(author["role"]) != "tool" {
+				continue
+			}
+			if selected[child] {
+				return child
+			}
+			first = defaultString(first, child)
+		}
+		return first
+	}
 	unread := []string{}
 	for _, nodeID := range chatGPTOrder(conversation.Mapping, children) {
 		node := conversation.Mapping[nodeID]
@@ -346,11 +362,12 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 		case role == "tool":
 			// The tool replies to the call before it. A reply can run on
 			// into more, such as each page a browser click quotes: each
-			// replies to the call, after the reply before it.
+			// replies to the call, and the one it runs on into names the
+			// reply it continues.
 			result := map[string]any{"tool": defaultString(author["name"], tools[node.Parent]), "content": text}
 			item.CallID = calls[node.Parent]
-			if item.CallID != "" && replies[node.Parent] {
-				result["continues"] = true
+			if item.CallID != "" && replies[node.Parent] && onward(node.Parent) == nodeID {
+				result["continues"] = read[node.Parent]
 			}
 			switch contentType {
 			case "system_error":
