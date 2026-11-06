@@ -1,3 +1,25 @@
+// Invitations stay separate from the editable draft and its context chips.
+function askPromptHints(random=Math.random){
+  const fallback='Ask about your past work…';
+  let hints=[],current=fallback,elapsed=0;
+  return {
+    current:()=>current,
+    update(items,visible=[]){
+      const shown=new Set(visible.map(item=>item.text));
+      hints=[...new Set(items.map(item=>item.text))].filter(text=>!shown.has(text));
+      if(!hints.includes(current)){
+        current=hints.length?hints[Math.floor(random()*hints.length)]:fallback;elapsed=0;
+      }
+      return current;
+    },
+    advance(delta,paused){
+      if(paused)elapsed=0;
+      else if((elapsed+=delta)>=12000){current=hints.length?hints[(hints.indexOf(current)+1)%hints.length]:fallback;elapsed=0;}
+      return current;
+    },
+  };
+}
+
 // Prompt offsets use UTF-16 text units and one unit per atomic context chip.
 // Keeping this model independent of the DOM lets additional chip kinds share
 // editing, movement and history without becoming part of the plain-text prompt.

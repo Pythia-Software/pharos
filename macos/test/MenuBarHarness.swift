@@ -120,6 +120,10 @@ final class MenuFixture: URLProtocol {
         return item.menu!
     }
     static func main() {
+        let currencyLocale = Locale(identifier: "en_US")
+        for (value, expected): (Double, String) in [(0, "$0.00"), (0.0001, "$0.00"), (12.3456, "$12.35"), (99.99, "$99.99"), (99.995, "$100"), (100, "$100"), (1234.56, "$1,235"), (-1234.56, "-$1,235"), (-0.0001, "$0.00")] {
+            precondition(MenuBarController.dollars(value, locale: currencyLocale) == expected)
+        }
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         URLProtocol.registerClass(MenuFixture.self)

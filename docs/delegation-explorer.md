@@ -5,16 +5,20 @@ transcript. Selecting a session opens `/work/{workspace}/conversation/{conversat
 and animates the overview into an inbox sidebar alongside the existing reader.
 The panes scroll independently. Their divider supports dragging, keyboard
 resizing, and double-click reset; its width is remembered. Below 720 pixels of
-sidebar width, the usage table becomes a compact hierarchy with one comparison
-metric selectable from every Self and Self + children column. Hierarchy boxes,
-selection highlighting, sorting, branch collapse, and pagination remain available.
-Widening the sidebar restores the full table. Parallel activity stays available
-in the sidebar with its full-workspace overview, range selection, explicit detail
-expansion, and tool-call popovers; event grouping adapts to its narrower axis.
+sidebar width, the usage table becomes a compact hierarchy with fixed Self API
+cost and Time to run columns, plus a Timeline button for each session. Time to run is the session's earliest-to-latest
+evidence span; its tooltip explains the evidence limits. Branch collapse and
+pagination remain available. Comparison controls and metric definitions are
+omitted. Widening the sidebar restores the full table and its saved ranking. Timeline replaces Parallel activity
+throughout the workspace explorer. Beside a reader it shows a collapsed, static
+overview with Session and clock columns; session names switch the reader, while
+interacting with the clock returns to the editable full-width view. Events stay
+available in the full-width view. Saved `explorer=parallel` links
+open Timeline and retain their time range, session and hierarchy state.
 
-Session rows show the age of their first retained evidence on the same line as
-provider, model, and effort; the compact hierarchy places it beneath the
-comparison metric. Turn headers show the age of the user message (or first event
+Full-width usage rows show the age of their first retained evidence on the same
+line as provider, model, and effort. Compact rows keep the session's outline
+number, provider and model beneath its title. Turn headers show the age of the user message (or first event
 for session setup). Ages refresh each minute and expose
 the exact local timestamp on hover. Missing timestamps omit the age.
 
@@ -48,31 +52,33 @@ resolve from retained launch messages without reindexing.
 
 A **Workspace Sessions** toolbar selects the transcript, replacing the
 conversation dropdown. A single button beside the sliding
-Hierarchy & usage / Parallel activity switch shows or hides the session content.
+Hierarchy & usage / Timeline switch shows or hides the session content.
 The toolbar remains visible while collapsed, and choosing a view opens it.
 The views sit directly on the workspace without an enclosing disclosure panel. The selected row and conversation header
-share a background highlight, session outline number, and assignment label.
+share a session outline number and assignment label. Both session views outline
+the current row. Titles of other sessions use link styling and underline on hover;
+the current session's title has no navigation action.
 Workspace totals sit alongside the workspace title and remain visible when the
 explorer is collapsed. The native workspace header omits its old Usage disclosure.
 The conversation header shows self usage and a child-session picker. Parent
-sessions and parallel activity are reached through the workspace navigator.
+sessions and Timeline are reached through the workspace navigator.
 Cross-workspace parent references retain their direct navigation link. Delegation entries gain
 links to child transcripts when their turns are materialized. Child transcripts
 open in the existing reader, with its search, context rail, and lazy tool output.
 
-The explorer has a hierarchy/usage table and a shared-axis activity view. Nested
-boxes and level badges frame each visible subtree. Parallel heavy borders retain
-every enclosing level on both sides, including during horizontal scrolling.
-A lighter divider beneath each parent separates it from its children. The table
+The explorer has a hierarchy/usage table and a shared-axis activity view. Both
+use the same session identities, ownership tree branches and outline numbering. The table
 uses the full overview width and grows with its rows, scrolling naturally with the overview. The inbox sidebar width is adjusted with
 its divider.
 The two orders are hierarchy and metric ranking. Clicking a metric header cycles
 through descending, ascending, and hierarchy; the Execution session header
 returns to hierarchy. Headers are the sole sorting controls. The explorer has no
 session search or matching-only toggle; legacy URL filters are cleared on load.
-First evidence ranking provides chronological order. Every metric supports Self and Self + children,
-with separate column families. A column picker exposes all 28 metrics, with drag handles (or arrow keys) to
-reorder them in both families. Order and visibility are saved independently.
+First evidence ranking provides chronological order. A scope selector shows either Self or Self + children
+for all visible metrics and their rankings; the default is Self + children. A column picker exposes the metrics, with drag handles (or arrow keys) to
+reorder them. Order and visibility are saved independently. Messages and Agent events appear beside Tool calls;
+Files read counts distinct successful read paths and excludes directory listings and searches.
+Each row's Timeline button opens that session's own evidence span with its immediate event groups visible and deeper groups closed.
 Large absolute values use K/M/B with three significant digits; metric tooltips
 retain exact values. A global tint control replaces per-cell percentages. Tint uses a
 softened logarithmic curve and each column's fixed, whole-workspace maximum.

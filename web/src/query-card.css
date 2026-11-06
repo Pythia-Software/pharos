@@ -63,7 +63,7 @@
 .query-rank-track { height:6px; background:color-mix(in srgb,var(--ink) 7%,transparent); border-radius:2px; }
 .query-rank-track i { display:block; height:100%; border-radius:2px; }
 .query-excerpt { font:14px/1.3 Charter,Georgia,serif; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
-.query-cover-columns { position:absolute; inset:0 0 0 24px; display:flex; align-items:stretch; gap:0; height:100%; }
+.query-cover-columns { grid-column:2; grid-row:1; position:relative; display:flex; align-items:stretch; gap:0; height:100%; min-width:0; }
 .query-cover-columns>span { flex:1; min-width:0; display:flex; flex-direction:column-reverse; justify-content:flex-start; height:100%; }
 .query-cover-columns i { display:block; flex:none; width:100%; min-height:0; }
 .query-timeline-lines { position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; }
@@ -75,11 +75,13 @@
 .query-scalar-headline { justify-content:center; }
 .query-scalar-label { text-align:center; font-size:10px; line-height:1.3; color:var(--muted); }
 .query-scalar-group { text-align:center; font-size:9px; line-height:1.3; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.query-cover-timeline { display:flex; flex-direction:column; gap:5px; flex:1; min-height:0; }
-.query-timeline-plot { position:relative; flex:1; min-height:30px; }
-.query-timeline-ticks { position:absolute; inset:0 auto 0 0; width:21px; font-size:8px; line-height:9px; font-variant-numeric:tabular-nums; color:var(--muted); }
-.query-timeline-ticks>span { position:absolute; right:0; transform:translateY(50%); }
-.query-timeline-dates { display:flex; justify-content:space-between; padding-left:24px; font-size:8px; line-height:10px; color:var(--muted); }
+/* The widest tick sizes the gutter; the plot and dates share its grid track. */
+.query-cover-timeline { display:grid; grid-template-columns:max-content minmax(0,1fr); grid-template-rows:minmax(30px,1fr); gap:5px 3px; flex:1; min-height:0; }
+.query-timeline-plot { display:contents; }
+.query-timeline-ticks { grid-column:1; grid-row:1; display:grid; min-width:21px; font-size:8px; line-height:9px; font-variant-numeric:tabular-nums; color:var(--muted); }
+.query-timeline-ticks>span { grid-area:1 / 1; align-self:end; justify-self:end; position:relative; white-space:nowrap; transform:translateY(50%); }
+.query-timeline-dates { grid-column:2; display:flex; justify-content:space-between; min-width:0; font-size:8px; line-height:10px; color:var(--muted); }
+.query-cover-timeline>:is(.query-chart-axis-labels,.query-timeline-legend) { grid-column:1 / -1; }
 .query-timeline-legend { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:2px 6px; font-size:8px; line-height:10px; color:var(--muted); }
 .query-timeline-legend>span { display:flex; align-items:center; gap:3px; min-width:0; }
 .query-timeline-legend i { flex:none; width:5px; height:5px; border-radius:1px; }
@@ -237,3 +239,17 @@
 .query-role-values i { display:inline-block; width:4px; height:4px; flex:none; border-radius:1px; }
 .query-cover-columns .query-timeline-point { position:absolute; left:50%; width:4px; height:4px; border-radius:50%; transform:translate(-50%,50%); }
 .query-cover-columns>.query-timeline-reference { height:0; position:absolute; left:0; right:0; border-top:1px dashed var(--muted); pointer-events:none; }
+/* A grid cover: an activity grid or heatmap filling the cover, with its key and what it shows. */
+.compact-grid { display:flex; flex-direction:column; gap:5px; flex:1 1 auto; min-height:0; }
+.compact-grid-plot { display:grid; flex:1 1 auto; min-height:0; }
+.compact-grid-cell { min-width:0; min-height:0; border-radius:1px; }
+.compact-grid-label { align-self:center; height:0; display:flex; align-items:center; justify-content:flex-end; padding-right:5px; font-size:9px; line-height:1; color:var(--muted); white-space:nowrap; }
+.compact-grid-tick { justify-self:center; width:0; display:flex; justify-content:center; padding-top:3px; font-size:9px; line-height:1; color:var(--muted); white-space:nowrap; }
+/* The outermost labels stay inside the cover. */
+.compact-grid-tick.is-first { justify-self:start; justify-content:flex-start; }
+.compact-grid-tick.is-last { justify-self:end; justify-content:flex-end; }
+.compact-grid-key { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; font-size:9px; color:var(--muted); }
+.compact-grid-legend { display:flex; align-items:center; gap:5px; flex:none; }
+.compact-grid-ramp { width:40px; height:6px; border-radius:2px; background:linear-gradient(90deg,var(--panel),var(--sea)); }
+.compact-grid-ramp.compact-grid-diverging { background:linear-gradient(90deg,var(--sea),var(--panel),var(--warn)); }
+.compact-grid-caption { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

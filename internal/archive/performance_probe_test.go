@@ -41,9 +41,11 @@ func TestQueryPerformanceProbe(t *testing.T) {
 	ctx := context.Background()
 	schema := PharosToolCallsSchema()
 	d := toolCallDataset.project([]string{"id", "provider", "started_at"})
-	source := d.v2Source(schema)
-	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "provider"}, Limit: 50}}
-	p, err := qt.CompileSQLiteRowsV2(ctx, q, schema, qt.PlanOptions{SourceSQL: source})
+	source := d.querySourceSQL(schema)
+	q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "provider"}, Limit: 50}}
+	dataset := queryV3Dataset(schema)
+	dataset.SourceSQL = source
+	p, err := dataset.SourcePlan(ctx, fixtureQuery(&q, nil, qt.PlanOptions{}), qt.PlanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func TestQueryPerformanceProbe(t *testing.T) {
 		args       []any
 	}{
 		{"count", "SELECT COUNT(*) FROM (SELECT 1 FROM (" + source + ") r LIMIT 250001)", nil},
-		{"rows", p.SQL, p.Args},
+		{"source plan", p.SQL, p.Args},
 		{"minimal-count", "SELECT COUNT(*) FROM tool_calls t WHERE " + d.base, nil},
 	} {
 		plan, err := queryMaps(db, "EXPLAIN QUERY PLAN "+query.sql, query.args...)
@@ -119,11 +121,11 @@ func TestQueryIndexedPerformanceProfile(t *testing.T) {
 	c := &Catalog{Path: path, DB: db}
 	defer c.closeQuery()
 	s := &Server{Catalog: c}
-	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "provider"}, Limit: 50}}
+	q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "provider"}, Limit: 50}}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 	start := time.Now()
-	result, err := s.executeQueryV2(ctx, "tool_calls", nil, PharosToolCallsSchema(), &q, nil)
+	result, err := s.executeQueryFixture(ctx, "tool_calls", nil, PharosToolCallsSchema(), &q, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

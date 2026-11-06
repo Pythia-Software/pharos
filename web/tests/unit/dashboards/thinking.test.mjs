@@ -17,6 +17,7 @@ test('every Thinking view and breakdown restores through the shared URL contract
  for(const [view]of thinkingViews)for(const [groupBy]of thinkingBreakdowns){
   const state={...defaultThinking,view,groupBy,model:'model with / characters',range:'custom',from:'2026-10-15T06:00:00.000Z',to:'2026-10-29T06:00:00.000Z',timezone:'America/Denver',hiddenPercentiles:['p75','p95'],calendarRows:'week',calendarMetric:'ratio',hours:7,days:4};
   const params=new URLSearchParams({thinking:encodeViewValue(viewFields.thinking,state)});
+  for(const overview of [false,true])assert.equal(new URL(thinkingRequest(state,overview),urlOrigin).searchParams.get('groupBy'),overview&&groupBy==='none'?'model':groupBy);
   for(const topic of ['thinking-overview','thinking-detail']){const url=new URL(usageWorkspaceURL({mode:'dashboards',topic,dataset:'model_requests'},params),urlOrigin);assert.deepEqual(parseViewValue(viewFields.thinking,url.searchParams.get('thinking')),state);assert.deepEqual(initialThinking(url.searchParams),{...state,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone});assert.equal(readUsageWorkspace(url.searchParams).topic,topic)}
  }
  const values=new URLSearchParams({thinking:JSON.stringify(defaultThinking)});retainPageView(values,'analyze/tokens');assert.equal(values.has('thinking'),false);

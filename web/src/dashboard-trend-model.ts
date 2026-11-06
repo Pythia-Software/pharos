@@ -3,7 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
-import { aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -41,7 +41,7 @@ export type TrendQuery = {
 // Clauses: one per series kind, grouped by [period, ...breakdown fields]; a
 // ratio's numerator and denominator as separate sums; one sum per component.
 export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where: WhereTerm[], { now = Date.now(), zone = localZone() }: { now?: number; zone?: string } = {}): TrendQuery {
-  const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric];
+  const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric];
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
   // Days, weeks and months are recorded calendar fields. Hours of a
   // timestamped dataset group the timestamp by UTC hour, as the hour cycle
@@ -70,7 +70,8 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     : components ? components.parts.map(part => ({ id: `trend:${part.key}`, op: "sum" as const, field: part.field, groupBy: [field], label: part.label }))
     : measure.ratio ? [{ id: "trend", ...partClause(measure.ratio[0]), groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", ...partClause(measure.ratio[1]), groupBy, label: `${measure.label}: denominator` }]
     : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }]).map(clause => ({ ...clause, ...dateGrouping }));
-  const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label, ...dateGrouping }, ...clauses] : clauses;
+  if(state.share&&measure.populationShare)clauses.push({id:'trend:population',...aggregate(measure),groupBy:[field],label:'All messages in interval',...dateGrouping});
+  const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label, ...dateGrouping }, ...clauses] : clauses.filter(clause=>clause.id!=="trend:population");
   // The supporting query covers what is drawn: with whole periods, from the
   // rounded start to the end of the last whole period, and the legend
   // selection as a filter on the breakdown's fields, where the predicate
@@ -118,7 +119,7 @@ const total = "total";
 export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, trend: TrendQuery, results: AggregationResultEntry[], { now = Date.now(), label = (_field, value) => String(value) }: {
   now?: number; label?: (field: string, value: unknown) => string;
 }): TrendSeries {
-  const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric], kind = trendKind(measure);
+  const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric], kind = trendKind(measure);
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
   const count = trendPeriodCount(state), cumulative = state.display === "cumulative", grid = { period: state.period, count };
   const additive = kind === "additive", empty: TrendSeries = { series: [], buckets: [], selected: [], excluded: false, lines: false, additive };
@@ -197,7 +198,11 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     // With whole periods, a partial last period is not drawn either.
     const limit = Math.min(bounds.to?.getTime() ?? now, now);
     const drawnKeys = new Set(weighted.filter(bucket => !bucket.history && (!state.completePeriods || (() => { const next = new Date(bucket.date); nextPeriod(next, state.period, count); return next.getTime() <= limit; })())).map(bucket => bucket.key));
-    series = foldSeries(weights.filter(([key]) => drawnKeys.has(key)), byKey(weighted), seriesLabel, breakdown.order, picked, state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
+    // All-series catalogs include history-only labels too: smoothing can
+    // carry those values into the visible window. Saved numeric caps do not
+    // hide ontology branches on a dashboard that always shows its full key.
+    const seriesRows = catalog.trend.allSeries ? weights : weights.filter(([key]) => drawnKeys.has(key));
+    series = foldSeries(seriesRows, byKey(weighted), seriesLabel, breakdown.order, picked, catalog.trend.allSeries ? Infinity : state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
     // Series are keyed by their raw values; a label two of them share (Agent
     // Time's command:foo and tool:foo) names the value too.
     series = series.map(item => item.value !== undefined && series.some(other => other !== item && other.label === item.label) ? { ...item, label: `${item.label} (${item.value})` } : item);
@@ -243,7 +248,11 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     });
   } else {
     buckets = window(amounts, state.rollingOp);
-    if (state.share) buckets = shareBuckets(buckets);
+    if(state.share&&measure.populationShare){
+      const population=layout();for(const [key,,value] of rows('trend:population')){const bucket=population.find(b=>b.key===key);if(bucket)bucket.values.total=value;}
+      const totals=byKey(window(population,state.rollingOp));
+      buckets=buckets.map(bucket=>{const total=totals.get(bucket.key)?.values.total??0;return {...bucket,values:Object.fromEntries(Object.entries(bucket.values).flatMap(([id,value])=>total>0?[[id,value/total]]:[]))};});
+    }else if (state.share) buckets = shareBuckets(buckets);
   }
   let norm: number | undefined, normPoints: number | undefined;
   const nonzero = state.nonzero && !state.share;
@@ -264,12 +273,12 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   }
   if (nonzero) buckets = withoutZeroes(buckets, drawn.map(item => item.key));
 
-  return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: !additive && series.length > 1, additive };
+  return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: state.view === "trend_line" || state.view !== "trend_bar" && !additive && series.length > 1, additive };
 }
 
 // The chart's title, in the dashboards' plain style.
 export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): string {
-  const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric];
+  const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric];
   const split = catalog.breakdowns[state.split]?.label ?? catalog.components?.[state.split]?.label;
   const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
   return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;

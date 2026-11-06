@@ -1,0 +1,65 @@
+/* Optimize → Fixes. Cards use the shared .optimize-card layout (findings.css);
+   each part of a card holds one line, and the detail page uses the shared
+   detail grid, so a card is about as tall as a Risky actions check. */
+.fixes-page .findings-filter select { max-width: 132px; text-overflow: ellipsis; }
+.fixes-page .findings-toolbar { gap: 10px 12px; }
+.fixes-page .findings-segmented button { padding: 0 9px; }
+.fixes-hidden-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); }
+.fixes-hidden-note { margin: 10px 2px 0; font-size: var(--fs-xs); }
+.fixes-card-title { font-weight: 650; line-height: 1.3; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fixes-card-title:hover { text-decoration: underline; }
+.fixes-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.fixes-card .fixes-chips { flex-wrap: nowrap; overflow: hidden; }
+.fixes-card .fixes-chips .findings-chip { flex: none; }
+.fixes-card .fixes-chips .findings-chip:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fixes-where, .fixes-hit { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fixes-where strong { margin-right: 4px; }
+.fixes-hit { color: var(--warn); }
+.fixes-foot { display: flex; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.fixes-foot .safety-check-when { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fixes-foot code { margin-right: 6px; }
+.fixes-foot .safety-check-open { flex: none; color: var(--accent); font-size: var(--fs-sm); }
+.fixes-safeguards { color: var(--muted); font-size: var(--fs-sm); }
+.optimize-card.fixes-card.hidden-by-bounds, .optimize-card.fixes-card.quiet { background: color-mix(in srgb, var(--panel) 55%, transparent); }
+.optimize-card.fixes-card.hidden-by-bounds { border-style: dashed; }
+.fixes-maybe { margin-top: 18px; }
+.fixes-maybe > summary { cursor: pointer; font-weight: 600; }
+.fixes-lead { margin: 0; padding: 0 0 0 10px; border-left: 3px solid var(--line); color: var(--muted); font-size: var(--fs-sm); line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Detail: the summary and its actions, then the shared main + side grid. */
+.fixes-detail { margin-top: 14px; overflow-wrap: anywhere; }
+.fixes-detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; font-size: var(--fs-sm); }
+.fixes-detail h2 { margin: 8px 0 6px; font-size: var(--fs-xl, 1.3rem); line-height: 1.25; max-width: 900px; }
+.fixes-detail > .fixes-lead { -webkit-line-clamp: unset; font-size: var(--fs-md); margin: 0 0 10px; max-width: 900px; }
+.fixes-detail > .findings-actions { margin: 10px 0 16px; }
+.fixes-detail > p { max-width: 900px; }
+.fixes-detail-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fixes-detail .findings-panel h3 { margin: 0 0 8px; font: 650 var(--fs-base)/1.35 var(--sans); }
+.fixes-detail .findings-panel > p { margin: 0 0 8px; line-height: 1.5; }
+.fixes-detail .findings-panel > p:last-child { margin-bottom: 0; }
+.fixes-detail .findings-facts { font-size: var(--fs-sm); }
+.fixes-named code { margin: 0 4px 2px 0; }
+.fixes-list { margin: 4px 0 8px; padding-left: 18px; font-size: var(--fs-sm); }
+.fixes-quotes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.fixes-quotes li { padding: 4px 12px; border-left: 3px solid var(--line); }
+.fixes-quotes blockquote { margin: 0; line-height: 1.45; }
+.fixes-quotes p { margin: 2px 0 0; font-size: var(--fs-xs); }
+.fixes-about span { font-weight: 600; margin-right: 4px; }
+.fixes-members { margin-top: 12px; }
+.fixes-members > summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.fixes-intended { padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--sea) 45%, var(--line)); border-radius: 7px; }
+
+/* Settings */
+.fixes-bounds { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; align-items: center; margin: 12px 0; max-width: 720px; }
+.fixes-bounds label { display: flex; flex-direction: column; gap: 2px; }
+.fixes-bounds small { color: var(--muted); font-size: var(--fs-xs); }
+.fixes-bounds select { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.fixes-defaults { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.fixes-settings .findings-facts { max-width: 860px; }
+@media (max-width: 560px) {
+  .fixes-bounds { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .fixes-bounds select { margin-bottom: 10px; }
+  /* Five ranks do not fit one row on a phone; the segments wrap instead. */
+  .fixes-page .findings-rank { flex-wrap: wrap; margin-left: 0; min-width: 0; }
+  .fixes-page .findings-segmented { flex-wrap: wrap; }
+}

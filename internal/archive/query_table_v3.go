@@ -3,9 +3,8 @@ package archive
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -19,16 +18,20 @@ import (
 // queryV3MaxRows is the V3 row budget. Tests lower it, so that a few rows
 // make a source larger than the budget.
 var queryV3MaxRows = querytable.MaxLimit
+var queryV3MaxGroups = 10_000
+var queryV3MaxPopulation = 10_000_000
+var queryV3UsageMaxGroups = 100_000
 
 func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
-	groups := 10_000
+	groups := queryV3MaxGroups
 	// Usage has one compact fact per execution/day/model. The built-in Work
-	// preset must cover a library with more than 10,000 workspaces.
-	if schema.Name == "pharos_usage" {
-		groups = 100_000
+	// preset and message-label conversation results must cover libraries with
+	// more than 10,000 workspaces or conversations.
+	if schema.Name == "pharos_usage" || schema.Name == "pharos_message_labels" {
+		groups = queryV3UsageMaxGroups
 	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",
-		MaxRows: queryV3MaxRows, MaxGroups: groups, MaxPopulation: 10_000_000, MaxStagingBytes: 512 << 20}
+		MaxRows: queryV3MaxRows, MaxGroups: groups, MaxPopulation: queryV3MaxPopulation, MaxStagingBytes: 512 << 20}
 }
 
 func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatasetV3) error {
@@ -48,25 +51,35 @@ func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatase
 func (s *Server) postQueryV3(w http.ResponseWriter, r *http.Request, dataset string) {
 	schema, err := sqliteQuerySchema(dataset)
 	if err != nil {
-		writeError(w, err, http.StatusBadRequest)
+		qt.WriteQueryError(w, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidRequest, Message: err.Error()})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1_000_000)
-	var request qt.QueryRequestV3
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&request); err == nil {
-		err = requireQueryEOF(decoder)
-	}
+	w.Header().Set("Cache-Control", "no-store")
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_000_000))
 	if err != nil {
-		writeError(w, err, http.StatusBadRequest)
+		qt.WriteQueryError(w, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
+	request, err := qt.DecodeQueryRequestV3(body)
+	if err != nil {
+		qt.WriteQueryError(w, err)
+		return
+	}
+	parent := r.Context()
+	if request.Distinct != nil {
+		var release func()
+		parent, release, err = s.beginQueryMetadata(parent)
+		if err != nil {
+			qt.WriteQueryError(w, err)
+			return
+		}
+		defer release()
+	}
+	ctx, cancel := context.WithTimeout(parent, queryTableDeadline)
 	defer cancel()
 	result, find, err := s.executeQueryV3(ctx, dataset, r.URL.Query(), schema, request)
 	if err != nil {
-		writeError(w, err, http.StatusBadRequest)
+		qt.WriteQueryError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -86,9 +99,18 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 	}
 	defer tx.Rollback()
 	d := queryV3Dataset(schema)
-	d.SourceSQL = (sqlDataset{}).v2Source(schema)
+	d.SourceSQL = (sqlDataset{}).querySourceSQL(schema)
 	if err = authorizeQueryV3Computed(ctx, tx, &d); err != nil {
 		return nil, err
+	}
+	// Distinct values read source.where and a field outside the result SELECT.
+	// Plan that authorized field as a row projection to discover its complete
+	// base/computed inputs; execute the original distinct request unchanged.
+	if q.Distinct != nil {
+		field := q.Distinct.Field
+		q.Distinct = nil
+		q.Rows = true
+		q.Result = qt.WireQuery{Select: []string{field}, Where: q.Source.Where, Limit: 1}
 	}
 	plan, err := d.SourcePlan(ctx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name,
 		Resolver: qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}})
@@ -97,16 +119,23 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
 	if err := checkRecordKeywordHostState(dataset, q.HostState, params); err != nil {
-		return qt.QueryResultV3{}, nil, err
+		return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: err.Error()}
 	}
 	record, recordErr := s.recordSearch(ctx, dataset, params)
 	if recordErr != nil {
-		return qt.QueryResultV3{}, nil, recordErr
+		return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: recordErr.Error()}
 	}
 	defer record.close()
 	if dataset == "parallelism" {
 		var err error
 		ctx, err = withParallelismPreferences(ctx, params.Get("parallelism_settings"))
+		if err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
+	if dataset == "rhythm" {
+		var err error
+		ctx, err = withHabitsPreferences(ctx, params.Get("habits_settings"))
 		if err != nil {
 			return qt.QueryResultV3{}, nil, err
 		}
@@ -123,10 +152,10 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	}
 	d := queryV3Dataset(schema)
 	where := q.Result.Where
-	if q.Grouping != nil {
+	if q.Grouping != nil || q.Distinct != nil {
 		where = q.Source.Where
 	}
-	table, sqlBacked := sqlDatasetFor(dataset)
+	table, sqlBacked := s.Catalog.sqlDatasetFor(dataset)
 	var rows []map[string]any
 	var required []string
 	var find *libraryFindSet
@@ -156,7 +185,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			bounds, err = queryBucketBounds(ctx, s.Catalog.reader(), where)
 			if err == nil {
 				projected, _ := table.project(required).preferCoveringScan(where)
-				d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, time.UnixMilli(q.Now), bounds)
+				d.SourceSQL, d.SourceArgs = projected.windowedQuerySource(schema, where, time.UnixMilli(q.Now), bounds)
 			}
 		}
 	} else {
@@ -212,7 +241,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if find != nil && q.Grouping != nil {
 		summary := find.summary()
 		if summary.Limited || summary.Search != nil && !summary.Search.Complete {
-			return qt.QueryResultV3{}, nil, errors.New("This search is incomplete. Complete or narrow the search before grouping its results.")
+			return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: "This search is incomplete. Complete or narrow the search before grouping its results."}
 		}
 	}
 	// Usage WHERE hour selects daily facts by their matching ledger hours, just
@@ -241,7 +270,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			}
 		}
 		rows = selected
-		if q.Grouping != nil {
+		if q.Grouping != nil || q.Distinct != nil {
 			q.Source.Where = nil
 		} else {
 			q.Result.Where = nil
@@ -251,7 +280,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	// ephemeral CTE B-trees otherwise write pages even with a temp cache. Keep the
 	// full raw tool ledger and message payloads on the spill-capable path. The
 	// executor still enforces the same staging-byte budget before any copy.
-	memoryScratch := dataset == "tools" || dataset == "skill_usages" || !sqlBacked && len(rows) <= 100_000
+	memoryScratch := dataset == "tools" || dataset == "skill_usages" || dataset == "message_labels" && !slices.Contains(required, "text") || !sqlBacked && len(rows) <= 100_000
 	mode := 1
 	if memoryScratch {
 		mode = 2
@@ -273,7 +302,12 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if err = record.restrictSource(ctx, tx, &d, q); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
-	result, err := d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
+	var result qt.QueryResultV3
+	if dataset == "usage" && q.Grouping == nil && len(q.Metrics) > 0 {
+		result, err = s.executeUsageQueryV3(ctx, tx, d, q, where, required)
+	} else {
+		result, err = d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
+	}
 	if err != nil {
 		return qt.QueryResultV3{}, nil, fmt.Errorf("%s query: %w", strings.TrimPrefix(schema.Name, "pharos_"), err)
 	}
@@ -301,4 +335,102 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		summary = &value
 	}
 	return result, summary, err
+}
+
+// Usage exposes daily rows but metrics that read hour reduce the hourly ledger.
+// Both populations are selected in the same request; Query Table owns every
+// filter, expression, row window and metric reduction on the staged sources.
+func (s *Server) executeUsageQueryV3(ctx context.Context, tx *sql.Tx, d qt.QueryDatasetV3, q qt.QueryRequestV3, originalWhere []qt.WhereTerm, required []string) (qt.QueryResultV3, error) {
+	options := qt.PlanOptions{Identity: queryTableScope + ":" + d.Schema.Name, Resolver: qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}}
+	daily, hourly, shown := q, q, q
+	daily.Metrics, hourly.Metrics, shown.Metrics = nil, nil, nil
+	hourly.Rows, shown.Rows = false, false
+	hourly.Result.Where, shown.Result.Where = nil, nil
+	for _, spec := range q.Metrics {
+		probe := q
+		probe.Rows = false
+		probe.Result = qt.WireQuery{}
+		dependency := spec
+		dependency.Scope = "allMatching"
+		probe.Metrics = []qt.AggSpec{dependency}
+		plan, err := d.SourcePlan(ctx, probe, options)
+		if err != nil {
+			return qt.QueryResultV3{}, err
+		}
+		if !slices.Contains(plan.BaseFields, "hour") {
+			daily.Metrics = append(daily.Metrics, spec)
+		} else if spec.Scope == "shownRows" {
+			spec.Scope = "allMatching"
+			shown.Metrics = append(shown.Metrics, spec)
+		} else {
+			hourly.Metrics = append(hourly.Metrics, spec)
+		}
+	}
+	result, err := d.ExecuteIn(ctx, tx, daily, options)
+	if err != nil || len(hourly.Metrics)+len(shown.Metrics) == 0 {
+		return result, err
+	}
+	localSchema, err := s.queryTableSchema("usage")
+	if err != nil {
+		return qt.QueryResultV3{}, err
+	}
+	resolved, err := querytable.ResolveRelativeWhere(originalWhere, localSchema, time.UnixMilli(q.Now))
+	if err != nil {
+		return qt.QueryResultV3{}, err
+	}
+	hours, err := s.Catalog.hourlyUsageForAggregation(ctx, resolved, required)
+	if err != nil {
+		return qt.QueryResultV3{}, err
+	}
+	byID := map[string]qt.MetricResult{}
+	for _, metric := range result.Metrics {
+		byID[metric.ID] = metric
+	}
+	for i, request := range []qt.QueryRequestV3{hourly, shown} {
+		if len(request.Metrics) == 0 {
+			continue
+		}
+		source := hours
+		if i == 1 {
+			window := daily
+			window.Rows = true
+			window.Result.Select = []string{d.Schema.IDField}
+			window.Metrics = nil
+			page, err := d.ExecuteIn(ctx, tx, window, options)
+			if err != nil {
+				return qt.QueryResultV3{}, err
+			}
+			ids := map[string]bool{}
+			for _, row := range page.Rows {
+				ids[firstString(row[d.Schema.IDField])] = true
+			}
+			source = make([]map[string]any, 0, len(hours))
+			for _, row := range hours {
+				if ids[usageDailyID(row)] {
+					source = append(source, row)
+				}
+			}
+		}
+		part := d
+		part.SourceSQL, err = stageQueryRowsWithBudget(ctx, tx, fmt.Sprintf("pharos_usage_hours_%d", i), source, d.Schema, d.MaxPopulation, required)
+		if err != nil {
+			return qt.QueryResultV3{}, err
+		}
+		part.SourceArgs = nil
+		out, err := part.ExecuteIn(ctx, tx, request, options)
+		if err != nil {
+			return qt.QueryResultV3{}, err
+		}
+		for _, metric := range out.Metrics {
+			if i == 1 {
+				metric.Scope = "shownRows"
+			}
+			byID[metric.ID] = metric
+		}
+	}
+	result.Metrics = nil
+	for _, spec := range q.Metrics {
+		result.Metrics = append(result.Metrics, byID[spec.ID])
+	}
+	return result, nil
 }

@@ -15,7 +15,7 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-func metricTotal(t *testing.T, metric qt.SQLiteMetricV2) float64 {
+func metricTotal(t *testing.T, metric qt.MetricResult) float64 {
 	t.Helper()
 	total := 0.0
 	for _, bucket := range metric.Buckets {
@@ -34,7 +34,7 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 	server := testServer(t, config, catalog)
 	call := func(method, path string, body any) *httptest.ResponseRecorder {
 		encoded, _ := json.Marshal(body)
-		r := httptest.NewRequest(method, path, strings.NewReader(string(encoded)))
+		r := queryFixtureHTTPRequest(method, path, strings.NewReader(string(encoded)))
 		r.Header.Set("Authorization", "Bearer "+config.APIToken)
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, r)
@@ -42,14 +42,13 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 	}
 	w := call(http.MethodGet, "/api/query/tool_calls/capabilities", nil)
 	var handshake struct {
-		MetricCapabilities qt.SQLiteMetricCapabilities `json:"metricCapabilities"`
-		QueryCapabilities  qt.QueryCapabilitiesV3      `json:"queryCapabilities"`
+		QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &handshake); err != nil || w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String(), err)
 	}
-	if !handshake.MetricCapabilities.Filters || !handshake.MetricCapabilities.MinCount || !handshake.QueryCapabilities.MetricFilters || !handshake.QueryCapabilities.MetricMinCount {
-		t.Fatalf("population controls are not advertised: %+v %+v", handshake.MetricCapabilities, handshake.QueryCapabilities)
+	if !handshake.QueryCapabilities.MetricFilters || !handshake.QueryCapabilities.MetricMinCount {
+		t.Fatalf("population controls are not advertised: %+v", handshake.QueryCapabilities)
 	}
 
 	var expected struct{ total, errors int }
@@ -60,7 +59,7 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 	// Plain COUNT metrics take the count-only fast path; a metric WHERE must leave it.
 	q := metricRequest(qt.AggSpec{ID: "all", Expression: "COUNT()"}, qt.AggSpec{ID: "errors", Expression: "COUNT()", Where: errors})
 	w = call(http.MethodPost, "/api/query/tool_calls/metrics", q)
-	var result qt.SQLiteMetricsV2Result
+	var result queryFixtureMetricsResult
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String(), err)
 	}
@@ -75,7 +74,7 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 		qt.AggSpec{ID: "error_kinds", Expression: "COUNT()", GroupBy: []string{"error_type"}, Where: errors},
 	)
 	w = call(http.MethodPost, "/api/query/tool_calls/metrics", q)
-	result = qt.SQLiteMetricsV2Result{}
+	result = queryFixtureMetricsResult{}
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String(), err)
 	}
@@ -107,11 +106,11 @@ func TestQueryMetricPopulationsHTTP(t *testing.T) {
 		{"tools", qt.AggSpec{Op: "sum", Field: "call_count"}, qt.MetricMinCount{Sum: "call_count"}},
 		{"tool_calls", qt.AggSpec{Op: "count_distinct", Field: "ended_at"}, qt.MetricMinCount{Distinct: "ended_at"}},
 	} {
-		run := func(spec qt.AggSpec) qt.SQLiteMetricV2 {
+		run := func(spec qt.AggSpec) qt.MetricResult {
 			t.Helper()
 			spec.ID, spec.GroupBy = "m", []string{"tool_name"}
 			w := call(http.MethodPost, "/api/query/"+c.dataset+"/metrics", metricRequest(spec))
-			var result qt.SQLiteMetricsV2Result
+			var result queryFixtureMetricsResult
 			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != 200 || result.Metrics[0].Error != "" {
 				t.Fatalf("%s: %d %s", c.dataset, w.Code, w.Body.String())
 			}
@@ -172,11 +171,11 @@ func TestQueryMetricPopulationDependencies(t *testing.T) {
 			Where: []qt.WhereTerm{{Field: "purpose", Op: "contains", Value: "purpose"}}},
 		qt.AggSpec{ID: "invalid", Expression: "SUM([tool_use_count])", MinCount: qt.MetricMinCount{Min: 2}},
 	)
-	fields, err := queryV2SourceFields(context.Background(), catalog.DB, schema, nil, &q, time.Now())
+	fields, err := fixtureSourceFields(context.Background(), catalog.DB, schema, nil, &q, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"id", "purpose", "source_kind", "token_count"}; !reflect.DeepEqual(fields, want) {
+	if want := []string{"activity_at", "id", "purpose", "source_kind", "token_count", "tool_use_count"}; !reflect.DeepEqual(fields, want) {
 		t.Fatalf("fields=%v, want %v", fields, want)
 	}
 }
@@ -199,7 +198,7 @@ func TestQueryMetricPopulationUsageHour(t *testing.T) {
 	}
 	q := metricRequest(qt.AggSpec{ID: "all", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "hour", Expression: "SUM([total_tokens])", Where: hour},
 		qt.AggSpec{ID: "invalid", Expression: "SUM([total_tokens])", MinCount: qt.MetricMinCount{Min: 2}}, conversations(1), conversations(1000))
-	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
+	result, err := server.executeQueryFixture(context.Background(), "usage", nil, schema, nil, &q)
 	if err != nil {
 		t.Fatal(err)
 	}
