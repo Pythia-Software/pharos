@@ -24,25 +24,35 @@ const clineManifest = `{"version":1,"session_id":"1793000000000_abcde","source":
 "messages_path":"/elsewhere/1793000000000_abcde.messages.json"}`
 
 // clineMessages is its <id>.messages.json: four requests, each ended by an
-// assistant message carrying its metrics; tool inputs as JSON text; a
-// failed command; an empty reply; and a prompt sent after a switch to plan
-// mode, which quotes usage JSON.
+// assistant message carrying its metrics; tool inputs as JSON text; results
+// as Cline's operation lists, and an edit's as JSON text; a failed command
+// flagged only by its operation; a command given as a program and its
+// arguments; a web search the provider ran; an empty reply; hook context
+// and a reminder Cline wrote as user messages; and a prompt sent after a
+// switch to plan mode, which quotes usage JSON.
 const clineMessages = `{"version":1,"updated_at":"2026-11-03T15:01:00.000Z","agent":"lead","sessionId":"1793000000000_abcde",
 "origin":{"source":"cli","mode":"user","sessionId":"1793000000000_abcde","version":"4.1.26"},"system_prompt":"You are Cline.","messages":[
+{"id":"h1","role":"user","ts":1793717999000,"content":[{"type":"text","text":"<hook_context>SessionStart: the tree is clean</hook_context>"}],"metadata":{"userRunSpan":0,"displayRole":"system"}},
 {"id":"u1","role":"user","ts":1793718000000,"content":[{"type":"text","text":"<user_input mode=\"act\">Count the words</user_input>"}]},
 {"id":"a1","role":"assistant","ts":1793718001000,"content":[{"type":"thinking","thinking":"Look at the files first."},
-  {"type":"tool_use","id":"c1","name":"run_commands","input":"{\"commands\":[\"ls\"]}"}],
+  {"type":"tool_use","id":"c1","name":"run_commands","input":"{\"commands\":[\"ls\"]}"},
+  {"type":"tool_use","id":"c5","name":"read_files","input":"{\"files\":[{\"path\":\"wordstats.py\"}]}"}],
   "modelInfo":{"id":"claude-sonnet-4.5","provider":"anthropic"},"metrics":{"inputTokens":1000,"outputTokens":40,"cacheReadTokens":600,"cacheWriteTokens":0}},
-{"id":"r1","role":"user","ts":1793718002000,"content":[{"type":"tool_result","tool_use_id":"c1","name":"run_commands","content":"wordstats.py"}]},
+{"id":"r1","role":"user","ts":1793718002000,"content":[{"type":"tool_result","tool_use_id":"c1","name":"run_commands","content":[{"query":"ls","result":"wordstats.py","success":true}]},
+  {"type":"tool_result","tool_use_id":"c5","name":"read_files","content":"{\"query\":\"wordstats.py\",\"result\":\"import sys\",\"success\":true}"}]},
 {"id":"a2","role":"assistant","ts":1793718003000,"content":[
   {"type":"tool_use","id":"c2","name":"run_commands","input":"{\"commands\":[\"wc -w wordstats.py\"]}"},
-  {"type":"tool_use","id":"c3","name":"run_commands","input":"{\"commands\":[\"cat missing.txt\"]}"}],
+  {"type":"tool_use","id":"c3","name":"run_commands","input":"{\"commands\":[\"cat missing.txt\"]}"},
+  {"type":"tool_use","id":"c4","name":"run_commands","input":{"commands":[{"command":"git","args":["status","--short"]}]}}],
   "modelInfo":{"id":"claude-sonnet-4.5","provider":"anthropic"},"metrics":{"inputTokens":1200,"outputTokens":60,"cacheReadTokens":1000,"cacheWriteTokens":0}},
-{"id":"r2","role":"user","ts":1793718004000,"content":[{"type":"tool_result","tool_use_id":"c2","name":"run_commands","content":"74 wordstats.py"},
-  {"type":"tool_result","tool_use_id":"c3","name":"run_commands","content":"{\"error\":\"No such file\"}","is_error":true}]},
+{"id":"r2","role":"user","ts":1793718004000,"content":[{"type":"tool_result","tool_use_id":"c2","name":"run_commands","content":[{"query":"wc -w wordstats.py","result":"74 wordstats.py","success":true}]},
+  {"type":"tool_result","tool_use_id":"c3","name":"run_commands","content":[{"query":"cat missing.txt","result":"[Command exited with code 1]\ncat: missing.txt: No such file","error":"Command exited with code 1","success":false}]},
+  {"type":"tool_result","tool_use_id":"c4","name":"run_commands","content":[{"query":"git status --short","result":"","success":true}]}]},
 {"id":"a3","role":"assistant","ts":1793718005000,"content":[{"type":"text","text":"There are 74 words."}],
+  "metadata":{"modelToolActivities":[{"toolCallId":"ws1","toolName":"web_search","execution":"provider","input":{"query":"word count"},"output":"Counting words","isError":false}]},
   "modelInfo":{"id":"claude-sonnet-4.5","provider":"anthropic"},"metrics":{"inputTokens":1300,"outputTokens":20,"cacheReadTokens":1200,"cacheWriteTokens":0}},
 {"id":"e1","role":"assistant","ts":1793718005500,"content":[]},
+{"id":"k1","role":"user","ts":1793718005800,"content":[{"type":"text","text":"Remember to finish with a summary."}],"metadata":{"kind":"completion_reminder"}},
 {"id":"u2","role":"user","ts":1793718006000,"content":[{"type":"text","text":"<user_input mode=\"plan\"><mode_notice>The user switched from act mode to plan mode before sending this message.</mode_notice>\n{\"usage\":{\"input_tokens\":1000,\"output_tokens\":200}} Plan the next step</user_input>"}]},
 {"id":"a4","role":"assistant","ts":1793718007000,"content":[{"type":"text","text":"Next, add tests."}],
   "modelInfo":{"id":"claude-opus-4.5","provider":"anthropic"},"metrics":{"inputTokens":1400,"outputTokens":30,"cacheReadTokens":1300,"cacheWriteTokens":0}}]}`
@@ -88,7 +98,9 @@ func TestClineSessionKeepsItsTurnsToolsAndUsage(t *testing.T) {
 		kinds = append(kinds, message.Role+":"+message.Kind)
 		byID[message.NativeID] = message
 	}
-	if got, want := strings.Join(kinds, " "), "system:context user:message assistant:reasoning assistant:tool_call system:metadata tool:tool_result assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result assistant:message system:metadata system:context user:message assistant:message system:metadata"; got != want {
+	if got, want := strings.Join(kinds, " "), "system:context system:context user:message assistant:reasoning assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result " +
+		"assistant:tool_call assistant:tool_call assistant:tool_call system:metadata tool:tool_result tool:tool_result tool:tool_result " +
+		"assistant:tool_call tool:tool_result assistant:message system:metadata system:context system:context user:message assistant:message system:metadata"; got != want {
 		t.Fatalf("messages\n got %s\nwant %s", got, want)
 	}
 	// What the person typed, without Cline's wrapper and mode notice.
@@ -104,8 +116,26 @@ func TestClineSessionKeepsItsTurnsToolsAndUsage(t *testing.T) {
 	if call := byID["a1:block:1"]; call.CallID != "c1" || call.Text != `{"input":{"commands":["ls"]},"tool":"run_commands"}` {
 		t.Fatalf("call = %+v", call)
 	}
-	if failed := byID["r2:block:1"]; failed.CallID != "c3" || !strings.Contains(failed.Text, `"is_error":true`) {
+	// Cline's operation results are read as their text; a failed operation
+	// fails its call. Hook context and Cline's reminders are not the
+	// person's, so the purpose is the first prompt.
+	if result := byID["r1:block:0"]; result.Text != `{"content":"wordstats.py","is_error":false,"tool":"run_commands"}` || !strings.Contains(result.RawText, `"success":true`) {
+		t.Fatalf("result = %+v", result)
+	}
+	if read := byID["r1:block:1"]; read.Text != `{"content":"import sys","is_error":false,"tool":"read_files"}` {
+		t.Fatalf("read result = %+v", read)
+	}
+	if failed := byID["r2:block:1"]; failed.CallID != "c3" || !strings.Contains(failed.Text, `"is_error":true`) || !strings.Contains(failed.Text, "No such file") {
 		t.Fatalf("failed result = %+v", failed)
+	}
+	if hook, reminder := byID["h1"], byID["k1"]; hook.Kind != "context" || !strings.Contains(hook.Text, "cline_hook_context") || reminder.Kind != "context" || !strings.Contains(reminder.Text, "cline_completion_reminder") {
+		t.Fatalf("hook %+v reminder %+v", hook, reminder)
+	}
+	if session.Purpose != "Count the words" {
+		t.Fatalf("purpose = %q", session.Purpose)
+	}
+	if search, result := byID["a3:block:1"], byID["a3:activity-result:0"]; search.CallID != "ws1" || search.Text != `{"input":{"query":"word count"},"tool":"web_search"}` || result.CallID != "ws1" || !strings.Contains(result.Text, "Counting words") {
+		t.Fatalf("provider search %+v result %+v", search, result)
 	}
 	if usage := byID["a2:usage"]; usage.Model != "claude-sonnet-4.5" || !strings.Contains(usage.Text, `"input_tokens":1200`) || !strings.Contains(usage.Text, `"cached_input_tokens":1000`) {
 		t.Fatalf("usage = %+v", usage)
@@ -161,25 +191,28 @@ func TestClineUsageCountsEachRequestOnce(t *testing.T) {
 		}
 		got = append(got, fmt.Sprintf("%s=%g", id, tokens))
 	}
-	if strings.Join(got, " ") != "c1=40 c2=30 c3=30" {
+	if strings.Join(got, " ") != "c1=20 c2=20 c3=20 c4=20 c5=20 ws1=20" {
 		t.Fatalf("output tokens per call: %v", got)
 	}
-	// Cline runs commands as a list, each its own command line.
-	commands, err := c.DB.Query(`SELECT call_id, tool_category, COALESCE(program,''), command_count FROM tool_calls WHERE provider='cline' ORDER BY call_id`)
+	// Cline runs commands as a list, each its own command line, or a
+	// program and its arguments. Its reads and the provider's search have
+	// their categories, and a failed operation fails its call.
+	commands, err := c.DB.Query(`SELECT call_id, tool_category, COALESCE(program,''), COALESCE(subcommand,''), command_count, status, result_bytes > 0 FROM tool_calls WHERE provider='cline' ORDER BY call_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer commands.Close()
 	got = got[:0]
 	for commands.Next() {
-		var id, category, program string
+		var id, category, program, subcommand, status string
 		var count int
-		if err := commands.Scan(&id, &category, &program, &count); err != nil {
+		var output bool
+		if err := commands.Scan(&id, &category, &program, &subcommand, &count, &status, &output); err != nil {
 			t.Fatal(err)
 		}
-		got = append(got, fmt.Sprintf("%s=%s:%s:%d", id, category, program, count))
+		got = append(got, fmt.Sprintf("%s=%s:%s:%s:%d:%s:%v", id, category, program, subcommand, count, status, output))
 	}
-	if strings.Join(got, " ") != "c1=command:ls:1 c2=command:wc:1 c3=command:cat:1" {
+	if strings.Join(got, " ") != "c1=command:ls::1:ok:true c2=command:wc::1:ok:true c3=command:cat::1:error:true c4=command:git:status:1:ok:false c5=read:::0:ok:true ws1=web:::0:ok:true" {
 		t.Fatalf("commands per call: %v", got)
 	}
 }
@@ -310,5 +343,33 @@ func TestClineIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
 	automatic.runAutomatic(automatic.life.ctx, syncSettings{Interval: 300})
 	if n := countRows(t, automatic.Catalog, `SELECT COUNT(*) FROM messages WHERE native_id='a5'`); n != 1 {
 		t.Fatalf("automatic updates skipped Cline: %d", n)
+	}
+}
+
+// Cline's operation results, as lists or JSON text, are read as their text;
+// an operation that reports failure fails the call even without an error.
+// Content of another shape is left as written.
+func TestClineOperationResults(t *testing.T) {
+	for _, test := range []struct {
+		content any
+		text    any
+		failed  bool
+	}{
+		{[]any{map[string]any{"query": "a", "result": "one", "success": true}, map[string]any{"query": "b", "result": "two", "success": true}}, "one\ntwo", false},
+		{[]any{map[string]any{"query": "go test", "result": "FAIL", "success": false}}, "FAIL", true},
+		{`{"query":"edit:a.go","result":"","error":"old_text was omitted","success":false}`, "old_text was omitted", true},
+		{`{"error":"Invalid input"}`, "Invalid input", true},
+		{"plain output", "plain output", false},
+		{`{"stdout":"x"}`, `{"stdout":"x"}`, false},
+	} {
+		text, failed := clineToolResult(test.content)
+		if text != test.text || failed != test.failed {
+			t.Errorf("%v: %q %v, want %q %v", test.content, text, failed, test.text, test.failed)
+		}
+	}
+	for name, want := range map[string]string{"read_files": "read", "fetch_web_content": "web", "skills": "meta", "search_codebase": "search", "run_commands": "command"} {
+		if got, _ := toolCategory(name, "tool_call"); got != want {
+			t.Errorf("%s is %s, want %s", name, got, want)
+		}
 	}
 }
