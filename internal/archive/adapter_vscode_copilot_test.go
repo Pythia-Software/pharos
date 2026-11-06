@@ -519,10 +519,14 @@ const vscodeHistorySession = `{"version":3,"sessionId":"history-1","creationDate
  "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":400,"outputTokens":10,"summaries":[{"toolCallRoundId":"round-r1","text":"Summary of the explanation"}]}}},
 {"requestId":"r3","timestamp":1793718402000,"modelId":"copilot/gpt-5-mini","message":{"text":"Clean up"},"response":[
  {"kind":"toolInvocationSerialized","toolCallId":"d1","toolId":"run_in_terminal","isComplete":true,"isConfirmed":{"type":0},"pastTenseMessage":{"value":"Ran rm -rf build"},"toolSpecificData":{"kind":"terminal","commandLine":{"original":"rm -rf build"}}},
- {"kind":"toolInvocationSerialized","toolCallId":"d2","toolId":"copilot_createFile","isComplete":true,"isConfirmed":{"type":5},"pastTenseMessage":{"value":"Created notes.md"}},
+ {"kind":"toolInvocationSerialized","toolCallId":"d2","toolId":"copilot_createFile","isComplete":true,"isConfirmed":{"type":5,"source":"user"},"pastTenseMessage":{"value":"Created notes.md"}},
  {"kind":"toolInvocationSerialized","toolCallId":"d3","toolId":"copilot_readFile","isComplete":true,"isConfirmed":false,"pastTenseMessage":{"value":"Read secrets.txt"}},
  {"kind":"toolInvocationSerialized","toolCallId":"m1","toolId":"mcp_weather-serve_lookup","isComplete":true,"isConfirmed":{"type":4},"pastTenseMessage":{"value":"Ran lookup"},
-  "source":{"type":"mcp","label":"Weather","serverLabel":"weather-server","collectionId":"c","definitionId":"d"}}],
+  "source":{"type":"mcp","label":"Weather","serverLabel":"weather-server","collectionId":"c","definitionId":"d"}},
+ {"kind":"toolInvocationSerialized","toolCallId":"h1","toolId":"run_in_terminal","isComplete":true,"isConfirmed":{"type":0,"source":"hook"},"pastTenseMessage":{"value":"Ran git push"},"toolSpecificData":{"kind":"terminal","commandLine":{"original":"git push"}}},
+ {"kind":"toolInvocationSerialized","toolCallId":"h2","toolId":"copilot_createFile","isComplete":true,"isConfirmed":{"type":5,"source":"riskAssessment"},"pastTenseMessage":{"value":"Created deploy.sh"}},
+ {"kind":"toolInvocationSerialized","toolCallId":"h3","toolId":"copilot_readFile","presentation":"hidden","isComplete":true,"isConfirmed":{"type":0},"pastTenseMessage":{"value":"Read .env"}},
+ {"kind":"toolInvocationSerialized","toolCallId":"m2","toolId":"mcp_foo_bar_lookup","isComplete":true,"isConfirmed":{"type":4},"pastTenseMessage":{"value":"Ran lookup"},"source":{"type":"mcp","label":"foo.bar"}}],
  "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":900,"outputTokens":20,"toolCallRounds":[
   {"id":"round-3a","toolCalls":[{"id":"d1__vscode-1","name":"run_in_terminal","arguments":"{\"command\":\"rm -rf build\"}"},{"id":"d2__vscode-2","name":"create_file","arguments":"{}"}]},
   {"id":"round-3b","toolCalls":[{"id":"d3__vscode-3","name":"read_file","arguments":"{}"},{"id":"m1__vscode-4","name":"mcp_weather-serve_lookup","arguments":"{\"city\":\"Paris\"}"}]}],
@@ -532,7 +536,9 @@ const vscodeHistorySession = `{"version":3,"sessionId":"history-1","creationDate
 {"requestId":"r5","timestamp":1793718404000,"modelId":"copilot/gpt-5-mini","shouldBeRemovedOnSend":{"requestId":"r5","afterUndoStop":"u1"},"message":{"text":"Edit it"},"response":[
  {"value":"Kept part."},{"value":"\n` + "```" + `\n"},{"kind":"undoStop","id":"u1"},{"kind":"codeblockUri","uri":{"scheme":"file","path":"/work/q.sql"}},{"value":"edited\n` + "```" + `\n"},{"value":"Dropped part."}],
  "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":1300,"outputTokens":5}}},
-{"requestId":"r6","timestamp":1793718405000,"modelId":"copilot/gpt-5-mini","isHidden":true,"message":{"text":"Hidden prompt"},"response":[{"value":"Hidden reply"}]}]}`
+{"requestId":"r6","timestamp":1793718405000,"modelId":"copilot/gpt-5-mini","isHidden":true,"message":{"text":"Hidden prompt"},"response":[{"value":"Hidden reply"}]},
+{"requestId":"r7","timestamp":1793718406000,"modelId":"copilot/gpt-5-mini","shouldBeRemovedOnSend":{"requestId":"r7","afterUndoStop":"u2"},"message":{"text":"Write a script"},"response":[
+ {"kind":"markdownContent","content":{"value":"Keep this"}},{"kind":"undoStop","id":"u2"},{"kind":"codeblockUri","isStandalone":true,"uri":{"scheme":"file","path":"/work/run.sh"}},{"value":"Dropped standalone."}]}]}`
 
 // What a request carries beside its prompt is kept, VS Code's own requests
 // are no person's, a declined call did not succeed, an MCP call names its
@@ -577,23 +583,33 @@ func TestVSCodeCopilotSavedRequestState(t *testing.T) {
 	}
 	// The earlier request's round is compacted before the next prompt; the
 	// request's own after the last call of that round.
-	if got, want := strings.Join(kinds, " "), "r2:compaction:round-r1 r2 r2:block:0 r2:usage r3 r3:block:0 r3:block:0:result r3:block:1 r3:block:1:result r3:compaction:round-3a r3:block:2 r3:block:2:result r3:block:3 r3:block:3:result r3:usage"; got != want {
+	if got, want := strings.Join(kinds, " "), "r2:compaction:round-r1 r2 r2:block:0 r2:usage r3 r3:block:0 r3:block:0:result r3:block:1 r3:block:1:result r3:compaction:round-3a r3:block:2 r3:block:2:result r3:block:3 r3:block:3:result r3:block:4 r3:block:4:result r3:block:5 r3:block:5:result r3:block:6 r3:block:6:result r3:block:7 r3:block:7:result r3:usage"; got != want {
 		t.Fatalf("order\n got %s\nwant %s", got, want)
 	}
-	if denied := byID["r3:block:0:result"]; denied.Text != `{"content":"The user denied this tool call","details":{"confirmation":"denied","status":"declined"},"is_error":false,"tool":"run_in_terminal"}` {
+	if denied := byID["r3:block:0:result"]; denied.Text != `{"content":"This tool call was denied","details":{"confirmation":"denied","status":"declined"},"is_error":false,"tool":"run_in_terminal"}` {
 		t.Fatalf("denied = %+v", denied)
+	}
+	if skipped := byID["r3:block:1:result"]; !strings.HasPrefix(skipped.Text, `{"content":"The user skipped this tool call",`) {
+		t.Fatalf("skipped = %+v", skipped)
+	}
+	// A hook or VS Code's risk assessment turned these down, not the person.
+	if hook := byID["r3:block:4:result"]; hook.Text != `{"content":"A hook denied this tool call","details":{"blocked_by":"hook","confirmation":"denied"},"is_error":false,"tool":"run_in_terminal"}` {
+		t.Fatalf("hook = %+v", hook)
 	}
 	if mcp := byID["r3:block:3"]; mcp.Text != `{"input":{"city":"Paris"},"tool":"mcp__Weather__lookup"}` {
 		t.Fatalf("MCP call = %+v", mcp)
 	}
+	if dotted := byID["r3:block:7"]; !strings.Contains(dotted.Text, `"tool":"mcp__foo.bar__lookup"`) {
+		t.Fatalf("MCP call of a dotted server = %+v", dotted)
+	}
 	// Undone requests are indexed, not selected; what they used is spent.
-	for id, selected := range map[string]bool{"r4": false, "r4:block:0": false, "r4:usage": true, "r5": true, "r5:block:0": true, "r5:block:1": false, "r6": false, "r6:block:0": false, "r3": true} {
+	for id, selected := range map[string]bool{"r4": false, "r4:block:0": false, "r4:usage": true, "r5": true, "r5:block:0": true, "r5:block:1": false, "r6": false, "r6:block:0": false, "r3": true, "r7:block:0": true, "r7:block:3": false} {
 		message, ok := byID[id]
 		if !ok || message.Selected != selected {
 			t.Fatalf("%s selected %v (found %v), want %v", id, message.Selected, ok, selected)
 		}
 	}
-	if session.Purpose != "Explain this code" || session.Outcome != "Kept part." {
+	if session.Purpose != "Explain this code" || session.Outcome != "Keep this" {
 		t.Fatalf("purpose %q outcome %q", session.Purpose, session.Outcome)
 	}
 
@@ -610,7 +626,8 @@ func TestVSCodeCopilotSavedRequestState(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s=%s:%s:%s:%s:%d", call.CallID, call.Status, call.ErrorType, call.Category, call.MCPServer, call.CarriedRequests))
 	}
 	// The calls before the compaction are not re-read by the requests after.
-	if want := "d1=error:user_rejected:command::0 d2=error:user_rejected:edit::0 d3=error:user_rejected:read::2 m1=ok::mcp:Weather:2"; strings.Join(got, " ") != want {
+	if want := "d1=error:user_rejected:command::0 d2=error:user_rejected:edit::0 d3=error:user_rejected:read::2 m1=ok::mcp:Weather:2 " +
+		"h1=error:hook_blocked:command::2 h2=error:hook_blocked:edit::2 h3=error:hook_blocked:read::2 m2=ok::mcp:foo.bar:2"; strings.Join(got, " ") != want {
 		t.Fatalf("calls\n got %s\nwant %s", strings.Join(got, " "), want)
 	}
 }
