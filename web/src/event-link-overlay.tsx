@@ -22,9 +22,9 @@ export function EventGlyph({group,hollow=false,size=10}:{group:string;hollow?:bo
  return <svg className="event-link-glyph" width={size} height={size} viewBox="-6 -6 12 12" aria-hidden="true"><path d={glyphPath(eventGroup(group).shape,0,0,4.6)} fill={hollow?'none':eventColor(group)} stroke={eventColor(group)} strokeWidth={hollow?1.4:0}/></svg>;
 }
 /** Legend: the groups present (shape and colour), and what an arc means. */
-export function EventLinkLegend({events}:{events:AgentEventLink[]}){
+export function EventLinkLegend({events,renderGroup}:{events:AgentEventLink[];renderGroup?:(group:typeof EVENT_GROUPS[number])=>React.ReactNode}){
  if(!events.length)return null;const groups=new Set(events.map(e=>e.group)),linked=events.some(e=>linkedTarget(e)),open=events.some(e=>!linkedTarget(e));
- return <div className="lt-legend-line event-link-legend"><strong>Agent events</strong>{EVENT_GROUPS.filter(g=>groups.has(g.name)).map(g=><span key={g.key}><EventGlyph group={g.name}/>{g.short}</span>)}
+ return <div className="lt-legend-line event-link-legend"><strong>Agent events</strong>{EVENT_GROUPS.filter(g=>groups.has(g.name)).map(g=>renderGroup?<React.Fragment key={g.key}>{renderGroup(g)}</React.Fragment>:<span key={g.key}><EventGlyph group={g.name}/>{g.short}</span>)}
   {linked?<span><svg width="26" height="12" aria-hidden="true"><path d="M2 10C8 2 16 3 24 3" fill="none" stroke="var(--event-link)" strokeWidth="1.2"/><path d="M2 7V11" stroke="var(--event-link)" strokeWidth="2"/></svg>Arc back to the earlier text it is about</span>:null}
   {open?<span><EventGlyph group={events.find(e=>!linkedTarget(e))!.group} hollow/>On the axis: no target found</span>:null}</div>;
 }

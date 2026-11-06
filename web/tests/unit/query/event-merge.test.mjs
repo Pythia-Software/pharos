@@ -62,5 +62,5 @@ test('a merged card lists each kind once with the text and a shared target once;
  assert.deepEqual(view.sentences,['It failed twice.'],'a sentence inside another is said once');
  assert.deepEqual(view.targets.map(t=>t.text),['drawer only']);
  assert.equal(eventKindCounts([mark]).get('obstacle'),2,'a mark counts its events');
- assert.equal(ribbonEventCount(members.map(e=>({id:e.id,start:0,end:0,title:'',color:'',thinking:false,event:e}))),3,'row headers count events, not marks');
+ assert.equal(ribbonEventCount(members.map(e=>({id:e.id,start:0,end:0,title:'',color:'',thinking:false,event:e})),'events'),3,'row headers count events, not marks');
 });

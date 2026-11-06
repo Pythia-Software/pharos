@@ -1049,6 +1049,18 @@ func TestWorkspaceLabelFingerprint(t *testing.T) {
 	if body["pending"] != true || len(messages[0].(map[string]any)["labels"].([]any)) != 1 || len(messages[1].(map[string]any)["labels"].([]any)) != 0 || messages[1].(map[string]any)["chunks"] != float64(0) {
 		t.Fatalf("mixed freshness hid valid labels or exposed stale labels: %v", body)
 	}
+	// An accepted empty classification carries processed chunks; stale or
+	// missing classifications must stay distinguishable from that no-match.
+	execTx(t, c.DB, `UPDATE message_labels SET labels=0 WHERE message_id='first-a'`)
+	messages = check(read("ribbon-work", 200), 2)
+	if len(messages[0].(map[string]any)["labels"].([]any)) != 0 || messages[0].(map[string]any)["chunks"] != float64(1) || messages[1].(map[string]any)["chunks"] != float64(0) {
+		t.Fatalf("no-match and pending classifications are indistinguishable: %v", messages)
+	}
+	execTx(t, c.DB, `DELETE FROM message_labels WHERE message_id='second-a'; DELETE FROM message_labels_dirty WHERE conversation_id='second'`)
+	messages = check(read("ribbon-work", 200), 2)
+	if messages[1].(map[string]any)["chunks"] != nil || len(messages[1].(map[string]any)["labels"].([]any)) != 0 {
+		t.Fatalf("missing classification looks processed: %v", messages[1])
+	}
 	override(t, &messageLabelFingerprintLimit, 1)
 	body = read("ribbon-work", 200)
 	check(body, 1)

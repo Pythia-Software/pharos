@@ -36,7 +36,9 @@ var delegationMetrics = []delegationMetricSpec{
 	{"tokens", "Tokens", "tokens", "Reconciled session usage. Cache is a subset of input; reasoning is a subset of output."},
 	{"cost", "API cost", "usd", "API-rate estimate on the date of use, not billing. Partial values are lower bounds."},
 	{"calls", "Tool calls", "count", "Distinct retained tool invocations."}, {"errors", "Errors", "count", "Reported tool failures; not the outcome of the agent."},
+	{"events", "Agent events", "count", "Retained agent events at the display probability threshold, attributed through session message membership. Unprocessed messages may contain additional events."},
 	{"files", "Files Edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
+	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
 	{"messages", "Messages", "count", "Retained session message membership."}, {"requests", "Requests", "count", "Distinct retained model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
 	{"total", "Session spans", "ms", "Sum of session evidence envelopes. Parallel and inactive time accumulate."},
@@ -98,6 +100,9 @@ type delegationNode struct {
 	fileCalls      int
 	fileKnown      int
 	filesPartial   bool
+	readFiles      map[string]bool
+	readCalls      int
+	readKnown      int
 }
 type delegationSpan struct {
 	Start float64 `json:"start"`
@@ -353,7 +358,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 				}
 			}
 		}
-		for _, key := range []string{"calls", "errors", "messages", "requests", "turns", "toolSum"} {
+		for _, key := range []string{"calls", "errors", "messages", "events", "requests", "turns", "toolSum"} {
 			n.Self[key] = delegationNumber(0, "observed", 0, 0)
 		}
 		s.Nodes = append(s.Nodes, n)
@@ -527,6 +532,24 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			bump(n, "toolSum", v)
 		}
 		category, _ := toolCategory(name, "tool_call")
+		// Listing tools share the read category and retain directory paths.
+		// Exclude them from both path counts and read-coverage accounting.
+		listing := command.String == "list"
+		switch strings.ToLower(name) {
+		case "ls", "list_dir", "list_directory":
+			listing = true
+		}
+		if !listing && (cat == "read" || category == "read" || command.String == "read") && status != "error" {
+			n.readCalls++
+			key := delegationFileKey(file.String, absolute.String, repoPath.String, repoID.String, cid)
+			if status == "ok" && key != "" {
+				if n.readFiles == nil {
+					n.readFiles = map[string]bool{}
+				}
+				n.readFiles[key] = true
+				n.readKnown++
+			}
+		}
 		if (cat == "edit" || cat == "write" || category == "edit") && status != "error" {
 			n.fileCalls++
 			key := delegationFileKey(file.String, absolute.String, repoPath.String, repoID.String, cid)
@@ -615,6 +638,45 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		bump(n, "turns", float64(turns))
 		point(n, delegationTime(start.String))
 		point(n, delegationTime(end.String))
+	}
+	// Count the same retained events shown by the reader and timeline. Stream
+	// only identities; alias memberships must not count an event twice.
+	events, err := tx.QueryContext(ctx, `SELECT e.id,e.conversation_id,am.agent_session_id
+ FROM conversations c JOIN agent_events e ON e.conversation_id=c.id
+ JOIN messages m ON m.id=e.message_id
+ LEFT JOIN agent_session_messages am ON am.message_id=m.id
+ WHERE c.workspace_id=? AND e.probability>=?`, workspace, agentEventThreshold)
+	if err != nil {
+		return nil, err
+	}
+	seenEvents := map[string]map[int64]bool{}
+	for events.Next() {
+		eventCount++
+		if eventCount > 500000 {
+			events.Close()
+			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
+		}
+		var id int64
+		var cid string
+		var sid sql.NullString
+		if err = events.Scan(&id, &cid, &sid); err != nil {
+			events.Close()
+			return nil, err
+		}
+		if n := owner(sid.String, cid); n != nil {
+			if seenEvents[n.ID] == nil {
+				seenEvents[n.ID] = map[int64]bool{}
+			}
+			if !seenEvents[n.ID][id] {
+				bump(n, "events", 1)
+				seenEvents[n.ID][id] = true
+			}
+		}
+	}
+	err = events.Err()
+	events.Close()
+	if err != nil {
+		return nil, err
 	}
 	book, err := c.loadPriceBookFrom(ctx, tx)
 	if err != nil {
@@ -710,6 +772,15 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			n.Self["files"] = delegationNumber(float64(len(n.editedFiles)), quality, n.fileKnown, n.fileCalls)
 		} else {
 			n.Self["files"] = delegationMetric{Quality: "unknown", Total: n.fileCalls}
+		}
+		if n.readCalls == 0 || n.readKnown > 0 {
+			quality := "observed"
+			if n.readKnown < n.readCalls {
+				quality = "partial"
+			}
+			n.Self["filesRead"] = delegationNumber(float64(len(n.readFiles)), quality, n.readKnown, n.readCalls)
+		} else {
+			n.Self["filesRead"] = delegationMetric{Quality: "unknown", Total: n.readCalls}
 		}
 		n.Self["episodes"] = delegationNumber(float64(len(n.episodes)), "inferred", len(n.episodes), len(n.episodes))
 		if n.ExternalChild != nil && n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
@@ -886,10 +957,14 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 			quality = "partial"
 		}
 		switch spec.ID {
-		case "files":
+		case "files", "filesRead":
 			files := map[string]bool{}
 			for _, n := range nodes {
-				for key := range n.editedFiles {
+				paths := n.editedFiles
+				if spec.ID == "filesRead" {
+					paths = n.readFiles
+				}
+				for key := range paths {
 					files[key] = true
 				}
 			}

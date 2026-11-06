@@ -39,7 +39,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "findings") return "findings";
   if (dataset === "safety") return "safety";
   if (dataset === "parallelism" || dataset === "rhythm") return "machines";
-  if (dataset === "model_requests") return "thinking";
+  if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";

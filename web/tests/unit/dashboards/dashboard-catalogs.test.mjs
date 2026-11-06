@@ -1,3 +1,4 @@
+import { compactionAnalysisCatalog as compaction } from "../../../src/compaction-analysis-catalog";
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 import { population } from "../../support/query-server.mjs";
 // The Tools, Pharos MCP, Tool Time and Skills catalogs: what each offers and
@@ -13,7 +14,7 @@ import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
 import { groupedDashboardQuery } from "../../../src/usage-dashboard-model";
 import { normalizedDashboardChart } from "../../../src/analysis-catalogs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
-import { analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { isTrendView, analysisInspectQuery, analysisNote, analysisQuery, analysisViews, catalogProblems, nativeCycleResult, normalizeAnalysis, readAnalysisLink, switchView, trendAdjustments, trendUnavailable, validAnalysisState, viewOptions, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
@@ -26,8 +27,8 @@ import { withTimeRange } from "../../../src/chart-range";
 import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 
-const rows = { conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }) };
-const catalogs = [tools, mcp, time, skills, activity, agentEvents];
+const rows = { compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }) };
+const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics
@@ -47,7 +48,7 @@ test("every view of every measure and breakdown executes over its own dataset", 
       const state = { view, metric, split, unit: view === "scatter" || view === "distribution" && !catalog.measures[metric].value ? undefined : "records", period: "week", rollingPeriods: 3 };
       const label = `${catalog.dataset} ${view} ${metric} by ${split}`;
       assert.ok(validAnalysisState(catalog, state), label);
-      const query = view === "trend" ? trendQuery(catalog, state, month(catalog), { now }) : analysisQuery(catalog, state, month(catalog), { now, zone: "America/Denver" });
+      const query = isTrendView(view) ? trendQuery(catalog, state, month(catalog), { now }) : analysisQuery(catalog, state, month(catalog), { now, zone: "America/Denver" });
       for (const result of run(catalog, query.query)) assert.equal(result.error, undefined, label);
       compiles(catalog, query.query, label);
       compiles(catalog, query.supporting, `${label}: supporting`);
@@ -476,4 +477,26 @@ test("whole conversations retain messages and delegated output across event repo
   const byRepository = analysisQuery(activity, { view: "compare", unit: "records", metric: "output", split: "repository_name" }, [], { now }).query;
   const result = core.evaluateMetrics(records, byRepository, schemas.conversation_activity, { now }).metrics[0];
   assert.deepEqual(Object.fromEntries(result.buckets.map(bucket => [bucket.keys[0], bucket.value])), { "repo-a": 0, "repo-b": 200 }, "record views still offer event repositories");
+});
+
+
+test("compaction charts count boundaries and retain unknown triggers through service filters and drill-down", () => {
+  const records = [
+    { id: "a", conversation_id: "one", trigger: "human", provider: "claude", occurred_at: "2026-10-10T12:00:00Z", day: "2026-10-10" },
+    { id: "b", conversation_id: "one", trigger: "machine", provider: "claude", occurred_at: "2026-10-10T12:01:00Z", day: "2026-10-10" },
+    { id: "c", conversation_id: "one", trigger: "unknown", provider: "claude", occurred_at: "2026-10-11T12:00:00Z", day: "2026-10-11" },
+    { id: "d", conversation_id: "two", trigger: "machine", provider: "codex", occurred_at: "2026-10-11T12:00:00Z", day: "2026-10-11" },
+  ];
+  const where = [{ field: "provider", op: "=", value: "claude" }];
+  const state = { view: "compare", metric: "compactions", split: "trigger" };
+  const planned = analysisQuery(compaction, state, where, { now });
+  const result = core.evaluateMetrics(records, planned.query, schemas.compactions, { now }).metrics[0];
+  assert.deepEqual(Object.fromEntries(result.buckets.map(bucket => [bucket.keys[0], bucket.value])), { human: 1, machine: 1, unknown: 1 });
+  const unknown = result.buckets.find(bucket => bucket.keys[0] === "unknown");
+  const drilldown = analysisInspectQuery(planned, unknown, planned.clause, schemas.compactions, "compare");
+  assert.deepEqual(core.applyQuery(records, drilldown, schemas.compactions, { now }).rows.map(row => row.id), ["c"]);
+  const distinct = analysisQuery(compaction, { ...state, metric: "conversations", split: "none" }, where, { now });
+  assert.equal(core.evaluateMetrics(records, distinct.query, schemas.compactions, { now }).metrics[0].buckets[0].value, 1);
+  assert.equal(compaction.labels.trigger("human"), "Human triggered");
+  assert.equal(compaction.labels.trigger("machine"), "Machine triggered");
 });

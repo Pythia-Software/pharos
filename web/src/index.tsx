@@ -47,6 +47,8 @@ import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { postMetrics, type MetricResult } from "./metric-request";
 import { tokenSummaryMetrics } from "./token-chart-request";
 import messageLabelsDocument from "../../schemas/message_labels.schema.json";
+import compactionsDocument from "../../schemas/compactions.schema.json";
+import { compactionAnalysisCatalog } from "./compaction-analysis-catalog";
 import modelRequestsDocument from "../../schemas/model_requests.schema.json";
 import { ThinkingDashboard } from "./thinking-dashboard";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -134,7 +136,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
+type Dataset = "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "agent_events" | "agent_event_messages";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -187,6 +189,7 @@ declare global {
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
   message_labels:loadSchema<Row>(messageLabelsDocument),
+  compactions: loadSchema<Row>(compactionsDocument),
   model_requests: loadSchema<Row>(modelRequestsDocument),
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
@@ -366,6 +369,7 @@ const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
   message_labels:"No messages match these labels and filters.",
+  compactions: "No compactions match this query.",
   model_requests: "No model requests match this query.",
   library: "No work matches this query.",
   usage: "No token usage matches this query.",
@@ -1076,6 +1080,7 @@ function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T)
 
 function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if(topic==="labels")return <CatalogDashboard catalog={messageLabelsCatalog} dataset="message_labels" name="labels" defaults={dashboardDefaults.labels}/>;
+  if (topic === "compaction") return <CompactionDashboard />;
   if(topic==="thinking-overview"||topic==="thinking-detail") return <ThinkingDashboard detail={topic==="thinking-detail"}/>;
   if (topic === "calls") return <CatalogDashboard catalog={toolTimeAnalysisCatalog} dataset="tool_calls" name="calls" defaults={dashboardDefaults.calls} />;
   if (topic === "activity") return <CatalogDashboard catalog={conversationAnalysisCatalog} dataset="conversation_activity" name="activity" defaults={dashboardDefaults.activity} summary={where => <ConversationsSummary where={where} />} />;
@@ -1282,6 +1287,12 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
     {after}
   </section></DashboardCardSourceContext.Provider>;
+}
+
+// Compaction counts use the same chart, filters and card definition as other catalogs.
+function CompactionDashboard() {
+  return <CatalogDashboard catalog={compactionAnalysisCatalog} dataset="compactions" name="compaction" defaults={dashboardDefaults.compaction}
+    before={<p className="usage-dashboard-note">Count recorded context compactions over time, or compare their triggers and services. Human means manual; machine means automatic. Claude records the trigger; Codex attribution is inferred from turn position. Unknown triggers stay visible. Boundaries without a timestamp appear in unbounded comparisons but cannot be placed on a time chart.</p>} />;
 }
 
 // Agent Experience: events found in agents' replies and thinking (agent_events),

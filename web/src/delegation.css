@@ -303,7 +303,7 @@
   font-variant-numeric: tabular-nums;
 }
 .delegation-table :is(th, td) {
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
   text-align: right;
   white-space: nowrap;
@@ -333,68 +333,26 @@
 }
 .delegation-table tbody td {
   position: relative;
-  padding-top: var(--delegation-row-top);
-  padding-bottom: var(--delegation-row-bottom);
   border-bottom: 0;
   box-shadow: inset 0 -1px color-mix(in srgb, var(--line) 65%, transparent);
   cursor: pointer;
 }
-.delegation-frame-edges {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-}
-.delegation-frame-edges i {
-  display: block;
-  position: absolute;
-}
-.delegation-frame-side {
-  top: 0;
-  width: 4px;
-}
-.delegation-frame-line {
-  height: 4px;
-}
-.delegation-frame-line.start {
-  top: 0;
-}
-.delegation-frame-line.parent-divider {
-  height: 1px;
-}
-.delegation-table .delegation-border-cell {
-  position: sticky;
-  right: 0;
-  z-index: 2;
-  padding-left: 0;
-  padding-right: 0;
+.delegation-timeline-button {
+  border: 1px solid var(--line);
+  border-radius: 4px;
   background: var(--panel);
-}
-.delegation-table thead .delegation-border-cell {
-  z-index: 4;
-}
-.delegation-level {
-  font-size: var(--fs-3xs);
-  font-weight: 600;
   color: var(--ink);
-  border: 1px solid var(--delegation-level-color);
-  border-radius: 3px;
-  padding: 1px 3px;
-  background: color-mix(
-    in srgb,
-    var(--delegation-level-color) 12%,
-    var(--panel)
-  );
-  flex: none;
+  font: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
 }
-.delegation-table .delegation-family {
-  font-family: var(--serif);
-  font-size: var(--fs-sm);
-  text-align: center;
-  padding: 7px;
+.delegation-timeline-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
 }
-.delegation-table .family-all {
-  border-left: 2px solid var(--line);
+.delegation-timeline-button:disabled {
+  opacity: .5;
+  cursor: default;
 }
 .delegation-table .delegation-label-cell {
   text-align: left;
@@ -414,15 +372,14 @@
 .delegation-table tr:hover td {
   box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--sea) 4%, transparent);
 }
-.delegation-current .delegation-label-cell {
-  background: color-mix(in srgb, var(--sea) 17%, var(--panel));
-}
 .delegation-table tr.delegation-current td {
-  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--sea) 17%, transparent);
+  box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent);
 }
-.delegation-current .delegation-name {
-  color: var(--ink);
-  font-weight: 650;
+.delegation-table tr.delegation-current td:first-child {
+  box-shadow: inset 1px 0 var(--accent), inset 0 1px var(--accent), inset 0 -1px var(--accent);
+}
+.delegation-table tr.delegation-current td:last-child {
+  border-right: 1px solid var(--accent);
 }
 .delegation-ancestor .delegation-name {
   color: var(--muted);
@@ -432,14 +389,8 @@
   margin-left: 2px;
 }
 .delegation-node {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   position: relative;
-  min-height: 31px;
-}
-.delegation-node > div:last-child {
-  min-width: 0;
+  height: 46px;
 }
 .delegation-name {
   display: block;
@@ -1043,6 +994,7 @@
   }
   .delegation-table .delegation-label-cell {
     max-width: 250px;
+    position: static;
   }
   .delegation-name {
     max-width: 180px;
@@ -1069,7 +1021,7 @@
 
 /* Sessions own the first column; compact facets live in a separate column. */
 .lt-session-tree *{border:0}.delegation-parallel.is-recursive .delegation-lane-scroll{border:0}.delegation-parallel.is-recursive .delegation-axis{grid-template-columns:calc(var(--lt-execution,175px) + var(--lt-events,165px)) var(--lt-time,minmax(350px,1fr));min-width:var(--lt-min-width,690px)}.delegation-parallel.is-recursive .delegation-lane-scroll{border-radius:0}
-.delegation-lane.lt-recursive-lane{display:block;min-width:var(--lt-min-width,690px);min-height:0}.lt-session-tree{position:relative;--label-report:#efbb2b}.lt-session-fold{position:absolute;left:4px;top:7px;z-index:3}.lt-session-fold button{width:22px;height:24px}.lt-session-node{margin:0!important;padding:0!important}.lt-session-node>summary,.lt-session-row{display:grid!important;grid-template-columns:var(--lt-execution,175px) var(--lt-events,165px) var(--lt-time,minmax(350px,1fr));align-items:center;min-width:var(--lt-min-width,690px);height:20px;min-height:20px;padding:0!important;list-style:none;cursor:pointer;border:0;border-radius:0;background:transparent;width:100%;text-align:left;color:var(--ink)}.lt-session-node>summary::-webkit-details-marker{display:none}.lt-session-node>summary:hover,.lt-session-row:hover{background:color-mix(in srgb,var(--muted) 7%,transparent)}.lt-session-node>summary:focus-visible,.lt-session-row:focus-visible{outline:0;background:color-mix(in srgb,var(--gold) 16%,transparent)}.lt-session-node[open]>summary>.lt-session-row-label>.lt-session-caret{transform:rotate(90deg)}.lt-session-row-label,.lt-session-identity,.lt-session-gutter{position:sticky;background:var(--panel);z-index:2;min-width:0;box-sizing:border-box;height:100%}.lt-session-row-label{left:var(--lt-execution,175px);display:flex;gap:5px;align-items:center;padding-right:6px;font-size:10px}.lt-session-row-label strong{font:400 10px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.lt-session-row-label small{font:9px ui-monospace,monospace;color:var(--muted);margin-left:auto}.lt-session-identity{left:0;display:flex;flex-direction:column;justify-content:center;padding-right:6px}.lt-session-identity strong,.lt-session-identity small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}.lt-session-identity strong{font-size:11px;font-weight:500}.lt-session-identity small{font-size:9px;color:var(--muted);margin-top:2px}.lt-session-gutter{left:0;background:linear-gradient(90deg,var(--panel) 0 15px,color-mix(in srgb,var(--muted) 13%,var(--panel)) 15px 17px,var(--panel) 17px)}.lt-session-caret{display:inline-block;width:8px;flex-shrink:0;color:var(--muted);text-align:center}.lt-session-root>summary{height:38px;min-height:38px;background:color-mix(in srgb,var(--muted) 5%,transparent)}.lt-session-root>summary>.lt-session-row-label{font-size:9px;color:var(--muted)}.delegation-lane-current .lt-session-root>summary>.lt-session-identity{background:color-mix(in srgb,var(--gold) 8%,var(--panel))}.lt-session-ribbon{min-width:0;margin-right:22px;position:relative;height:18px;align-self:center}.lt-session-ribbon.is-session{height:32px}.lt-session-ribbon svg{display:block;width:100%;height:100%}.lt-session-untimed{display:block;padding:3px 12px;font-size:9px;color:var(--muted)}
+.delegation-lane.lt-recursive-lane{display:block;min-width:var(--lt-min-width,690px);min-height:0}.lt-session-tree{position:relative;--label-report:#efbb2b}.lt-session-fold{position:absolute;left:4px;top:7px;z-index:3}.lt-session-fold button{width:22px;height:24px}.lt-session-node{margin:0!important;padding:0!important}.lt-session-node>summary,.lt-session-row{display:grid!important;grid-template-columns:var(--lt-execution,175px) var(--lt-events,165px) var(--lt-time,minmax(350px,1fr));align-items:center;min-width:var(--lt-min-width,690px);height:20px;min-height:20px;padding:0!important;list-style:none;cursor:pointer;border:0;border-radius:0;background:transparent;width:100%;text-align:left;color:var(--ink)}.lt-session-node>summary::-webkit-details-marker{display:none}.lt-session-node>summary:hover,.lt-session-row:hover{background:color-mix(in srgb,var(--muted) 7%,transparent)}.lt-session-node>summary:focus-visible,.lt-session-row:focus-visible{outline:0;background:color-mix(in srgb,var(--gold) 16%,transparent)}.lt-session-node[open]>summary>.lt-session-row-label>.lt-session-caret{transform:rotate(90deg)}.lt-session-row-label,.lt-session-identity,.lt-session-gutter{position:sticky;background:var(--panel);z-index:2;min-width:0;box-sizing:border-box;height:100%}.lt-session-row-label{left:var(--lt-execution,175px);display:flex;gap:5px;align-items:center;padding-right:6px;font-size:10px}.lt-session-row-label strong{font:400 10px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.lt-session-row-label small{font:9px ui-monospace,monospace;color:var(--muted);margin-left:auto}.lt-session-identity{left:0;display:flex;flex-direction:column;justify-content:center;padding-right:6px}.lt-session-identity strong,.lt-session-identity small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}.lt-session-identity strong{font-size:11px;font-weight:500}.lt-session-identity small{font-size:9px;color:var(--muted);margin-top:2px}.lt-session-gutter{left:0;background:linear-gradient(90deg,var(--panel) 0 15px,color-mix(in srgb,var(--muted) 13%,var(--panel)) 15px 17px,var(--panel) 17px)}.lt-session-caret{display:inline-block;width:8px;flex-shrink:0;color:var(--muted);text-align:center}.lt-session-root>summary{height:38px;min-height:38px;background:color-mix(in srgb,var(--muted) 5%,transparent)}.lt-session-root>summary>.lt-session-row-label{font-size:9px;color:var(--muted)}.lt-session-ribbon{min-width:0;margin-right:22px;position:relative;height:18px;align-self:center}.lt-session-ribbon.is-session{height:32px}.lt-session-ribbon svg{display:block;width:100%;height:100%}.lt-session-untimed{display:block;padding:3px 12px;font-size:9px;color:var(--muted)}
 .delegation-parallel.is-recursive .delegation-axis>.lt-axis-names{padding:0;display:grid;grid-template-columns:var(--lt-execution,175px) var(--lt-events,165px);align-items:center}.lt-axis-names>span{padding-left:8px;font-weight:400}
 
 /* Labels are filled fields; tools are dots on rails in secondary and tertiary
@@ -1094,6 +1046,11 @@
 .lt-column-resizer{position:absolute;right:-5px;top:0;bottom:0;width:11px;padding:0;border:0;border-radius:0;background:transparent;cursor:col-resize;touch-action:none;z-index:8;display:flex;justify-content:center;align-items:center}
 .lt-column-resizer>i{width:3px;height:21px;background:color-mix(in srgb,var(--muted) 45%,transparent);border-radius:2px}.lt-column-resizer:hover>i,.lt-column-resizer:focus-visible>i{background:var(--gold)}
 .lt-timeline-legend{display:grid;gap:8px;padding:10px 0;font-size:var(--fs-xs);color:var(--muted)}
+.lt-timeline-legend .usage-legend-item{gap:5px;max-width:100%;text-align:left;white-space:normal}
+.lt-timeline-legend .usage-legend-chip{min-width:0;max-width:100%}
+.lt-timeline-legend .usage-legend-caret{margin-left:0}
+.lt-timeline-legend .usage-legend-item.dimmed{color:var(--muted)}
+.lt-timeline-legend .usage-legend-item.dimmed :is(i,.event-link-glyph){filter:grayscale(1)}
 .lt-legend-line{display:flex;align-items:center;flex-wrap:wrap;gap:5px 13px}.lt-legend-line>strong{font-weight:500;min-width:94px;color:var(--ink)}.lt-legend-line>span{display:inline-flex;gap:5px;align-items:center}.lt-legend-line>small{font-size:10px}.lt-label-swatch,.lt-source-swatch{width:12px;height:10px;display:inline-block;flex:none}
 .lt-tool-swatch{display:inline-block;width:20px;height:1px;background:currentColor;position:relative;margin:4px 1px}.lt-tool-swatch:before{content:'';position:absolute;top:-3px;left:0;width:7px;height:7px;border-radius:50%;background:currentColor}
 .lt-source-swatch.is-diagonal{background-image:repeating-linear-gradient(135deg,transparent 0 2px,color-mix(in srgb,var(--ink) 65%,transparent) 2px 2.8px,transparent 2.8px 4px)}.lt-source-swatch.is-dots{background-image:radial-gradient(color-mix(in srgb,var(--ink) 65%,transparent) .65px,transparent .65px);background-size:3px 3px}
@@ -1124,7 +1081,7 @@
 
 /* The sidebar clock is a static overview; session identities remain live.
    Activating the clock preserves saved columns, window and disclosures. */
-.delegation-parallel.is-preview{position:relative;--lt-execution:clamp(110px,40%,175px)!important;--lt-events:56px!important;--lt-time:minmax(0,1fr)!important;--lt-min-width:0px!important}
+.delegation-parallel.is-preview{position:relative;--lt-execution:clamp(110px,40%,175px)!important;--lt-events:0px!important;--lt-time:minmax(0,1fr)!important;--lt-min-width:0px!important}
 .lt-preview-activate{position:absolute;inset:0;z-index:10;width:100%;padding:0;border:0;border-radius:0;background:transparent;cursor:zoom-in;text-align:right;color:var(--accent)}
 .lt-preview-activate>span{position:absolute;right:0;top:0;display:inline-flex;align-items:center;gap:4px;padding:2px 4px;background:var(--panel);font-size:10px}
 .lt-preview-activate .app-icon{width:12px;height:12px}
@@ -1143,7 +1100,9 @@
 
 /* Session navigation stays independent of event disclosure and clock editing. */
 button.lt-session-identity.is-interactive{border:0;border-radius:0;color:var(--ink);text-align:left;padding-top:0;padding-bottom:0;cursor:pointer;font:inherit}
-button.lt-session-identity.is-interactive:hover,button.lt-session-identity.is-interactive:focus-visible{background:color-mix(in srgb,var(--gold) 12%,var(--panel))}
+button.lt-session-identity.is-interactive strong{color:var(--accent)}
+button.lt-session-identity.is-interactive:hover strong,button.lt-session-identity.is-interactive:focus-visible strong{text-decoration:underline}
+button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:-2px}
 .is-preview button.lt-session-identity.is-interactive{z-index:11}
 .lt-session-row-label.is-root{gap:5px;font-variant-numeric:tabular-nums}
 .lt-session-row-label.is-root .lt-event-count{font:500 11px/1 var(--sans)}
@@ -1183,3 +1142,14 @@ button.lt-session-identity.is-interactive:hover,button.lt-session-identity.is-in
 .lt-idle-cut time b{display:block;font-weight:600;color:var(--ink)}
 :root{--idle-cut:color-mix(in srgb,var(--ink) 55%,transparent)}
 .lt-idle-cut-line{stroke:var(--idle-cut);stroke-width:2}
+
+/* Session identity and selection are shared by the usage table and timeline. */
+.delegation-table tbody .delegation-label-cell{padding-top:0;padding-bottom:0}
+.delegation-node .lt-session-identity{position:relative;width:100%;max-width:330px}
+.session-fold{z-index:3;position:absolute;top:13px;width:20px;height:20px;padding:2px;background:transparent}
+.lt-session-identity[aria-current="true"]{cursor:default}
+.lt-session-root>summary,.lt-session-preview,.lt-session-empty-root{position:relative}
+.delegation-inbox-row.current::after,.delegation-lane-current .lt-session-root>summary::after,.delegation-lane-current .lt-session-preview::after,.delegation-lane-current .lt-session-empty-root::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 1px var(--accent);pointer-events:none;z-index:13}
+.is-preview .lt-session-identity[aria-current="true"]{z-index:11}
+.without-events .lt-session-node>summary,.without-events .lt-session-row,.without-events .delegation-axis.lt-resizable-axis{grid-template-columns:var(--lt-execution) var(--lt-time)}
+.delegation-ancestor .lt-session-identity:not(.is-interactive) strong{color:var(--muted)}
