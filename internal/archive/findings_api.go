@@ -160,6 +160,11 @@ func (view *findingView) state(row *findingRow) string {
 		if state.SnoozeWorse && !view.snoozeWoke(row, state) {
 			return findingSnoozed
 		}
+		if findingNeedsUndo(state) != nil {
+			// Undoing a harmful change remains actionable even when the
+			// pattern no longer qualifies for another recommendation.
+			return findingOpen
+		}
 		if latest := state.latest(); latest != nil {
 			switch {
 			case latest.Status == interventionWatching:
@@ -269,6 +274,13 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	regressed := 0
 	newCount := 0
 	for _, row := range view.rows {
+		// Verified results belong to history, independently of whether
+		// the finding currently qualifies for a recommendation.
+		if user := view.states[row.ID]; user != nil {
+			won, _, back := user.improved()
+			saved.add(won)
+			regressed += back
+		}
 		state := view.state(row)
 		if state == findingHidden {
 			continue
@@ -282,11 +294,6 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 				newCount++
 				card["new"] = true
 			}
-		}
-		if user := view.states[row.ID]; user != nil {
-			won, _, back := user.improved()
-			saved.add(won)
-			regressed += back
 		}
 		if filter == "" || filter == state {
 			cards = append(cards, card)

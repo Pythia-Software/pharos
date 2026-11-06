@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -108,26 +109,56 @@ func TestFindingUnchangedMovesToTheNextChange(t *testing.T) {
 }
 
 func TestFindingWorseAsksToUndo(t *testing.T) {
-	ctx := context.Background()
-	fixture, id, plan, now := copiedFinding(t)
-	result := closeWindow(t, fixture, plan, now, func(int) bool { return true })
-	if result.Status != interventionWorse {
-		t.Fatalf("status %q %v", result.Status, result.Result)
-	}
-	catalog := fixture.catalog
-	detail, _ := catalog.FindingDetail(ctx, id)
-	if detail["undo"] == nil || !strings.Contains(firstString(detail["prompt"]), "revert it") {
-		t.Fatalf("a worse result asks to undo the change: %v\n%s", detail["undo"], detail["prompt"])
-	}
-	if err := catalog.FindingAction(ctx, id, map[string]any{"action": "cart_add"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := catalog.CopyCart(ctx, "repo:repo-1", []string{id}, "pr"); err != nil {
-		t.Fatal(err)
-	}
-	detail, _ = catalog.FindingDetail(ctx, id)
-	if detail["undo"] != nil || detail["state"] != findingOpen {
-		t.Fatalf("after copying the undo, the finding is open with its next change: %v %v", detail["undo"], detail["state"])
+	for _, quiet := range []bool{false, true} {
+		name := "recent evidence"
+		if quiet {
+			name = "expired evidence"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fixture, id, plan, now := copiedFinding(t)
+			result := closeWindow(t, fixture, plan, now, func(int) bool { return true })
+			if result.Status != interventionWorse {
+				t.Fatalf("status %q", result.Status)
+			}
+			catalog := fixture.catalog
+			if quiet {
+				later := catalog.clock().AddDate(0, 0, findingRecentDays)
+				catalog.now = func() time.Time { return later }
+			}
+			detail, err := catalog.FindingDetail(ctx, id)
+			if err != nil || detail["state"] != findingOpen || detail["undo"] == nil || !strings.Contains(firstString(detail["prompt"]), "revert it") {
+				t.Fatalf("pending undo: state=%v undo=%v err=%v", detail["state"], detail["undo"] != nil, err)
+			}
+			overview, err := catalog.FindingsOverview(ctx, findingOpen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, card := range overview["findings"].([]map[string]any) {
+				if card["id"] == id && card["undo"] != nil {
+					visible = true
+				}
+			}
+			if !visible {
+				t.Fatal("pending undo disappeared from open findings")
+			}
+			if err := catalog.FindingAction(ctx, id, map[string]any{"action": "cart_add"}); err != nil {
+				t.Fatal(err)
+			}
+			copied, err := catalog.CopyCart(ctx, "repo:repo-1", []string{id}, "pr")
+			if err != nil || !strings.Contains(firstString(copied["prompt"]), "revert it") {
+				t.Fatalf("copy undo prompt: count=%v err=%v", copied["count"], err)
+			}
+			want := findingOpen
+			if quiet {
+				want = findingHidden
+			}
+			detail, err = catalog.FindingDetail(ctx, id)
+			if err != nil || detail["undo"] != nil || detail["state"] != want {
+				t.Fatalf("after undo: state=%v, want %v; undo=%v err=%v", detail["state"], want, detail["undo"] != nil, err)
+			}
+		})
 	}
 }
 
@@ -182,6 +213,40 @@ func TestFindingWinRegresses(t *testing.T) {
 	detail, _ := fixture.catalog.FindingDetail(ctx, id)
 	if detail["state"] != findingOpen || detail["regressed"] == nil {
 		t.Fatalf("a regressed win reopens: %v", detail["state"])
+	}
+	before, err := fixture.catalog.FindingsOverview(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSummary := before["summary"].(map[string]any)
+	saved := beforeSummary["saved"].(findingSavings)
+	if saved.Tokens <= 0 || integer(beforeSummary["regressed"]) != 1 {
+		t.Fatalf("regressed win must have saved history: %v", beforeSummary)
+	}
+	later := fixture.catalog.clock().AddDate(0, 0, findingRecentDays)
+	fixture.catalog.now = func() time.Time { return later }
+	// Both the complete overview and the header's summary-only poll keep
+	// every historical total when the recommendation becomes hidden.
+	for _, filter := range []string{"", "summary"} {
+		after, err := fixture.catalog.FindingsOverview(ctx, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		summary := after["summary"].(map[string]any)
+		if !reflect.DeepEqual(summary["saved"], saved) || integer(summary["regressed"]) != 1 {
+			t.Fatalf("hidden finding lost historical results (%q): %v, want saved %+v", filter, summary, saved)
+		}
+		if filter == "" {
+			for _, card := range after["findings"].([]map[string]any) {
+				if card["id"] == id {
+					t.Fatal("a quiet regressed win should not be recommended")
+				}
+			}
+			wins := after["wins"].([]map[string]any)
+			if len(wins) != 1 || wins[0]["id"] != id || wins[0]["saved"].(findingSavings).Tokens != saved.Tokens {
+				t.Fatalf("wins and summary disagree: %v", wins)
+			}
+		}
 	}
 }
 
