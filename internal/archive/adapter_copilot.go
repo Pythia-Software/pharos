@@ -680,9 +680,19 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 	}
 	// Each other message of a split response names its receipt too, as the
 	// same request, so its tool calls are the request's.
+	// The effort a request's receipt last reported is its messages' and tool
+	// calls' too, though a correction arrived after them.
 	aliases := map[*copilotAgent]map[int][]MessageRecord{}
 	for _, r := range receipts {
 		key := r.agentID + "\x00" + r.request
+		if r.efforted > 0 {
+			for index := range r.agent.conversation.Messages {
+				message := &r.agent.conversation.Messages[index]
+				if message.Kind != "metadata" && slices.Contains(chunks[key], strings.TrimSuffix(blockSuffixPattern.ReplaceAllString(message.NativeID, ""), ":reasoning")) {
+					message.Effort = r.effort
+				}
+			}
+		}
 		for _, id := range chunks[key] {
 			if id == paidFor[key] {
 				continue
