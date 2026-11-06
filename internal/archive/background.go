@@ -83,7 +83,7 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
-	// requiresLabels items exist only where labels_enabled is on;
+	// requiresLabels items run only where labels_enabled is on;
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool

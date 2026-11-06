@@ -266,6 +266,10 @@ test("the schedule is the server's headline, one row per cadence with its items"
   const adhoc = schedule.rows.at(-1);
   assert.deepEqual([adhoc.id, adhoc.label, adhoc.dot, adhoc.run.cadence, adhoc.open], ["manual", "Ad hoc", "paused", "manual", false]);
   assert.deepEqual(adhoc.items.map(item => [item.id, item.text]), [["backup", "Last run 26 h ago"]]);
+  const disabled = plain(panel.scheduleModel({...background, unscheduled: ['labels'], items: [
+    ...background.items, {id: 'labels', label: 'Message labels', state: 'disabled', state_label: 'Off'},
+  ]}, at));
+  assert.equal(disabled.rows.some(row => row.id === 'manual'), false, 'disabled model settings do not offer work in the drive popover');
   // Each row runs its own cadence now, unless it is already running.
   assert.deepEqual(schedule.rows.map(row => [row.run.cadence, row.run.disabled]), [["frequent", false], ["hourly", true], ["daily", false], ["manual", false]]);
   // Updating now pulses; Up next is steady.

@@ -110,7 +110,7 @@ const searchTemplate = emptyTextSearch();
 viewFields.disclosures.details={
   example:{quickStatsSettings:true},
   layout_sections:["menuBarPreferences","headerSettings","quickStatsSettings"],
-  sections:{"sync:separate":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
+  sections:{"sync:history":"settings/sync", "sync:sources":"settings/sync", "sync:repairs":"settings/sync", "sync:diagnostics":"settings/sync", "library:drive-health":"settings", "library:application":"settings/libraries", "machine:methodology":"/analyze?analyze_view=tokens&machine_view=time", "tokens.pricing-prompt":"analyze/tokens"},
   families:{"background:<item ID>":"settings/sync", "sync:forecast:<run ID>":"settings/sync", "cloud:schedule:<destination ID>":"settings/backups", "carbon:row:<tier>:<category>":"analyze/carbon", "status:cadence:<cadence ID>":"overlay=drive", "status:support":"overlay=drive", "library:activity:<activity ID>:<started_at>:details":"overlay=drive", "work:<work ID>:files":"work", "feedback:logs:<submission ID>":"feedback inbox"},
   defaults:"Fixed defaults remain implicit; data-dependent initial defaults are captured only in their active view. Explicit false closes a section even when its normal default is open.",
   note:"On settings/layout, true opens a section and false closes it. Combine with reveal=section:<identity> to scroll and highlight without moving focus. Settings values remain saved preferences.",

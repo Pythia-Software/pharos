@@ -974,20 +974,22 @@ test('row disclosures record deliberate choices without capturing every rendered
 });
 
 test('accordion links restore capture/index diagnostics in fresh browsers and history, and reveal a closed accordion without opening it',{skip},async t=>{
- const keys=['sync:separate','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast'],ready='#syncDiagnosticTables details';
+ const keys=['sync:history','sync:sources','sync:repairs','sync:diagnostics','sync:forecast:capture-forecast','background:labels','background:agent_events'],ready='#syncDiagnosticTables details';
  const route=entries=>'/settings/sync?'+new URLSearchParams({disclosures:JSON.stringify(entries)});
- const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,false]));
+ const entries=Object.fromEntries(keys.map(key=>[key,true])),defaults=Object.fromEntries(keys.map(key=>[key,['sync:history','sync:sources'].includes(key)]));
  const app=await open(t,{url:route(entries),ready}),{page}=app;
  const state=(browser,expected)=>browser.waitForFunction(expected=>Object.entries(expected).every(([key,open])=>{
   const element=[...document.querySelectorAll('[data-view-key],[data-pharos-target]')].find(element=>element.dataset.viewKey===key||element.dataset.pharosTarget==='section:'+key);
   return element&&(element.tagName==='DETAILS'?element.open:element.getAttribute('aria-expanded')==='true')===open;
  }),expected);
  await state(page,entries);
- const first=page.locator('[data-view-key="'+keys[0]+'"]');
+ const first=page.locator('[data-view-key="'+keys[0]+'"],[data-pharos-target="section:'+keys[0]+'"]');
  if(await first.evaluate(element=>element.tagName==='DETAILS'))await first.locator('summary').first().click();else await first.click();
  await state(page,{...entries,[keys[0]]:false});
  await page.waitForFunction(key=>JSON.parse(new URLSearchParams(location.search).get('disclosures')||'{}')[key]===false,keys[0]);await app.settled();
  const fresh=await open(t,{url:path(page),ready});
+ await state(fresh.page,{...entries,[keys[0]]:false});
+ await fresh.page.evaluate(()=>window.pharosSync.refresh());
  await state(fresh.page,{...entries,[keys[0]]:false});
  await page.evaluate(url=>window.pharosNavigate(url),route({}));
  await state(page,defaults);
@@ -995,7 +997,7 @@ test('accordion links restore capture/index diagnostics in fresh browsers and hi
  await page.goForward();await state(page,defaults);
  assert.equal(app.calls.some(call=>call.method!=='GET'&&/^\/api\/(background\/(settings|run)|sync\/|cloud-backup\/(schedule|start))/.test(call.path)),false,'restoring sections must not run work or save settings');
  // Revealing a closed accordion highlights its summary without overriding explicit false.
- const closed={'sync:separate':false,'sync:diagnostics':false};
+ const closed={'sync:history':false,'sync:sources':false,'sync:diagnostics':false};
  await page.evaluate(url=>window.pharosNavigate(url),route(closed)+'&'+new URLSearchParams({reveal:'section:sync:diagnostics'}));
  const target=page.locator('[data-pharos-target="section:sync:diagnostics"].pharos-reveal');await target.waitFor({state:'visible'});
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
