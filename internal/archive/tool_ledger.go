@@ -178,9 +178,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 	}
 
-	// A call's result is its first. A later result marked as continuing
-	// it (each page a ChatGPT browser click quotes) is more of its output;
-	// any other repeats it.
+	// A call's result is its first. A later result that names the result
+	// before it as the one it continues (each page a ChatGPT browser click
+	// quotes) is more of its output; any other repeats it, or is an
+	// alternative to it.
 	results, later := map[string]int{}, map[string][]int{}
 	for index, message := range messages {
 		if message.Kind != "tool_result" && message.Kind != "delegation_result" {
@@ -256,11 +257,13 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 				isError = payload["is_error"] == true || ((call.MCPServer != "" || call.Category == "mcp") && mcpResultError(payload["content"]))
 				details = mapValue(payload["details"])
 			}
+			last := result.NativeID
 			for _, index := range later[key] {
 				var payload map[string]any
-				if json.Unmarshal([]byte(messages[index].Text), &payload) != nil || payload["continues"] != true {
+				if json.Unmarshal([]byte(messages[index].Text), &payload) != nil || firstString(payload["continues"]) != last {
 					continue
 				}
+				last = messages[index].NativeID
 				text, count := toolResultText(payload["content"])
 				content, images, isError = content+"\n"+text, images+count, isError || payload["is_error"] == true
 				call.EndedAt = defaultString(nilIfEmpty(messages[index].CreatedAt), call.EndedAt)
