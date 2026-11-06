@@ -33,3 +33,5 @@
 .dashboard-histogram-axis{position:relative;height:1.4em;font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 .dashboard-histogram-axis span{position:absolute;top:2px;transform:translateX(-50%);white-space:nowrap}
 .dashboard-histogram-name{font-size:var(--fs-xs);color:var(--muted);text-align:center}
+.dashboard-histogram-card{flex:1;min-width:0;padding-right:34px}
+.dashboard-histogram-card .dashboard-histogram{padding-left:8px}
