@@ -125,12 +125,22 @@ what each offers and why.
   label: "requests with no results" }`, so a share of records meeting a
   condition pools like any ratio. It runs as `SUM(IF(...))` in clauses,
   formulas and grouped rows, and names what it counts (`label`, which
-  `catalogProblems` requires). Pooling still sums each part per period,
-  window or unit. Each also has:
+  `catalogProblems` requires). A part may also **count distinct values**,
+  `{ op: "count_distinct", field, when?, per?, label }`: the turns with an
+  event are `{ op: "count_distinct", field: "turn_id", when: "[events]>0" }`,
+  running as `COUNT_DISTINCT(IF([events]>0,[turn_id],NULL))`, and `per: 1000`
+  divides by a thousand (events per 1,000 messages). A distinct part is exact
+  for each group and window it is computed over; Other and a trailing window
+  pool such parts by adding them, which counts a unit in several groups or
+  periods once in each (Agent Events states this in its notes). Pooling still
+  sums each part per period, window or unit. Each also has:
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
-  - an optional implied population (`where`), such as fully priced usage.
+  - an optional implied population (`where`), such as fully priced usage;
+  - an optional `drill`: where terms a bar's or point's records add, so a
+    rate opens the records behind its numerator (Agent Events opens the
+    messages with an event, `events > 0`, rather than every message read).
 
   A mean is declared as a ratio of a sum and a count, never as `avg`:
   `catalogProblems` rejects an `avg` measure, because a mean of per-period

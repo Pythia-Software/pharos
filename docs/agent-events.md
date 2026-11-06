@@ -49,6 +49,37 @@ dashboard's catalog (`web/src/agent-events-analysis-catalog.ts`). The dashboard 
 messages** by day or week, dividing by the messages read in each period under the same filters: the engine's parts
 split only additive measures, so this panel computes the rate from two grouped counts.
 
+### Agent Events dashboard
+
+`agent_event_facts` (`agent_event_facts.go`) gives each message the pass read the context its rates are broken down
+by, so a breakdown never reads the conversation history at query time:
+
+- `agent_event_facts`: one row per message read, with its turn (`turn_id`, the prompt it answered, found from the
+  prompts' source order), who prompted the turn (`prompted_by`: `person` when the prompt has typed words, `automated`
+  when it has none, `agent` for a delegated subagent's run, `unclassified` before authorship has run, `none` before
+  the first prompt), the prompt's typed words, model, effort, provider, harness, whether it is a subagent, and its
+  events at the threshold. A message without a time takes its conversation's start (`time_source`).
+- `agent_event_fact_kinds`: the message's events per reported kind.
+
+The facts are rebuilt per conversation when its stamp changes (messages read, their events, authorship, model or
+parent), in batches of 200 conversations: while the events pass runs (at most every ten minutes), when its backlog is done,
+after an import (`refreshAgentEventFactsLogged`), and by `pharos agent-events facts`. Opening the dashboard never runs the pass or rebuilds the facts.
+
+They back the `agent_event_rates` dataset: one row per (message read, reported kind), with that kind's events in the
+message (usually none). Every message read is in every kind, so a rate's denominator, the distinct messages, turns
+or conversations read under the filters, stays the same whichever kinds are filtered or broken down; only the
+numerator follows the kinds. Its queries use memory scratch storage (`executeQueryV3`), since the rows are narrow and
+file scratch made a distinct share take seconds.
+
+The catalog (`web/src/agent-event-rates-catalog.ts`) offers events per 1,000 messages read and the shares of messages,
+turns and conversations with an event, by kind group, kind, reply or thinking, who prompted, prompt length (person
+prompts only), main agent or subagent, model, model and effort, effort, provider, harness, repository, week, and
+pairs of these. Compare hides groups under 200 messages read by default. A bar opens the messages behind it that
+have an event of its kind, each linking into the reader with its events marked (`reader_events=1`). The rates
+describe what agents wrote; nothing scores a person, a prompt or a model. Seven cards
+(`web/src/agent-event-card-recipes.ts`) open the dashboard at their views. Intervals for small groups wait on Query
+Table ([handoff](handoffs/query-table-rate-intervals.md)).
+
 ### In the reader
 
 A conversation the pass has read offers **Agent events** in the reader's Highlight row, beside Human writing and

@@ -50,6 +50,11 @@ shipped as #271–#273.
 
 ## Upstream Query Table
 
+[`query-table-rate-intervals.md`](query-table-rate-intervals.md) (open, against
+1.0.0): intervals for ratio metrics (Wilson for shares, Poisson for rates) in
+the result and the charts, so the Agent Events dashboard can show how far a
+small group's value could move.
+
 Pharos uses the published Query Table module and packages without patches.
 Query Table 0.9.7 delivered every request in
 [`query-table-after-0.9.6.md`](query-table-after-0.9.6.md): chart labels,
