@@ -46,7 +46,7 @@ export function BinnedHistogram({ histogram, label, noun, format = String, onSel
           })}
           {marks.map(mark => <line key={mark.level} x1={mark.x * width} x2={mark.x * width} y1={0} y2={height} className="dashboard-heatmap-trace" data-level={mark.level} vectorEffect="non-scaling-stroke" />)}
         </svg>
-        {marks.map((mark, index) => <span key={mark.level} className="dashboard-histogram-mark" style={{ left: `${100 * mark.x}%`, top: `${4 + index * 18}px` }}>{percentileLabel(mark.level)} {format(mark.value)}</span>)}
+        {marks.map((mark, index) => <span key={mark.level} className={`dashboard-histogram-mark${mark.x > 0.6 ? " is-left" : ""}`} style={{ left: `${100 * mark.x}%`, top: `${4 + index * 18}px` }}>{percentileLabel(mark.level)} {format(mark.value)}</span>)}
       </div>
       <div className="dashboard-histogram-axis" aria-hidden="true">
         {histogram.ticks.map(tick => <span key={tick.value} style={{ left: `${100 * tick.y}%` }}>{format(tick.value)}</span>)}

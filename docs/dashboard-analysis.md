@@ -100,7 +100,24 @@ what each offers and why.
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
-  - an optional implied population (`where`), such as fully priced usage.
+  - an optional implied population (`where`), such as fully priced usage;
+  - an optional `valueBins` (or a `band`), the breakdown whose fine bins
+    hold the per-record value. A record distribution of it without a
+    breakdown is then a histogram over those bins on the value's own axis
+    (`distributionBins`, `BinnedHistogram`): a log axis gives a long tail
+    its shape where Query Table's even steps would put nearly every record
+    in the first bar, zero sits apart, and the median and 90th percentile
+    are marked. Any other log-axis distribution leaves out zero, which a log
+    axis cannot place, and its note says so;
+  - an optional `noDistribution` reason, for a measure whose distribution
+    says nothing, such as a count of rare events nearly every record has
+    none of. Distribution disables it with that reason.
+
+  A unit may be `recordsAlike`: one record each, such as Session Shape's
+  agent session. Its distribution is the records', so Distribution offers
+  the records for a measure with a per-record value and the unit only for
+  one without, and Compare's per-unit Total, which is the records' bars,
+  gives way to a mean. Each disabled choice says why.
 
   A mean is declared as a ratio of a sum and a count, never as `avg`:
   `catalogProblems` rejects an `avg` measure, because a mean of per-period

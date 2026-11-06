@@ -20633,11 +20633,6 @@
       "where": [
         {
           "field": "active_seconds",
-          "op": "is_not_null",
-          "value": ""
-        },
-        {
-          "field": "active_seconds",
           "op": ">",
           "value": "0"
         }
@@ -20719,8 +20714,8 @@
       "where": [
         {
           "field": "turn_cycle_p50_seconds",
-          "op": "is_not_null",
-          "value": ""
+          "op": ">",
+          "value": "0"
         }
       ],
       "note": "A session's turn cycle is the median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Only sessions with a turn cycle count; providers with fewer than three are left out.",
@@ -20807,11 +20802,6 @@
           "field": "has_authorship",
           "op": "=",
           "value": "true"
-        },
-        {
-          "field": "autonomy",
-          "op": "is_not_null",
-          "value": ""
         },
         {
           "field": "autonomy",
@@ -21728,6 +21718,305 @@
         },
         "dataset": "session_shape",
         "detailAction": "Explore peak context share over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_active_band_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "active_seconds_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Active time per session"
+          }
+        }
+      ],
+      "id": "session-active-time-trend",
+      "title": "Active time over time",
+      "description": "Your sessions each day by their active time, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with timestamps count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_active_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "active_seconds_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "active_time",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore active time per session over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "hours",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_length_band_active_hours_daily",
+          "op": "sum",
+          "field": "active_hours",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      ],
+      "id": "session-length-hours",
+      "title": "Active hours by session length",
+      "description": "Active hours of your sessions each day by the session's message count, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Active time adds the gaps between consecutive messages of 300 seconds or less. Length counts every message of the session's own stream; a delegated run is its own session. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's active hours of sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_length_band_active_hours_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "messages_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "day",
+          "messages_bin"
+        ],
+        "summaries": [
+          {
+            "id": "card_active_hours",
+            "op": "sum",
+            "field": "active_hours",
+            "label": "Active hours per day"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_active_hours",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "hours",
+        "coverMetric": {
+          "id": "ss_length_band_active_hours_daily",
+          "op": "sum",
+          "field": "card_active_hours",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "active_hours",
+          "split": "length_band",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore active hours by session length"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "calls",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_length_band_tool_calls_daily",
+          "op": "sum",
+          "field": "tool_calls",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Tool calls per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      ],
+      "id": "session-length-tool-calls",
+      "title": "Tool calls by session length",
+      "description": "Tool calls of your sessions each day by the session's message count, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Length counts every message of the session's own stream; a delegated run is its own session. Only sessions the tool ledger covers count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's tool calls of sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_length_band_tool_calls_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "messages_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "day",
+          "messages_bin"
+        ],
+        "summaries": [
+          {
+            "id": "card_tool_calls",
+            "op": "sum",
+            "field": "tool_calls",
+            "label": "Tool calls per day"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_tool_calls",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "calls",
+        "coverMetric": {
+          "id": "ss_length_band_tool_calls_daily",
+          "op": "sum",
+          "field": "card_tool_calls",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Tool calls per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "tool_calls",
+          "split": "length_band",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore tool calls by session length"
       }
     },
     {

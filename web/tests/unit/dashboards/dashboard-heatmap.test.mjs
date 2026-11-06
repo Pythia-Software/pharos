@@ -4,11 +4,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas } from "../helpers/recipes.mjs";
-import { heatmapAxis, heatmapBins, heatmapSource, normalizeAnalysis, percentileLimit, trendAdjustments, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, distributionBins, heatmapAxis, heatmapBins, heatmapSource, normalizeAnalysis, percentileLimit, trendAdjustments, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { levelOf, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { heatmapBinLabel, heatmapCellText, heatmapColumnText, heatmapGrid, heatmapShade, trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { binOf, binsSpanning, nextEdge } from "../../../src/value-bins";
 import { sessionShapeAnalysisCatalog } from "../../../src/session-shape-analysis-catalog";
+import { histogramBarText, histogramOf } from "../../../src/dashboard-histogram";
 import fixture from "../../../../testdata/value-bins.json";
 
 // The engine's rules, without Session Shape's own choice of chart.
@@ -150,4 +151,37 @@ test("the %ile control's levels: a line's reference over earlier points, a heatm
   assert.equal(levelOf([1, 2, 3, 10], "mean"), 4);
   assert.equal(levelOf([1, 2, 3, 10], "p50"), 2.5);
   assert.equal(levelOf([5], "p90"), 5);
+});
+
+test("Distribution offers only the combinations that draw something: binned histograms, no spikes at zero, no duplicate units", () => {
+  const distribution = { view: "distribution", unit: "records", split: "none" };
+  // A long-tailed value without a breakdown is a histogram over its fine bins.
+  const state = normalizeAnalysis(catalog, { ...distribution, metric: "active_time", scale: "logarithmic" });
+  assert.equal(distributionBins(catalog, state)?.field, "active_seconds_bin");
+  const { clause, query } = analysisQuery(catalog, state, []);
+  assert.deepEqual(clause.groupBy, ["active_seconds_bin"]);
+  // Zero is a bin apart, so it is kept.
+  assert.ok(!query.where.some(term => term.op === ">"));
+  assert.equal(distributionBins(catalog, normalizeAnalysis(catalog, { ...distribution, metric: "messages" }))?.field, "messages_bin");
+  // With a breakdown it is boxes, and a log axis leaves out zero.
+  const boxes = analysisQuery(catalog, normalizeAnalysis(catalog, { ...distribution, metric: "active_time", split: "provider", scale: "logarithmic" }), []);
+  assert.equal(boxes.clause.distribution.kind, "box");
+  assert.ok(boxes.query.where.some(term => term.field === "active_seconds" && term.op === ">" && term.value === "0"));
+  // A rare signal's distribution is a spike at zero: another measure is drawn.
+  assert.notEqual(normalizeAnalysis(catalog, { ...distribution, metric: "rejections" }).metric, "rejections");
+  // A unit of one record each distributes as the records do.
+  assert.equal(normalizeAnalysis(catalog, { ...distribution, unit: "session", metric: "messages" }).unit, "records");
+  assert.equal(normalizeAnalysis(catalog, { ...distribution, unit: "session", metric: "failure_rate" }).unit, "session");
+  // ...and its totals in Compare are the records' own.
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", unit: "session", metric: "messages", split: "provider", reduce: "total" }).reduce, "mean");
+});
+
+test("a binned histogram places its bars on the value's axis and marks its median and 90th percentile", () => {
+  const bins = catalog.breakdowns.length_band.bins;
+  const histogram = histogramOf([{ low: 1, count: 6 }, { low: 3, count: 2 }, { low: 10, count: 2 }], bins);
+  assert.deepEqual(histogram.levels, ["p50", "p90"]);
+  assert.equal(histogram.columns[0].total, 10);
+  assert.ok(histogram.rows.every((row, index) => index === 0 || row.y0 >= histogram.rows[index - 1].y1 - 1e-9));
+  assert.match(histogramBarText(histogram, 0, { label: "Messages", noun: "sessions" }), /Messages 1\n6 sessions \(60%\)/);
+  assert.ok(histogram.columns[0].levels[0].value < 2, "the median is in the first bin");
 });

@@ -291,7 +291,17 @@ other levels the reader ticks.
 | Over time | a total by any other breakdown | stacked columns |
 | Over time | a rate by any breakdown, a band included | a line per group |
 | Compare | any | bars |
-| Distribution, Two measures | long-tailed times and counts | a log axis; percentages linear |
+| Distribution | messages, typed messages, tool calls, active time, tool calls per typed message, turn cycle or peak context, no breakdown | a histogram over the value's fine bins on its own axis (log, or linear for peak context), zero apart, the median and 90th percentile marked |
+| Distribution | any other measure, or a breakdown | a histogram or boxes; long-tailed times and counts on a log axis, which leaves out zero |
+| Two measures | long-tailed times and counts | a log axis; percentages linear |
+
+Some combinations are not offered, each disabled with its reason. The
+forensic signals and forensic events are rare: nearly every session has none,
+so Distribution does not offer them (Compare and Over time do). An agent
+session is one record, so Distribution counts Sessions for a measure with a
+per-session value and Agent sessions only for a rate, and Compare's
+per-session Total, which is the Sessions bars, gives way to a mean. A root
+conversation spans sessions that differ in every breakdown, so it has none.
 
 Time bucket, smoothing and range stay yours. The heatmap shows the whole
 distribution rather than six groups: a shift within a band, a second mode

@@ -24,7 +24,7 @@
 @media (max-width:640px){.dashboard-heatmap-guide-label{display:none}}
 /* A distribution over fine bins (dashboard-histogram.tsx): bars on the
    value's own axis, the median and 90th percentile marked. */
-.dashboard-histogram{display:grid;grid-template-rows:minmax(200px,clamp(200px,34vh,320px)) auto auto;margin-top:12px;min-width:0}
+.dashboard-histogram{display:grid;grid-template-rows:minmax(200px,clamp(200px,34vh,320px)) auto auto;margin-top:12px;min-width:0;overflow:hidden}
 .dashboard-histogram-area{position:relative;min-width:0;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
 .dashboard-histogram-area svg{position:absolute;inset:0;width:100%;height:100%;display:block;shape-rendering:crispEdges}
 .dashboard-histogram-bar{fill:var(--heat-1);fill-opacity:.85;cursor:pointer}
@@ -35,3 +35,4 @@
 .dashboard-histogram-name{font-size:var(--fs-xs);color:var(--muted);text-align:center}
 .dashboard-histogram-card{flex:1;min-width:0;padding-right:34px}
 .dashboard-histogram-card .dashboard-histogram{padding-left:8px}
+.dashboard-histogram-mark.is-left{transform:translateX(calc(-100% - 4px))}

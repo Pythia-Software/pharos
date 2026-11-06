@@ -4642,6 +4642,15 @@
       "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
     },
     {
+      "key": "4ab3d0652d53c61e:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "DashboardAnalysis",
+      "tag": "BinnedHistogram",
+      "control": "onSelect={low => { const bucket = entry!.buckets.find(item => Number(item.keys[0]) === low); const query = bucket && analysisInspectQuery(analysis, bucket, analysis.clause, schema, view.view); if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: \"query\", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search))); }}",
+      "contract": "action",
+      "reason": "Opens the selected bin's records in a new query view; it navigates and holds no view state of its own."
+    },
+    {
       "key": "d837395f82219be5:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "DashboardAnalysis",
@@ -4658,6 +4667,15 @@
       "control": "onClick={() => set({ selection: { values: [], excluded: false } })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
+      "key": "85b6a55ef7b795c5:0",
+      "file": "web/src/dashboard-histogram.tsx",
+      "owner": "BinnedHistogram",
+      "tag": "rect",
+      "control": "onClick={onSelect ? () => onSelect(row.low) : undefined}",
+      "contract": "action",
+      "reason": "Opens the selected bin's records in a new query view; it navigates and holds no view state of its own."
     },
     {
       "key": "17e7dc8b6e37bfc1:0",
