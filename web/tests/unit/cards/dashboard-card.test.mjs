@@ -652,6 +652,26 @@ test('compaction card defaults follow trigger/service controls and filters', t =
   assert.notEqual(services.title, triggers.title);
 });
 
+test('People message-label cards retain their source, filters and counting after collection',async t=>{
+ fixture(t);
+ for(const topic of ['human','activity','habits']){
+  const source=analysisCatalogs[topic],state={...dashboardDefaults[topic],metric:'messages',split:'message_family',share:true,period:'day'},at=new Date(now-86400000).toISOString();
+  const filters=[{field:'repository_name',op:'=',value:'importer'},...topic==='human'?[{field:'text',op:'contains',value:'parser'}]:[]];
+  const url=dashboardCardURL('/analyze?analyze_topic='+topic,source,state,filters);
+  const restored=readDashboardCard(url,new Date(now));
+  assert.equal(restored.dataset,'people_message_labels');assert.deepEqual(restored.where,filters);
+  const copy=dashboardCardMetadata(url,'chart',schemas.people_message_labels);
+  assert.match(copy.title,/message label/i);assert.match(copy.description,/importer/);
+  const card=collectDashboardCard(url,copy.title,copy.description);
+  assert.equal(dashboardCardSource(card.url).dataset,'people_message_labels');
+  const data=[{id:'one',message_id:'m',people_scope:topic,label:'P.request.work',family:'P.request',text:'Please fix the parser',repository_name:'importer',sent_at:at,event_at:at,started_at:at,day:at.slice(0,10)}];
+  if(topic==='human')data.push({...data[0],id:'two',message_id:'other',label:'P.control.redirect',family:'P.control',text:'Please review the renderer'});
+  const preview=await loadDashboardCardPreview(url,schemas.people_message_labels,undefined,{rows:data},now);
+  assert.equal(preview.state,'ready');assert.ok(preview.series.some(series=>series.value==='P.request'));
+  if(topic==='human')assert.equal(preview.series.some(series=>series.value==='P.control'),false,'saved previews retain the text filter');
+ }
+});
+
 
 test('saved component shares keep their metric, denominator and context through card previews', async t => {
   fixture(t);

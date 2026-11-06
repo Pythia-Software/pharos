@@ -94,7 +94,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const catalog = analysisCatalogFor(topic, {
     parallelism: parallelism.counting,
     carbon: calculator && settings ? { settings, factors: factors as CarbonFactors, estimate: (factors, period) => calculator.estimate(factors, period, settings) } : undefined,
-  });
+  },state);
   if (!catalog) throw new Error("This dashboard card is unavailable.");
   const fields = catalog.breakdowns[state.split]?.fields ?? [];
   if (fields.some(isOriginDimension)) await loadOriginMetadata();

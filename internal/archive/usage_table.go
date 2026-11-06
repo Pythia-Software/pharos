@@ -19,7 +19,7 @@ var usageTokenFields = []string{
 }
 
 func queryFieldsFor(dataset string, names ...string) libraryFields {
-	if dataset != "usage" && dataset != "parallelism" && dataset != "rhythm" {
+	if dataset != "usage" && dataset != "parallelism" && dataset != "rhythm" && dataset != "people_message_labels" {
 		return libraryFieldsFor(names...)
 	}
 	return fieldSet(names...)

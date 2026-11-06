@@ -105,6 +105,10 @@ for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
 // transcript (long code blocks, a wide table, tool output, an edit, nested
 // agents) and two child sessions.
 export const workID = "work-long", rootConversation = "conv-root";
+datasets.people_message_labels=['human','activity','habits'].flatMap(scope=>datasets.writing_messages.slice(0,24).map((row,i)=>{
+ const label=i%3?'P.request.work.implement':'P.control.redirect';
+ return {...row,id:`${scope}:${row.id}:${label}`,message_id:row.id,people_scope:scope,label,family:label.split('.').slice(0,2).join('.'),label_status:'matched',sent_at:row.sent_at,event_at:row.sent_at,started_at:row.sent_at,typed_words:8,source_conversation_id:rootConversation,source_workspace_id:workID,actor:'you',initiator:'human'};
+}));
 const start = now - 2 * 3600000;
 const at = seconds => new Date(start + seconds * 1000).toISOString();
 let sequence = 0;

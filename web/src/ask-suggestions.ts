@@ -17,7 +17,7 @@ export type AskFamily = { id: string; area: string; form: AskForm; prior: number
 export const askForms: AskForm[] = ["understand", "compare", "change", "find", "improve", "check", "learn"];
 
 export const askAreas: AskArea[] = [
-  {id:"message-labels",label:"Conversation functions",pages:["analyze/labels","analyze/query/message_labels"],signals:["labels.coverage"]},
+  {id:"message-labels",label:"Conversation functions",pages:["analyze/labels","analyze/query/message_labels","analyze/query/people_message_labels"],signals:["labels.coverage"]},
   { id: "verification", label: "Tests and builds", pages: ["analyze/calls", "analyze/time"], signals: ["verification.failures", "verification.time"] },
   { id: "tool-failures", label: "Failing tool calls", pages: ["analyze/calls", "analyze/tools", "analyze/query/tool_calls", "analyze/query/tools"], signals: ["tools.failures"] },
   { id: "machine-time", label: "Where agent time goes", pages: ["analyze/time", "analyze/tools"], signals: ["tools.time"] },

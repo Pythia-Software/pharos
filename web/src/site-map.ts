@@ -1,3 +1,4 @@
+import {peopleMessageLabelCatalog} from "./people-message-labels";
 import {messageLabelConversationQuery,messageLabelResultParameters} from "./message-label-results-model";
 import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
@@ -92,7 +93,7 @@ export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>):
   const merged = { ...dashboardDefaults[topic], ...chart } as AnalysisState;
   if (!validAnalysisState(catalog, merged)) return "invalid";
   if (merged.v !== analysisVersion || json(canonicalState(catalog, merged)) !== json(merged)) return "coercible";
-  const drawn = normalizeAnalysis(catalog, merged) as Record<string, unknown>;
+  const drawn = normalizeAnalysis(peopleMessageLabelCatalog(catalog,merged), merged) as Record<string, unknown>;
   const keys = chartKeys[(merged.view ?? "trend") as AnalysisView];
   return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
 }
@@ -153,13 +154,13 @@ type Scalar = string | number | boolean;
 type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
 type Shape = { option: string; constraints: string[][]; fallback: string[] };
 const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
-const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric"]]),
-  shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
+const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric","split"]]),
+  shape("rollingOp", [["metric","split"]]), shape("period", [["metric", "split", "multiple_periods"]], ["metric", "split", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
 const drawShapes: Record<AnalysisView, Shape[]> = {
   trend: trendShapes, trend_line: trendShapes, trend_bar: trendShapes,
-  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"], ["metric"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
-  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
-  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
+  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit","metric"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split", "unit", "metric", "reduce"]])],
+  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit","metric"]])],
+  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit","metric"]])],
   cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("reduce", [["metric"]], ["metric", "self"])],
 };
 // The defaults normalizeAnalysis fills multiple_periods' inputs with.
@@ -289,7 +290,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const domains: Record<string, Scalar[]> = Object.fromEntries(allChartKeys.filter(name => !numericKeys.includes(name) && (keys.includes(name) || checked(name))).map(option => [option, domainOf(topic, defaults, option)]));
   const numeric = numericOptions(topic, view, defaults);
   const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
-    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(catalog, item.merged as AnalysisState) as Record<string, unknown> }));
+    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(peopleMessageLabelCatalog(catalog,item.merged as AnalysisState), item.merged as AnalysisState) as Record<string, unknown> }));
   const drawing = states.filter(item => item.verdict !== "invalid");
   // Each rule from the drawings: what stays, what replaces it, and the fill.
   const rules: Rule[] = [];
@@ -387,7 +388,7 @@ function dashboardFacts(topic: UsageTopic) {
     defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults),
     views, ...Object.keys(unavailable).length ? { unavailable_views: unavailable } : {},
     measures: Object.fromEntries(Object.entries(catalog.measures).map(([id, measure]) => [id, { label: measure.label, unit: measure.unit, kind: trendKind(measure), additive: measure.additive, per_record_value: Boolean(measure.value), note: measure.note }])),
-    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.note ? { note: breakdown.note } : {} }])),
+    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.measures ? {measures:breakdown.measures,views:breakdown.views,source_dataset:"people_message_labels",note:"Each message counts once under its highest-confidence accepted specific label or that label's family. Groups add up to the message total. Only message-count metrics use this source."} : {}, ...breakdown.note ? { note: breakdown.note } : {} }])),
     components: Object.fromEntries(Object.entries(catalog.components ?? {}).map(([id, components]) => [id, { label: components.label, measures: components.measures, fallback: components.fallback, parts: components.parts.map(part => part.label) }])),
     units: {
       [records]: { label: catalog.records.label, plural: catalog.records.plural, note: catalog.records.note },

@@ -1,3 +1,5 @@
+import {peopleMessageLabelCatalog} from "./people-message-labels";
+import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 import { formatUSD } from "./currency";
 import { installOverflowTitles } from "./overflow-tooltip";
 import { fitQueryToScreen } from "./query-fit";
@@ -140,7 +142,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages";
+type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -193,6 +195,7 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  people_message_labels:loadSchema<Row>(peopleMessageLabelsDocument),
   message_labels:loadSchema<Row>(messageLabelsDocument),
   compactions: loadSchema<Row>(compactionsDocument),
   model_requests: loadSchema<Row>(modelRequestsDocument),
@@ -374,6 +377,7 @@ const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dat
 const failedMessage = "No results: the query failed (see the error above).";
 
 const emptyMessages: Record<Dataset, string> = {
+  people_message_labels:"No messages match these labels and filters.",
   message_labels:"No messages match these labels and filters.",
   compactions: "No compactions match this query.",
   model_requests: "No model requests match this query.",
@@ -450,7 +454,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   }, [dataset, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset) } : renderers, [dataset]);
-  const tableRenderers = useUsageTableRenderers(dataset==="message_labels"?{...usageRenderers,...messageLabelRenderers}:usageRenderers);
+  const tableRenderers = useUsageTableRenderers(["message_labels","people_message_labels"].includes(dataset)?{...usageRenderers,...messageLabelRenderers}:usageRenderers);
   const detailSchema = useMemo(() => usageDetailsSchema(schema, dataset), [schema, dataset]);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
@@ -1274,20 +1278,21 @@ function CatalogDashboard({ catalog, linkCatalog = catalog, dataset, name, defau
     return readAnalysisLink(linkCatalog, canonicalState(linkCatalog, view), read ? read.where : where);
   });
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
-  const schema = schemas[dataset];
+  const resolved=peopleMessageLabelCatalog(catalog,state.view), resolvedDataset=resolved.dataset as UsageDataset;
+  const schema = schemas[resolvedDataset];
   const views: CatalogViews = (drawn, amount = format) => {
-    const choose = (next: AnalysisView) => state.update(switchView(drawn, state.view, next));
+    const choose = (next: AnalysisView) => state.update(switchView(isTrendView(next)||next==="compare"?drawn:catalog, state.view, next));
     return <>
       {!isTrendView(state.view.view)
-        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
-        : <AnalysisTrend catalog={drawn} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
+        ? <DashboardAnalysis catalog={drawn} schema={schema} dataset={resolvedDataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</DashboardAnalysis>
+        : <AnalysisTrend catalog={drawn} schema={schema} dataset={resolvedDataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={amount} headline={chartHeadline}>{summary?.(state.where, Boolean(state.view.selection?.values.length))}</AnalysisTrend>}
       {panels?.(state.where, state.onFilter)}
     </>;
   };
-  return <DashboardCardSourceContext.Provider value={{ catalog, state: state.view, where: state.where, schema }}><section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
+  return <DashboardCardSourceContext.Provider value={{ catalog:resolved, state: state.view, where: state.where, schema }}><section className={`usage-catalog-dashboard usage-${name}-dashboard`}>
     {notice.current ? <p className="usage-dashboard-note" role="status">{notice.current}</p> : null}
     {before}
-    {frame ? frame(views, state.where, state.onFilter) : views(catalog)}
+    {frame ? frame(views, state.where, state.onFilter) : views(resolved)}
     {after}
   </section></DashboardCardSourceContext.Provider>;
 }

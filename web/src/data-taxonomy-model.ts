@@ -10,6 +10,7 @@ export const dataEntities = {
 export type DataEntity = keyof typeof dataEntities;
 
 export const dataSources = {
+  people_message_labels:{label:"People message labels",entity:"messages",grain:"One user message within a People dashboard population, assigned to its highest-confidence accepted specific label or missing-label coverage. Label groups add up to the message total."},
   message_labels:{label:"Message label observations",entity:"messages",grain:"One most-specific accepted label per retained message, or one coverage observation. Messages can have several labels."},
   compactions: { label: "Context Compaction Events", entity: "agents", grain: "One recorded compaction boundary, with human, machine or unknown trigger attribution" },
   model_requests: {label:"Individual Model Requests",entity:"agents",grain:"One retained usage-bearing response event, with linked post-tool timing evidence when available"},

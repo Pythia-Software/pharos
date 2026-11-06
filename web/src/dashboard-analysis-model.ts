@@ -51,7 +51,7 @@ export const partField = (part: RatioPart) => ratioPart(part).field;
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
 // A breakdown with an implied where names that population in its note.
-export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string };
+export type AnalysisBreakdown = { views?: AnalysisView[]; measures?: string[]; label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string };
 // A component breakdown splits a measure into its additive parts, such as
 // tokens into uncached input, cache reads and writes, and output. Its series
 // are fields, not groups of records. Trends draw them per period; record
@@ -324,7 +324,9 @@ export const changeState = <T extends AnalysisState>(catalog: AnalysisCatalog, s
 
 export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T & ResolvedAnalysis {
   const next = { ...analysisDefaults, ...canonicalState(catalog, state) } as T & ResolvedAnalysis;
+  if(catalog.breakdowns[next.split]?.measures && !catalog.breakdowns[next.split].measures!.includes(next.metric)) next.split=noSplit;
   next.view ??= "trend";
+  if(catalog.breakdowns[next.split]?.views && !catalog.breakdowns[next.split].views!.includes(next.view)) next.split=noSplit;
   if (catalog.views && !catalog.views.includes(next.view)) next.view = catalog.views[0] ?? "trend";
   if (isTrendView(next.view)) return normalizeTrend(catalog, next);
   const firstUnit = Object.keys(catalog.units)[0];

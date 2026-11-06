@@ -1337,6 +1337,64 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  await app.shot('compaction-compare');
 });
 
+test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
+ const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.',reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
+ const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
+ const messages=[labeled('tint-prompt','user','message',prompt,'P.request.work.implement','H-typed',0),labeled('tint-thinking','assistant','reasoning',thought,'C.deliberation.plan','TH',10),labeled('tint-reply','assistant','message',reply,'C.report.verification','AR',25)];
+ const sentence='The import fails when a quoted cell contains a newline.';
+ messages[1].agent_events=[{id:'e-tint',kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.91,sentence:[thought.indexOf(sentence),thought.indexOf(sentence)+sentence.length],subject:[],response:[]}];
+ const taxonomy=[{id:'P.request.work.implement',name:'Implement',definition:'Requests a concrete change.'},{id:'C.deliberation.plan',name:'Plan',definition:'Considers how to do the work.'},{id:'C.report.verification',name:'Verification',definition:'Reports checks and their evidence.'}];
+ const api={'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),title:'Review the CSV importer'}),'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),title:'Review the CSV importer',first_prompt:prompt,agent_nickname:'Review the CSV importer',messages,labels:{labeled:3,pending:false,taxonomy},agent_events:{messages_read:2}})};
+ api['GET /api/work/:id/delegation']=request=>{
+  const data=defaultApi['GET /api/work/:id/delegation'](request);
+  const named=row=>row.conversation_id===rootConversation?{...row,label:'Review the CSV importer'}:row;
+  return {...data,rows:data.rows.map(named),focus:data.focus.map(named)};
+ };
+ const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0`;
+ const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
+ const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
+ await reasoning.locator('summary').click();
+ await page.locator('.thinking-card mark.agent-event').waitFor();
+ assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
+ await page.locator('.thinking-card').hover();await page.getByRole('tooltip').waitFor();
+ assert.match(await page.getByRole('tooltip').textContent(),/Plan/);
+ await page.mouse.move(0,0);
+ await app.shot('message-card-tints-dark');
+ await page.getByRole('checkbox',{name:'Message labels',exact:true}).uncheck();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
+ await page.getByRole('checkbox',{name:'Message labels',exact:true}).check();
+ await page.getByRole('checkbox',{name:'Agent events',exact:true}).uncheck();await app.settled();
+ const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
+ assert.equal(await copied.page.getByRole('checkbox',{name:'Agent events',exact:true}).isChecked(),false);
+ assert.match(await copied.page.locator('.thinking-card').textContent(),/quoted cell/);
+ await page.getByRole('checkbox',{name:'Agent events',exact:true}).check();
+ await page.evaluate(()=>document.documentElement.dataset.theme='light');
+ await app.shot('message-card-tints-light');
+ await page.setViewportSize({width:390,height:844});
+ await page.locator('.thinking-card').scrollIntoViewIfNeeded();
+ await app.shot('message-card-tints-phone');
+});
+
+test('People message-label breakdowns keep their dashboard and saved URL',{skip},async t=>{
+ const dashboard=topic=>'/analyze?'+new URLSearchParams({analyze_topic:topic,analyze_window:'30d',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'repository_name',op:'is_not_null',value:''}]}),analyze_chart:JSON.stringify({metric:'messages',split:'message_family',period:'day',share:true})});
+ const app=await open(t,{url:dashboard('human'),ready:'.usage-human-dashboard .usage-chart'}),{page}=app;
+ await app.shot('people-message-label-breakdown');
+ for(const topic of ['human','activity','habits']){
+  if(topic!=='human')await page.goto(new URL(dashboard(topic),page.url()).href);
+  await page.locator('.usage-'+topic+'-dashboard .usage-chart').waitFor();await app.settled();
+  await page.getByRole('combobox',{name:'Breakdown',exact:true}).selectOption('message_label');await app.settled();
+  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).split,'message_label');
+  assert.ok(app.calls.some(call=>call.path.includes('/api/query/people_message_labels/')));
+  await page.locator('.usage-query-destination').first().click();
+  const back=page.getByRole('link',{name:'Back to dashboard',exact:true});await back.waitFor();await back.click();
+  await page.locator('.usage-'+topic+'-dashboard .usage-chart').waitFor();await app.settled();
+  assert.equal(new URL(page.url()).searchParams.get('analyze_window'),'30d');
+  assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
+ }
+ await page.reload();await page.locator('.usage-habits-dashboard .usage-chart').waitFor();await app.settled();
+ assert.equal(await page.getByRole('combobox',{name:'Breakdown',exact:true}).inputValue(),'message_label');
+});
+
 
 test('component share charts restore their controls across reloads and view switches',{skip},async t=>{
  const words=Object.fromEntries(Object.entries({typed:40,pasted:22,quoted:12,resent:8,template:6,attachment:2,harness:7,automated:3}).map(([key,value])=>[key+'_words',value]));
