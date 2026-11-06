@@ -722,6 +722,8 @@ func cursorCLIProto(fields ...any) []byte {
 func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".cursor")
 	chat := cursorCLIConversation()
+	// No later update time than the turns give.
+	delete(chat.metaJSON, "updatedAtMs")
 	dir := cursorCLIWriteChat(t, root, chat)
 	const child = "a0000000-0000-4000-8000-00000000000c"
 	high := func(fields map[string]any) map[string]any {
@@ -782,6 +784,10 @@ func TestCursorCLISubagentsSummariesErrorsAndTurnTimes(t *testing.T) {
 		timed["tool_call:call1"] != "2026-11-04T16:19:06.000Z" || timed["tool_result:call1"] != "2026-11-04T16:19:07.000Z" ||
 		timed["message:Fixed."] != "2026-11-04T16:19:07.000Z" || timed["message:Abandoned reply."] != "2026-11-04T16:18:00.000Z" {
 		t.Fatalf("times = %v", timed)
+	}
+	// The chat ends with the last time a selected message was placed at.
+	if chatA := records[cursorCLIChatA]; chatA.Conversations[0].EndedAt != "2026-11-04T16:19:07.000Z" || chatA.ActivityAt != chatA.Conversations[0].EndedAt {
+		t.Fatalf("ended %s, active %s", chatA.Conversations[0].EndedAt, chatA.ActivityAt)
 	}
 	record := records[child]
 	subagent := record.Conversations[0]
