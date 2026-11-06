@@ -540,14 +540,17 @@ func nonNilRanges(ranges [][2]int) [][2]int {
 // UTF-16 code units, JavaScript's string indexes. An event whose sentence is
 // not where it was found (text changed since it was scored) is left out.
 // summary is nil for a conversation the pass never read, so the reader shows
-// no Events control.
-func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
-	rows, err := queryMaps(c.reader(), `SELECT message_id,family,probability,sentence_start,sentence_end,sentence,subject_ranges,response_ranges
+// no Events control. link, called with the conversation's messages in
+// reading order once they are all attached, gives each event its target
+// (agent_event_links.go).
+func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), link func([]map[string]any), err error) {
+	rows, err := queryMaps(c.reader(), `SELECT 'e'||id id,message_id,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges
 		FROM agent_events WHERE conversation_id=? AND probability>=? ORDER BY message_id,sentence_start,probability DESC`, conversationID, agentEventThreshold)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	byMessage := map[string][]map[string]any{}
+	linkEvents, attachedEvents := []eventLinkEvent{}, map[string]map[string]any{}
 	for _, row := range rows {
 		byMessage[firstString(row["message_id"])] = append(byMessage[firstString(row["message_id"])], row)
 	}
@@ -599,8 +602,13 @@ func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[strin
 		out := []map[string]any{}
 		for _, event := range kept {
 			probability, _ := event.row["probability"].(float64)
-			out = append(out, map[string]any{"kind": event.family.Key, "label": event.family.Label, "group": event.family.Group, "definition": event.family.Definition,
-				"probability": math.Round(probability*1000) / 1000, "sentence": convert([][2]int{event.sentence})[0], "subject": convert(event.subject), "response": convert(event.response)})
+			id := firstString(event.row["id"])
+			value := map[string]any{"id": id, "kind": event.family.Key, "label": event.family.Label, "group": event.family.Group, "definition": event.family.Definition,
+				"probability": math.Round(probability*1000) / 1000, "sentence": convert([][2]int{event.sentence})[0], "subject": convert(event.subject), "response": convert(event.response)}
+			out = append(out, value)
+			linkEvents = append(linkEvents, eventLinkEvent{ID: id, MessageID: firstString(message["id"]), Family: event.family.Key,
+				Sentence: firstString(event.row["sentence"]), Subject: firstString(event.row["subject"]), Response: firstString(event.row["response"])})
+			attachedEvents[id] = value
 		}
 		if len(out) > 0 {
 			message["agent_events"] = out
@@ -617,7 +625,25 @@ func (c *Catalog) agentEventsAttacher(conversationID any) (attach func(map[strin
 		}
 		return map[string]any{"messages_read": read, "messages_with_events": attached, "threshold": agentEventThreshold}, nil
 	}
-	return attach, summary, nil
+	link = func(messages []map[string]any) {
+		if len(linkEvents) == 0 {
+			return
+		}
+		list, texts := []eventLinkMessage{}, map[string]string{}
+		for _, m := range messages {
+			if kind := firstString(m["kind"]); agentEventLinkKinds[kind] {
+				id, text := firstString(m["id"]), firstString(m["text"])
+				list = append(list, eventLinkMessage{ID: id, Role: firstString(m["role"]), Kind: kind, Text: text})
+				texts[id] = text
+			}
+		}
+		for id, target := range findAgentEventTargets(list, linkEvents) {
+			if value := agentEventTargetJSON(target, texts); value != nil {
+				attachedEvents[id]["target"] = value
+			}
+		}
+	}
+	return attach, summary, link, nil
 }
 
 // utf16Offsets maps UTF-8 byte offsets of text to UTF-16 code unit offsets,

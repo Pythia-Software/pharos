@@ -88,7 +88,7 @@ Past Work also shows when an archived commit appears on the local `origin/main` 
 - **Settings → Backups** also provides the local backup controls and a cloud backup wizard: a six-step calculator/configuration/commands/test/first-backup/test-restore flow, an opt-in compact wizard with GCP defaults, four primary calculator controls, collapsed detailed options, linked regional settings, and a calendar-month cost graph comparing linear growth with a flat library using a measured full-backup compression sample, database-saved configurations, and exact copyable provisioning commands and prompts. AWS/GCP use native revision-count retention; Azure uses previous-version age expiry. The selected design stores restricted upload credentials in the Pharos database and uses provider-managed encryption, with cloud-account access for restore. Optional password protection uses age public-key encryption with a password-encrypted recovery bundle; setup asks for the password only in Terminal, with separately copyable preparation and provisioning blocks. The Test, First backup and Test restore steps use server-side credential import, restricted-access probes, real provider uploads and recorded version IDs. The backend makes consistent full snapshots, embeds recovery bundles, and validates downloaded archive digests, file manifests and SQLite integrity in isolated folders. Protected verification prompts only in Terminal; `pharos cloud-restore` also recovers without the original database. Daily, weekly and every-30-day schedules persist in SQLite and activate after a verified full restore. They bind to a Mac and library path, catch up once after downtime, serialize destination uploads, and use bounded retries. Settings offers pause/resume, schedule editing, repeat manual backups and version selection for restore tests. The cloud entry carries a Beta chip. Durable upload restart-resume journals remain future work. See [Cloud backups](cloud-backups.md) for pricing assumptions and the implementation plan.
 - **Library drive** in the header shows live indexing progress and the latest completed index result, including updated workspace and conversation counts and any error.
 - **Your writing** (in Analyze) estimates how much text you typed or dictated into agent chats. Each user message is split into typed text, harness instructions, one-click templates, attachments, agent output copied from the previous 48 hours, re-sent text, likely pastes, and prompts sent by scripts or other agents. A query table lists one row per conversation, sortable and filterable by each kind of input and by tokens and cost, so "deepest conversations" is one click; the chart and breakdown above it follow the filters. The chart splits words by kind of input, repository, app, or provider; its key and a dragged time range filter the table the same way as on Tokens, and a time filter counts only the words sent inside it. A second query table lists one row per user message, filterable by the categories and rules that labelled its text, and shows messages either as rows or as text highlighted span by span, each span explaining on hover why it counted as what. The transcript reader shows the split for each message, and Settings has cards that open each Analyze view. Definitions are in [`docs/human-authorship.md`](human-authorship.md).
-- **Analyze → Agent Experience** (preview, turned on in Settings → App preferences) shows what agents ran into while they worked, found in their replies and thinking: obstacles, surprises, discoveries, workarounds, unchecked claims and more, with rates per 1,000 agent messages and each event linked into the reader. Events are imported from a study's model predictions for now. See [`docs/agent-events.md`](agent-events.md).
+- **Analyze → Agent Experience** (preview, turned on in Settings → Background Processing) shows what agents ran into while they worked, found in their replies and thinking: obstacles, surprises, discoveries, workarounds, unchecked claims and more, with rates per 1,000 agent messages and each event linked into the reader. Events are imported from a study's model predictions for now. See [`docs/agent-events.md`](agent-events.md).
 - **Analyze → Carbon Impact** estimates the electricity and CO₂e behind your token usage, all time or the last 30 days, split by token type (uncached input, cache writes, cache reads, output) and model tier. Energy per token comes from published inference measurements, with cache reads charged far less than recomputed input; you choose the electricity grid, data-center overhead (PUE), and a low, central, or high estimate. It is an estimate, not a measurement: factors and sources are in [`carbon/`](../carbon/README.md).
 - **Library upgrade** appears when a catalog indexed by an older version needs its derived data brought up to date: repository merges, token attribution, harness versions, loaded instructions, and the tool ledger, run in that order as one resumable background job. See [Upgrading an existing library](releases-and-updates.md#upgrading-an-existing-library).
 - **Health** shows retrieval coverage/freshness, index size, and external-storage health. Retrieval-only is shown as an intentional capability.
@@ -259,22 +259,18 @@ POST /api/findings/settings
 POST /api/findings/refresh
 GET  /api/query/{library|activity|usage|…}/distinct?field=&q=&limit=
 GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
-POST /api/query/{library|activity|usage|…}/metrics
 POST /api/query/{library|activity|usage|…}/query-v3
 ```
 
-The query endpoints implement the `@pythia-software/query-table-*` 0.6.0 wire
-contract. Their allowlisted field definitions live in [`schemas`](../schemas), and
-the same documents drive the React frontend and generated Go SQLite schemas.
-V2 rows and metrics use the upstream SQLite harness with formulas, paired
-metrics, distributions, shown-row scopes, and canonical computed definitions.
-Every chart and metric reads `/metrics` or `/query-v3`; the legacy
-`/aggregations` route answers 410 Gone. Plain counts and sums, and Machine
-Time's fact cubes, are answered by host fast paths inside `/metrics` that give
-the adapter's exact results. Legacy row requests keep Pharos's map adapter and
-indexed SQLite paths. See
-[`Query Table integration`](query-table-integration.md) for endpoints, bounds,
-local upstream patches, and performance verification. Query values never become
+The query endpoints implement the published Query Table **1.0.0** V3 wire
+contract. Their allowlisted field definitions live in [`schemas`](../schemas),
+and the same documents drive the React frontend and generated Go SQLite schemas.
+Tables, charts, metrics, filter suggestions, field statistics and identity
+lookups use `/query-v3` with the upstream executor and canonical computed
+columns. The old `/rows-v2`, `/metrics` and `/aggregations` routes answer 410
+Gone. Legacy domain row and metadata APIs retain their host adapters.
+See [`Query Table integration`](query-table-integration.md) for endpoints,
+execution limits and the remaining host integration workarounds. Query values never become
 SQL text. Both the in-memory and SQLite executors support text length filters (`length_gt`,
 `length_lt`, `length_eq`, counting characters; zero length matches empty text
 but not NULL) and sorts on a regex-extracted value (the first capture group, or

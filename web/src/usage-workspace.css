@@ -68,3 +68,13 @@
 @media(max-width:600px){.usage-chart-headline h2{font-size:var(--fs-2xl)}}
 /* Reset and Refresh sit together at the heading's end. */
 .usage-workspace .nested-page-heading>.query-reset-page{margin-left:auto}
+
+.pricing-notice{margin-bottom:22px;padding:16px;border:1px solid var(--line);border-radius:7px;background:var(--panel);overflow-wrap:anywhere}
+.pricing-notice-heading{display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px}
+.pricing-notice-heading>div{flex:1 1 260px;min-width:0}
+.pricing-notice h2{margin:0 0 6px;font-size:var(--fs-md)}
+.pricing-notice p{margin:0;color:var(--muted);font-size:var(--fs-sm);line-height:1.6}
+.pricing-notice button{max-width:100%;white-space:normal}
+.pricing-notice details,.pricing-notice>p{margin-top:12px}
+.pricing-notice summary{cursor:pointer;font-size:var(--fs-sm)}
+.pricing-notice textarea{display:block;box-sizing:border-box;width:100%;max-width:100%;margin-top:10px;resize:vertical;font-family:var(--mono,monospace);font-size:var(--fs-sm)}

@@ -23,8 +23,11 @@ export type ColumnScale = { y: (value: number) => number; ticks: number[]; split
 
 export function columnScale(totals: number[], mode: ChartScale): ColumnScale {
   const peak = Math.max(0, ...totals), filled = totals.filter(value => value > 0).sort((left, right) => left - right);
-  const typical = filled.length >= 5 ? niceCeil(filled[Math.ceil(filled.length * 0.8) - 1]) : 0;
-  if (mode === "linear" || !peak) {
+  // Ignore idle buckets and isolated tiny values. Require enough nonzero
+  // observations and more than ten times their 80th
+  // percentile before compressing peaks in the default linear + log mode.
+  const typical = filled.length >= 5 ? filled[Math.ceil(filled.length * 0.8) - 1] : 0;
+  if (mode === "linear" || !peak || mode === "half" && (!typical || peak <= 10 * typical)) {
     const scale = peak || 1;
     return { y: value => 100 * value / scale, ticks: niceTicks(peak) };
   }
@@ -41,9 +44,7 @@ export function columnScale(totals: number[], mode: ChartScale): ColumnScale {
     for (const value of candidates) if (y(value) - (ticks.length ? y(ticks[ticks.length - 1]) : 0) >= 10) ticks.push(value);
     return { y, ticks };
   }
-  // Keep the existing outlier break when useful; otherwise reserve the lower
-  // half for values up to a round number near one tenth of the peak.
-  const split = typical > 0 && peak > 2 * typical ? typical : niceCeil(peak / 10);
+  const split = niceCeil(typical);
   const span = Math.log(peak / split);
   const y = (value: number) => value <= split ? 50 * value / split : 50 + 50 * Math.log(value / split) / span;
   // Powers of ten above the break, or 1-2-5 steps when fewer than two fit;

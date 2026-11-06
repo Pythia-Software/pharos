@@ -35,12 +35,13 @@ test("a complete single-group metric becomes a value without altering its query 
   assert.equal(compactMetricPresentation(input).scalar, true, "observed zero is still a value");
 });
 test("single distributions, relationships, timelines and partial populations retain their chart", () => {
-  for (const variant of ["distribution", "paired", "calendar", "day", "partial", "limited", "null", "nonfinite"]) {
+  for (const variant of ["distribution", "paired", "calendar", "hour", "day", "week", "month", "line", "partial", "limited", "null", "nonfinite"]) {
     const input = preview(), { clause, result } = input.metrics[0];
     if (variant === "distribution") clause.distribution = { kind: "histogram", input: "[total_tokens]" };
     if (variant === "paired") clause.expressionY = "SUM([total_tokens])";
     if (variant === "calendar") clause.dateGrouping = { field: "at", interval: "hour" };
-    if (variant === "day") clause.groupBy = ["day"];
+    if (["hour", "day", "week", "month"].includes(variant)) clause.groupBy = [variant];
+    if (variant === "line") clause.display.kind = "line";
     if (variant === "partial") result.coverage = "partial";
     if (variant === "limited") result.groupCount = 10;
     if (variant === "null") result.buckets[0].value = null;
@@ -199,13 +200,20 @@ test("percentage timeline labels retain percentage units across scales while sha
     const options = { unit: "percent", scale, percent: false, prepared: true };
     const axis = compactTimelineScale(buckets, series, options);
     assert.equal(axis.y(1), 100);
-    if (scale !== "linear") assert.ok(axis.y(.5) > linear.y(.5), `${scale} is not a linear percentage axis`);
+    if (scale === "logarithmic") assert.ok(axis.y(.5) > linear.y(.5), "logarithmic percentage axes expand smaller values");
+    else assert.equal(axis.y(.5), linear.y(.5), "ordinary percentage values keep proportional heights");
     const html = renderToStaticMarkup(React.createElement(CompactColumns, { buckets, series, ...options }));
     const text = html.replace(/<[^>]*>/g, " ");
     assert.match(text, /0%/);
     assert.match(text, /100%/);
     assert.match(html, /Failure rate: 50%/);
   }
+  const outliers = [.01, .01, .01, .01, .01, 1].map((value, index) => ({ key: String(index), date: new Date(2026, 9, index + 1), values: { rate: value } }));
+  const compressed = compactTimelineScale(outliers, series, { scale: "half" });
+  assert.ok(compressed.y(.01) > linear.y(.01), "extreme percentage peaks still allow compression");
+  const compressedHTML = renderToStaticMarkup(React.createElement(CompactColumns, { buckets: outliers, series, unit: "percent", scale: "half", prepared: true }));
+  assert.match(compressedHTML, /Failure rate: 1%/);
+  assert.match(compressedHTML, /Failure rate: 100%/);
   const partial = buckets.slice(0, 2);
   const shares = compactTimelineScale(partial, series, { percent: true, scale: "logarithmic" });
   assert.equal(shares.y(.5), 50, "share-of-total charts keep the whole 0–100% axis");

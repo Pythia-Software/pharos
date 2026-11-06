@@ -93,6 +93,7 @@ export function loadClassicScript(name, globals = {}) {
   };
   sandbox.window = sandbox.self = sandbox;
   const context = vm.createContext(sandbox);
+  if (name !== "currency.js") vm.runInContext(readFileSync(join(assets, "currency.js"), "utf8"), context, { filename: join(assets, "currency.js") });
   vm.runInContext(source, context, { filename: join(assets, name) });
   const identifier = /^[A-Za-z_$][\w$]*$/;
   return new Proxy({ window: sandbox, events }, {

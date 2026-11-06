@@ -461,7 +461,7 @@ func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
 // model runs inside Pharos.
 func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, args []string) error {
 	if len(args) >= 1 && args[0] == "run" {
-		labels := config.Labels
+		labels := config.AgentEvents.labeler(config.Labels)
 		flags := flag.NewFlagSet("agent-events run", flag.ContinueOnError)
 		limit := flags.Int("limit", 0, "score at most about N messages")
 		full := flags.Bool("full", false, "look at every conversation")

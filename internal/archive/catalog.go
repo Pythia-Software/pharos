@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,7 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	qt "github.com/Pythia-Software/query-table/backends/go"
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -41,10 +41,6 @@ type Catalog struct {
 	derived      derivedCache
 	// Initialized under derived.mu; caps simultaneous workload fits.
 	thinkingFitSlots chan struct{}
-	queryCounts      queryCountCache
-	// sourceProofs holds what Query Table proved about SQL datasets' whole
-	// sources, keyed by the data generation it was proven in.
-	sourceProofs qt.SQLiteSourceProofs
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -63,6 +59,7 @@ type Catalog struct {
 	agentEventsRun sync.Mutex
 	labelers       *labelrt.Manager
 	labelersOnce   sync.Once
+	labelerWorkers sync.Map // model path -> labelerWorkerObservation
 	mcpHistory     mcpHistory
 	wal            walBound
 	writers        catalogWriteTracker
@@ -211,7 +208,11 @@ func (c *Catalog) Close() error {
 // preservation contract of these rows.
 // 21: library delivery checkpoints. Older writers ignore moved inventories
 // and can recreate history explicitly moved out of a source library.
-const catalogSchemaVersion = 21
+// 22: provisional authorship and the durable estimates queue. Older full
+// writers do not maintain per-message completion state.
+// 23: explicit writing outcomes and timestamped live/history queue lanes.
+// Older writers cannot preserve these dispositions or the queue timestamps.
+const catalogSchemaVersion = 23
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -279,9 +280,15 @@ func (c *Catalog) Initialize() error {
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
 		{"messages", "model", "ALTER TABLE messages ADD COLUMN model TEXT"},
 		{"messages", "effort", "ALTER TABLE messages ADD COLUMN effort TEXT"},
+		{"messages", "speed", "ALTER TABLE messages ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'"},
+		{"messages", "service_tier", "ALTER TABLE messages ADD COLUMN service_tier TEXT"},
+		{"messages", "speed_source", "ALTER TABLE messages ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'"},
 		{"conversations", "effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"},
 		{"agent_sessions", "effort", "ALTER TABLE agent_sessions ADD COLUMN effort TEXT"},
 		{"model_requests", "effort", "ALTER TABLE model_requests ADD COLUMN effort TEXT"},
+		{"model_requests", "speed", "ALTER TABLE model_requests ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "service_tier", "ALTER TABLE model_requests ADD COLUMN service_tier TEXT; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "speed_source", "ALTER TABLE model_requests ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
 		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
@@ -357,14 +364,19 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, index := range []string{
+		messageLabelMessageIndexSQL,
+		messageLabelConversationIndexSQL,
 		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
 		// Request-gap aggregation reads only these small timing fields, not tool bodies.
 		"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
 		// Cover the timing projection so request reads never visit large
 		// conversation bodies or sort the entire ledger's window partitions.
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
-		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
+		// Ask Pharos's compaction signal reads only requests after a
+		// compaction, a few in a thousand.
+		"CREATE INDEX IF NOT EXISTS model_requests_compacted_idx ON model_requests(requested_at) WHERE compacted_before>0",
 
 		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
 		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
@@ -385,6 +397,15 @@ func (c *Catalog) Initialize() error {
 		}
 	}
 	// Its triggers read request and tool-call columns migrated above.
+	// Index an existing optional ledger without creating or running it.
+	if c.hasLabelsLedger() {
+		if _, err := c.DB.Exec(messageLabelLedgerIndexSQL); err != nil {
+			return err
+		}
+		if _, err := c.DB.Exec(messageLabelMaskIndexSQL); err != nil {
+			return err
+		}
+	}
 	if err := c.ensureRequestTimings(); err != nil {
 		return fmt.Errorf("initialize request timings: %w", err)
 	}
@@ -559,6 +580,9 @@ func (c *Catalog) Initialize() error {
 			WHERE NOT EXISTS (SELECT 1 FROM workspaces) AND NOT EXISTS (SELECT 1 FROM meta WHERE key=?)`, key, version, key); err != nil {
 			return err
 		}
+	}
+	if err := c.ensureMessageLabelFacts(context.Background()); err != nil {
+		return err
 	}
 	if err := c.ensureQueryCacheGeneration(); err != nil {
 		return fmt.Errorf("initialize query cache invalidation: %w", err)

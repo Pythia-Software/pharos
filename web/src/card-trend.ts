@@ -33,7 +33,9 @@ export const trendCover = (metricId: string): CardCover => ({ mode: "source", me
 
 export function usesCardTrend(job: PreviewJob): boolean {
   const options = job.options, recipe = options?.recipe, trend = recipe?.trend;
-  if (!trend || options?.coverMetricId || JSON.stringify(options?.cover ?? recipe.cover) !== JSON.stringify(trendCover(recipe.measures[0]?.id ?? ""))) return false;
+  // Saving a collected card names its unchanged cover metric; that is still the shipped cover.
+  const metricId = recipe?.measures[0]?.id ?? "";
+  if (!trend || options?.coverMetricId && options.coverMetricId !== metricId || JSON.stringify(options?.cover ?? recipe.cover) !== JSON.stringify(trendCover(metricId))) return false;
   const window = options?.window;
   if (recipe.period ? window : !window || window.mode !== "relative" || !rollingQueryMatches(job.query, window)) return false;
   if (!trend.lookback && !window) return false;

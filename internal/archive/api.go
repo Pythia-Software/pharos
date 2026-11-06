@@ -81,7 +81,8 @@ type Server struct {
 	forecasts forecastStore
 	auto      automaticSync
 	// background is the Hourly and Daily schedule's state (background.go).
-	background backgroundState
+	background   backgroundState
+	labelerProbe labelerProbeCache
 	// diagnostics holds Settings → Logs's page and request journals.
 	diagnostics serviceDiagnostics
 	// Leave catalog connections available for rows/previews while metadata scans run.
@@ -175,6 +176,7 @@ func (s *Server) Serve() error {
 	s.daemon("maintainTextSearch", s.Catalog.maintainTextSearch)
 	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
+	s.daemon("maintainMessageLabelFacts", s.Catalog.maintainMessageLabelFacts)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
@@ -312,7 +314,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -333,6 +335,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
 	"/assets/quick-stats.js":       {"quick-stats.js", "text/javascript; charset=utf-8"},
+	"/assets/currency.js":          {"currency.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
@@ -340,6 +343,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/ask-glow.js":          {"ask-glow.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-prompt.js":        {"ask-prompt.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.js":        {"ask-pharos.js", "text/javascript; charset=utf-8"},
+	"/assets/event-spans.js":       {"event-spans.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":      {"reader-model.js", "text/javascript; charset=utf-8"},
 	"/assets/storage-breakdown.js": {"storage-breakdown.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-storage.js":   {"managed-storage.js", "text/javascript; charset=utf-8"},
@@ -557,6 +561,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
+	case strings.HasPrefix(path, "/api/labels/conversations/"), strings.HasPrefix(path, "/api/labels/workspaces/"):
+		s.getMessageLabelFingerprint(w, r)
 	case path == "/api/origins":
 		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
 		if err != nil {
@@ -569,6 +575,20 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.handleThinking(w, r)
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
+		writeResult(w, value, err)
+	case path == "/api/habits":
+		mode, days := r.URL.Query().Get("mode"), 0
+		if n, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil {
+			days = n
+		} else {
+			days = 365
+		}
+		ctx, err := withHabitsPreferences(r.Context(), r.URL.Query().Get("habits_settings"))
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		value, err := s.Catalog.Habits(ctx, mode, days)
 		writeResult(w, value, err)
 	case path == "/api/usage/parallelism":
 		value, err := s.Catalog.parallelismData(r.Context())
@@ -686,6 +706,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/markdown-link":
+		s.markdownLink(w, r)
 	case path == "/api/search/text" || path == "/api/search/text/validate":
 		if r.Method != "POST" {
 			writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)

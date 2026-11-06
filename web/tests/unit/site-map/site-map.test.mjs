@@ -1,3 +1,4 @@
+import {peopleMessageLabelCatalog} from "../../../src/people-message-labels";
 // The site map (internal/archive/assets/site-map.json) and its cases
 // (testdata/site-map-cases.json): that its routes are the ones the server and
 // the page shell serve, that its tables decide every case as the page does,
@@ -23,6 +24,7 @@ import { queryFromURL, readRollingWindow } from "../../../src/query-links";
 import { restoreSearch } from "../../../src/search-composer-state";
 import { readFindingsRoute } from "../../../src/findings-route";
 import { readDelegationRoute } from "../../../src/delegation-route";
+import { readViewState } from "../../../src/view-state";
 import { legacyRoutes, idSources, readerParams } from "../../../src/site-routes";
 
 globalThis.location ??= new URL("http://localhost/");
@@ -70,17 +72,17 @@ test("the site map's rules judge every dashboard case, partial charts included, 
     assert.equal(chartVerdict(item.topic, item.chart), item.verdict, name);
     assert.equal(judgeChart(facts, map.analyze.version, item.chart), item.verdict, name);
     verdicts[item.verdict]++;
-    const view = facts.views[merged(item.topic, item.chart).view ?? "trend"];
+    const view = facts.views[readChart(facts, item.chart).merged.view ?? "trend"];
     if (view && view.keys.some(key => !(key in item.chart))) partial++;
     // What the rules draw is what the page draws, and keeping only the
     // view's keys (what Go writes) changes neither the verdict nor the drawing.
     if (item.verdict !== "invalid") {
-      const kept = viewChart(item.topic, item.chart), viewDrawing = chart => plain(view.keys.map(key => normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, chart))[key]));
+      const kept = viewChart(item.topic, item.chart), viewDrawing = chart => plain(view.keys.map(key => normalizeAnalysis(peopleMessageLabelCatalog(analysisCatalogs[item.topic],merged(item.topic,chart)), merged(item.topic, chart))[key]));
       const renamed = readChart(facts, item.chart).renamed;
       assert.equal(readChart(facts, kept).renamed, false, `${name} is written in current names`);
       if (renamed) assert.notEqual(chartVerdict(item.topic, kept), "invalid", name); else assert.equal(chartVerdict(item.topic, kept), item.verdict, `${name} with only its view's keys`);
       assert.deepEqual(viewDrawing(kept), viewDrawing(item.chart), `${name} draws the same with only its view's keys`);
-      const drawn = drawChart(view, readChart(facts, item.chart).merged), page = normalizeAnalysis(analysisCatalogs[item.topic], merged(item.topic, item.chart));
+      const drawn = drawChart(view, readChart(facts, item.chart).merged), page = normalizeAnalysis(peopleMessageLabelCatalog(analysisCatalogs[item.topic],merged(item.topic,item.chart)), merged(item.topic, item.chart));
       for (const [key, value] of Object.entries(drawn)) assert.deepEqual(value, plain(page[key]), `${name} draws ${key}`);
     }
   }
@@ -127,7 +129,7 @@ test("every valid dashboard link reads back as the state that built it", () => {
     const where = [...item.filters, ...windowTerms(map.analyze.dashboards[item.topic].time, item.days)];
     assert.deepEqual(plain(opened.where), where, name);
     assert.deepEqual(item.decoded.analyze_filters.where, where, name);
-    const drawn = normalizeAnalysis(analysisCatalogs[item.topic], opened.view);
+    const drawn = normalizeAnalysis(peopleMessageLabelCatalog(analysisCatalogs[item.topic],opened.view), opened.view);
     for (const key of Object.keys(item.chart)) assert.deepEqual(plain(drawn[key]), item.chart[key], `${name} draws ${key}`);
     assert.equal(dashboardURL(item.topic, item.chart, item.filters, item.days), item.url, name);
   }
@@ -153,6 +155,8 @@ test("the sampled card links rebuild from the site map and open their dashboards
     if(isThinkingTopic(readUsageWorkspace(params(item.url)).topic)) {
       const opened=initialThinking(params(item.url));assert.equal(opened.range,item.days===null?"all":({180:"6m",365:"1y"}[item.days]??item.days+"d"),name);assert.ok(card.page.startsWith("analyze/thinking-"));continue;
     }
+    // A Habits section card is the page at its selectors, with no chart.
+    if (card.page === "analyze/habits") { assert.equal(readUsageWorkspace(params(item.url)).topic, "habits", name); continue; }
     const opened = openDashboard(item.url);
     assert.equal(`analyze/${opened.workspace.topic}`, card.page, name);
     assert.equal(opened.error, "", name);
@@ -160,7 +164,7 @@ test("the sampled card links rebuild from the site map and open their dashboards
     assert.deepEqual(plain(opened.where), where, name);
     assert.deepEqual(item.decoded.analyze_filters.where, where, name);
     // A card's state is the chart its dashboard draws, in canonical form.
-    const drawn = normalizeAnalysis(analysisCatalogs[opened.workspace.topic], opened.view);
+    const drawn = normalizeAnalysis(peopleMessageLabelCatalog(analysisCatalogs[opened.workspace.topic],opened.view), opened.view);
     for (const [key, value] of Object.entries(card.state)) if (!(card.window?.chart_days ?? []).includes(key)) assert.deepEqual(plain(drawn[key]), value, `${name} draws ${key}`);
     assert.equal(chartVerdict(opened.workspace.topic, card.state), "valid", name);
   }
@@ -204,6 +208,11 @@ test("every other page's link reads back through its page's reader", () => {
         if (value !== null && option.values) assert.ok(option.values.some(choice => choice.value === value), `${name} ${option.param}`);
       }
       for (const [key, value] of Object.entries(item.state ?? {})) assert.equal(search.get(key), value, name);
+    } else if (item.path === "settings/sync") {
+      const query = decodeQueryStrict(readViewState("sync_operations", "", search));
+      assert.deepEqual(query.where, [{ field: "kind", op: "!=", value: "maintenance.checkpoint" }], name);
+      assert.deepEqual(query.orderBy, [{ field: "seconds", dir: "desc" }], name);
+      assert.deepEqual(readViewState("query_layout", {}, search), { sync_operations: false, sync_sources: true }, name);
     } else if (item.path === "work") {
       assert.equal(decodeURIComponent(url.pathname.split("/")[2]), item.state.work_id, name);
       for (const { name: param } of readerParams) assert.equal(search.get(param), item.state[param] ?? null, `${name} ${param}`);

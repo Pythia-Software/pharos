@@ -176,6 +176,7 @@ type Ready struct {
 		Outputs []TensorInfo `json:"outputs"`
 	} `json:"model"`
 	Limits struct {
+		MaxTokens     int `json:"max_tokens,omitempty"` // optional total padded tokens per batch
 		MaxBatch      int `json:"max_batch"`
 		MaxSeq        int `json:"max_seq"`
 		MaxFrameBytes int `json:"max_frame_bytes"`

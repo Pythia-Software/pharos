@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strconv"
 )
 
@@ -14,6 +15,7 @@ func (s *Server) labelsSettings() map[string]any {
 	config := s.Config()
 	settings := config.Labels.withAssets()
 	status := "Off. Turn on to label messages in this library."
+	notice := ""
 	if settings.Enabled {
 		status = "On. Message labels follow the background update schedule."
 		waiting := settings.labelsWaiting()
@@ -26,8 +28,60 @@ func (s *Server) labelsSettings() map[string]any {
 		} else if waiting != "" {
 			status = "On, " + waiting + "."
 		}
+		if waiting != "" || settings.labelerProblem() != "" {
+			notice = status
+		}
 	}
-	return map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status}
+	document := map[string]any{"enabled": settings.Enabled, "can_change": config.Path != "", "status": status, "notice": notice,
+		"threads": max(1, settings.Threads)}
+	s.addLabelerDevice(document, settings, config.Path != "")
+	return document
+}
+
+// labelerThreadChoices are the threads per worker Settings offers each
+// model: powers of two up to this Mac's cores, and the cores themselves.
+func labelerThreadChoices() []int {
+	choices := []int{}
+	for threads := 1; threads < runtime.NumCPU(); threads *= 2 {
+		choices = append(choices, threads)
+	}
+	return append(choices, runtime.NumCPU())
+}
+
+// agentEventsSettings sits beside labelsSettings in Background Processing.
+// Its switch is the agentEventsFlag preference, which the page saves; a
+// library whose configuration sets agent_events_enabled is on regardless.
+func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
+	config := s.Config()
+	configured := config.AgentEvents.Enabled
+	enabled := configured || s.Catalog.featureFlag(ctx, agentEventsFlag)
+	status := "Off. Turn on to find agent events in this library."
+	notice := ""
+	if enabled {
+		status = "On. Agent events follow the background update schedule."
+		if configured {
+			status = "On in this library's configuration (agent_events_enabled)."
+		}
+		waiting := config.AgentEvents.waiting(config.Labels)
+		if problem := config.Labels.withAssets().labelerProblem(); problem != "" {
+			status = "On, but agent events can't be found: " + problem + "."
+			if waiting != "" {
+				status += " It is also " + waiting + "."
+			}
+		} else if waiting != "" {
+			status = "On, " + waiting + "."
+		}
+		if configured || waiting != "" || config.Labels.withAssets().labelerProblem() != "" {
+			notice = status
+		}
+	}
+	document := map[string]any{"enabled": enabled, "can_change": !configured, "status": status, "notice": notice,
+		"threads": max(1, config.AgentEvents.threads(config.Labels))}
+	settings := config.AgentEvents.labeler(config.Labels.withAssets())
+	model := config.AgentEvents.withAssets()
+	settings.ModelDir, settings.Variant = model.ModelDir, model.Variant
+	s.addLabelerDevice(document, settings, config.Path != "")
+	return document
 }
 
 // labelerProblem is why no labeling can run on this Mac, however long it
@@ -45,11 +99,26 @@ func (settings LabelerSettings) labelerProblem() string {
 	return ""
 }
 
-// postLabelsSettings persists the opt-in alongside labels_enabled's other
-// settings, and applies it to the running service without a restart.
+// postLabelsSettings persists what Settings chose for the labeler (enabled,
+// threads, agent_events_threads; any of them) alongside the library's other
+// settings, and applies it to the running service without a restart. Threads
+// are a target that active runs check every two minutes.
 func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body map[string]any) {
+	threads := map[string]int{}
+	for _, key := range []string{"threads", "agent_events_threads"} {
+		raw, ok := body[key]
+		if !ok {
+			continue
+		}
+		value, valid := raw.(float64)
+		if !valid || value != float64(int(value)) || value < 1 || int(value) > runtime.NumCPU() {
+			writeError(w, fmt.Errorf("%s must be a whole number from 1 to %d", key, runtime.NumCPU()), http.StatusBadRequest)
+			return
+		}
+		threads[key] = int(value)
+	}
 	enabled, valid := body["enabled"].(bool)
-	if !valid {
+	if _, ok := body["enabled"]; (ok && !valid) || (!ok && len(threads) == 0) {
 		writeError(w, fmt.Errorf("enabled must be true or false"), http.StatusBadRequest)
 		return
 	}
@@ -57,12 +126,54 @@ func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body
 		writeError(w, fmt.Errorf("the running service has no writable configuration path"), http.StatusBadRequest)
 		return
 	}
-	if err := s.setLabelsEnabled(r.Context(), enabled); err != nil {
-		writeError(w, err, http.StatusInternalServerError)
-		return
+	if len(threads) > 0 {
+		if err := s.setLabelerThreads(threads); err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+	}
+	if valid {
+		if err := s.setLabelsEnabled(r.Context(), enabled); err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
 	}
 	s.wakeBackground()
 	s.getBackground(w, r)
+}
+
+// setLabelerThreads saves labels_threads and agent_events_threads, and
+// recounts each model's peer for the default budget.
+func (s *Server) setLabelerThreads(threads map[string]int) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	if _, chosen := threads["agent_events_threads"]; !chosen && s.config.AgentEvents.Threads == 0 {
+		// Agent events followed labels_threads; Settings shows two separate
+		// choices, so changing one keeps the other where it was.
+		threads["agent_events_threads"] = max(1, s.config.Labels.Threads)
+	}
+	hostFileMu.Lock()
+	defer hostFileMu.Unlock()
+	for _, key := range []string{"threads", "agent_events_threads"} {
+		value, ok := threads[key]
+		if !ok {
+			continue
+		}
+		name := "labels_threads"
+		if key == "agent_events_threads" {
+			name = key
+		}
+		if err := setRootValue(s.config.Path, name, strconv.Itoa(value)); err != nil {
+			return err
+		}
+		if key == "threads" {
+			s.config.Labels.Threads = value
+		} else {
+			s.config.AgentEvents.Threads = value
+		}
+	}
+	s.config.Labels = s.config.AgentEvents.withPeer(s.config.Labels)
+	return nil
 }
 
 func (s *Server) setLabelsEnabled(ctx context.Context, enabled bool) error {
