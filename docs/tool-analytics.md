@@ -37,7 +37,7 @@ Codex's hosted web searches (`web_search_call`) are recorded as `web_search` cal
 
 ## Tokens and cost
 
-- **Call output tokens:** the emitting request's output tokens, split evenly across the calls it made.
+- **Call output tokens:** the emitting request's output tokens, split evenly across the calls it made. The emitting request is the usage in the call's own provider event, otherwise the first usage after the call in its stream before the next prompt. A call the person ran themselves has none.
 - **Context added:** how much the result grew the context. It is measured as the growth in the next request's prompt over the previous request's prompt plus its output. That growth is split across the results (and any user turns) that arrived in between, in proportion to their size. Without usable request usage it is estimated at 4 bytes a token, plus 1,500 per image. `result_tokens_source` records which.
 - **Context carried:** context added times the number of later requests in the same agent stream until the context is compacted. Each of those requests re-reads the result.
 - **Cost:** API-equivalent cost at the day's list prices (see [token accounting](token-accounting.md)). Context cost prices the first send as a cache write for Claude (5-minute rate) or as uncached input for others, then the carried tokens as cache reads. Output cost prices the call's output share.
