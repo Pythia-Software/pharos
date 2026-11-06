@@ -11,7 +11,7 @@ test("every dashboard belongs to People, Agents or Outcomes and retains its dest
     const pages = analyzePages(params, previews), groups = pages.find(page => page.id === 'dashboards').children;
     assert.deepEqual(groups.map(group => group.label), ['People', 'Agents', 'Outcomes']);
     const dashboards = groups.flatMap(group => group.children);
-    const topics = Object.keys(usageTopics).filter(topic => previews || topic !== 'agent_experience');
+    const topics = Object.keys(usageTopics).filter(topic => previews || !['agent_experience', 'agent_event_rates'].includes(topic));
     assert.deepEqual(dashboards.map(page => page.id).sort(), topics.map(topic => `dashboards:${topic}`).sort());
     assert.equal(new Set(dashboards.map(page => page.id)).size, dashboards.length);
     for (const group of groups) {

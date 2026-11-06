@@ -29,6 +29,7 @@ export const dataSources = {
   findings: { label: "Findings from Archived Work", entity: "workspaces", grain: "One finding" },
   tl1_attempts: { label: "Individual Agent Attempts (TL1)", entity: "agents", grain: "One TL1 attempt" },
   agent_events: { label: "Events in Agent Replies & Thinking", entity: "messages", grain: "One sentence judged to express one kind of event (experimental)" },
+  agent_event_rates: { label: "Agent Event Rates", entity: "messages", grain: "One agent message the event pass read, once per kind of event" },
   agent_event_messages: { label: "Agent Messages Read for Events", entity: "messages", grain: "One agent reply or thinking block the event pass read" },
 } as const satisfies Record<string, { label: string; entity: DataEntity; grain: string }>;
 export type DataSource = keyof typeof dataSources;

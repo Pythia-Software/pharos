@@ -26,7 +26,12 @@ export function primaryUsageSource(dataset: UsageDataset, row: Row) {
   if (dataset === "writing") return conversationRowURL({ workspace_id: row.id });
   const message = dataset === "writing_messages" ? row.id : dataset === "tool_calls" ? row.call_message_id : dataset === "skill_usages" ? row.evidence_message_id : row.message_id;
   const at = dataset === "model_requests" ? row.requested_at : dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : dataset === "skill_usages" ? row.created_at : row.started_at;
-  return conversationRowURL(row, message, at, dataset === "tool_calls" ? row.call_id : undefined);
+  const href = conversationRowURL(row, message, at, dataset === "tool_calls" ? row.call_id : undefined);
+  // An agent event's message opens with the reader's Events marks on.
+  if (!href || !["agent_events", "agent_event_messages", "agent_event_rates"].includes(dataset)) return href;
+  const url = new URL(href, "http://pharos.invalid");
+  url.searchParams.set("reader_events", "1");
+  return url.pathname + url.search;
 }
 const filtered = (dataset: UsageDataset, where: WhereTerm[], current: URLSearchParams) => usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, { ...EMPTY_QUERY, where }) }, current);
 export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URLSearchParams()): UsageRowLink[] {
@@ -80,6 +85,7 @@ export const usageDetailFields: Record<UsageDataset, string[]> = {
   rhythm: ["channel", "machine_id", "execution_machine_id", "source_links", "unit_label", "started_at", "actor", "initiator", "automation", "repository_name", "elapsed_hours", "active_hours", "messages", "typed_words", "turns", "peak_level", "provider", "model", "unit_id"],
   parallelism: ["channel", "machine_id", "execution_machine_id", "source_links", "unit_label", "started_at", "repository_name", "counting", "gap_minutes", "level", "repo_level", "unit_hours", "elapsed_hours", "repo_elapsed_hours", "parallel_elapsed_hours", "location", "provider", "model", "unit_id"],
   agent_events: ["source_links", "family", "sentence", "subject", "response", "source", "occurred_at", "title", "repository_name", "provider", "model", "probability", "event_model"],
+  agent_event_rates: ["source_links", "occurred_at", "family", "events", "source", "prompted_by", "model_effort", "title", "repository_name"],
   agent_event_messages: ["source_links", "occurred_at", "source", "events", "candidates", "title", "repository_name", "provider", "event_model"],
 };
 const extraProperties: Partial<Record<UsageDataset, [string, string, "code" | "json" | "boolean" | "number"][]>> = {

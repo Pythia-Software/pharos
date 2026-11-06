@@ -426,6 +426,10 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  // Agent Events opens on Compare; its trend is the stacked kind chart.
+  { name: "Agent Events dashboard", url: "/analyze?analyze_topic=agent_event_rates", ready: `.usage-agent-events-dashboard ${analysisReady}`,
+    check: async page => assert.deepEqual(await page.locator(".usage-agent-events-dashboard [role=alert], .usage-agent-events-dashboard .query-table-error").allTextContents(), [], "the dashboard reports an error") },
+  { name: "Agent Events trend by kind", url: `/analyze?analyze_topic=agent_event_rates&analyze_chart=${encodeURIComponent(JSON.stringify({ view: "trend", metric: "per_thousand", split: "family", period: "day" }))}`, ready: `.usage-agent-events-dashboard ${overTimeReady}` },
   // A card's relative range, replaced by custom dates and times in the
   // dashboard's inline range picker.
   { name: "Dashboard custom date and time range", url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens",

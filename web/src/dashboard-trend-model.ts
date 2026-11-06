@@ -92,7 +92,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
     // query keys as a calendar group key (groupedDashboardQuery).
     supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), aggregations: supporting },
     range, requested, population, slice, normFrom, normTo,
-    records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
+    records: unique([...population, ...measure.drill ?? [], ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };
 }
 

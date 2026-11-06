@@ -47,6 +47,11 @@ const occupancy = [sum("unit_hours", "Agent/workspace hours"), distinct("unit_id
 
 // Agent events: each row is one event; agent_event_messages: one row per message read.
 const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("conversation_id", "Conversations"), distinct("message_id", "Messages")];
+// agent_event_rates: one row per message read and kind, so its populations
+// are distinct messages, turns and conversations.
+const agentEventRates: SummaryColumn[] = [distinct("message_id", "Messages read"), sum("events", "Events"),
+  ratio("idea_events_per_thousand", "1000*SUM([events])/NULLIF(COUNT_DISTINCT([message_id]),0)", "Events per 1,000 messages read"),
+  ratio("idea_message_share", "COUNT_DISTINCT(IF([events]>0,[message_id],NULL))/NULLIF(COUNT_DISTINCT([message_id]),0)", "Share of messages with an event", true)];
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
@@ -121,6 +126,11 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("agent_events", "weeks", "Over time", "Weekly events", "Events per week by kind group", ["week", "family_group"], agentEvents, "idea_events", true),
     idea("agent_events", "repos", "Compare", "Events by repository", "Compare events and affected conversations across repositories", ["repository_name"], agentEvents),
     idea("agent_events", "threads", "Explore", "Conversations with the most events", "Rank conversations by their events and open them in the reader", ["conversation_id"], [...agentEvents, conversation]),
+  ],
+  agent_event_rates: [
+    idea("agent_event_rates", "kinds", "Compare", "Rates by kind", "Events per 1,000 messages read and the share of messages with each kind", ["family"], agentEventRates),
+    idea("agent_event_rates", "prompted", "Compare", "Rates by who prompted", "Compare event rates in turns a person, an automation or a delegating agent prompted", ["prompted_by"], agentEventRates),
+    idea("agent_event_rates", "models", "Compare", "Rates by model and source", "Compare event rates by model, keeping replies and thinking apart", ["model", "source"], agentEventRates),
   ],
   agent_event_messages: [
     idea("agent_event_messages", "repos", "Compare", "Messages read by repository", "Compare messages read, keyword hits and events across repositories", ["repository_name"], agentEventMessages),

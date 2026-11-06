@@ -8,6 +8,7 @@ import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { toolTimeAnalysisCatalog, skillsAnalysisCatalog } from "./record-analysis-catalogs";
 import { humanAnalysisCatalog } from "./human-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
+import { agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
@@ -19,6 +20,7 @@ export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   compaction: compactionAnalysisCatalog, labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
   human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, habits: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog,
+  agent_event_rates: agentEventRatesCatalog,
 };
 
 // The complete catalog a topic draws with, given the user's settings: Carbon
