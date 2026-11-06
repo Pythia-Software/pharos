@@ -158,13 +158,46 @@ func harnessChannel(harness, source string) (string, int) {
 	case "tl1":
 		return "tl1", 20
 	// OpenCode's terminal and desktop apps share its database and record
-	// neither, so its channel stays unknown.
-	case "codex/codex_cli_rs", "codex/codex_exec", "codex/cli", "claude-code/cli", "antigravity-cli", "cursor-cli", "copilot-cli":
+	// neither, so its channel stays unknown. The Copilot CLI's runtime and
+	// store also serve SDK apps and VS Code, so its channel is the client
+	// that created the session (copilotClientChannel).
+	case "codex/codex_cli_rs", "codex/codex_exec", "codex/cli", "claude-code/cli", "antigravity-cli", "cursor-cli":
 		return "cli", 10
 	case "codex/codex_desktop", "codex/codex-desktop", "codex/codex desktop", "codex/desktop":
 		return "desktop", 10
 	case "codex/vscode", "codex/codex_vscode", "claude-code/vscode", "antigravity", "vscode-copilot", "cursor", "zed":
 		return "ide", 10
+	}
+	return "", 0
+}
+
+// copilotClientChannel maps the client a Copilot session's workspace names as
+// its creator. Only clients whose identity is established count: the CLI
+// writes github/cli; VS Code's Copilot CLI chat sessions write vscode and its
+// agent host vscode-agent-host. Any other SDK app, or none, stays unknown.
+func copilotClientChannel(client string) (string, int) {
+	switch client {
+	case "github/cli":
+		return "cli", 10
+	case "vscode", "vscode-agent-host":
+		return "ide", 10
+	}
+	return "", 0
+}
+
+// clineClientChannel maps the client Cline recorded for a session it ran (its
+// SessionSource, resolved from the client's name); core, kanban and others
+// stay unknown.
+func clineClientChannel(client string) (string, int) {
+	switch client {
+	case "cli":
+		return "cli", 10
+	case "vscode", "jetbrains", "neovim":
+		return "ide", 10
+	case "desktop":
+		return "desktop", 10
+	case "web":
+		return "web", 10
 	}
 	return "", 0
 }
@@ -181,7 +214,15 @@ func nativeOriginContext(meta map[string]any) map[string]any {
 	return result
 }
 
-func recordOriginObservation(tx *sql.Tx, id, host, source string, cv ConversationRecord) error {
+// nativeChannel is the channel a conversation's own record establishes,
+// before any canonical initiation overrides it.
+func nativeChannel(source string, cv ConversationRecord) (string, int) {
+	switch source {
+	case "copilot":
+		return copilotClientChannel(firstString(cv.NativeContext["client_name"]))
+	case "cline":
+		return clineClientChannel(firstString(cv.NativeContext["source"]))
+	}
 	ch, priority := harnessChannel(cv.Harness, source)
 	if source == "codex" && firstString(cv.NativeContext["originator"]) != "" {
 		ch, priority = harnessChannel("codex/"+firstString(cv.NativeContext["originator"]), "")
@@ -194,7 +235,7 @@ func recordOriginObservation(tx *sql.Tx, id, host, source string, cv Conversatio
 			switch marker {
 			case "cli", "exec":
 				ch, priority = "cli", 10
-			case "vscode", "jetbrains":
+			case "vscode":
 				ch, priority = "ide", 10
 			case "desktop":
 				ch, priority = "desktop", 10
@@ -203,6 +244,11 @@ func recordOriginObservation(tx *sql.Tx, id, host, source string, cv Conversatio
 			}
 		}
 	}
+	return ch, priority
+}
+
+func recordOriginObservation(tx *sql.Tx, id, host, source string, cv ConversationRecord) error {
+	ch, priority := nativeChannel(source, cv)
 	machinePriority, executionPriority := 5, 5
 	var machine, execution any
 	evidence := cv.Harness

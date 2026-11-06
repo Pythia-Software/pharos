@@ -87,6 +87,7 @@ func (a *zedAdapter) Discover(emit func(WorkspaceRecord) error) error {
 }
 
 func (a *zedAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil {
 		return err
@@ -307,6 +308,7 @@ func (a *zedAdapter) olderReader(file string, view *captureView, selected map[st
 // readGroup reads, as indexing does, the group whose parts begin as parts
 // do; nothing when that thread is gone.
 func (a *zedAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil || len(parts) == 0 {
 		return nil, nil, err
@@ -448,8 +450,8 @@ func sliceOf(value any) []any {
 }
 
 // conversation reads a thread's messages: the agent's own format (a message
-// is {"User": …}, {"Agent": …} or "Resume"), or that of releases before it,
-// whose messages have a role.
+// is {"User": …}, {"Agent": …}, {"Compaction": …} or "Resume"), or that of
+// releases before it, whose messages have a role.
 func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any) ConversationRecord {
 	started := iso(firstNonNil(row["created_at"], row["updated_at"]))
 	model := mapValueDefault(thread["model"])
@@ -512,6 +514,20 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 				}
 				continue
 			}
+			// A compaction is a boundary, with the summary that stands for
+			// what came before it (unless the provider kept its own).
+			if compaction, ok := message["Compaction"]; ok {
+				native := defaultString(turn, "start") + "/compaction:" + strconv.Itoa(index)
+				item := base
+				item.NativeID, item.Role, item.Kind, item.EvidenceLocator = native, "system", "metadata", locator(native)
+				value := map[string]any{"type": "compaction"}
+				if summary := firstString(mapValueDefault(compaction)["Summary"]); summary != "" {
+					value["summary"] = summary
+				}
+				item.Text = jsonText(value)
+				add(item)
+				continue
+			}
 			agent := mapValue(message["Agent"])
 			if agent == nil {
 				continue // "Resume": the person continued past a tool limit
@@ -567,6 +583,18 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 // request's usage is kept by the message's position.
 func (a *zedAdapter) legacyMessages(messages []any, usage any, base MessageRecord, locator func(string) string, add func(MessageRecord), addUsage func(string, any)) {
 	requests := sliceOf(usage)
+	// A call's result is found by its ID: release 0.1.0 keeps a call's
+	// results on the user message after it, which Zed moves back onto the
+	// call's message when it reads the thread.
+	results := map[string]map[string]any{}
+	for _, raw := range messages {
+		for _, raw := range sliceOf(mapValueDefault(raw)["tool_results"]) {
+			result := mapValueDefault(raw)
+			if call := firstString(result["tool_use_id"]); call != "" && results[call] == nil {
+				results[call] = result
+			}
+		}
+	}
 	for index, raw := range messages {
 		message := mapValueDefault(raw)
 		native := "message:" + defaultString(message["id"], strconv.Itoa(index))
@@ -574,11 +602,6 @@ func (a *zedAdapter) legacyMessages(messages []any, usage any, base MessageRecor
 		item.EvidenceLocator = locator(native)
 		item.RawText = jsonText(map[string]any{"type": "zed_message", "id": native})
 		role := firstString(message["role"])
-		results := map[string]map[string]any{}
-		for _, raw := range sliceOf(message["tool_results"]) {
-			result := mapValueDefault(raw)
-			results[firstString(result["tool_use_id"])] = result
-		}
 		segments := sliceOf(message["segments"])
 		// The oldest threads keep a message's text whole.
 		if text, ok := message["text"].(string); ok && len(segments) == 0 {
@@ -598,7 +621,7 @@ func (a *zedAdapter) legacyMessages(messages []any, usage any, base MessageRecor
 				if text := firstString(segment["text"]); strings.TrimSpace(text) != "" {
 					add(reasoningRecord(record, text, "text", ""))
 				}
-			case "redacted_thinking":
+			case "RedactedThinking", "redacted_thinking":
 				add(reasoningRecord(record, "", "", "redacted"))
 			}
 		}
@@ -615,8 +638,50 @@ func (a *zedAdapter) legacyMessages(messages []any, usage any, base MessageRecor
 	}
 }
 
-// zedExit is a terminal command's outcome as Zed reports it to the model.
-var zedExit = regexp.MustCompile(`failed with exit code (-?\d+)`)
+// zedExit is a failed terminal command's header, as Zed reports it to the
+// model.
+var zedExit = regexp.MustCompile(`(?s)Command ".*" failed with exit code (-?\d+)\.`)
+
+// zedTimedOut is a timed-out terminal command's header.
+var zedTimedOut = regexp.MustCompile(`(?s)Command ".*" timed out\.`)
+
+// zedTerminalOutcome is how a terminal command ended, from what Zed reports
+// to the model (which it saves as a result that did not fail): notes, then
+// a header saying how it ended, then the output in a fenced block. Only what
+// comes before that block is Zed's own; the output may say anything. Nothing
+// when the result does not say.
+func zedTerminalOutcome(content string, input any) map[string]any {
+	header := content
+	if strings.HasPrefix(content, "```") {
+		header = ""
+	} else if fence := strings.Index(content, "\n```"); fence >= 0 {
+		header = content[:fence]
+	}
+	starts := func(prefix string) bool {
+		return strings.HasPrefix(header, prefix) || strings.Contains(header, "\n"+prefix)
+	}
+	switch {
+	case starts("The user stopped this command."):
+		return map[string]any{"interrupted": true}
+	case zedTimedOut.MatchString(header):
+		// Zed times a command out only at the limit its call set.
+		if limit, ok := number(mapValueDefault(input)["timeout_ms"]); ok {
+			return map[string]any{"timedOutAfterMs": limit}
+		}
+		return map[string]any{"status": "failed"}
+	case starts("Command terminated unexpectedly."), starts("Command failed or was interrupted."):
+		return map[string]any{"status": "failed"}
+	}
+	if match := zedExit.FindStringSubmatch(header); match != nil {
+		exit, _ := strconv.Atoi(match[1])
+		return map[string]any{"exit_code": exit}
+	}
+	// Otherwise the output is all there is, or there was none.
+	if header != content || starts("Command executed successfully.") {
+		return map[string]any{"exit_code": 0}
+	}
+	return nil
+}
 
 // tool records a tool call and its result.
 func (a *zedAdapter) tool(base MessageRecord, call, name string, input any, result map[string]any, add func(MessageRecord)) {
@@ -639,12 +704,9 @@ func (a *zedAdapter) tool(base MessageRecord, call, name string, input any, resu
 	content := zedToolContent(result["content"])
 	failed := result["is_error"] == true
 	payload := map[string]any{"tool": defaultString(result["tool_name"], name), "content": content, "is_error": failed}
-	if matchesFold(name, "terminal") {
-		if match := zedExit.FindStringSubmatch(content); match != nil {
-			exit, _ := strconv.Atoi(match[1])
-			payload["details"] = map[string]any{"exit_code": exit}
-		} else if !failed && content != "" && !strings.Contains(content, "timed out") && !strings.Contains(content, "terminated unexpectedly") && !strings.Contains(content, "stopped this command") {
-			payload["details"] = map[string]any{"exit_code": 0}
+	if matchesFold(name, "terminal") && !failed {
+		if details := zedTerminalOutcome(content, input); details != nil {
+			payload["details"] = details
 		}
 	}
 	outcome.Text = jsonText(payload)

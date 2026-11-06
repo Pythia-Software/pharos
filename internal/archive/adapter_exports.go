@@ -250,8 +250,10 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	selected := chatGPTSelected(conversation, children)
 	messages := []MessageRecord{}
 	// read is the message each node, or the nearest node above it, was
-	// read as; calls and tools are each call node's message and tool.
+	// read as; calls and tools are the call each call or reply node
+	// belongs to, and its tool; replies marks the replies.
 	read, calls, tools, kinds := map[string]string{}, map[string]string{}, map[string]string{}, map[string]string{}
+	replies := map[string]bool{}
 	unread := []string{}
 	for _, nodeID := range chatGPTOrder(conversation.Mapping, children) {
 		node := conversation.Mapping[nodeID]
@@ -300,23 +302,22 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 		text, attachments := chatGPTContent(content)
 		switch {
 		case contentType == "thoughts":
-			thoughts, summaries := []string{}, []string{}
+			// Each thought is read as its text, or when it holds none as
+			// its summary, in order: so a record holding any summary is
+			// one.
+			thoughts, format := []string{}, "text"
 			for _, raw := range reasoningList(content["thoughts"]) {
 				thought := mapValue(raw)
 				if text := strings.TrimSpace(firstString(thought["content"])); text != "" {
 					thoughts = append(thoughts, text)
-				}
-				if summary := strings.TrimSpace(firstString(thought["summary"])); summary != "" {
-					summaries = append(summaries, summary)
+				} else if summary := strings.TrimSpace(firstString(thought["summary"])); summary != "" {
+					thoughts, format = append(thoughts, summary), "summary"
 				}
 			}
-			switch {
-			case len(thoughts) > 0:
-				add(reasoningRecord(item, strings.Join(thoughts, "\n\n"), "text", ""))
-			case len(summaries) > 0:
-				add(reasoningRecord(item, strings.Join(summaries, "\n\n"), "summary", ""))
-			default:
+			if len(thoughts) == 0 {
 				add(reasoningRecord(item, "", "", "hidden"))
+			} else {
+				add(reasoningRecord(item, strings.Join(thoughts, "\n\n"), format, ""))
 			}
 		case contentType == "reasoning_recap":
 			// "Thought for 12 seconds": the reasoning it follows is already
@@ -333,18 +334,39 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			}
 			add(item)
 			calls[nodeID], tools[nodeID] = item.NativeID, recipient
+		case role == "tool" && calls[node.Parent] == "" && contentType == "text" && firstString(metadata["initial_text"], metadata["finished_text"]) != "":
+			// o1's reasoning, in older exports: a summary of it, from a
+			// tool ("Thinking", then "Thought for 27 seconds") that no call
+			// asked.
+			if text == "" {
+				add(reasoningRecord(item, "", "", "hidden"))
+			} else {
+				add(reasoningRecord(item, text, "summary", ""))
+			}
 		case role == "tool":
-			// The tool replies to the call before it.
+			// The tool replies to the call before it. A reply can run on
+			// into more, such as each page a browser click quotes: each
+			// replies to the call, after the reply before it.
 			result := map[string]any{"tool": defaultString(author["name"], tools[node.Parent]), "content": text}
 			item.CallID = calls[node.Parent]
+			if item.CallID != "" && replies[node.Parent] {
+				result["continues"] = true
+			}
 			switch contentType {
 			case "system_error":
 				result["is_error"] = true
 			case "tether_quote":
 				result["url"], result["title"] = content["url"], content["title"]
 			}
+			// Python's exception can be told only in how its run ended.
+			if run := mapValue(metadata["aggregate_result"]); run != nil && (run["status"] == "failed_with_in_kernel_exception" || mapValue(run["in_kernel_exception"]) != nil) {
+				result["is_error"] = true
+			}
 			item.Kind, item.Text = "tool_result", jsonText(result)
 			add(item)
+			if item.CallID != "" {
+				calls[nodeID], tools[nodeID], replies[nodeID] = item.CallID, firstString(result["tool"]), true
+			}
 		default:
 			// Whatever text a node holds is read, under the node's ID, as
 			// the adapter before chatgpt-v2 read it: so a read holds every

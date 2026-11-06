@@ -149,6 +149,15 @@ func (a baseAdapter) context() context.Context {
 	return context.Background()
 }
 
+// shareSQLiteCopies makes the adapter's reads, until end runs, one pass that
+// reads a database it had to copy from that one copy (withSQLiteCopyShare).
+func (a *baseAdapter) shareSQLiteCopies() (end func()) {
+	previous := a.ctx
+	ctx, endShare := withSQLiteCopyShare(a.context())
+	a.ctx = ctx
+	return func() { a.ctx = previous; endShare() }
+}
+
 func setAdapterContext(adapter Adapter, ctx context.Context) {
 	if contextual, ok := adapter.(interface{ setContext(context.Context) }); ok {
 		contextual.setContext(ctx)
