@@ -20460,24 +20460,27 @@
           "label": "Sessions per day",
           "display": {
             "kind": "auto",
-            "yLabel": "Sessions"
+            "yLabel": "Share of sessions"
           }
         }
       ],
       "id": "session-archetype-mix",
       "title": "Your sessions by kind",
-      "description": "Sessions you typed in each day over the last {days} days, by archetype.",
+      "description": "Each day's share of the sessions you typed in by archetype, over each trailing seven days in the last {days} days.",
       "action": "Explore Session Shape",
-      "note": "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more). Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "note": "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more). Shares divide each kind's sessions by all your sessions in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
       "cover": {
         "mode": "source",
         "metricId": "ss_archetype_daily",
         "kind": "auto",
         "maxGroups": 15,
         "showOther": true,
-        "showLegend": true,
+        "showLegend": false,
         "showHeadline": false,
-        "height": 300
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
       },
       "where": [
         {
@@ -20496,7 +20499,7 @@
           "period": "day",
           "scale": "linear",
           "nonzero": false,
-          "share": false
+          "rollingPeriods": 7
         },
         "dataset": "session_shape",
         "detailAction": "Explore sessions over time"
@@ -20539,12 +20542,11 @@
         "kind": "auto",
         "maxGroups": 15,
         "showOther": true,
-        "showLegend": true,
+        "showLegend": false,
         "showHeadline": false,
-        "height": 300,
         "timeline": {
           "rollingPeriods": 7,
-          "percent": true
+          "display": "heatmap"
         }
       },
       "where": [
@@ -20564,8 +20566,7 @@
           "period": "day",
           "scale": "linear",
           "nonzero": false,
-          "rollingPeriods": 7,
-          "share": true
+          "rollingPeriods": 7
         },
         "dataset": "session_shape",
         "detailAction": "Explore sessions over time"
@@ -21493,28 +21494,45 @@
       "idea": "conversation-04",
       "dataset": "session_shape",
       "field": "started_at",
-      "unit": "calls per typed message",
+      "unit": "sessions",
       "days": [
         30,
         90
       ],
       "measures": [
         {
-          "id": "ss_autonomy_trend",
-          "op": "sum",
-          "field": "tool_calls",
-          "expression": "SUM([tool_calls])/NULLIF(SUM([autonomy_prompts]),0)",
+          "id": "ss_autonomy_band_daily",
+          "op": "count",
           "groupBy": [
-            "day"
+            "day",
+            "autonomy_band"
           ],
           "groupLimit": 10000,
-          "label": "Tool calls per typed message by day"
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Share of sessions"
+          }
         }
       ],
       "id": "session-autonomy-trend",
       "title": "Tool calls per typed message over time",
-      "description": "Tool calls over the messages you typed, pooled over each trailing seven complete days.",
+      "description": "Each day's share of your sessions by tool calls per typed message, over each trailing seven days in the last {days} days.",
       "action": "Explore Session Shape",
+      "note": "Each session's tool calls divided by the messages you typed in it. Only sessions the tool ledger covers and whose prompts are all classified count. Shares divide each band's sessions by all your sessions with a value in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_autonomy_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
       "where": [
         {
           "field": "archetype",
@@ -21530,35 +21548,13 @@
           "field": "has_authorship",
           "op": "=",
           "value": "true"
+        },
+        {
+          "field": "autonomy_band",
+          "op": "is_not_null",
+          "value": ""
         }
       ],
-      "note": "Each point pools seven complete local days; today is left out until it is complete. Only sessions the tool ledger covers and whose prompts are all classified count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
-      "cover": {
-        "mode": "source",
-        "metricId": "ss_autonomy_trend",
-        "kind": "auto",
-        "height": 260
-      },
-      "trend": {
-        "value": {
-          "op": "sum",
-          "field": "tool_calls"
-        },
-        "per": {
-          "op": "sum",
-          "field": "autonomy_prompts"
-        },
-        "count": {
-          "op": "count"
-        },
-        "lookback": 7,
-        "completeDays": true,
-        "valueLabel": "calls per typed message · 7 days",
-        "pointValueLabel": "calls per typed message",
-        "trendLabel": "7d",
-        "sample": "sessions",
-        "detail": "Each point: calls per typed message pooled over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
-      },
       "destination": {
         "topic": "session_shape",
         "chart": {
@@ -21569,9 +21565,7 @@
           "period": "day",
           "scale": "linear",
           "nonzero": false,
-          "rollingPeriods": 7,
-          "completePeriods": true,
-          "norm": true
+          "rollingPeriods": 7
         },
         "dataset": "session_shape",
         "detailAction": "Explore tool calls per typed message over time"
@@ -21582,62 +21576,57 @@
       "idea": "conversation-04",
       "dataset": "session_shape",
       "field": "started_at",
-      "unit": "seconds",
+      "unit": "sessions",
       "days": [
         30,
         90
       ],
       "measures": [
         {
-          "id": "ss_turn_cycle_trend",
-          "op": "sum",
-          "field": "turn_cycle_p50_seconds",
-          "expression": "SUM([turn_cycle_p50_seconds])/NULLIF(COUNT([turn_cycle_p50_seconds]),0)",
+          "id": "ss_turn_cycle_band_daily",
+          "op": "count",
           "groupBy": [
-            "day"
+            "day",
+            "turn_cycle_band"
           ],
           "groupLimit": 10000,
-          "label": "Turn cycle (session median) by day"
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Share of sessions"
+          }
         }
       ],
       "id": "session-turn-cycle-trend",
       "title": "Turn cycle over time",
-      "description": "The mean of your sessions' median turn cycles, over each trailing seven complete days.",
+      "description": "Each day's share of your sessions by their median turn cycle, over each trailing seven days in the last {days} days.",
       "action": "Explore Session Shape",
+      "note": "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count. Shares divide each band's sessions by all your sessions with a value in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_turn_cycle_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
       "where": [
         {
           "field": "archetype",
           "op": "!=",
           "value": "automated"
+        },
+        {
+          "field": "turn_cycle_band",
+          "op": "is_not_null",
+          "value": ""
         }
       ],
-      "note": "Each point pools seven complete local days; today is left out until it is complete. A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
-      "cover": {
-        "mode": "source",
-        "metricId": "ss_turn_cycle_trend",
-        "kind": "auto",
-        "height": 260
-      },
-      "trend": {
-        "value": {
-          "op": "sum",
-          "field": "turn_cycle_p50_seconds"
-        },
-        "per": {
-          "op": "count",
-          "field": "turn_cycle_p50_seconds"
-        },
-        "count": {
-          "op": "count"
-        },
-        "lookback": 7,
-        "completeDays": true,
-        "valueLabel": "seconds, session median · 7 days",
-        "pointValueLabel": "seconds",
-        "trendLabel": "7d",
-        "sample": "sessions",
-        "detail": "Each point: seconds pooled over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
-      },
       "destination": {
         "topic": "session_shape",
         "chart": {
@@ -21648,9 +21637,7 @@
           "period": "day",
           "scale": "linear",
           "nonzero": false,
-          "rollingPeriods": 7,
-          "completePeriods": true,
-          "norm": true
+          "rollingPeriods": 7
         },
         "dataset": "session_shape",
         "detailAction": "Explore turn cycle (session median) over time"
@@ -21661,28 +21648,45 @@
       "idea": "conversation-04",
       "dataset": "session_shape",
       "field": "started_at",
-      "unit": "percent",
+      "unit": "sessions",
       "days": [
         30,
         90
       ],
       "measures": [
         {
-          "id": "ss_context_peak_trend",
-          "op": "sum",
-          "field": "context_peak_ratio",
-          "expression": "SUM([context_peak_ratio])/NULLIF(COUNT([context_peak_ratio]),0)",
+          "id": "ss_context_band_daily",
+          "op": "count",
           "groupBy": [
-            "day"
+            "day",
+            "context_band"
           ],
           "groupLimit": 10000,
-          "label": "Peak context share by day"
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Share of sessions"
+          }
         }
       ],
       "id": "session-context-trend",
       "title": "Peak context over time",
-      "description": "The mean of your sessions' largest request as a share of the model's context window, over each trailing seven complete days.",
+      "description": "Each day's share of your sessions by their largest request as a share of the model's context window, over each trailing seven days in the last {days} days.",
       "action": "Explore Session Shape",
+      "note": "Only sessions whose model's context window is known count. Shares divide each band's sessions by all your sessions with a value in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_context_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
       "where": [
         {
           "field": "archetype",
@@ -21693,36 +21697,13 @@
           "field": "has_context_window",
           "op": "=",
           "value": "true"
+        },
+        {
+          "field": "context_band",
+          "op": "is_not_null",
+          "value": ""
         }
       ],
-      "note": "Each point pools seven complete local days; today is left out until it is complete. Only sessions whose model's context window is known count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
-      "cover": {
-        "mode": "source",
-        "metricId": "ss_context_peak_trend",
-        "kind": "auto",
-        "height": 260
-      },
-      "trend": {
-        "value": {
-          "op": "sum",
-          "field": "context_peak_ratio"
-        },
-        "per": {
-          "op": "count",
-          "field": "context_peak_ratio"
-        },
-        "count": {
-          "op": "count"
-        },
-        "lookback": 7,
-        "completeDays": true,
-        "format": "percent",
-        "valueLabel": "peak context share · 7 days",
-        "pointValueLabel": "peak context share",
-        "trendLabel": "7d",
-        "sample": "sessions",
-        "detail": "Each point: peak context share pooled over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
-      },
       "destination": {
         "topic": "session_shape",
         "chart": {
@@ -21733,9 +21714,7 @@
           "period": "day",
           "scale": "linear",
           "nonzero": false,
-          "rollingPeriods": 7,
-          "completePeriods": true,
-          "norm": true
+          "rollingPeriods": 7
         },
         "dataset": "session_shape",
         "detailAction": "Explore peak context share over time"

@@ -1,5 +1,5 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
-import type { AnalysisCatalog, AnalysisMeasure, RatioPart } from "./dashboard-analysis-model";
+import { heatmapKind, isTrendView, noSplit, type AnalysisCatalog, type AnalysisMeasure, type AnalysisPresentation, type RatioPart } from "./dashboard-analysis-model";
 import { archetypes, bandBreakdowns } from "./session-shape-bands";
 
 // Session shape over the session_shape dataset: one record is one agent
@@ -20,7 +20,7 @@ const signal = (label: string, field: string, note: string, where?: WhereTerm[])
 const measures: Record<string, AnalysisMeasure> = {
   sessions: { label: "Sessions", unit: "sessions", format: count, op: "count", additive: true, note: "Agent sessions: each conversation once, a delegated run as its own session. Mirrors and aliases of one session count once." },
   active_hours: { label: "Active hours", unit: "hours", format: hours, op: "sum", field: "active_hours", value: "active_hours", additive: true, note: "Time between consecutive messages, counting gaps of 300 seconds or less; a longer gap counts as zero." },
-  active_time: { label: "Active time per session", unit: "seconds", format: seconds, op: "sum", ratio: ["active_seconds", counted("active_seconds", "sessions with timestamps")], value: "active_seconds", additive: false,
+  active_time: { label: "Active time per session", unit: "seconds", format: seconds, op: "sum", ratio: ["active_seconds", counted("active_seconds", "sessions with timestamps")], value: "active_seconds", additive: false, band: "active_band",
     note: "Active time divided by sessions with timestamps, pooled. Per session it is the value the distribution draws." },
   messages: { label: "Messages", unit: "messages", format: count, op: "sum", field: "messages", value: "messages", additive: true, note: "Every message of the session's own stream; an embedded sub-agent's messages are its own." },
   typed_messages: { label: "Typed human messages", unit: "messages", format: count, op: "sum", field: "typed_human_messages", value: "typed_human_messages", additive: true, where: authorship,
@@ -28,15 +28,15 @@ const measures: Record<string, AnalysisMeasure> = {
   tool_calls: { label: "Tool calls", unit: "calls", format: count, op: "sum", field: "tool_calls", value: "tool_calls", additive: true, where: toolData, note: "The session's own tool calls, in sessions the tool ledger covers." },
   // How much the agent did per thing you wrote: per typed message, and per
   // 100 typed words. The id stays "autonomy" for links made before.
-  autonomy: { label: "Tool calls per typed message", unit: "calls per typed message", format: mean, op: "sum", ratio: ["tool_calls", "autonomy_prompts"], value: "autonomy", additive: false, where: [...toolData, ...authorship],
+  autonomy: { label: "Tool calls per typed message", unit: "calls per typed message", format: mean, op: "sum", ratio: ["tool_calls", "autonomy_prompts"], value: "autonomy", additive: false, where: [...toolData, ...authorship], band: "autonomy_band",
     note: "Tool calls per message holding text you typed (a session with none counts one), pooled: summed calls over summed messages. Pasted or quoted text alone does not count as a message." },
   calls_per_words: { label: "Tool calls per 100 typed words", unit: "calls per 100 words", format: mean, op: "sum", ratio: [{ op: "sum", expression: "[tool_calls]*100", label: "Tool calls × 100" }, "typed_words"], additive: false,
     where: [...toolData, ...authorship, { field: "typed_words", op: ">", value: "0" }],
     note: "Tool calls per 100 words you typed, pooled: summed calls over summed typed words. Only sessions where you typed something; pasted and quoted text is not typed." },
-  turn_cycle: { label: "Turn cycle (session median)", unit: "seconds", format: seconds, op: "sum", ratio: ["turn_cycle_p50_seconds", counted("turn_cycle_p50_seconds", "sessions with a turn cycle")], value: "turn_cycle_p50_seconds", additive: false,
+  turn_cycle: { label: "Turn cycle (session median)", unit: "seconds", format: seconds, op: "sum", ratio: ["turn_cycle_p50_seconds", counted("turn_cycle_p50_seconds", "sessions with a turn cycle")], value: "turn_cycle_p50_seconds", additive: false, band: "turn_cycle_band",
     note: "Each session's median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Pooled over groups it is the mean of those medians; the distribution draws them." },
   active_share: { label: "Active share of wall time", unit: "percent", format: percent, op: "sum", ratio: ["active_seconds", "wall_seconds"], additive: false, note: "Active time divided by first-to-last message time, pooled over sessions." },
-  context_peak: { label: "Peak context share", unit: "percent", format: percent, op: "sum", ratio: ["context_peak_ratio", counted("context_peak_ratio", "sessions with a known window")], value: "context_peak_ratio", additive: false, where: contextWindow,
+  context_peak: { label: "Peak context share", unit: "percent", format: percent, op: "sum", ratio: ["context_peak_ratio", counted("context_peak_ratio", "sessions with a known window")], value: "context_peak_ratio", additive: false, where: contextWindow, band: "context_band",
     note: "Each session's largest request input divided by its model's context window, the figure the reader's context rail uses; only sessions whose window is known. Pooled over groups it is the mean of the sessions' peaks." },
   one_shot_rate: { label: "One-shot edit turns", unit: "percent", format: percent, op: "sum", ratio: ["one_shot_edit_turns", "edit_turns"], additive: false, where: [...toolData, ...authorship],
     note: "Human turns with an edit and no edit–verify–edit retry on one file, divided by turns with an edit, pooled." },
@@ -79,9 +79,31 @@ const sessionBreakdowns: AnalysisCatalog["breakdowns"] = {
   execution_machine_id: { label: "Execution machine", fields: ["execution_machine_id"] },
 };
 
+// Each chart is drawn one way (docs/session-shape.md#charts). Over time, an
+// ordered breakdown (a band or the archetypes) is a heatmap: shares of a
+// total, or a rate's value in each band. A per-session measure with a band
+// of its own is, without a breakdown, its distribution as a heatmap. Totals
+// by any other breakdown stack as columns, rates draw a line per group, and
+// a single series is a line with its norm. Long-tailed times and counts are
+// on a log axis outside Over time.
+const longTailed = new Set(["active_time", "turn_cycle", "autonomy", "calls_per_words", "messages", "typed_messages", "tool_calls", "active_hours"]);
+const axis = (metric: string) => longTailed.has(metric) ? "logarithmic" as const : "linear" as const;
+function present({ view, metric, metricY, split }: { view: string; metric: string; metricY: string; split: string }): AnalysisPresentation {
+  const measure = measures[metric], scale = axis(metric);
+  if (isTrendView(view)) {
+    if (heatmapKind(sessionShapeAnalysisCatalog, { metric, split })) return { view: "trend", display: "heatmap", share: false, nonzero: false };
+    const lines = { display: "interval", share: false, nonzero: false, scale: "linear" } as const;
+    if (split === noSplit) return { ...lines, view: "trend_line", norm: true };
+    return { ...lines, view: measure.additive ? "trend" : "trend_line", norm: false };
+  }
+  if (view === "compare") return { compareAs: "bars", scale };
+  if (view === "scatter") return { scale, scaleY: axis(metricY) };
+  return { scale: view === "cycle" ? "linear" : scale };
+}
+
 export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   dataset: "session_shape", time: { first: "started_at", last: "started_at" }, measures, breakdowns: sessionBreakdowns,
-  records: { label: "Session", plural: "Sessions", note: "A record is one agent session: a conversation, with a delegated run as its own session." },
+  records: { label: "Session", plural: "Sessions", note: "A record is one agent session: a conversation, with a delegated run as its own session.", count: "sessions" },
   units: {
     // Every breakdown is a property of the session itself.
     session: { label: "Agent session", plural: "Agent sessions", key: "conversation_id", where: [{ field: "conversation_id", op: "is_not_null", value: "" }],
@@ -99,4 +121,5 @@ export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
   trend: { metric: "sessions", split: "length_band" },
   scatter: ["active_time", "tool_calls"],
+  present,
 };

@@ -547,28 +547,48 @@ no sum, cumulative or share.
   the trend adds Show as (values or shares), Display, Time bucket,
   Smoothing with its Window (average or total), Periods (whole periods
   only) and Norm.
-- **Heatmap.** Display = Heatmap draws a distribution over time: one column
-  per period, one row per group of an ordered breakdown (one with `order`,
-  such as Session Shape's bands and archetype), each cell the period's
-  share of the measure in that group. For Session Shape's autonomy, choose
-  Sessions by autonomy band. It reads the trend's own query and prepared
-  buckets, so filters, smoothing (each column then averages its window),
-  whole periods and Refresh apply as they do to columns.
+- **Chosen charts.** A catalog may choose each chart itself (`present`):
+  given the view, measure and breakdown, how it is drawn — display, shares,
+  scale, norm, Compare's bars or shares, and for Over time whether it draws
+  lines or bars (`trendDrawing`, without changing the state's view). The
+  choice overrides what a link asked for, the controls for those settings
+  are hidden, and the site map leaves them out of the topic's chart keys
+  (`topicChartKeys`), so a link neither holds nor checks them. Session
+  Shape is the one catalog that chooses
+  ([its charts](session-shape.md#charts)).
+- **Heatmap.** Display = Heatmap draws one column per period and one row
+  per group of an ordered breakdown (one with `order`, such as Session
+  Shape's bands and archetype). What a cell holds depends on the measure
+  (`heatmapKind`):
+  - an additive measure's cell is the period's share of the measure in that
+    group (a *share* heatmap);
+  - a pooled rate's cell is the group's own value in that period, such as
+    the failure rate of sessions in each length band (a *value* heatmap);
+  - without a breakdown, a measure with a band of its own (`band`, such as
+    Session Shape's tool calls per typed message and its band) is drawn as
+    its distribution: the share of the period's records in each band, among
+    the records in the measure's population with a band (`heatmapSource`,
+    which counts them with the catalog's `records.count` measure).
+
+  It reads the trend's own query and prepared buckets, so filters, smoothing
+  (each column then averages, or for a rate pools, its window), whole
+  periods and Refresh apply as they do to columns.
   - Rows follow the breakdown's order, the highest at the top; groups
     outside the order (Other, an unknown value) come after it, and a group
     without a value last.
   - One hue, shaded relative to the largest share drawn, which the key
     names. A period with no records is hatched, never a zero share.
   - Hover a cell for its share and the count behind it out of the period's
-    total.
+    total, or for its value.
   - A legend selection limits the rows, and shares are then of the
     selected groups.
-  - It needs an additive measure (shares) and an ordered breakdown
-    (`trendLimits.heatmap`); otherwise it falls back to per interval and
-    says why. Show as, Scale and Norm do not apply and are hidden.
+  - Without one of those (`trendLimits.heatmap`) it falls back to per
+    interval and says why. Show as, Scale and Norm do not apply and are
+    hidden.
   - The model is `dashboard-heatmap-model.ts` (`trendHeatmap`) and the
-    component `dashboard-heatmap.tsx`. A card made from a heatmap draws the
-    same shares as columns, and opens the heatmap.
+    component `dashboard-heatmap.tsx`. A card made from a heatmap draws it
+    as a grid cover (`heatmapGrid`), as does a card recipe whose daily
+    cover asks for `timeline.display: "heatmap"`.
   - Why not bin a measure's per-record value by period on the server: Query
     Table's histograms bin each group with its own edges, so rows would not
     line up across columns. Catalogs give such values fixed bands instead.

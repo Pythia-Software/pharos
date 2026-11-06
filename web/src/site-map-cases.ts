@@ -1,6 +1,6 @@
 import { decodeQueryStrict, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { chartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
+import { topicChartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
 import { isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
@@ -56,7 +56,7 @@ function chartCases(map: SiteMap): ChartCase[] {
     const facts = map.analyze.dashboards[topic], sets = filterSets(facts.dataset as UsageDataset), windows = [...dashboardWindows, null];
     for (const [view, info] of Object.entries(facts.views)) {
       // A spread of every enumerated combination, valid and coercible.
-      const judged = enumerateView(topic, view as AnalysisView, info.defaults, info.domains).filter(item => chartKeys[view as AnalysisView].every(name => name in item.chart));
+      const judged = enumerateView(topic, view as AnalysisView, info.defaults, info.domains).filter(item => topicChartKeys(topic, view as AnalysisView).every(name => name in item.chart));
       const linked = (item: ChartCase) => {
         const filters = sets[turn % sets.length], days = windows[turn % windows.length];
           turn++;
@@ -208,7 +208,7 @@ export function buildSiteMapCases(map: SiteMap) {
     if (judgeChart(facts, map.analyze.version, item.chart) !== item.verdict) throw new Error(`site map cases: the rules misjudge ${item.topic} ${json(item.chart)}`);
     if (item.verdict === "invalid") continue;
     // Keeping only the view's keys changes neither the verdict nor the drawing.
-    const kept = viewChart(item.topic, item.chart), view = chartKeys[(item.chart.view ?? facts.merge_defaults.view ?? "trend") as AnalysisView];
+    const kept = viewChart(item.topic, item.chart), view = topicChartKeys(item.topic, (item.chart.view ?? facts.merge_defaults.view ?? "trend") as AnalysisView);
     const draw = (chart: Record<string, unknown>) => json(view.map(key => (normalizeAnalysis(analysisCatalogs[item.topic]!, { ...facts.merge_defaults, ...chart } as AnalysisState) as Record<string, unknown>)[key]));
     // A chart with an older name is written in current names, and opens.
     const renamed = readChart(facts, item.chart).renamed, verdict = chartVerdict(item.topic, kept);

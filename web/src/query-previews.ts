@@ -18,7 +18,9 @@ import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
 import type { DashboardCardTarget } from "./dashboard-card-model";
 import type { HabitsCover } from "./habits-card";
-import type { GridCover } from "./grid-cover";
+import { gridCoverHeight, type GridCover } from "./grid-cover";
+import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
+import { orderedValues } from "./session-shape-bands";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
@@ -321,6 +323,14 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
     if (!ready && eligible && periods && rollingAverageBuckets(chart, periods, { period: "day" }).some(bucket => !bucket.history && Object.values(bucket.values).some(value => value > 0))) preview.state = "ready";
+    // A heatmap cover shades each day's share of the groups, rows in their
+    // scope's order (session-shape-bands.ts), as the dashboard's heatmap.
+    if (preview.timeline?.display === "heatmap") {
+      const ordered = orderedValues[recipe?.scope ?? clause.groupBy.at(-1) ?? ""], order = ordered ? ordered.order.map(value => ordered.labels[value] ?? value) : [];
+      const days = periods ? rollingAverageBuckets(chart, periods, { period: "day" }).filter(bucket => !bucket.history) : chart;
+      preview.grid = heatmapGrid(trendHeatmap(days, preview.series.filter(item => !item.hiddenCount), order), { period: "day", noun: recipe?.unit ?? countUnit, rollingPeriods: periods ?? 0 });
+      preview.coverHeight = gridCoverHeight(preview.grid);
+    }
   }
   if (query.grouping && recipe?.exploration && !clause.distribution && !clause.expressionY && (!additive || !recipe.exploration.coverMetric)) {
     const count = result.groupCount ?? result.processedRows ?? values.length;

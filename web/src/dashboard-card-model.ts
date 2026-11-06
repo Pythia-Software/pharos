@@ -1,6 +1,6 @@
 import { EMPTY_QUERY, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { isTrendView, barsShown, canonicalState, normalizeAnalysis, slicesShown, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
+import { isTrendView, barsShown, canonicalState, normalizeAnalysis, slicesShown, trendDrawing, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
 
 import { dashboardDefaults } from "./dashboard-defaults";
 import { trendTitle } from "./dashboard-trend-model";
@@ -157,7 +157,8 @@ export function dashboardCardPresentation(address: string, target: DashboardCard
   const category: QueryCategory = topic === "tokens" ? state.metric.includes("cost") ? "cost" : "usage"
     : topic === "carbon" ? "carbon" : topic === "human" ? "human" : topic === "skills" ? "skills"
     : topic === "activity" ? "models" : topic === "time" || topic === "parallelism" || topic === "habits" ? "machines" : "tools";
-  const kind = isTrendView(state.view) ? state.view === "trend_line" || state.view !== "trend_bar" && state.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
+  const drawn = isTrendView(state.view) ? normalizeAnalysis(analysisCatalogs[topic]!, state) : undefined, drawing = drawn && trendDrawing(analysisCatalogs[topic]!, drawn);
+  const kind = drawn ? drawing === "trend_line" || drawing !== "trend_bar" && drawn.display === "cumulative" ? "line" : "columns" : state.view === "distribution" || state.view === "cycle" && state.reduce === "median" ? "box" : state.view === "scatter" ? "scatter" : state.view === "cycle" ? "columns" : state.compareAs === "share" ? "pie" : "list";
   const count = state.view === "cycle" ? state.cycle === "hour" ? 24 : 7 : kind === "columns" ? 12 : Math.min(groups ?? 4, cardGroupsMax);
 
   return { category, loading: { kind, count, height: fittedCoverHeight(kind, count) } };

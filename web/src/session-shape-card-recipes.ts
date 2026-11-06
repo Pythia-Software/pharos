@@ -22,12 +22,22 @@ const coverage = {
   window: "Only sessions whose model's context window is known count.",
 };
 
-// Sessions per day by a breakdown: counts, or shares of each trailing seven
-// days.
-function daily(id: string, title: string, description: string, split: string, note: string, { shares = false, ...extra }: Partial<QueryRecipe> & { shares?: boolean } = {}): QueryRecipe {
-  const metric: AggregationClause = { id: `ss_${split}_daily`, op: "count", groupBy: ["day", split], groupLimit: 10000, label: "Sessions per day", display: { kind: "auto", yLabel: shares ? "Share of sessions" : "Sessions" } };
+// Sessions per day by an ordered breakdown, as the dashboard's heatmap: each
+// trailing seven days' share of sessions in each band.
+function daily(id: string, title: string, description: string, split: string, note: string, extra: Partial<QueryRecipe> = {}): QueryRecipe {
+  const metric: AggregationClause = { id: `ss_${split}_daily`, op: "count", groupBy: ["day", split], groupLimit: 10000, label: "Sessions per day", display: { kind: "auto", yLabel: "Share of sessions" } };
   return session({ id, title, description, action: "Explore sessions over time", note, measures: [metric],
-    cover: { mode: "source", metricId: metric.id, kind: "auto", maxGroups: 15, showOther: true, showLegend: true, showHeadline: false, height: 300, ...(shares ? { timeline: { rollingPeriods: 7, percent: true } } : {}) }, ...extra });
+    cover: { mode: "source", metricId: metric.id, kind: "auto", maxGroups: 15, showOther: true, showLegend: false, showHeadline: false, timeline: { rollingPeriods: 7, display: "heatmap" } }, ...extra });
+}
+
+// A per-session measure's distribution over time: the share of your sessions
+// in each of its bands, as the dashboard draws the measure without a
+// breakdown (heatmapSource). Only sessions with the measure's evidence and a
+// band count.
+function bands(id: string, title: string, description: string, metric: string, note: string): QueryRecipe {
+  const measure = catalog.measures[metric], band = measure.band!;
+  return daily(id, title, description, band, `${note} Shares divide each band's sessions by all your sessions with a value in the same seven days. ${steeredNote}`,
+    { action: `Explore ${measure.label.toLowerCase()} over time`, unit: "sessions", where: [steered, ...measure.where ?? [], { field: band, op: "is_not_null", value: "" }] });
 }
 
 // The dashboard's own distribution clause and population, so the cover is
@@ -90,9 +100,10 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     note: "A harness is the app that ran the session: an interactive client, an SDK or a batch runner. Delegated runs count as their own sessions.",
     exploration: { keys: ["harness"], summaries: [sessions], valueField: sessions.id, unit: "sessions", subjects: "harnesses", action: "Compare harnesses", labelFields: ["harness"] },
     cover: { mode: "result", metricId: sessions.id, kind: "bar-horizontal", maxGroups: 10, showOther: true } }),
-  daily("session-archetype-mix", "Your sessions by kind", "Sessions you typed in each day over the last {days} days, by archetype.", "archetype", `${archetypeNote} ${steeredNote}`, { where: [steered] }),
+  daily("session-archetype-mix", "Your sessions by kind", "Each day's share of the sessions you typed in by archetype, over each trailing seven days in the last {days} days.", "archetype",
+    `${archetypeNote} Shares divide each kind's sessions by all your sessions in the same seven days. ${steeredNote}`, { where: [steered] }),
   daily("session-length-mix", "How long your sessions are", "Each day's share of your sessions by length band, over each trailing seven days in the last {days} days.", "length_band",
-    `${lengthNote} Shares divide each band's sessions by all your sessions in the same seven days. ${steeredNote}`, { shares: true, where: [steered] }),
+    `${lengthNote} Shares divide each band's sessions by all your sessions in the same seven days. ${steeredNote}`, { where: [steered] }),
   session({ id: "session-active-time", title: "Active time by session kind", description: "Each session's active time over the last {days} days, by archetype; log axis.", idea: "rhythm-05", unit: "seconds", action: "Compare session active time", ...activeTime, where: [...activeTime.where, positive("active_seconds")],
     note: "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with some active time count; kinds with fewer than three are left out.",
     cover: box("ss_active_time", 3) }),
@@ -124,11 +135,12 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     "A session counts on the day it starts."),
   sparkline("session-hours-trend", "Your active hours a day", "Active hours of the sessions you typed in, a day, averaged over each trailing seven complete days.", "active_hours", { value: "active hours a day", point: "active hours a day" },
     "Active time adds the gaps between consecutive messages of 300 seconds or less, on the day the session starts."),
-  sparkline("session-autonomy-trend", "Tool calls per typed message over time", "Tool calls over the messages you typed, pooled over each trailing seven complete days.", "autonomy", { value: "calls per typed message", point: "calls per typed message" },
-    coverage.both),
-  sparkline("session-turn-cycle-trend", "Turn cycle over time", "The mean of your sessions' median turn cycles, over each trailing seven complete days.", "turn_cycle", { value: "seconds, session median", point: "seconds" },
+  // Per-session measures over time, as their distributions.
+  bands("session-autonomy-trend", "Tool calls per typed message over time", "Each day's share of your sessions by tool calls per typed message, over each trailing seven days in the last {days} days.", "autonomy",
+    `Each session's tool calls divided by the messages you typed in it. ${coverage.both}`),
+  bands("session-turn-cycle-trend", "Turn cycle over time", "Each day's share of your sessions by their median turn cycle, over each trailing seven days in the last {days} days.", "turn_cycle",
     "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count."),
-  sparkline("session-context-trend", "Peak context over time", "The mean of your sessions' largest request as a share of the model's context window, over each trailing seven complete days.", "context_peak", { value: "peak context share", point: "peak context share" },
+  bands("session-context-trend", "Peak context over time", "Each day's share of your sessions by their largest request as a share of the model's context window, over each trailing seven days in the last {days} days.", "context_peak",
     coverage.window),
   // Context, and when you work.
   session({ id: "session-model-context", title: "Peak context by model", description: "Each session's largest request as a share of its model's context window, over the last {days} days.", idea: "context-02", unit: "percent", action: "Compare peak context", ...contextPeak,

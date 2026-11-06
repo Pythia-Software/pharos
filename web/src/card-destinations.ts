@@ -155,8 +155,8 @@ const dashboards: Record<string, CardDashboard> = {
   // Session Shape: one record per agent session. Rates carry their coverage
   // population as the card's filters.
   "session-sources": sessions("sessions", "harness", {}),
-  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend", share: false }),
-  "session-length-mix": sessions("sessions", "length_band", { view: "trend", rollingPeriods: 7, share: true }),
+  "session-archetype-mix": sessions("sessions", "archetype", { view: "trend", rollingPeriods: 7 }),
+  "session-length-mix": sessions("sessions", "length_band", { view: "trend", rollingPeriods: 7 }),
   "session-active-time": sessions("active_time", "archetype", { view: "distribution", scale: "logarithmic" }),
   "session-turn-cycle": sessions("turn_cycle", "provider", { view: "distribution", scale: "logarithmic" }),
   "session-autonomy": sessions("autonomy", "provider", { view: "distribution", scale: "logarithmic" }),
@@ -165,9 +165,9 @@ const dashboards: Record<string, CardDashboard> = {
   "session-failure-trend": sessions("failure_rate", "none", { view: "trend", ...trailing }),
   "session-count-trend": sessions("sessions", "none", { view: "trend", ...trailing }),
   "session-hours-trend": sessions("active_hours", "none", { view: "trend", ...trailing }),
-  "session-autonomy-trend": sessions("autonomy", "none", { view: "trend", ...trailing }),
-  "session-turn-cycle-trend": sessions("turn_cycle", "none", { view: "trend", ...trailing }),
-  "session-context-trend": sessions("context_peak", "none", { view: "trend", ...trailing }),
+  "session-autonomy-trend": sessions("autonomy", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-turn-cycle-trend": sessions("turn_cycle", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-context-trend": sessions("context_peak", "none", { view: "trend", rollingPeriods: 7 }),
   "session-repository-hours": sessions("active_hours", "repository_name", {}),
   "session-repository-verification": sessions("verification", "repository_name", { minSamples: 20 }),
   "session-model-context": sessions("context_peak", "model_family", { view: "distribution" }),

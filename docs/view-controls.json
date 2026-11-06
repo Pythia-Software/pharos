@@ -4606,11 +4606,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "c95326deb298b518:0",
+      "key": "4725800412da7d36:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisViewControl",
       "tag": "ChartSelect",
-      "control": "value={state.view ?? \"trend\"} onChange={onChange}",
+      "control": "value={shown} onChange={onChange}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },

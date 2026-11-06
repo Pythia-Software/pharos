@@ -3,7 +3,7 @@ import type { QueryRecipe } from "./curiosity-data";
 import type { ChartScale } from "./chart-scale";
 import type { ChartDisplay } from "./chart-series";
 
-export type CardCover = { mode: "source" | "result"; metricId: string; kind?: MetricDisplay["kind"]; maxGroups?: number; showOther?: boolean; showLegend?: boolean; height?: number; showHeadline?: boolean; legendColumns?: 1 | 2; minSamples?: number; sampleUnit?: string; density?: "compact"; stackBy?: string; timeline?: { rollingPeriods?: number; percent?: boolean; scale?: ChartScale; display?: ChartDisplay; nonzero?: boolean } };
+export type CardCover = { mode: "source" | "result"; metricId: string; kind?: MetricDisplay["kind"]; maxGroups?: number; showOther?: boolean; showLegend?: boolean; height?: number; showHeadline?: boolean; legendColumns?: 1 | 2; minSamples?: number; sampleUnit?: string; density?: "compact"; stackBy?: string; timeline?: { rollingPeriods?: number; percent?: boolean; scale?: ChartScale; display?: ChartDisplay | "heatmap"; nonzero?: boolean } };
 
 function coverDisplay(cover: CardCover): Partial<MetricDisplay> {
   return { ...(cover.maxGroups !== undefined ? { maxGroups: cover.maxGroups } : {}),

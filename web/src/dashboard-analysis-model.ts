@@ -29,6 +29,10 @@ export type AnalysisMeasure = {
   populationShare?: boolean;
   // A population the measure implies, such as fully priced usage.
   where?: WhereTerm[];
+  // The ordered breakdown that bins each record's value, such as a band of
+  // per-session ratios. Over time can then draw the measure's distribution:
+  // each period's records in each band, as a heatmap (heatmapSource).
+  band?: string;
   note: string;
 };
 // A ratio's part is a summed field, or a count of a field's non-empty values,
@@ -95,7 +99,9 @@ export type AnalysisCatalog = {
   measures: Record<string, AnalysisMeasure>;
   breakdowns: Record<string, AnalysisBreakdown>;
   units: Record<string, AnalysisUnit>;
-  records: { label: string; plural: string; note: string };
+  // count names the measure that counts records, which a distribution
+  // heatmap draws (heatmapSource).
+  records: { label: string; plural: string; note: string; count?: string };
   // The calendar keys each cycle folds, and how they name their slots
   // (CycleKey). Without any, no cycle view; without one, that cycle is
   // offered disabled.
@@ -146,7 +152,21 @@ export type AnalysisCatalog = {
   // (the tools rollup counts whole days).
   rangeNote?: string;
   scatter: [string, string];
+  // A catalog that chooses each chart itself: for the view, measure and
+  // breakdown asked for, how it is drawn. The choice overrides the state, and
+  // the controls for what it sets are not shown.
+  present?: (state: Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit">) => AnalysisPresentation;
 };
+// What a catalog's present chooses. For Over time, view chooses how the trend
+// is drawn (lines or bars, trendDrawing) while the state's view stays as it
+// was; the other views ignore it.
+export type AnalysisPresentation = Partial<Pick<AnalysisState, "view" | "display" | "share" | "nonzero" | "scale" | "scaleY" | "norm" | "compareAs">>;
+// A catalog's choice for this state, limited to what the state's view uses.
+export function presentation(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit">): AnalysisPresentation {
+  if (!catalog.present) return {};
+  const { view, ...chosen } = catalog.present(state);
+  return isTrendView(state.view) ? { ...chosen, ...isTrendView(view) && view ? { view } : {} } : { ...chosen.scale ? { scale: chosen.scale } : {}, ...chosen.scaleY ? { scaleY: chosen.scaleY } : {}, ...chosen.compareAs ? { compareAs: chosen.compareAs } : {} };
+}
 
 export const rollingOps = ["mean", "sum"] as const;
 export type RollingOp = typeof rollingOps[number];
@@ -349,6 +369,7 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
     if (firstUnit) next.unit = firstUnit; else next.metric = Object.keys(catalog.measures).find(id => catalog.measures[id].value)!;
   }
   if (!splitValid(catalog, next.unit, next.split)) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
+  Object.assign(next, presentation(catalog, next));
   // A cycle summarizes slot values: a box per slot by default, or their mean,
   // or their total where slot values add up (not ratios or distinct counts).
   if (next.view === "cycle") { if (state.reduce === undefined || !["total", "mean", "median"].includes(next.reduce) || next.reduce === "total" && !cycleTotal(catalog.measures[next.metric])) next.reduce = "median"; }
@@ -369,6 +390,32 @@ export const periodField = (period: ChartPeriod): TrendPeriodField => period ===
 const baseUnit = (period: ChartPeriod) => period === "hours" ? "hour" : period === "days" ? "day" : period;
 const multiplePeriods = (state: Pick<AnalysisState, "period" | "hours" | "days">) => state.period === "hours" && (state.hours ?? 1) > 1 || state.period === "days" && (state.days ?? 1) > 1;
 
+// How Over time draws a state: its own view, or the one its catalog chose.
+export const trendDrawing = (catalog: AnalysisCatalog, state: ResolvedAnalysis): AnalysisView => presentation(catalog, state).view ?? state.view;
+
+// How a heatmap shades this measure and breakdown, if it can. Each period is
+// a column and each group of an ordered breakdown a row: an additive
+// measure's cells are the period's shares, a pooled rate's are its values,
+// and a measure with a band of its own and no breakdown is drawn as the
+// share of the period's records in each band (its distribution).
+export type HeatmapKind = "share" | "value" | "distribution";
+export function heatmapKind(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "split">): HeatmapKind | undefined {
+  const measure = catalog.measures[state.metric];
+  if (!measure) return;
+  if (state.split === noSplit) return measure.band && catalog.breakdowns[measure.band]?.order && catalog.records.count ? "distribution" : undefined;
+  if (!catalog.breakdowns[state.split]?.order) return;
+  return measure.additive ? "share" : measure.ratio ? "value" : undefined;
+}
+// What a heatmap queries: the state itself, or for a distribution the
+// records counted by the measure's band, within the measure's population
+// and with a band value.
+export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): { catalog: AnalysisCatalog; state: T } {
+  if (state.display !== "heatmap" || heatmapKind(catalog, state) !== "distribution") return { catalog, state };
+  const measure = catalog.measures[state.metric], band = measure.band!, count = catalog.records.count!;
+  const counted: AnalysisMeasure = { ...catalog.measures[count], label: measure.label, where: [...measure.where ?? [], { field: catalog.breakdowns[band].fields[0], op: "is_not_null", value: "" }] };
+  return { catalog: { ...catalog, present: undefined, measures: { ...catalog.measures, [state.metric]: counted } }, state: { ...state, split: band, selection: undefined } };
+}
+
 // Why each trend option is unavailable for this measure, breakdown and
 // display, if it is. The controls disable the option with this reason, and
 // normalizeTrend moves a state off it.
@@ -384,8 +431,8 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
-    heatmap: !measure.additive ? `${measure.label} does not add up across groups, so a heatmap has no shares`
-      : state.split === noSplit || !catalog.breakdowns[state.split]?.order ? "A heatmap needs an ordered breakdown, such as a band" : undefined,
+    heatmap: heatmapKind(catalog, state) ? undefined : state.split === noSplit ? `A heatmap needs an ordered breakdown, such as a band${measure.band ? "" : `; ${name} has no band of its own`}`
+      : !catalog.breakdowns[state.split]?.order ? "A heatmap needs an ordered breakdown, such as a band" : `${measure.label} is neither a total nor a pooled rate, so a heatmap cannot shade it`,
     norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.display === "heatmap" ? "A heatmap shades shares, which have no norm" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
     component, name,
   };
@@ -400,6 +447,8 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (!has(catalog.measures, next.metric) || notTrended(catalog.measures[next.metric])) next.metric = catalog.trend.metric;
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
+  const { view: _drawing, ...chosen } = presentation(catalog, next);
+  Object.assign(next, chosen);
   next.share = next.share === true; next.nonzero = next.nonzero === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
   // The trend's scale, resolved once for the control and the chart: a state
   // without one draws the old trend charts' default, the linear + log split.
@@ -423,8 +472,9 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
 // dashboard can say why the chart differs from the link or the last choice.
 export function trendAdjustments(catalog: AnalysisCatalog, input: AnalysisState): string[] {
   if (!isTrendView(input.view)) return [];
-  const asked = { ...analysisDefaults, ...canonicalState(catalog, input) };
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
+  // What the catalog chose was never asked for, so it needs no explanation.
+  const asked = { ...analysisDefaults, ...canonicalState(catalog, input), ...presentation(catalog, state) };
   const limits = trendLimits(catalog, { ...state, split: asked.split, display: asked.display, share: asked.share === true });
   const notes: string[] = [];
   if (has(catalog.measures, asked.metric) && notTrended(catalog.measures[asked.metric])) notes.push(`${notTrended(catalog.measures[asked.metric])}; ${measure.label.toLowerCase()} is shown instead.`);

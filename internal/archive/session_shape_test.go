@@ -254,7 +254,8 @@ func TestSessionShapeBands(t *testing.T) {
 	for _, edge := range []struct {
 		got, want string
 	}{{lengthBand(5), "1-5"}, {lengthBand(121), "121+"}, {activeBand(300), "5-15m"}, {activeBand(7200), "2h+"}, {toolBand(0), "0"}, {toolBand(101), "101+"},
-		{autonomyBand(0.49), "<0.5"}, {autonomyBand(10), "10+"}, {sessionArchetype(5), "quick"}, {sessionArchetype(51), "marathon"}} {
+		{autonomyBand(0.49), "<0.5"}, {autonomyBand(10), "10+"},
+		{turnCycleBand(9.9), "<10s"}, {turnCycleBand(60), "1-3m"}, {turnCycleBand(1800), "10m+"}, {contextBand(0.09), "<10%"}, {contextBand(0.5), "50-75%"}, {contextBand(0.95), "90%+"}, {sessionArchetype(5), "quick"}, {sessionArchetype(51), "marathon"}} {
 		if edge.got != edge.want {
 			t.Errorf("band %q, want %q", edge.got, edge.want)
 		}

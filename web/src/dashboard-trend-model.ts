@@ -3,7 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
-import { isTrendView, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, heatmapKind, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -120,7 +120,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   now?: number; label?: (field: string, value: unknown) => string;
 }): TrendSeries {
   const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric], kind = trendKind(measure);
-  const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
+  const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split], drawing = trendDrawing(catalog, state);
   const count = trendPeriodCount(state), cumulative = state.display === "cumulative", grid = { period: state.period, count };
   const additive = kind === "additive", empty: TrendSeries = { series: [], buckets: [], selected: [], excluded: false, lines: false, additive };
   // No results yet: the query is loading, which is not an error.
@@ -273,13 +273,17 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   }
   if (nonzero) buckets = withoutZeroes(buckets, drawn.map(item => item.key));
 
-  return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: state.view === "trend_line" || state.view !== "trend_bar" && !additive && series.length > 1, additive };
+  return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: drawing === "trend_line" || drawing !== "trend_bar" && !additive && series.length > 1, additive };
 }
 
 // The chart's title, in the dashboards' plain style.
 export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric];
   const split = catalog.breakdowns[state.split]?.label ?? catalog.components?.[state.split]?.label;
-  const cumulative = state.display === "cumulative", name = state.share || state.display === "heatmap" ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
+  // A share heatmap shades shares; a value heatmap the measure itself; a
+  // distribution heatmap the records in each of the measure's bands.
+  const heatmap = state.display === "heatmap" ? heatmapKind(catalog, state) : undefined;
+  if (heatmap === "distribution") return `${measure.label}: ${catalog.records.plural.toLowerCase()} per ${periodLabel(state.period, trendPeriodCount(state))} by band`;
+  const cumulative = state.display === "cumulative", name = state.share || heatmap === "share" ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
   return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
 }

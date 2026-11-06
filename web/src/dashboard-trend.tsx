@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { isTrendView, changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, changeState, heatmapKind, heatmapSource, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, updateSliceValues, type LegendAction } from "./chart-selection";
@@ -36,15 +36,20 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const headline = useDashboardHeadline();
   const requested = { ...state, view: isTrendView(state.view) ? state.view : "trend" as const };
   const view = normalizeAnalysis(catalog, requested);
-  const measure = catalog.measures[view.metric], breakdown = catalog.breakdowns[view.split], count = trendPeriodCount(view);
+  const measure = catalog.measures[view.metric], count = trendPeriodCount(view);
+  // A distribution heatmap counts the records in the measure's band
+  // (heatmapSource); the query and series read that catalog and state, and
+  // the controls the state asked for.
+  const source = heatmapSource(catalog, view), queried = source.state;
+  const breakdown = source.catalog.breakdowns[queried.split];
   // Relative bounds resolve to period boundaries, so the query is stable
   // between renders within one period.
-  const trend = trendQuery(catalog, view, where);
+  const trend = trendQuery(source.catalog, queried, where);
   const result = useAnalysisResult(dataset, schema, trend.query, catalog.request?.params);
   const labels = useMemo(() => optionLabels(schema.fields), [schema]);
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(String(value)) ?? String(value);
   // A heatmap keeps every period, so an empty one is drawn as empty.
-  const built = useMemo(() => trendSeries(catalog, view.display === "heatmap" ? { ...view, nonzero: false } : view, trend, result.results, { label }),
+  const built = useMemo(() => trendSeries(source.catalog, view.display === "heatmap" ? { ...queried, nonzero: false } : queried, trend, result.results, { label }),
     [catalog, result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
   useUsageChartPalette(trend.slice ?? null, built.series);
   // Save what was asked for; only drawing and querying normalize, so a
@@ -94,8 +99,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)} />;
   const action = onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined;
   if (view.display === "heatmap") return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-    <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, breakdown?.order ?? [])}
-      period={view.period} noun={measure.unit} rollingPeriods={view.rollingPeriods} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
+    <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, breakdown?.order ?? [], heatmapKind(catalog, view) === "value" ? "value" : "share")}
+      period={view.period} noun={heatmapKind(catalog, view) === "value" ? catalog.records.plural.toLowerCase() : source.catalog.measures[queried.metric].unit} rollingPeriods={view.rollingPeriods} format={amount} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {children}
     {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
@@ -103,7 +108,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
-      rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={view.view === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
+      rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={trendDrawing(catalog, view) === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
       reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}

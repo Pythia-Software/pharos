@@ -40,7 +40,9 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
 
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
   const options = viewOptions(catalog, state), blocked = options.find(([view, , reason]) => isTrendView(view) && reason)?.[2];
-  return <ChartSelect label="View" value={state.view ?? "trend"} options={options} note={blocked} title="Over time, or one value per group across the range" onChange={onChange} />;
+  // A catalog that draws Over time as lines or bars itself lists one Over time.
+  const value = state.view ?? "trend", shown = isTrendView(value) && !options.some(([view]) => view === value) ? "trend" : value;
+  return <ChartSelect label="View" value={shown} options={options} note={blocked} title="Over time, or one value per group across the range" onChange={onChange} />;
 }
 
 // One control bar for every view: each view shows only the controls it uses,
@@ -61,6 +63,9 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
   const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`]),
     ...trend ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, limits.component(id)]) : []];
   const count = trendPeriodCount(view);
+  // A catalog that chooses each chart (present) has no controls for what it
+  // chooses: shares, display, scale and the norm.
+  const adjustable = !catalog.present;
   const content = <>
     {onView ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
     {grouped ? <ChartSelect label="Count each" value={view.unit} options={unitOptions} title="What one observation is" onChange={next => set({ unit: next })} /> : null}
@@ -70,24 +75,24 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
       onChange={split => set({ split, selection: { values: [], excluded: false }, ...trend ? { seriesLimit: 15 } : {} })} /> : null}
     {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", measure.additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(measure) ? undefined : `${measure.label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
-    {view.view === "compare" ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
-    {trend && view.display !== "heatmap" ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
+    {view.view === "compare" && adjustable ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
+    {trend && adjustable && view.display !== "heatmap" ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
       title="Values; values without zeroes, which leaves out periods with nothing drawn and passes lines over a series' zeroes; or each series' share of its period's total" onChange={shown => set({ share: shown === "share", nonzero: shown === "nonzero" })} /> : null}
-    {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} heatmap={{ disabled: limits.heatmap }} onChange={display => set({ display })} /> : null}
+    {trend && adjustable ? <DisplayControl value={view.display} disabled={limits.cumulative} heatmap={{ disabled: limits.heatmap }} onChange={display => set({ display })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
     {view.view === "cycle" && catalog.cycleOn ? <ChartSelect label="Placed by" value={view.cycleOn ?? ""} options={[["", catalog.cycleOn.label], ...Object.entries(catalog.cycleOn.options).map(([id, option]) => [id, option.label] as [string, string])]}
       title="Which of each record's times places it in the cycle" onChange={cycleOn => set({ cycleOn: cycleOn || undefined })} /> : null}
-    {trend ? view.display === "heatmap" ? null : <ScaleControl value={view.scale!} percent={view.share} onChange={scale => set({ scale })} />
+    {!adjustable ? null : trend ? view.display === "heatmap" ? null : <ScaleControl value={view.scale!} percent={view.share} onChange={scale => set({ scale })} />
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
-    {view.view === "scatter" ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
+    {view.view === "scatter" && adjustable ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
     <RangeControl bounds={bounds} onPresetChange={trend ? (range, oldest) => set(presetPeriod(range, oldest)) : undefined} onChange={onRange} />
     {trend ? <PeriodControl view={view} disabled={Object.fromEntries((["hour", "hours", "day", "days", "week", "month"] as const).map(period => [period, limits.period(period) ?? (period === "hours" || period === "days" ? limits.multiple : undefined)]))} onChange={set} /> : null}
     {trend ? <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => set({ rollingPeriods })}
       note={view.rollingOp === "sum" ? "Trailing total · includes preceding history" : limits.rollingSum && measure.ratio ? "Pooled over the window · includes preceding history" : undefined} /> : null}
     {trend && view.rollingPeriods > 1 && view.display !== "cumulative" ? <ChartSelect label="Window" value={view.rollingOp} options={[["mean", measure.ratio ? "Pooled" : "Average"], ["sum", "Total", limits.rollingSum]]} title="Each point's trailing window: its average per period, or its total" onChange={rollingOp => set({ rollingOp })} /> : null}
     {trend ? <ChartSelect label="Periods" value={view.completePeriods ? "complete" : "all"} options={[["all", "Include partial"], ["complete", "Whole periods only"]]} title="Whole periods leave out the current period and a partial first one" onChange={value => set({ completePeriods: value === "complete" })} /> : null}
-    {trend && view.display !== "heatmap" ? <ChartSelect label="Norm" value={view.norm ? "on" : "off"} options={[["off", "Off"], ["on", "Mean of earlier points", limits.norm]]} title={`A reference line at the mean of the ${view.normPeriods} periods before the latest point, whatever the range`} onChange={value => set({ norm: value === "on" })} /> : null}
+    {trend && adjustable && view.display !== "heatmap" ? <ChartSelect label="Norm" value={view.norm ? "on" : "off"} options={[["off", "Off"], ["on", "Mean of earlier points", limits.norm]]} title={`A reference line at the mean of the ${view.normPeriods} periods before the latest point, whatever the range`} onChange={value => set({ norm: value === "on" })} /> : null}
   </>;
   // The trend's chart lays out its own control row.
   return trend ? content : <div className="usage-tools-controls usage-analysis-controls">{content}</div>;

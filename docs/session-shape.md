@@ -76,6 +76,8 @@ is comparable from week to week.
 | `active_band` | active time <5 m, 5–15 m, 15–30 m, 30–60 m, 1–2 h, 2 h+ | AgentsView `DurationBucket` |
 | `tool_band` | tool calls 0, 1–5, 6–20, 21–50, 51–100, 101+ | Splitrail `SESSION_SHAPES.toolCalls` |
 | `autonomy_band` | tool calls per typed message <0.5, 0.5–1, 1–2, 2–5, 5–10, 10+ | AgentsView `AutonomyBucket` |
+| `turn_cycle_band` | median turn cycle <10 s, 10–30 s, 30–60 s, 1–3 min, 3–10 min, 10 min+ | this document |
+| `context_band` | peak context share <10%, 10–25%, 25–50%, 50–75%, 75–90%, 90%+ | this document |
 | `archetype` | Automated (no typed human message); otherwise by typed human messages: Quick ≤5, Standard ≤15, Deep ≤50, Marathon >50 | this document |
 
 AgentsView's autonomy is assistant messages with a tool use per user
@@ -236,7 +238,7 @@ AgentsView's penalty-from-100 health grade is deliberately not adopted.
 ## The dashboard
 
 Analyze → Session Shape (`?mode=dashboards&topic=session_shape`) opens on
-sessions by length band as weekly shares. It has no headline number and no
+sessions by length band as a daily heatmap, each column a trailing week. It has no headline number and no
 grade, colours no value as good or bad, and shows each rate's sample size
 beside it. The note's Definitions button scrolls to the definitions at the
 foot of the page.
@@ -265,15 +267,38 @@ for the common views are cards (below).
 The main chart's catalog is described in
 [dashboard analysis](dashboard-analysis.md#the-catalogs).
 
+### Charts
+
+Session Shape chooses how each chart is drawn from its view, measure and
+breakdown (the catalog's `present`), rather than offering every display,
+share, scale and norm. Those controls are not shown, and a link's values
+for them are ignored.
+
+| View | Measure and breakdown | Drawn as |
+|---|---|---|
+| Over time | a total (sessions, hours, calls, signals) by a band or archetype | share heatmap: each period's share in each band |
+| Over time | a rate by a band or archetype | value heatmap: the rate of each band's sessions |
+| Over time | tool calls per typed message, active time, turn cycle or peak context, no breakdown | distribution heatmap: each period's sessions in the measure's own band |
+| Over time | any other measure, no breakdown | a line with its norm |
+| Over time | a total by any other breakdown | stacked columns |
+| Over time | a rate by any other breakdown | a line per group |
+| Compare | any | bars |
+| Distribution, Two measures | long-tailed times and counts | a log axis; percentages linear |
+
+Time bucket, smoothing and range stay yours. The heatmap reads a band's
+change in mix better than stacked shares do: each cell is shaded on its
+own, so a thin band's movement shows.
+
 **Cards.** The Card Library's Session Shape category
 (`session-shape-card-recipes.ts`) has nineteen cards, each opening the
 dashboard on the state its cover draws. Automated sessions are most of
 them, so most cards count only the sessions a person typed in
 (`archetype != automated`), which arrives as a dashboard filter.
 
-- Usage: where sessions come from (by harness), your sessions by kind each
-  day, how long your sessions are (length band shares), and where your
-  active hours go (by repository).
+- Usage: where sessions come from (by harness), your sessions by kind and
+  how long your sessions are (each a heatmap of trailing-week shares by
+  archetype or length band), and where your active hours go (by
+  repository).
 - Shape: active time by session kind, turn cycle and tool calls per typed
   message by provider, each a box on a log axis, and peak context by model.
 - Failures: failure rate by model (synthetic turns left out) and by session
@@ -282,10 +307,13 @@ them, so most cards count only the sessions a person typed in
   last interact (each by weekday). The second places each session by its
   last message: the dashboard's cycle with *Placed by: Last message*
   (`cycleOn`). Both still pick sessions by their start.
-- Sparklines of your sessions, without a breakdown: sessions a day, active
-  hours a day, tool calls per typed message, turn cycle and peak context.
-  Each point pools a trailing seven complete days, as the dashboard's Over
-  time view does with a 7-day window and its norm, and states its sample.
+- Sparklines of your sessions, without a breakdown: sessions a day and
+  active hours a day. Each point pools a trailing seven complete days, as
+  the dashboard's Over time view does with a 7-day window and its norm, and
+  states its sample.
+- Tool calls per typed message, turn cycle and peak context over time, each
+  a heatmap of the share of your sessions in each of its bands, over
+  trailing weeks, as the dashboard draws the measure without a breakdown.
 
 A log axis cannot place zero, so the active time and tool calls per typed
 message cards leave out sessions with none. Sparklines of one-shot edit

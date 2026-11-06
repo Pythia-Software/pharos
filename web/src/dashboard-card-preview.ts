@@ -2,7 +2,9 @@ import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pyt
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
-import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, nativeCycleResult, selectGroups } from "./dashboard-analysis-model";
+import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, heatmapKind, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "./dashboard-analysis-model";
+import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
+import { formatMetricOutput } from "@pythia-software/query-table-ui";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardRibbon, readDashboardCard, type DashboardCardTarget } from "./dashboard-card-model";
 import { timeBounds } from "./chart-range";
@@ -104,8 +106,20 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const request = { ...catalog.request?.params, ...topic === "parallelism" ? { parallelism_settings: JSON.stringify({ counting: parallelism.counting, gap: parallelism.gap }) } : {} };
   const run = (query: Parameters<typeof runAnalysisQuery>[2]) => runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
   if (isTrendView(state.view)) {
-    // A card cannot draw a heatmap; it draws the same shares as columns.
-    const drawn = state.display === "heatmap" ? { ...state, display: "interval" as const, share: true } : state;
+    const drawn = normalizeAnalysis(catalog, state), drawing = trendDrawing(catalog, drawn);
+    // A heatmap is drawn as the dashboard draws it, as a grid of cells.
+    if (drawn.display === "heatmap") {
+      const kind = heatmapKind(catalog, drawn), source = heatmapSource(catalog, drawn), measure = catalog.measures[drawn.metric];
+      const trend = trendQuery(source.catalog, source.state, where, { now, zone });
+      const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, trend, await run(trend.query), { now, label });
+      if (built.error) throw new Error(built.error);
+      const heatmap = trendHeatmap(built.buckets, built.series, source.catalog.breakdowns[source.state.split]?.order ?? [], kind === "value" ? "value" : "share");
+      const grid = heatmapGrid(heatmap, { period: drawn.period, noun: kind === "value" ? catalog.records.plural.toLowerCase() : source.catalog.measures[source.state.metric].unit,
+        rollingPeriods: drawn.rollingPeriods, format: value => formatMetricOutput(value, measure.format).text });
+      const ready = grid.cells.some(row => row.some(cell => cell !== null));
+      return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION, note: analysisNote(catalog, drawn),
+        ...ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
+    }
     const trend = trendQuery(catalog, drawn, where, { now, zone });
     const built = trendSeries(catalog, drawn, trend, await run(trend.query), { now, label });
     if (built.error) throw new Error(built.error);
@@ -116,7 +130,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
     return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION,
       buckets: built.buckets, series, note: analysisNote(catalog, drawn),
-      dashboardTrend: { prepared: true, lines: drawn.view !== "trend_bar" && (built.lines || drawn.display === "cumulative"), bars: drawn.view === "trend_bar", grouped: drawn.view === "trend_bar" && (!built.additive || drawn.scale === "logarithmic" && !drawn.share), percent: drawn.share, nonzero: drawn.nonzero && !drawn.share, scale: drawn.scale, reference: built.norm,
+      dashboardTrend: { prepared: true, lines: drawing !== "trend_bar" && (built.lines || drawn.display === "cumulative"), bars: drawing === "trend_bar", grouped: drawing === "trend_bar" && (!built.additive || drawn.scale === "logarithmic" && !drawn.share), percent: drawn.share, nonzero: drawn.nonzero && !drawn.share, scale: drawn.scale, reference: built.norm,
         unit: percent ? "percent" : catalog.measures[drawn.metric].format.kind === "duration" ? "ms" : catalog.measures[drawn.metric].unit,
         xLabel: drawn.period, yLabel: trendTitle(catalog, drawn) } };
   }
