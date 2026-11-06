@@ -155,20 +155,34 @@
   }
 
   // The page's model from GET /api/background.
-  function scheduleModel(document, now = Date.now()) {
+  function scheduleModel(document, now = Date.now(), pendingCadences = {}) {
     const view = document?.view;
     if (!view) return null;
-    const byId = Object.fromEntries((view.items || []).map(item => [item.id, item]));
+    const items = (view.items || []).map(item => {
+      const model = itemModel(item, now);
+      if (!Object.hasOwn(pendingCadences, item.id)) return model;
+      const cadence = pendingCadences[item.id];
+      return {...model, column: cadence || model.usual, temporary: cadence ? {cadence} : null,
+        text: 'Saving schedule…', note: '', moves: []};
+    });
+    const byId = Object.fromEntries(items.map(item => [item.id, item]));
+    // Keep the last server snapshot while saves run, but place each pending
+    // move immediately. Keep the server's order and append incoming items.
+    const placed = new Map((view.cadences || []).flatMap(row => (row.items || []).map(id => [id, row.id])));
+    for (const id of view.unscheduled || []) placed.set(id, 'manual');
+    for (const item of items) if (Object.hasOwn(pendingCadences, item.id)) placed.set(item.id, item.column);
+    const inColumn = (id, order = []) => [...new Set([...order, ...items.map(item => item.id)])]
+      .filter(item => placed.get(item) === id).map(item => byId[item]).filter(Boolean);
     // Every cadence has a column, an empty one too (the view leaves it
     // out), so it stays somewhere to drag an item to.
     const rows = Object.fromEntries((view.cadences || []).map(row => [row.id, row]));
     const columns = Object.keys(CADENCE_ICONS).map(id => rows[id] || {id, label: CADENCE_LABELS[id], items: []}).map(row => ({
       id: row.id, label: row.label, icon: CADENCE_ICONS[row.id] || '', description: document.descriptions?.[row.id] || row.description || '',
-      dot: DOTS[row.state] ?? '', text: stateText(row, now), running: row.state === 'running', empty: !row.items?.length,
-      items: (row.items || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now)),
+      dot: DOTS[row.state] ?? '', text: stateText(row, now), running: row.state === 'running', empty: !inColumn(row.id, row.items).length,
+      items: inColumn(row.id, row.items),
     }));
     // Only when you ask is the fourth column, on no automatic schedule.
-    const unscheduled = (view.unscheduled || []).map(id => byId[id]).filter(Boolean).map(item => itemModel(item, now));
+    const unscheduled = inColumn('manual', view.unscheduled);
     // Only when you ask runs as the manual cadence: not while one of its
     // items runs, nor when none of them can.
     const unscheduledRunnable = unscheduled.length > 0 && !unscheduled.some(item => item.state === 'running') && !unscheduled.every(item => ['unavailable', 'disabled'].includes(item.state));
@@ -224,6 +238,32 @@
     return item.temporary && cadence === item.usual ? '' : cadence;
   }
 
+  // Serialize settings writes so rapid moves reach the server in order.
+  // Pending moves remain visible over each response until their own save
+  // settles; a failed save removes only that move, revealing the saved state.
+  function createSettingsQueue(send, accept, changed) {
+    const pending = [];
+    let tail = Promise.resolve(), revision = 0;
+    return {
+      get busy() { return pending.length > 0; },
+      get revision() { return revision; },
+      get cadences() { return Object.assign({}, ...pending.map(entry => entry.body.temporary_cadences)); },
+      save(body) {
+        const entry = {body};
+        pending.push(entry);
+        revision++;
+        if (body.temporary_cadences) changed();
+        const result = tail.then(() => send(body)).then(accept).finally(() => {
+          pending.splice(pending.indexOf(entry), 1);
+          revision++;
+          changed();
+        });
+        tail = result.catch(() => {});
+        return result;
+      },
+    };
+  }
+
   function labelingControls(settings) {
     const execution = settings.execution || {device: 'unknown', status: 'Device not yet confirmed', detail: 'The device will be confirmed when labeling starts.'};
     const notice = settings.notice || (settings.enabled && execution.device === 'unavailable' ? 'Processing is unavailable. Check the local model and runtime installation.' : '');
@@ -258,10 +298,11 @@
     };
     return element;
   };
-  async function save(body) {
-    document_ = await call('/api/background/settings', body);
-    render();
-  }
+  const settingsQueue = createSettingsQueue(body => call('/api/background/settings', body), next => {
+    document_ = next;
+    fetchedAt = Date.now();
+  }, () => render());
+  const save = body => settingsQueue.save(body);
 
   function select(options, value, onchange, label) {
     const element = node('select');
@@ -292,14 +333,17 @@
   // panel's does; beside an item's, that item.
   function runButton(label, body, disabled) {
     if (typeof body === 'string') body = {cadence: body};
+    // Columns show pending moves before the server uses that membership.
+    const waitingForMoves = () => Boolean(body.cadence && Object.keys(settingsQueue.cadences).length);
     const run = button('', async () => {
+      if (waitingForMoves()) return;
       await call('/api/background/run', body);
       toast(`${label} runs now.`);
       refresh(true);
     }, 'bg-run');
     run.append(play());
     run.dataset.focusKey = 'run:' + (body.item || body.cadence);
-    run.disabled = disabled;
+    run.disabled = disabled || waitingForMoves();
     run.title = `Run ${label} now`;
     run.setAttribute('aria-label', `Run ${label} now`);
     return run;
@@ -465,7 +509,7 @@
     run.disabled = ['unavailable', 'disabled'].includes(item.state);
     row.append(run);
     detail.append(row);
-    if (item.temporary) {
+    if (item.temporary?.expires_at) {
       const expiry = new Date(item.temporary.expires_at).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
       detail.append(line('Temporary schedule', `${item.cadenceLabel} until ${expiry}`));
     }
@@ -513,7 +557,7 @@
     const focusKey = document.activeElement?.dataset?.focusKey;
     const focused = document.activeElement?.closest?.('[data-item]')?.dataset.item;
     const labelsFocused = ['labelsEnabled', 'agentEventsEnabled'].includes(document.activeElement?.id) && document.activeElement.id;
-    const model = scheduleModel(document_);
+    const model = scheduleModel(document_, Date.now(), settingsQueue.cadences);
     if (!model) return;
     const content = node('div');
     const card = node('section', 'bg-card');
@@ -663,12 +707,13 @@
 
   async function refresh(force = false) {
     const target = host();
-    if (!target || inFlight || labelsSaving || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
+    if (!target || inFlight || labelsSaving || settingsQueue.busy || (!force && (!target.offsetParent || Date.now() - fetchedAt < 4000))) return;
     inFlight = true;
     const revision = labelsRevision;
+    const settingsRevision = settingsQueue.revision;
     try {
       const next = await call('/api/background');
-      if (revision !== labelsRevision || labelsSaving) return;
+      if (revision !== labelsRevision || labelsSaving || settingsRevision !== settingsQueue.revision || settingsQueue.busy) return;
       document_ = next;
       fetchedAt = Date.now();
       render();
@@ -691,6 +736,6 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, batteryModel, labelingControls, stateText, dropCadence, pauseLength, ago, until, duration};
+    scheduleModel, itemModel, batteryModel, labelingControls, createSettingsQueue, stateText, dropCadence, pauseLength, ago, until, duration};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();
