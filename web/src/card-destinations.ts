@@ -158,13 +158,10 @@ const dashboards: Record<string, CardDashboard> = {
   "parallel-active-weekday": parallel("active_hours", "none", { view: "cycle", cycle: "weekday" }),
   "parallel-weekday": parallel("at_once", "none", { view: "cycle", cycle: "weekday" }),
   // Agent Events: the cover's filters are the dashboard's population.
-  "agent-events-thinking-vs-reply": events("per_thousand", "source"),
-  "agent-events-groups-by-source": events("per_thousand", "group_source"),
-  "agent-events-delegated-turns": events("turn_share", "prompted_by"),
-  "agent-events-models-by-source": events("per_thousand", "model_source"),
-  "agent-events-repository-friction": events("per_thousand", "repository_name"),
-  "agent-events-ambiguity-by-length": events("turn_share", "prompt_length"),
-  "agent-events-subagent-kinds": events("per_thousand", "family_role"),
+  "agent-events-repository-friction": events("per_thousand", "friction_repository"),
+  "agent-events-stale-docs": events("per_thousand", "repository_name"),
+  "agent-events-known-failures": events("per_thousand", "repository_name"),
+  "agent-events-unseen-choices": events("per_thousand", "choices_repository"),
 };
 
 function dashboardFor(recipe: QueryRecipe): CardDashboard {

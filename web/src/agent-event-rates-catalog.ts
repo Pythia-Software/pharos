@@ -45,32 +45,62 @@ const sourceLabel = (value: string) => value === "thinking" ? "Thinking" : value
 const promptedLabels: Record<string, string> = { person: "A person", automated: "An automation", agent: "A delegating agent", unclassified: "Not yet classified", none: "No prompt recorded" };
 const lengthLabels: Record<string, string> = { "1-10": "1–10 words", "11-30": "11–30 words", "31-100": "31–100 words", "101-300": "101–300 words", "300+": "Over 300 words" };
 export const agentEventPromptedOrder = Object.keys(promptedLabels);
+
+// The Fixes kind (fixes-model.ts's fixesKinds) that groups each friction kind
+// into a change to the person's setup: what to do about a rate.
+export const agentEventFixKinds: Record<string, { kind: string; label: string }> = {
+  stale_guidance: { kind: "stale", label: "out-of-date docs" },
+  preexisting_failure: { kind: "flaky", label: "failing or flaky checks" },
+  env_friction: { kind: "env", label: "environment problems" },
+  missing_capability: { kind: "tool", label: "missing tools" },
+  obstacle: { kind: "obstacle", label: "recurring obstacles" },
+};
+// Fixes links for a population: one kind's when it names one, else all.
+export function agentEventFixLinks(where: WhereTerm[]): { href: string; label: string }[] {
+  const kinds = where.flatMap(term => "field" in term && term.field === "family" && term.op === "=" ? [term.value] : []);
+  const chosen = kinds.length ? kinds.filter(kind => agentEventFixKinds[kind]) : Object.keys(agentEventFixKinds);
+  return chosen.map(kind => ({ href: `/findings?${new URLSearchParams({ optimize_area: "fixes", fixes_kind: agentEventFixKinds[kind].kind })}`, label: agentEventFixKinds[kind].label }));
+}
 export const agentEventLengthOrder = Object.keys(lengthLabels);
 const person: WhereTerm[] = [{ field: "prompted_by", op: "=", value: "person" }];
+const inGroup = (group: string): WhereTerm[] => [{ field: "family_group", op: "=", value: group }];
+const kindsOf = (group: string) => agentEventKinds.filter(kind => kind.group === group).map(kind => kind.key);
+// What the events pass sees differs by text, not only by what happened:
+// thinking narrates far more than a reply, and nearly all thinking text read
+// is one model's. These breakdowns say so beside the chart.
+const narrates = "Thinking narrates far more than a reply does, and nearly all the thinking text read comes from Claude models: compare reply with reply, and thinking with thinking.";
+const byModel = `Models differ in how much they narrate, in whether their thinking is recorded at all, and in the work they were given, so a model's rate describes what it wrote on its tasks, not how well it worked. ${narrates}`;
 
 export const agentEventRatesCatalog: AnalysisCatalog = {
   dataset: "agent_event_rates", views: ["trend", "compare"], time: { first: "occurred_at", last: "occurred_at" }, measures,
   breakdowns: {
+    friction: { label: "Friction kind", fields: ["family"], order: kindsOf("Friction"), where: inGroup("Friction"),
+      note: "Friction is what got in an agent's way: obstacles, environment problems, out-of-date docs, failures that were already there, missing tools, unclear instructions, getting stuck and giving up. Each rate is over every message read." },
+    friction_repository: { label: "Repository + friction kind", fields: ["repository_name", "family"], where: inGroup("Friction"),
+      note: "Each repository's rates divide by its own messages read, so a busy repository does not rank high for volume alone." },
+    choices_repository: { label: "Repository + unseen choice", fields: ["repository_name", "family"], where: inGroup("Choices you may not see"),
+      note: "Choices you may not see: workarounds, claims left unchecked, assumptions, deferred work, technical debt and risks the agent noted while working. Each rate divides by the repository's messages read." },
     family_group: { label: "Kind group", fields: ["family_group"], order: [...agentEventGroups] },
     family: { label: "Kind", fields: ["family"], order: agentEventKinds.map(kind => kind.key) },
-    source: { label: "Reply or thinking", fields: ["source"], order: ["reply", "thinking"] },
+    source: { label: "Reply or thinking", fields: ["source"], order: ["reply", "thinking"], note: narrates },
     prompted_by: { label: "Who prompted", fields: ["prompted_by"], order: agentEventPromptedOrder },
     prompt_length: { label: "Prompt length", fields: ["prompt_length"], order: agentEventLengthOrder, where: person,
       note: "Prompt length counts the words a person typed in the prompt that started the turn, so it covers turns a person prompted only." },
-    agent_role: { label: "Main agent or subagent", fields: ["agent_role"], order: ["main", "subagent"], values: { main: "Main agent", subagent: "Subagent" } },
-    model: { label: "Model", fields: ["model"], empty: "Unknown model" },
-    model_effort: { label: "Model and effort", fields: ["model_effort"] },
+    agent_role: { label: "Main agent or subagent", fields: ["agent_role"], order: ["main", "subagent"], values: { main: "Main agent", subagent: "Subagent" },
+      note: `Most of a subagent's messages read are thinking, a main agent's less so. ${narrates}` },
+    model: { label: "Model", fields: ["model"], empty: "Unknown model", note: byModel },
+    model_effort: { label: "Model and effort", fields: ["model_effort"], note: byModel },
     effort: { label: "Effort", fields: ["effort"], empty: "Effort not recorded" },
-    provider: { label: "Provider", fields: ["provider"], order: ["claude", "codex", "antigravity", "chatgpt", "tl1", "canonical"] },
-    harness: { label: "Harness", fields: ["harness"], empty: "Harness not recorded" },
+    provider: { label: "Provider", fields: ["provider"], order: ["claude", "codex", "antigravity", "chatgpt", "tl1", "canonical"], note: byModel },
+    harness: { label: "Harness", fields: ["harness"], empty: "Harness not recorded", note: byModel },
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
     week: { label: "Week", fields: ["week"], empty: "No time recorded" },
-    family_source: { label: "Kind + reply or thinking", fields: ["family", "source"] },
-    group_source: { label: "Kind group + reply or thinking", fields: ["family_group", "source"] },
-    model_source: { label: "Model + reply or thinking", fields: ["model", "source"] },
-    family_model: { label: "Kind + model", fields: ["family", "model"] },
-    group_role: { label: "Kind group + main agent or subagent", fields: ["family_group", "agent_role"] },
-    family_role: { label: "Kind + main agent or subagent", fields: ["family", "agent_role"] },
+    family_source: { label: "Kind + reply or thinking", fields: ["family", "source"], note: narrates },
+    group_source: { label: "Kind group + reply or thinking", fields: ["family_group", "source"], note: narrates },
+    model_source: { label: "Model + reply or thinking", fields: ["model", "source"], note: byModel },
+    family_model: { label: "Kind + model", fields: ["family", "model"], note: byModel },
+    group_role: { label: "Kind group + main agent or subagent", fields: ["family_group", "agent_role"], note: narrates },
+    family_role: { label: "Kind + main agent or subagent", fields: ["family", "agent_role"], note: narrates },
     group_repository: { label: "Kind group + repository", fields: ["family_group", "repository_name"] },
   },
   labels: {
@@ -84,6 +114,6 @@ export const agentEventRatesCatalog: AnalysisCatalog = {
   // A compare's minimum counts messages read, not message × kind records.
   samples: { unit: "messages read", label: "Messages read", distinct: "message_id" },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",
-  trend: { metric: "per_thousand", split: "family_group" },
+  trend: { metric: "per_thousand", split: "friction" },
   scatter: ["per_thousand", "message_share"],
 };

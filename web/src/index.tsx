@@ -112,7 +112,7 @@ import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
-import { agentEventRatesCatalog } from "./agent-event-rates-catalog";
+import { agentEventFixLinks, agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { AgentEventExamples } from "./agent-event-examples";
 import { AgentEventRates } from "./agent-event-rates";
 import { agentEventReadWhere, daySpan, eventRates, ratePeriod } from "./agent-event-rates-model";
@@ -1382,10 +1382,17 @@ function AgentEventRatesSummary({ where }: { where: WhereTerm[] }) {
     {card("Messages with an event", read ? `${(100 * value("with") / read).toFixed(1)}%` : "—", `${value("with").toLocaleString()} of the messages read`)}
   </div>;
 }
+// What to do about friction: Fixes groups recurring events into changes to
+// guidance, environment, tools or docs, by the kinds this population names.
+function AgentEventFixLinks({ where }: { where: WhereTerm[] }) {
+  const links = agentEventFixLinks(where);
+  if (!links.length) return null;
+  return <p className="usage-dashboard-note">Fixes groups the friction that keeps recurring into changes you can make to your setup: {links.map((link, index) => <React.Fragment key={link.href}>{index ? index === links.length - 1 ? " and " : ", " : ""}<a href={link.href}>{link.label}</a></React.Fragment>)}.</p>;
+}
 function AgentEventRatesDashboard() {
   return <CatalogDashboard catalog={agentEventRatesCatalog} dataset="agent_event_rates" name="agent-events" defaults={dashboardDefaults.agent_event_rates}
-    summary={where => <AgentEventRatesSummary where={where} />}
-    after={<p className="usage-dashboard-note">Every rate divides by what the events pass read: agent replies and thinking blocks, never all messages. A kind filter narrows the events, not the messages read. Events are sentences a small model judged to express a kind of event (confidence threshold 0.5), so expect misses and false alarms; compare rates rather than single counts, and within one model version. Thinking narrates more than replies do, so compare reply with reply. These rates describe how often agents wrote such sentences; they do not score prompts or people. Select a point or bar to open the messages with a matching event, each linked to the reader with its events marked.</p>} />;
+    summary={where => <><AgentEventRatesSummary where={where} /><AgentEventFixLinks where={where} /></>}
+    after={<p className="usage-dashboard-note">Every rate divides by what the events pass read: agent replies and thinking blocks, never all messages. A kind filter narrows the events, not the messages read. Events are sentences a small model judged to express a kind of event (confidence threshold 0.5), so expect misses and false alarms; compare rates rather than single counts, and within one model version. Thinking narrates more than replies do, and nearly all thinking read is from Claude models, so compare reply with reply. These rates describe how often agents wrote such sentences; they do not score prompts, people or models. Select a point or bar to open the messages with a matching event, each linked to the reader with its events marked.</p>} />;
 }
 
 function MCPUsageDashboard() {

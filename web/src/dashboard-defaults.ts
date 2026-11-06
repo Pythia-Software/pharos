@@ -28,5 +28,5 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   time: { metric: "time", split: "activity", ...daily },
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
-  agent_event_rates: { metric: "per_thousand", split: "family_group", view: "compare", minSamples: 200 },
+  agent_event_rates: { metric: "per_thousand", split: "friction_repository", view: "compare", minSamples: 200 },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

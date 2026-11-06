@@ -3,8 +3,12 @@ import type { QueryRecipe } from "./curiosity-data";
 
 // Agent Events cards: each opens the Agent Events dashboard
 // (agent-event-rates-catalog.ts) at the view its cover draws, over the
-// messages the events pass read. They describe how often agents wrote such
-// sentences; none of them scores a person, a prompt or a model.
+// messages the events pass read. Each points at something in the person's
+// own repositories they can change or review (docs, checks, environment, the
+// choices agents made), with the events behind every bar a click away; none
+// of them scores a person, a prompt or a model. What did not pass that test
+// (thinking against replies, models, who prompted, prompt length, subagents)
+// is a breakdown with its caveat, not a card: docs/agent-events.md.
 
 const base = { dataset: "agent_event_rates", field: "occurred_at", category: "agent_events", idea: "conversation-01" } as const;
 const days = [7, 30, 90];
@@ -14,54 +18,36 @@ const floor = { min: 200, distinct: "message_id" } as const;
 // Card covers draw a day-by-day series only from additive sums, so a rate
 // over time is the dashboard's trend rather than a card.
 const perThousand = "SUM([events])/NULLIF(COUNT_DISTINCT([message_id])/1000,0)";
-const shareOf = (field: string) => `COUNT_DISTINCT(IF([events]>0,[${field}],NULL))/NULLIF(COUNT_DISTINCT([${field}]),0)`;
 const rate = (id: string, groupBy: string[], label: string, extra: Partial<AggregationClause> = {}): AggregationClause => ({
-  id, op: "sum", expression: perThousand, groupBy, groupLimit: 200, label, display: { kind: "bar-horizontal", format: { kind: "number", decimals: 0 } }, ...extra,
-});
-const share = (id: string, field: string, groupBy: string[], label: string): AggregationClause => ({
-  id, op: "sum", expression: shareOf(field), groupBy, groupLimit: 200, label, minCount: floor, display: { kind: "bar-horizontal", format: { kind: "percent", decimals: 1 } },
+  id, op: "sum", expression: perThousand, groupBy, groupLimit: 200, label, display: { kind: "bar-horizontal", format: { kind: "number", decimals: 1 } }, ...extra,
 });
 const bars = (metricId: string, maxGroups = 12) => ({ mode: "source" as const, metricId, kind: "bar-horizontal" as const, maxGroups, showOther: false, showLegend: false, showHeadline: false, height: 300 });
-const opus: WhereTerm = { field: "model", op: "=", value: "claude-opus-5-5" };
 const friction: WhereTerm = { field: "family_group", op: "=", value: "Friction" };
+const choices: WhereTerm = { field: "family_group", op: "=", value: "Choices you may not see" };
+const kind = (value: string): WhereTerm => ({ field: "family", op: "=", value });
+const inRepository: WhereTerm = { field: "repository_name", op: "is_not_null", value: "" };
 const read = "Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.";
 const empty = "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.";
 
 export const agentEventCardRecipes: QueryRecipe[] = [
-  { ...base, days, id: "agent-events-thinking-vs-reply", title: "Opus thinking beside its replies", unit: "events per 1,000 messages",
-    description: "Events per 1,000 Opus messages read over the last {days} days, thinking blocks beside visible replies.", where: [opus],
-    measures: [rate("events_by_source", ["source"], "Events per 1,000 messages read", { minCount: floor })], cover: bars("events_by_source"),
-    action: "Compare thinking and replies", emptyLabel: empty,
-    note: `Limited to Opus, whose thinking is nearly all of the thinking text read, so both bars come from one model. Thinking narrates what a reply leaves out; a higher rate there is not more trouble. ${read}` },
-  { ...base, days, id: "agent-events-groups-by-source", title: "What thinking narrates", unit: "events per 1,000 messages",
-    description: "Events per 1,000 messages read over the last {days} days, by kind group, in thinking and in visible replies.",
-    measures: [rate("groups_by_source", ["family_group", "source"], "Events per 1,000 messages read", { minCount: floor })], cover: bars("groups_by_source", 8),
-    action: "Compare kind groups", emptyLabel: empty,
-    note: `Each bar's denominator is every message read in thinking or in replies, so the kind groups of one side add up to its total rate. ${read}` },
-  { ...base, days, id: "agent-events-delegated-turns", title: "Turns with an event, by who prompted", unit: "turns",
-    description: "Share of turns over the last {days} days with at least one event in a message read, by who started the turn.",
-    measures: [share("turns_by_prompter", "turn_id", ["prompted_by"], "Share of turns with an event")], cover: bars("turns_by_prompter"),
-    action: "Compare who prompted", emptyLabel: empty,
-    note: `A delegated turn is a whole subagent run, usually far longer than a turn a person typed, and a longer turn has more chances to hold an event. This compares turns as they are, not prompts. ${read}` },
-  { ...base, days, id: "agent-events-models-by-source", title: "Events by model, replies and thinking", unit: "events per 1,000 messages",
-    description: "Events per 1,000 messages read over the last {days} days, by model and by reply or thinking.",
-    measures: [rate("models_by_source", ["model", "source"], "Events per 1,000 messages read", { minCount: floor })], cover: bars("models_by_source"),
-    action: "Compare models", emptyLabel: empty,
-    note: `Models differ in how much they narrate and in how much thinking their harness records, so these rates describe what each model wrote, not how well it worked. ${read}` },
-  { ...base, days, id: "agent-events-repository-friction", title: "Friction by repository", unit: "events per 1,000 messages",
-    description: "Friction events per 1,000 messages read over the last {days} days, by repository.", where: [friction, { field: "repository_name", op: "is_not_null", value: "" }],
-    measures: [rate("friction_by_repository", ["repository_name"], "Friction events per 1,000 messages read", { minCount: floor })], cover: bars("friction_by_repository"),
-    action: "Compare repositories", emptyLabel: empty,
-    note: `Friction is obstacles, environment friction, out-of-date guidance, pre-existing failures, missing capabilities, unclear instructions, getting stuck and giving up. The denominator is every message read in the repository, so a kind filter does not shrink it. Conversations outside a repository are left out. ${read}` },
-  { ...base, days, id: "agent-events-ambiguity-by-length", title: "Unclear instructions by prompt length", unit: "turns",
-    description: "Share of person-prompted turns over the last {days} days in which the agent said the instructions were unclear or conflicting, by prompt length.",
-    where: [{ field: "family", op: "=", value: "ambiguous_request" }, { field: "prompted_by", op: "=", value: "person" }],
-    measures: [share("ambiguity_by_length", "turn_id", ["prompt_length"], "Share of turns with unclear instructions")], cover: bars("ambiguity_by_length"),
-    action: "Compare prompt lengths", emptyLabel: empty,
-    note: `Descriptive only: a long prompt often describes a larger task, and an agent finds more to call unclear when there is more to read. Counts are small; open a bar to read the events behind it. ${read}` },
-  { ...base, days, id: "agent-events-subagent-kinds", title: "What subagents and main agents report", unit: "events per 1,000 messages",
-    description: "Events per 1,000 messages read over the last {days} days, by kind, for main agents and subagents.",
-    measures: [rate("kinds_by_role", ["family", "agent_role"], "Events per 1,000 messages read", { minCount: floor })], cover: bars("kinds_by_role", 12),
-    action: "Compare subagents", emptyLabel: empty,
-    note: `A subagent is a conversation an agent delegated to. Each side's denominator is its own messages read, so the kinds compare as rates rather than counts. ${read}` },
+  { ...base, days, id: "agent-events-repository-friction", title: "Where agents hit friction", unit: "events per 1,000 messages",
+    description: "Friction per 1,000 agent messages read over the last {days} days, by repository and kind.", where: [friction, inRepository],
+    measures: [rate("friction_by_repository", ["repository_name", "family"], "Friction events per 1,000 messages read", { minCount: floor })], cover: bars("friction_by_repository"),
+    action: "See where agents struggle", emptyLabel: empty,
+    note: `Each repository's rate divides by its own messages read, so a busy repository does not rank high for volume alone. Open a bar for the sentences behind it; Fixes groups the recurring ones into changes to docs, checks, environment or tools. ${read}` },
+  { ...base, days, id: "agent-events-stale-docs", title: "Docs agents found out of date", unit: "events per 1,000 messages",
+    description: "Times per 1,000 agent messages over the last {days} days that an agent said a doc, comment or instruction no longer matched the code, by repository.", where: [kind("stale_guidance"), inRepository],
+    measures: [rate("stale_by_repository", ["repository_name"], "Out-of-date guidance per 1,000 messages read", { minCount: floor })], cover: bars("stale_by_repository"),
+    action: "Read what was out of date", emptyLabel: empty,
+    note: `Open a bar to read each sentence in its conversation. Fixes collects the docs named more than once into an update you can hand to an agent. ${read}` },
+  { ...base, days, id: "agent-events-known-failures", title: "Failures agents stepped around", unit: "events per 1,000 messages",
+    description: "Times per 1,000 agent messages over the last {days} days that an agent met a failure it judged already there, or flaky, and left it, by repository.", where: [kind("preexisting_failure"), inRepository],
+    measures: [rate("failures_by_repository", ["repository_name"], "Pre-existing failures per 1,000 messages read", { minCount: floor })], cover: bars("failures_by_repository"),
+    action: "Read the failures", emptyLabel: empty,
+    note: `A failure every agent steps around costs each of them the time to rule it out. Open a bar for the sentences; Fixes lists the checks that keep failing. ${read}` },
+  { ...base, days, id: "agent-events-unseen-choices", title: "Choices agents made without asking", unit: "events per 1,000 messages",
+    description: "Workarounds, unchecked claims, assumptions and deferred work per 1,000 agent messages over the last {days} days, by repository.", where: [choices, inRepository],
+    measures: [rate("choices_by_repository", ["repository_name", "family"], "Unseen choices per 1,000 messages read", { minCount: floor })], cover: bars("choices_by_repository"),
+    action: "Review the choices", emptyLabel: empty,
+    note: `These are decisions an agent noted while working that a summary may leave out. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. ${read}` },
 ];
