@@ -156,7 +156,7 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 			t.Run(period.name+"/"+variant.name, func(t *testing.T) {
 				setCarbonPreferences(t, catalog, variant.prefs)
 				response := httptest.NewRecorder()
-				server.postQueryTable(response, httptest.NewRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(`{"where":`+period.where+`}`)), "usage", "carbon")
+				server.postQueryTable(response, queryFixtureHTTPRequest(http.MethodPost, "/api/query/usage/carbon", strings.NewReader(`{"where":`+period.where+`}`)), "usage", "carbon")
 				var carbon struct {
 					Windows []carbonWindow `json:"windows"`
 				}

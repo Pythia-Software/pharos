@@ -355,11 +355,16 @@ func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
 		t.Fatal("no pass before a stop")
 	}
 	defer done()
+	otherPass, otherDone, running := catalog.libraryPass(context.Background())
+	if !running {
+		t.Fatal("a scheduled pass could not join the continuous refresh")
+	}
+	defer otherDone()
 	if code, body := probeCall(t, server, http.MethodPost, "/api/library/refresh/stop", "{}"); code != http.StatusOK || body["stopped"] != true {
 		t.Fatalf("stop: %d %#v", code, body)
 	}
-	if pass.Err() == nil {
-		t.Fatal("the pass in progress was not cancelled")
+	if pass.Err() == nil || otherPass.Err() == nil {
+		t.Fatal("Stop did not cancel every refresh pass in progress")
 	}
 	if _, _, running := catalog.libraryPass(context.Background()); running {
 		t.Fatal("a pass started while stopped")
@@ -383,6 +388,19 @@ func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
 	} else {
 		next()
 	}
+	// Finishing an older cancelled pass must not unhook a resumed one.
+	resumed, resumedDone, running := catalog.libraryPass(context.Background())
+	if !running {
+		t.Fatal("resumed refresh could not start")
+	}
+	defer resumedDone()
+	done()
+	otherDone()
+	catalog.stopLibraryRefresh()
+	if resumed.Err() == nil {
+		t.Fatal("an old pass unhooked the resumed refresh from Stop")
+	}
+	catalog.resumeLibraryRefresh()
 	if refresh := libraryStatusCall(t, server, "/api/library/status")["library_refresh"].(map[string]any); refresh["stopped"] != false {
 		t.Fatalf("resumed refresh: %#v", refresh)
 	}

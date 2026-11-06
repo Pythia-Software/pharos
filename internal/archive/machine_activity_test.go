@@ -24,14 +24,14 @@ func TestMachineTimeQueries(t *testing.T) {
 	}
 	server := testServer(t, config, catalog)
 	v2Schema := PharosToolCallsSchema()
-	generic := queryV2Dataset("tool_calls", v2Schema)
-	generic.SourceSQL = toolCallDataset.v2Source(v2Schema)
+	generic := queryFixtureFor("tool_calls", v2Schema)
+	generic.SourceSQL = toolCallDataset.querySourceSQL(v2Schema)
 	for _, groups := range [][]string{
 		{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
 		{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
 	} {
 		q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
-		result, err := server.executeQueryV2(ctx, "tool_calls", nil, v2Schema, nil, &q)
+		result, err := server.executeQueryFixture(ctx, "tool_calls", nil, v2Schema, nil, &q)
 		if err != nil {
 			t.Fatalf("grouping %v: %v", groups, err)
 		}
@@ -49,8 +49,8 @@ func TestMachineTimeQueries(t *testing.T) {
 		if calls != 80 || timed <= 0 || timed >= calls || metrics[2].Buckets[0].Value != float64(80) {
 			t.Fatalf("grouping %v: %d timed of %d calls; missing durations must remain separate", groups, timed, calls)
 		}
-		want, err := generic.ExecuteV2(ctx, catalog.reader(), nil, &q, qt.PlanOptions{})
-		if err != nil || !same(result.SQLiteV2ExecutionResult, want) {
+		want, err := generic.executeFixture(ctx, catalog.reader(), nil, &q, qt.PlanOptions{})
+		if err != nil || !same(result, want) {
 			t.Fatalf("operation metrics must match raw calls for %v: %v", groups, err)
 		}
 	}
@@ -66,9 +66,9 @@ func TestMachineTimeQueries(t *testing.T) {
 		for _, where := range [][]qt.WhereTerm{nil, pairs} {
 			q := metricRequest(spec)
 			q.Where = where
-			result, err := server.executeQueryV2(ctx, "tool_calls", nil, v2Schema, nil, &q)
-			want, wantErr := generic.ExecuteV2(ctx, catalog.reader(), nil, &q, qt.PlanOptions{})
-			if err != nil || wantErr != nil || !same(result.SQLiteV2ExecutionResult, want) {
+			result, err := server.executeQueryFixture(ctx, "tool_calls", nil, v2Schema, nil, &q)
+			want, wantErr := generic.executeFixture(ctx, catalog.reader(), nil, &q, qt.PlanOptions{})
+			if err != nil || wantErr != nil || !same(result, want) {
 				t.Fatalf("%s over %+v must match raw calls: %v %v", spec.ID, where, err, wantErr)
 			}
 		}
@@ -79,7 +79,7 @@ func TestMachineTimeQueries(t *testing.T) {
 	}
 	count := metricRequest(qt.AggSpec{ID: "n", Op: "count"})
 	count.Where = pairs
-	counted, err := generic.ExecuteV2(ctx, catalog.reader(), nil, &count, qt.PlanOptions{})
+	counted, err := generic.executeFixture(ctx, catalog.reader(), nil, &count, qt.PlanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +114,9 @@ func TestMachineOperationFamilies(t *testing.T) {
 	if machineOperationKey("search", "github", "", "") == machineOperationKey("search", "linear", "", "") {
 		t.Fatal("different MCP servers must retain separate tool identities")
 	}
+	if machineActivity("command", "list", "Bash", "", "ls") != "read" || machineActivity("command", "run", "Bash", "", "python3") != "command:python3" {
+		t.Fatal("listings read; other commands keep their program")
+	}
 	if machineActivity("mcp", "", "search", "github", "") != "tool:github / search" || machineActivity("mcp", "", "query", "pharos", "") != "tool:pharos / query" {
 		t.Fatal("unclassified tools must remain individually named")
 	}
@@ -125,25 +128,25 @@ func TestMachineOperationFamilies(t *testing.T) {
 // without operations, so a budget that crossing them would exceed still
 // answers it.
 func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
-	override(t, &queryV2MaxGroups, 5)
+
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 60)
 	if err := catalog.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
-	metrics := func(where []qt.WhereTerm, specs ...qt.AggSpec) []qt.SQLiteMetricV2 {
+	metrics := func(where []qt.WhereTerm, specs ...qt.AggSpec) []qt.MetricResult {
 		t.Helper()
 		q := metricRequest(append(specs, qt.AggSpec{ID: "calls", Op: "count"})...)
 		q.Where = where
 		response := apiCall(t, server, config.APIToken, "POST", "/api/query/tool_calls/metrics", q)
-		var result qt.SQLiteMetricsV2Result
+		var result queryFixtureMetricsResult
 		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Metrics) != len(specs)+1 || result.Metrics[len(specs)].Error != "" {
 			t.Fatal(response.Code, response.Body.String())
 		}
 		return result.Metrics[:len(specs)]
 	}
-	calls := func(metric qt.SQLiteMetricV2) (total int64) {
+	calls := func(metric qt.MetricResult) (total int64) {
 		for _, bucket := range metric.Buckets {
 			total += bucket.Count
 		}
@@ -154,19 +157,21 @@ func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
 	}
 	crossed := spent("repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server")
 	cube := metrics(nil, crossed)[0]
-	if cube.Error != "" || len(cube.Buckets) <= queryV2MaxGroups || cube.GroupCount != int64(len(cube.Buckets)) || calls(cube) != 60 || cube.ProcessedRows != 60 {
+	if cube.Error != "" || len(cube.Buckets) <= 5 || cube.GroupCount != int64(len(cube.Buckets)) || calls(cube) != 60 || cube.ProcessedRows != 60 {
 		t.Fatalf("accelerated cube stopped at the generic budget: %d groups, %d calls, %q", len(cube.Buckets), calls(cube), cube.Error)
 	}
-	// A shape the accelerator declines keeps the generic budget.
+	// Every metric uses the library group budget.
+	override(t, &queryV3MaxGroups, 5)
 	limited := crossed
 	limited.GroupLimit = 1000
 	if generic := metrics(nil, limited)[0]; !strings.Contains(generic.Error, "group population exceeds host budget") {
 		t.Fatalf("generic metric past its budget: %+v", generic)
 	}
-	override(t, &machineTimeMaxGroups, len(cube.Buckets)-1)
-	if over := metrics(nil, crossed)[0]; !strings.Contains(over.Error, "group population exceeds the "+thousands(machineTimeMaxGroups)+"-group host budget") || len(over.Buckets) != 0 {
+	override(t, &queryV3MaxGroups, len(cube.Buckets)-1)
+	if over := metrics(nil, crossed)[0]; !strings.Contains(over.Error, "group population exceeds host budget") || len(over.Buckets) != 0 {
 		t.Fatalf("accelerated cube past its budget: %+v", over)
 	}
+	queryV3MaxGroups = 10_000
 	midnight := func(month time.Month, day int) string {
 		return time.Date(2026, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
 	}
