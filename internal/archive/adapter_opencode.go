@@ -102,6 +102,8 @@ func (a *opencodeAdapter) discoverParts(unchanged func([]sourcePart) bool, emit 
 // opencodeSession is a session_v2 row's identity and how far it has changed.
 type opencodeSession struct {
 	id, parent string
+	// fork is the session a fork copied its start from.
+	fork string
 	// watermark is the latest time_updated of the session and its rows, and
 	// rows their count, which falls when an undo deletes messages.
 	watermark, rows int64
@@ -142,7 +144,13 @@ func (a *opencodeAdapter) sessions(database string) ([]opencodeSession, error) {
 	if tables["session_part"] {
 		parts = "(SELECT COALESCE(MAX(time_updated),0) FROM session_part p WHERE p.session_id=s.id), (SELECT COUNT(*) FROM session_part p WHERE p.session_id=s.id)"
 	}
-	rows, err := tx.QueryContext(a.context(), `SELECT s.id, COALESCE(s.parent_id,''), s.time_updated,
+	fork := "''"
+	if columns, err := tableColumns(tx, "session_v2"); err != nil {
+		return nil, err
+	} else if columns["fork_session_id"] {
+		fork = "COALESCE(s.fork_session_id,'')"
+	}
+	rows, err := tx.QueryContext(a.context(), `SELECT s.id, COALESCE(s.parent_id,''), `+fork+`, s.time_updated,
 		(SELECT COALESCE(MAX(time_updated),0) FROM session_message m WHERE m.session_id=s.id),
 		(SELECT COUNT(*) FROM session_message m WHERE m.session_id=s.id), `+parts+`
 		FROM session_v2 s ORDER BY s.id`)
@@ -154,7 +162,7 @@ func (a *opencodeAdapter) sessions(database string) ([]opencodeSession, error) {
 	for rows.Next() {
 		var session opencodeSession
 		var updated, messagesUpdated, messages, partsUpdated, partCount int64
-		if err := rows.Scan(&session.id, &session.parent, &updated, &messagesUpdated, &messages, &partsUpdated, &partCount); err != nil {
+		if err := rows.Scan(&session.id, &session.parent, &session.fork, &updated, &messagesUpdated, &messages, &partsUpdated, &partCount); err != nil {
 			return nil, err
 		}
 		session.watermark, session.rows = max(updated, messagesUpdated, partsUpdated), messages+partCount
@@ -224,7 +232,12 @@ func (a *opencodeAdapter) planParts() (*sourceWorkPlan, error) {
 			sort.SliceStable(members, func(i, j int) bool { return levels[members[i].id] < levels[members[j].id] })
 			parts := make([]sourcePart, 0, len(members))
 			for _, member := range members {
-				parts = append(parts, sourcePart{item: a.original(database) + "#" + member.id, size: member.rows, version: member.watermark * 1e6, signal: fmt.Sprintf("%d:%d", member.watermark, member.rows)})
+				signal := fmt.Sprintf("%d:%d", member.watermark, member.rows)
+				// A fork's copies are read by what its source still holds.
+				if source, ok := byID[member.fork]; ok && member.fork != "" {
+					signal += fmt.Sprintf(":fork:%d:%d", source.watermark, source.rows)
+				}
+				parts = append(parts, sourcePart{item: a.original(database) + "#" + member.id, size: member.rows, version: member.watermark * 1e6, signal: signal})
 			}
 			database, members := database, members
 			plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
@@ -317,9 +330,10 @@ func (a *opencodeAdapter) read(database string, members []opencodeSession) (*Wor
 			depth[member.id] = depth[member.parent] + 1
 			conversation.ParentNativeID, conversation.AgentDepth = member.parent, max(depth[member.id], 1)
 			conversation.AgentNickname, conversation.AgentPath = firstString(session["title"]), firstString(session["agent"])
-			// A subagent's prompts are its parent's.
+			// A subagent's prompts are its parent's; a command run from its
+			// prompt is still the person's.
 			for index := range conversation.Messages {
-				if message := &conversation.Messages[index]; message.Role == "user" {
+				if message := &conversation.Messages[index]; message.Role == "user" && message.Kind != "tool_call" {
 					message.Role, message.Sender = agentRole, "agent:"+member.parent
 				}
 			}
@@ -392,11 +406,13 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 	locator := func(message string) string { return fmt.Sprintf("%s#%s:%s", origin, id, message) }
 	// A fork starts with a copy of its source's messages up to the cut, each
 	// with the source's data, usage and tool runs included, under the ID
-	// <fork event>_<seq>; the fork's totals start at zero. The source counts
-	// the copies, so while it exists they are left to it. A deleted source
-	// may have been indexed before, so the copies stay as the fork's history
-	// but without their usage.
-	inherited, sourced := "", false
+	// <fork event>_<seq> and the source's seq; the fork's totals start at
+	// zero. The source counts a copy while it holds the message at that seq,
+	// so the copy is left to it; seqs are never reused, so one an undo or
+	// deleting the source removed is the fork's alone. That stays as the
+	// fork's history, without its usage, which the source may have been
+	// indexed with.
+	inherited, held := "", map[int64]bool{}
 	if source := firstString(session["fork_session_id"]); source != "" {
 		for _, message := range messages {
 			if suffix := "_" + strconv.FormatInt(message.seq, 10); strings.HasSuffix(message.id, suffix) && len(message.id) > len(suffix) {
@@ -404,16 +420,27 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				break
 			}
 		}
-		if err := tx.QueryRowContext(a.context(), `SELECT EXISTS(SELECT 1 FROM session_v2 WHERE id=?)`, source).Scan(&sourced); err != nil {
+		rows, err := tx.QueryContext(a.context(), `SELECT seq FROM session_message WHERE session_id=?`, source)
+		if err != nil {
+			return nil, nil, err
+		}
+		for rows.Next() {
+			var seq int64
+			if err := rows.Scan(&seq); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			held[seq] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
 			return nil, nil, err
 		}
 	}
 	copied := func(message row) bool {
 		return inherited != "" && message.id == inherited+"_"+strconv.FormatInt(message.seq, 10)
 	}
-	if sourced {
-		messages = slices.DeleteFunc(messages, copied)
-	}
+	messages = slices.DeleteFunc(messages, func(message row) bool { return copied(message) && held[message.seq] })
 	// What the session totals beyond its messages: requests whose messages
 	// an undo deleted, and title generation, which no message records.
 	sums := map[string]float64{}
