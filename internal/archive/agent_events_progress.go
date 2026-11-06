@@ -19,14 +19,15 @@ type agentEventsCounts struct {
 // Preparation, batch completion and commits report independently. Publish a
 // coherent snapshot under one lock, and limit batch-only updates to once a second.
 type agentEventsProgress struct {
-	mu                         sync.Mutex
-	ctx                        context.Context
-	counts                     agentEventsCounts
-	total                      int
-	started, published         time.Time
-	preparing, scoring, saving bool
-	device                     string
-	dryRun                     bool
+	mu                 sync.Mutex
+	ctx                context.Context
+	counts             agentEventsCounts
+	total              int
+	started, published time.Time
+	preparing          int
+	scoring, saving    bool
+	device             string
+	dryRun             bool
 }
 
 func newAgentEventsProgress(ctx context.Context, base agentEventsCounts, started time.Time, total int, dryRun bool) *agentEventsProgress {
@@ -40,7 +41,11 @@ func (p *agentEventsProgress) stage(stage string, active bool) {
 	defer p.mu.Unlock()
 	switch stage {
 	case "preparing":
-		p.preparing = active
+		if active {
+			p.preparing++
+		} else {
+			p.preparing--
+		}
 	case "scoring":
 		p.scoring = active
 	case "saving":
@@ -107,7 +112,7 @@ func (p *agentEventsProgress) publish(force bool) {
 		} else if p.device == "cpu" {
 			phase = "Scoring on CPU"
 		}
-	case p.preparing:
+	case p.preparing > 0:
 		phase = "Preparing conversations"
 	case p.saving:
 		phase = "Saving results"
