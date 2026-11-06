@@ -237,7 +237,7 @@ function trailingCard(id, scale, catalog = catalogs[recipeById(id).destination.t
   const { days, ends } = cardTrendDays(trend.lookback, true, at);
   const card = buildCardTrend(trend, trend.lookback, cardTrendQueries([], trend, days).map(query => core.evaluateMetrics(rows[trend.dataset], query, schemas[trend.dataset], { now: at }).metrics), at).study;
   const where = withTimeRange([], catalog.time, undefined, undefined, "30d"), state = { ...recipe.destination.chart, view: "trend" };
-  assert.deepEqual([state.rollingPeriods, state.completePeriods, state.norm, state.split], [trend.lookback, true, true, "none"]);
+  assert.deepEqual([state.rollingPeriods, state.completePeriods, state.percentiles, state.split], [trend.lookback, true, ["mean"], "none"]);
   const query = trendQuery(catalog, state, where, { now: at });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(rows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
   assert.equal(built.error, undefined);

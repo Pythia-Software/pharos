@@ -288,7 +288,7 @@ fields:
 | `share` | each trend series as a share of its bucket's total |
 | `nonzero` | values without zeroes: buckets with nothing drawn are left out, and lines pass over a series' zeroes; ignored with `share` |
 | `completePeriods` | whole periods only |
-| `percentiles`, `normPeriods` | the %ile control's reference levels, any of `mean`, `p50`, `p75`, `p90`, `p95`, `p99`: a line at each level of the `normPeriods` (30) points before the latest, or on a heatmap a trace of each period's percentile. `norm: true` is the older name for `["mean"]`, and the site map's agent-facing key |
+| `percentiles`, `normPeriods` | the %ile control's reference levels, any of `mean`, `p50`, `p75`, `p90`, `p95`, `p99`: a line at each level of the `normPeriods` (30) points before the latest, or on a heatmap a trace of each period's percentile. `norm: true` is the older name for `["mean"]` (`canonicalState` reads it). Links, cards and the site map's agents use `percentiles`; the site map's list rule says which levels each chart draws ([site map](site-map.md#valid-combinations)) |
 | `seriesLimit`, `selection` | series drawn before Other, and the legend selection: the breakdown's groups drawn (or hidden, when `excluded`) |
 | `v` | the link format, `2`; see [Selections and links](#selections-and-links) |
 

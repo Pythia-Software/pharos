@@ -3,7 +3,7 @@ import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
 import { usageDatasetTopics, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { cardDashboardWhere } from "./card-exploration";
-import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
+import { analysisVersion, type AnalysisState, type PercentileLevel } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
 import { defaultCardCover } from "./card-cover";
 import { windowedChart } from "./card-windows";
@@ -27,8 +27,8 @@ const engine = (topic: UsageTopic, view: AnalysisState["view"]) => (metric: stri
 const activity = engine("activity", "scatter");
 const sessions = engine("session_shape", "compare");
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
-// A card's trailing window with whole days and a norm (buildCardTrend).
-const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
+// A card's trailing window with whole days and a mean reference level (buildCardTrend).
+const trailing = { rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] as PercentileLevel[] };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
 const dashboards: Record<string, CardDashboard> = {
  "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
@@ -102,9 +102,9 @@ const dashboards: Record<string, CardDashboard> = {
   "mcp-methods": calls("calls", "mcp_server_method"),
   "truncated-outputs": calls("truncation_rate", "tool_name", { minSamples: 10 }),
   "pharos-mcp-sources": calls("calls", "app_provider"),
-  "machine-call-trend": calls("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  "machine-call-trend": calls("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] }),
   // Record-level trends retain the card's precise timestamp bounds.
-  "machine-latency-trend": calls("mean_time", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  "machine-latency-trend": calls("mean_time", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] }),
   "cache-efficiency": tokens("cache_read_share", "provider_model", { view: "compare" }),
   "cache-repositories": tokens("cache_read_share", "repository_name", { view: "compare" }),
   "price-coverage": tokens("tokens", "price_status", { view: "compare", compareAs: "share" }),
@@ -121,7 +121,7 @@ const dashboards: Record<string, CardDashboard> = {
   "repository-cost-share": tokens("cost", "repository_name", { view: "compare", compareAs: "share" }),
   // Human Words: messages (writing_messages).
   "human-words": human("typed", "none"),
-  "human-word-total": human("typed", "none", { rollingPeriods: 7, rollingOp: "sum", norm: true }),
+  "human-word-total": human("typed", "none", { rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] }),
   "explaining-repos": human("typed", "repository_name", { view: "compare", compareAs: "share" }),
   "human-word-mix": human("typed_share", "repository_name", { view: "compare" }),
   "human-repository-words-trend": human("typed", "repository_name", { rollingPeriods: 7 }),
@@ -139,7 +139,7 @@ const dashboards: Record<string, CardDashboard> = {
   "human-specific-feedback": human("typed_messages", "none", { rollingPeriods: 7 }),
   "session-human-output": activity("messages", "provider_model", { unit: "conversation", metricY: "output", scale: "logarithmic", scaleY: "logarithmic" }),
   // Carbon: usage, under the user's assumptions.
-  "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", norm: true }),
+  "carbon-trend": carbon("co2", "none", { view: "trend", rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] }),
   "carbon-tiers": carbon("co2", "carbon_tier", { compareAs: "share" }),
   "carbon-repositories": carbon("co2", "repository_name"),
   "carbon-models": carbon("co2", "model_family"),

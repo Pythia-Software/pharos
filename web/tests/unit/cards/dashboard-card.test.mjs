@@ -106,7 +106,7 @@ test('every dashboard topic retains its requested chart and dataset in a saved U
 test('saved dashboard trend previews match smoothing, cumulative totals, shares and legend selections', async t => {
   fixture(t);
   const local = usageLedger();
-  for (const options of [{rollingPeriods:3,rollingOp:'sum',norm:true},{display:'cumulative'},{share:true},{metric:'cache_read_share'}, {selection:{values:['claude'],excluded:true}}]) {
+  for (const options of [{rollingPeriods:3,rollingOp:'sum',percentiles:['mean','p90']},{display:'cumulative'},{share:true},{metric:'cache_read_share'}, {selection:{values:['claude'],excluded:true}}]) {
     const url = makeURL({...dashboardDefaults.tokens,metric:'tokens',split:'provider',scale:'linear',...options},[]);
     const {state,where} = readDashboardCard(url,new Date(now));
     const query = trendQuery(catalog,state,where,{now});
@@ -116,7 +116,7 @@ test('saved dashboard trend previews match smoothing, cumulative totals, shares 
     assert.deepEqual(preview.buckets,expected.buckets);
     assert.deepEqual(preview.series,expected.series.filter(item=>!expected.selected.length || expected.selected.includes(item.key)!==expected.excluded));
     assert.equal(preview.dashboardTrend.prepared,true);
-    assert.equal(preview.dashboardTrend.reference,expected.references?.[0]?.value);
+    assert.deepEqual(preview.dashboardTrend.references,expected.references);
   }
 });
 

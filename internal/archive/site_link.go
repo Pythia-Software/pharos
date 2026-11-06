@@ -2113,6 +2113,16 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 	}
 	switch viewName {
 	case "trend":
+		display := text("display")
+		if chosen := view.ChosenDisplay; chosen != nil {
+			keys := make([]string, len(chosen.Given))
+			for index, name := range chosen.Given {
+				keys[index] = text(name)
+			}
+			if found := lookupTable(chosen.Values, keys); found != nil {
+				display = siteString(found)
+			}
+		}
 		period := text("period")
 		count := int(jsNumber(value(period)))
 		phrase := measure("metric") + " per " + period
@@ -2126,11 +2136,11 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 		if value("share") == true {
 			phrase += ", as a share of the total"
 		}
-		switch text("display") {
+		switch display {
 		case "cumulative":
 			phrase += ", cumulative"
 		case "heatmap":
-			phrase += ", as a heatmap of each period's shares"
+			phrase += ", as a heatmap of its distribution"
 		}
 		if rolling := int(jsNumber(value("rollingPeriods"))); rolling > 0 {
 			span := singular
@@ -2139,8 +2149,16 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 			}
 			phrase += fmt.Sprintf(", %d-%s rolling %s", rolling, span, text("rollingOp"))
 		}
-		if value("norm") == true {
-			phrase += fmt.Sprintf(", against the norm of the previous %s periods", text("normPeriods"))
+		if levels, ok := value("percentiles").([]any); ok && len(levels) > 0 {
+			names := make([]string, len(levels))
+			for index, level := range levels {
+				names[index] = lowerLabel(site.Analyze.Labels.Percentiles[siteString(level)])
+			}
+			if display == "heatmap" {
+				phrase += ", tracing each period's " + strings.Join(names, " and ")
+			} else {
+				phrase += fmt.Sprintf(", against the %s of the previous %s periods", strings.Join(names, " and "), text("normPeriods"))
+			}
 		}
 		return phrase
 	case "compare":

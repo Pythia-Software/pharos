@@ -354,6 +354,12 @@ func TestSiteMCPViewDiscoveryAndValidation(t *testing.T) {
 		}
 	}
 	browseText(t, catalog, map[string]any{"path": "analyze/query/usage/filters/@computed/scaled"})
+	// The %ile levels are a list setting, each level labelled, with where
+	// the chart draws it.
+	levels, levelsText := browseText(t, catalog, map[string]any{"path": "analyze/session_shape/chart/trend/percentiles"})
+	if levels["kind"] != "list" || !strings.Contains(levelsText, "Median") || levels["constraints"] == nil {
+		t.Error("percentiles are not described as a list of levels", levelsText)
+	}
 	_, targetHelp := browseText(t, catalog, map[string]any{"path": "analyze/query/usage/targets"})
 	if !strings.Contains(targetHelp, "control:q_usage") {
 		t.Fatal("native query control is not discoverable", targetHelp)

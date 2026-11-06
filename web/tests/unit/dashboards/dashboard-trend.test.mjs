@@ -244,18 +244,18 @@ test("a change applies to the state as asked for: old names never override it, a
     assert.deepEqual([values.metric, values.share], [alias === "percent" ? "tokens" : "cost", false], `${alias}: Values takes effect at once`);
     assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { split: "model_family" })).share, true, `${alias}: other changes keep the shares`);
   }
-  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", norm: true };
+  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] };
   const ratio = changeState(catalog, asked, { metric: "cache_read_share" });
   assert.deepEqual(["share", "rollingOp", "norm"].map(key => normalizeAnalysis(catalog, ratio)[key]), [false, "mean", false], "drawn without what the ratio cannot use");
   assert.equal(trendAdjustments(catalog, ratio).length, 3, "and each change is explained");
   const back = changeState(catalog, ratio, { metric: "tokens" });
-  assert.deepEqual(["share", "rollingOp", "norm"].map(key => back[key]), [true, "sum", true], "all three are still saved");
+  assert.deepEqual(["share", "rollingOp", "percentiles"].map(key => back[key]), [true, "sum", ["mean"]], "all three are still saved");
   assert.deepEqual(normalizeAnalysis(catalog, back), normalizeAnalysis(catalog, asked), "and tokens draws exactly as before");
-  // Shares have no norm, so without them the saved norm draws again.
+  // Shares have no reference level, so without them the saved mean draws again.
   assert.equal(normalizeAnalysis(catalog, changeState(catalog, back, { share: false })).norm, true);
   // A visit to Compare keeps the trend's own settings.
   const returned = switchView(catalog, switchView(catalog, asked, "compare"), "trend");
-  assert.deepEqual(["share", "rollingOp", "norm", "rollingPeriods"].map(key => returned[key]), [true, "sum", true, 7]);
+  assert.deepEqual(["share", "rollingOp", "percentiles", "rollingPeriods"].map(key => returned[key]), [true, "sum", ["mean"], 7]);
 });
 
 test("a share is of every group in the filters; a legend selection only chooses what is drawn, in the trend and in Compare", () => {

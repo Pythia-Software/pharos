@@ -198,7 +198,7 @@ function trailingCard(id, scale = 1, window = 7) {
   const opened = new URL(cardDestination(recipe, instantiateRecipe(recipe, window, new Date(at)).query, { days: window, field: recipe.field, mode: "relative" }), "http://localhost");
   const state = { ...JSON.parse(opened.searchParams.get("analyze_chart")), view: "trend" };
   assert.deepEqual(state, { ...windowedChart(id, recipe.destination.chart, window), view: "trend" });
-  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.norm, state.split], [lookback, Boolean(trend.completeDays), true, "none"], id);
+  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.percentiles, state.split], [lookback, Boolean(trend.completeDays), ["mean"], "none"], id);
   const query = trendQuery(catalog, state, where, { now: at, zone });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(dashboardRows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
   assert.equal(built.error, undefined);

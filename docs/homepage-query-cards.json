@@ -9485,7 +9485,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily writing trends"
@@ -10241,7 +10243,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily message counts"
@@ -10316,7 +10320,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily conversation counts"
@@ -19079,7 +19085,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "tool_calls",
         "detailAction": "Explore daily tool calls"
@@ -19152,7 +19160,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect daily call times"
@@ -19306,7 +19316,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "parallelism",
         "detailAction": "Open the parallelism view"
@@ -19576,7 +19588,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "usage",
         "detailAction": "Explore carbon impact"
@@ -21121,7 +21135,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "session_shape",
         "detailAction": "Explore failure rate over time"
@@ -21376,7 +21392,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "session_shape",
         "detailAction": "Explore sessions over time"
@@ -21483,7 +21501,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "session_shape",
         "detailAction": "Explore active hours over time"

@@ -253,6 +253,7 @@ with. `absent` and `fallback` are the markers the rules use.
 | `domains` | For each non-numeric key, the values the page accepts |
 | `numeric` | Integer ranges (`min`, optional `max`, `integer`) and the legend selection's `max_values` |
 | `rules` | How the page draws each option of the merged chart, in order |
+| `chosen_display` | Only for a catalog that chooses its charts (Session Shape's `present`), whose charts hold no `display`: the display the page draws, walked by `given` (`metric`, `split`) |
 
 #### Valid combinations
 
@@ -273,8 +274,10 @@ implementation:
    - A merged value that `legacy` lists as an older name `{key, value, set}`
      takes `set`, as `canonicalState` reads it. `readChart` does both steps.
      The legacy list holds the older names the site's own card links still
-     use, plus the list positions older metrics used. Other older vocabulary
-     is outside the map.
+     use, the list positions older metrics used, and the engine's own:
+     `norm: true`, the old single reference line, is `percentiles: ["mean"]`
+     (`norm: false` asks for none). Other older vocabulary is outside the
+     map.
    - A chart may hold keys its view does not draw. The page writes such
      charts itself: after a view switch it saves the whole switched state,
      and some cards' own charts carry them (a Compare chart's `period`).
@@ -289,7 +292,10 @@ implementation:
    - a merged key that has a domain holds a value outside it;
    - a numeric key is outside `numeric`;
    - `selection` is not `{values: [string…], excluded: bool}` within
-     `max_values`.
+     `max_values`;
+   - a list rule's key (`percentiles`) is not a list of distinct values of
+     its domain. Every view checks it, as the page does, though only the
+     trend draws it.
 
    `domains` and `numeric` cover every key `validAnalysisState` checks in
    the view, drawn or not. A key the view does not check has neither, and is
@@ -314,6 +320,15 @@ implementation:
      `days` with `days` > 1.
    - **Unchanged options.** An option with no rule is drawn as its merged
      value.
+   - **List rules** (`list: true`; the %ile control's `percentiles`). The
+     merged value is a list of the option's domain values. It is drawn as
+     the domain's values, in the domain's order, that the list holds and
+     that every constraint's list allows; a constraint's `given` options
+     are read as above. A missing list is left to the page, which draws its
+     catalog's default levels (a heatmap traces its median and 90th
+     percentile). The constraints say which levels each context draws: none
+     with shares or a cumulative display, or for a measure without a total
+     across groups; no mean on a heatmap.
 5. **Valid or coercible.** The chart is valid if every key it names among the
    view's `keys` is drawn as given, and coercible otherwise.
 
@@ -335,7 +350,7 @@ older name becomes valid. Every canonical chart in the cases is valid: every
 link, each card's `state`, and each view's defaults.
 
 **The trade-off:** the page keeps the trend's own settings (`rollingPeriods`,
-`period`, `norm` …) in the chart while another view is showing, and returns
+`period`, `percentiles` …) in the chart while another view is showing, and returns
 to them when the reader chooses Over time again. A Go-written non-trend link
 drops them, so the same drawing opens, but choosing Over time from it starts
 from the topic's defaults rather than the trend the link was copied from.

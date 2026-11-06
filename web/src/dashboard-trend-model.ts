@@ -3,7 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
-import { isTrendView, heatmapAxis, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, percentileFraction, trendKind, unique, type AnalysisCatalog, type PercentileLevel, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { drawsLevels, isTrendView, heatmapAxis, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, percentileFraction, trendKind, unique, type AnalysisCatalog, type PercentileLevel, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -55,7 +55,7 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   // The norm averages a fixed number of points before the latest, whatever
   // the range, so the query reaches back for them (and their windows).
   let normFrom: Date | undefined, normTo: Date | undefined;
-  if (state.norm) {
+  if (drawsLevels(state)) {
     const bounds = timeBounds(range, catalog.time, now), limit = Math.min(bounds.to?.getTime() ?? now, now);
     normTo = periodStart(new Date(limit - 1), state.period, count);
     const end = new Date(normTo); nextPeriod(end, state.period, count);
@@ -139,13 +139,13 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const bounds = timeBounds(trend.range, catalog.time, now);
   const keys = results.flatMap(item => item.buckets.map(bucket => bucket.keys[0]));
   const earliest = earliestKey(keys), [start, end] = chartSpan(bounds, earliest, now);
-  const historyStart = !cumulative && (state.rollingPeriods > 1 || state.norm) ? timeBounds(trend.requested, catalog.time, now).from ?? earliest : undefined;
+  const historyStart = !cumulative && (state.rollingPeriods > 1 || drawsLevels(state)) ? timeBounds(trend.requested, catalog.time, now).from ?? earliest : undefined;
   const dates = keys.map(key => parseDay(String(key)));
   // Whole periods only: a period starting before the rounded range start
   // is history, which smoothing may read but nothing draws. The norm's
   // earlier points are history too, every period of them, idle ones included.
   const visible = periodStart(start, state.period, count);
-  const layout = () => (state.norm && historyStart ? periodBuckets(state.period, historyStart, end, count).map(bucket => bucket.date < visible ? { ...bucket, history: true } : bucket)
+  const layout = () => (drawsLevels(state) && historyStart ? periodBuckets(state.period, historyStart, end, count).map(bucket => bucket.date < visible ? { ...bucket, history: true } : bucket)
     : chartBucketsWithHistory(state.period, start, end, count, dates, historyStart))
     .map(bucket => state.completePeriods && bounds.from && bucket.date < bounds.from ? { ...bucket, history: true } : bucket);
   const amounts = layout(), denominators = kind === "ratio" ? layout() : [];
@@ -261,7 +261,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const nonzero = state.nonzero && !state.share;
   const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
   const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  if (state.norm && trend.normFrom && trend.normTo) {
+  if (drawsLevels(state) && trend.normFrom && trend.normTo) {
     const from = trend.normFrom.getTime(), to = trend.normTo.getTime();
     const points = buckets.filter(bucket => bucket.date.getTime() >= from && bucket.date.getTime() < to).map(bucket => additive ? drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)
       : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number" && !(nonzero && value === 0));

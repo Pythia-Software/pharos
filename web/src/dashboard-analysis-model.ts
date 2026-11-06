@@ -357,7 +357,15 @@ export function reductionLabel(reduce: AnalysisReduce, measure: AnalysisMeasure,
 // A state in the catalog's own terms: older links and saved states are read
 // through its legacy mapping. Controls apply changes to this state, so an
 // old name never overrides a later choice.
-export const canonicalState = <T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T => catalog.legacy ? catalog.legacy(state) as T : state;
+// A catalog's own older names (legacy), then the engine's: norm, the old
+// single reference line, is the %ile control's mean (norm: true is
+// percentiles ["mean"]; norm: false asks for none and is left out).
+export function canonicalState<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): T {
+  const read = catalog.legacy ? catalog.legacy(state) as T : state;
+  if (typeof read.norm !== "boolean") return read;
+  const { norm, ...rest } = read;
+  return (norm ? { ...rest, percentiles: ["mean"] } : rest) as T;
+}
 
 // A link as the dashboard reads it. A link marked with analysisVersion keeps
 // its filters as the population. An older one, on a dashboard whose legend
@@ -523,6 +531,11 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   return next;
 }
 
+// Whether a trend draws reference levels over earlier points: a normalized
+// state says (norm); a link's state, read as given, does when it asks for a
+// level and is not a heatmap.
+export const drawsLevels = (state: Pick<AnalysisState, "norm" | "percentiles" | "display">) =>
+  typeof state.norm === "boolean" ? state.norm : Boolean(state.percentiles?.length) && state.display !== "heatmap";
 // The levels a state asks for, in their order: its own, or the older norm.
 function askedPercentiles(state: AnalysisState): PercentileLevel[] | undefined {
   if (Array.isArray(state.percentiles)) return state.percentiles;

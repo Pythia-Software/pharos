@@ -8,7 +8,7 @@ import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { percentileLabel, percentileLevels, type PercentileLevel, type ResolvedAnalysis, isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
@@ -112,7 +112,7 @@ export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Re
 // The keys a canonical analyze_chart holds for each view, in order: the
 // settings that view draws. A non-empty legend selection follows them.
 // Other keys are left out; the page fills them from its defaults.
-const trendKeys = ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "norm", "normPeriods", "seriesLimit"];
+const trendKeys = ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "percentiles", "normPeriods", "seriesLimit"];
 export const chartKeys: Record<AnalysisView, string[]> = {
   trend: trendKeys, trend_line: trendKeys, trend_bar: trendKeys,
   compare: ["v", "view", "unit", "metric", "split", "reduce", "compareAs", "minSamples", "scale"],
@@ -122,7 +122,7 @@ export const chartKeys: Record<AnalysisView, string[]> = {
 };
 // A catalog that chooses each chart itself (present) draws these settings as
 // it chooses, so its charts neither hold nor check them.
-const presentedKeys = ["display", "share", "nonzero", "scale", "scaleY", "norm", "compareAs"];
+const presentedKeys = ["display", "share", "nonzero", "scale", "scaleY", "compareAs"];
 const presents = (topic: UsageTopic) => Boolean(analysisCatalogs[topic]?.present);
 export const topicChartKeys = (topic: UsageTopic, view: AnalysisView) => presents(topic) ? chartKeys[view].filter(key => !presentedKeys.includes(key)) : chartKeys[view];
 // A chart's keys in canonical order, over the view's defaults.
@@ -154,11 +154,15 @@ export function canonicalChart(defaults: Record<string, unknown>, change: Record
 
 export const absent = "(absent)", viaFallback = "(fallback)";
 type Scalar = string | number | boolean;
-type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
+// A list rule (list: true) holds a list of its domain's values, such as the
+// %ile control's levels: each value stays when every constraint allows it,
+// in the domain's order, and the rest are dropped. A missing list is left to
+// the page.
+type Rule = { option: string; list?: true; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
 type Shape = { option: string; constraints: string[][]; fallback: string[] };
 const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
 const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("display", [["metric"], ["split"]]), shape("share", [["metric"], ["split"], ["display"]]),
-  shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
+  shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"])];
 const allShapes: Record<AnalysisView, Shape[]> = {
   trend: trendShapes, trend_line: trendShapes, trend_bar: trendShapes,
   compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
@@ -190,14 +194,15 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
     case "display": return [...analysisDisplays];
     case "rollingOp": return [...rollingOps];
     case "scale": case "scaleY": return [...chartScales];
-    case "share": case "nonzero": case "norm": case "completePeriods": return [false, true];
+    case "share": case "nonzero": case "completePeriods": return [false, true];
+    case "percentiles": return [...percentileLevels];
     default: return fail(`no candidates for ${option}`);
   }
 }
 // Values validAnalysisState accepts for one option, the rest as defaults.
 function domainOf(topic: UsageTopic, base: Record<string, unknown>, option: string): Scalar[] {
   const catalog = analysisCatalogs[topic]!;
-  return candidates(catalog, option).filter(value => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [option]: value } as AnalysisState));
+  return candidates(catalog, option).filter(value => validAnalysisState(catalog, { ...dashboardDefaults[topic], ...base, [option]: listKeys.includes(option) ? [value] : value } as AnalysisState));
 }
 const key = (value: unknown) => value === undefined ? absent : String(value);
 const nest = (table: Record<string, unknown>, keys: string[], leaf: (node: unknown) => unknown) => {
@@ -214,6 +219,12 @@ export function drawChart(view: ViewRules, merged: Record<string, unknown>): Rec
   const drawn: Record<string, unknown> = {};
   const value = (name: string, self: unknown) => name === "self" ? key(self) : name === "multiple_periods" ? key(multiple(merged)) : key(name in drawn ? drawn[name] : merged[name]);
   for (const rule of view.rules) {
+    if (rule.list) {
+      const asked = merged[rule.option];
+      if (Array.isArray(asked)) drawn[rule.option] = view.domains[rule.option].filter(item => asked.includes(item)
+        && rule.constraints.every(constraint => (lookup(constraint.allowed, constraint.given.map(name => value(name, undefined))) as Scalar[] | undefined)?.includes(item) ?? false));
+      continue;
+    }
     let own: unknown = merged[rule.option];
     const fallback = () => rule.fallback ? rule.fallback.given.length ? lookup(rule.fallback.values, rule.fallback.given.map(name => value(name, own))) : rule.fallback.values : undefined;
     if (own === undefined && rule.fill === viaFallback) { drawn[rule.option] = fallback(); continue; }
@@ -242,6 +253,8 @@ export function judgeChart(facts: ChartFacts, version: number, chart: Record<str
     if (name === "selection") {
       const selection = value as { values?: unknown; excluded?: unknown };
       if (!selection || typeof selection.excluded !== "boolean" || !Array.isArray(selection.values) || selection.values.length > (range as { max_values: number }).max_values || selection.values.some(item => typeof item !== "string")) return "invalid";
+    } else if (view.rules.some(rule => rule.list && rule.option === name)) {
+      if (!Array.isArray(value) || value.some(item => !view.domains[name].includes(item)) || new Set(value).size !== value.length) return "invalid";
     } else if (range && "min" in range) {
       if (typeof value !== "number" || value < range.min || range.max !== undefined && value > range.max || range.integer && !Number.isInteger(value)) return "invalid";
     } else if (view.domains[name]) {
@@ -251,7 +264,7 @@ export function judgeChart(facts: ChartFacts, version: number, chart: Record<str
   }
   if (merged.v === undefined || renamed) return "coercible";
   const drawn = drawChart(view, merged);
-  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || drawn[name] === chart[name]) ? "valid" : "coercible";
+  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || json(drawn[name]) === json(chart[name])) ? "valid" : "coercible";
 }
 
 // Every combination of a view's drawn options over its defaults, each
@@ -281,7 +294,10 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
   return states;
 }
 
-type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown> };
+// A catalog that chooses its charts (present) holds no display in its
+// charts; chosen_display says which one it draws for each measure and
+// breakdown, so a reader can describe the chart.
+type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown>; chosen_display?: { given: string[]; values: Record<string, unknown> } };
 function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFacts {
   const catalog = analysisCatalogs[topic]!, merge = dashboardDefaults[topic] as Record<string, unknown>;
   const start = { ...merge, v: analysisVersion } as AnalysisState;
@@ -327,19 +343,64 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
       rule.fill = [...domains[option], viaFallback].find(draws) ?? fail(`${topic} ${view}: no fill draws a missing ${option} as the page does`);
     }
   }
-  // A rule that never changes its option says nothing.
-  const facts: ViewFacts = { label, keys, defaults, domains, numeric, rules: rules.filter(rule => rule.constraints.length || rule.fallback || rule.fill !== undefined) };
+  // The %ile levels: which levels each context draws, from every drawing
+  // asked for each level alone, and checked below with several at once.
+  // Another view still checks the list's values, as the page does.
+  if (keys.includes("percentiles")) rules.push(levelRule(topic, drawing, rules));
+  else if (domains.percentiles) rules.push({ option: "percentiles", list: true, constraints: [] });
+  // A rule that never changes its option says nothing; a list rule always
+  // says which values its list may hold.
+  const facts: ViewFacts = { label, keys, defaults, domains, numeric, rules: rules.filter(rule => rule.list || rule.constraints.length || rule.fallback || rule.fill !== undefined) };
+  if (presents(topic) && isTrendView(view)) {
+    const values: Record<string, unknown> = {};
+    for (const item of drawing) {
+      const path = ["metric", "split"].map(name => key(item.drawn[name])), before = lookup(values, path), display = item.drawn.display;
+      if (before !== undefined && before !== display) fail(`${topic} ${view}: the chosen display depends on more than the measure and breakdown`);
+      nest(values, path, () => display);
+    }
+    facts.chosen_display = { given: ["metric", "split"], values };
+  }
   for (const item of states) {
     const verdict = judgeChart({ merge_defaults: merge, views: { [view]: facts } }, analysisVersion, item.chart);
     if (verdict !== item.verdict) fail(`${topic} ${view}: the rules judge ${json(item.chart)} ${verdict}, the page ${item.verdict}`);
     if (item.verdict === "invalid") continue;
     const drawn = drawChart(facts, item.merged);
-    for (const { option } of rules) {
+    for (const { option, list } of rules) {
+      if (list && item.merged[option] === undefined) continue;
       const value = option in drawn ? drawn[option] : item.merged[option];
       if (json(value) !== json(item.drawn[option])) fail(`${topic} ${view}: the rules draw ${option} of ${json(item.chart)} as ${json(value)}, the page as ${json(item.drawn[option])}`);
     }
   }
+  for (const item of drawing) for (const probe of levelProbes) {
+    const chart = { ...item.chart, percentiles: probe }, merged = { ...item.merged, percentiles: probe };
+    if (!keys.includes("percentiles")) break;
+    const page = (normalizeAnalysis(catalog, merged as AnalysisState) as Record<string, unknown>).percentiles, drawn = drawChart(facts, merged).percentiles;
+    if (json(page) !== json(drawn)) fail(`${topic} ${view}: the rules draw percentiles ${json(probe)} of ${json(item.chart)} as ${json(drawn)}, the page as ${json(page)}`);
+    const verdict = judgeChart({ merge_defaults: merge, views: { [view]: facts } }, analysisVersion, chart);
+    if (verdict !== chartVerdict(topic, chart)) fail(`${topic} ${view}: the rules judge ${json(chart)} ${verdict}, the page ${chartVerdict(topic, chart)}`);
+  }
   return facts;
+}
+
+// Keys whose value is a list of their domain's values.
+const listKeys = ["percentiles"];
+const levelProbes: PercentileLevel[][] = [["mean", "p50", "p90"], ["p99", "p75"], ["mean"], ["p95"], []];
+// The levels each context draws: a catalog that chooses its charts draws
+// them by measure and breakdown; any other by display, shares, and measure
+// and breakdown. Built from every drawing asked for each level alone.
+function levelRule(topic: UsageTopic, drawing: Array<{ merged: Record<string, unknown>; drawn: Record<string, unknown> }>, rules: Rule[]): Rule {
+  const catalog = analysisCatalogs[topic]!, givens = presents(topic) ? [["metric", "split"]] : [["display"], ["share"], ["metric", "split"]];
+  const context = (item: typeof drawing[number], name: string) => key(rules.some(rule => rule.option === name) ? item.drawn[name] : item.merged[name]);
+  const allowed = givens.map(() => ({} as Record<string, unknown>));
+  for (const item of drawing) for (const level of percentileLevels) {
+    const drawn = (normalizeAnalysis(catalog, { ...item.merged, percentiles: [level] } as AnalysisState) as ResolvedAnalysis).percentiles;
+    if (!drawn.includes(level)) continue;
+    givens.forEach((given, index) => nest(allowed[index], ["all", ...given.map(name => context(item, name))], leaf => (leaf as Scalar[] | undefined)?.includes(level) ? leaf : [...(leaf as Scalar[] ?? []), level]));
+  }
+  const rule: Rule = { option: "percentiles", list: true, constraints: givens.map((given, index) => ({ given, allowed: allowed[index].all ?? [] })) };
+  // Keep a constraint only where it removes a level somewhere.
+  rule.constraints = rule.constraints.filter(constraint => drawing.some(item => percentileLevels.some(level => !((lookup(constraint.allowed, constraint.given.map(name => context(item, name))) as Scalar[] | undefined)?.includes(level) ?? false))));
+  return rule;
 }
 
 // The integer range validAnalysisState accepts for one setting.
@@ -370,15 +431,16 @@ function numericOptions(topic: UsageTopic, view: AnalysisView, base: Record<stri
 // positions older metrics used. Other older vocabulary is outside the map.
 function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
   const catalog = analysisCatalogs[topic]!, base = { ...dashboardDefaults[topic], v: analysisVersion } as Record<string, unknown>;
-  if (!catalog.legacy) return {};
   const probes = new Map<string, unknown[]>();
   const add = (key: string, value: unknown) => { if (!probes.has(key)) probes.set(key, []); if (!probes.get(key)!.some(item => json(item) === json(value))) probes.get(key)!.push(value); };
   for (const recipe of queryRecipes) if (recipe.destination?.topic === topic) for (const [key, value] of Object.entries(recipe.destination.chart)) add(key, value);
   for (let position = 0; position < Object.keys(catalog.measures).length; position++) add("metric", position);
   for (const [key, values] of Object.entries(catalog.legacyValues ?? {})) for (const value of values) add(key, value);
+  // The engine's own older name: norm, the single reference line.
+  add("norm", true); add("norm", false);
   const names: LegacyName[] = [];
   for (const [key, values] of probes) for (const value of values) {
-    const state = { ...base, [key]: value }, read = catalog.legacy(state as AnalysisState) as Record<string, unknown>;
+    const state = { ...base, [key]: value }, read = canonicalState(catalog, state as AnalysisState) as Record<string, unknown>;
     const set = Object.fromEntries(Object.keys({ ...state, ...read }).filter(name => json(read[name]) !== json(state[name])).map(name => [name, read[name]]));
     if (Object.keys(set).length) names.push({ key, value, set });
   }
@@ -409,6 +471,7 @@ function dashboardFacts(topic: UsageTopic) {
 const optionLabels = {
   view: Object.fromEntries(allAnalysisViews),
   reduce: Object.fromEntries(analysisReductions),
+  percentiles: Object.fromEntries(percentileLevels.map(level => [level, percentileLabel(level)])),
   window: Object.fromEntries(chartRanges.filter(([range]) => range !== "today").map(([range, label]) => [String(rangeDays(range)), range === "1d" ? "1 day" : label])),
 };
 
@@ -785,7 +848,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     excluded: { legacy_routes: legacyRoutes, params: ["ask_chat", "token", "fresh"] },
     windows: { days: rollingWindowDays, dashboard: dashboardWindows, analyze_days: analyzeDays, analyze_days_default: readUsageWorkspace(new URLSearchParams()).days, labels: optionLabels.window, tables: windowTables, ...windowTemplates() },
     analyze: {
-      version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce },
+      version: analysisVersion, fill_defaults: fillDefaults, absent, fallback: viaFallback, labels: { view: optionLabels.view, reduce: optionLabels.reduce, percentiles: optionLabels.percentiles },
       options: { period: Object.keys(chartPeriods), display: analysisDisplays, scale: chartScales, rollingOp: rollingOps, compareAs: compareModes, cycle: analysisCycles, split_none: noSplit, unit_records: records },
       dashboards,
     },
