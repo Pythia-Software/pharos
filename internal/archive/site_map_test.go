@@ -704,6 +704,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"timeline_visibility":{"modes":{"values":["C.report.finding","?"],"excluded":false},"events":{"values":["friction"],"excluded":true},"tools":{"values":["error"],"excluded":true},"origins":{"values":["typed"],"excluded":false}}}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {
@@ -968,6 +969,51 @@ func TestSiteLinkJSONInspectionsAndDetailTargets(t *testing.T) {
 
 func TestSiteLinkNativeValidationAndComposition(t *testing.T) {
 	site := testSiteMap(t)
+	visibilityData, err := os.ReadFile(filepath.Join("..", "..", "testdata", "timeline-visibility-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visibilityCases []struct {
+		Name  string
+		State any
+		Valid bool
+	}
+	if err := json.Unmarshal(visibilityData, &visibilityCases); err != nil {
+		t.Fatal(err)
+	}
+	checkVisibility := func(t *testing.T, value any, valid bool) {
+		t.Helper()
+		args := map[string]any{"page": "work", "options": map[string]any{"work_id": "w"}, "view": map[string]any{"timeline_visibility": value}}
+		result, err := site.linkTool(args)
+		if (err == nil) != valid {
+			t.Fatalf("structured arguments: valid=%v: %v", valid, err)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = site.linkTool(map[string]any{"url": "/work/w?timeline_visibility=" + url.QueryEscape(string(raw))})
+		if (err == nil) != valid {
+			t.Fatalf("URL arguments: valid=%v: %v", valid, err)
+		}
+		if valid {
+			roundTrip(t, site, "timeline visibility", result["url"].(string))
+		}
+	}
+	for _, sample := range visibilityCases {
+		t.Run("timeline visibility "+sample.Name, func(t *testing.T) {
+			checkVisibility(t, sample.State, sample.Valid)
+		})
+	}
+	for _, count := range []int{1000, 1001} {
+		t.Run(fmt.Sprintf("timeline visibility %d values", count), func(t *testing.T) {
+			values := make([]string, count)
+			for i := range values {
+				values[i] = "?"
+			}
+			checkVisibility(t, map[string]any{"modes": map[string]any{"values": values, "excluded": false}}, count <= 1000)
+		})
+	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "search-draft-cases.json"))
 	if err != nil {
 		t.Fatal(err)

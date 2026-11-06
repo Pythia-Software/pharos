@@ -8,7 +8,7 @@ import { initialThinking, isThinkingTopic, orderThinkingGroups, thinkingFixedOrd
 import { gridTicks, type GridCover } from "./grid-cover";
 import { periodLabel as chartPeriodLabel } from "./chart-period";
 
-// Waiting and Compaction's and Thinking's charts as Home cards. The page's
+// Waiting's and Thinking's charts as Home cards. The page's
 // address (its thinking view and analyze_filters population) is the card
 // definition, as for any dashboard card. Thinking's grids (time of day, the
 // comparison heatmap, distributions over time) draw from the page's own
@@ -19,8 +19,8 @@ export const thinkingCardTargets = ["thinking-waits", "thinking-compactions", "t
 export type ThinkingCardTarget = typeof thinkingCardTargets[number];
 export const isThinkingCardTarget = (target: string): target is ThinkingCardTarget => (thinkingCardTargets as readonly string[]).includes(target);
 
-// Waiting and Compaction offers its waits and compactions; Thinking its comparison.
-export const thinkingTopicTargets = (topic: string): ThinkingCardTarget[] => topic === "thinking-overview" ? ["thinking-waits", "thinking-compactions"] : ["thinking-distributions"];
+// Waiting offers its wait distribution; legacy compaction cards remain readable.
+export const thinkingTopicTargets = (topic: string): ThinkingCardTarget[] => topic === "thinking-overview" ? ["thinking-waits"] : ["thinking-distributions"];
 
 export function isThinkingCardAddress(address: string): boolean {
   return isThinkingTopic(new URL(address, location.origin).searchParams.get("analyze_topic") ?? "");
@@ -53,7 +53,7 @@ export function thinkingCardRecipe(target: ThinkingCardTarget, state: ThinkingSt
   return { ...card, measures: card.measures.map(measure => measure.distribution?.kind === "box" ? { ...measure, display: { ...measure.display, kind: "box", xScale: { mode: "log" }, xLabel: card.unit } } : measure) };
 }
 function thinkingCardMeasures(target: ThinkingCardTarget, state: ThinkingState): QueryRecipe {
-  // Waiting and Compaction's curves are per model; a card draws a box for each.
+  // Waiting's curves are per model; a card draws a box for each.
   if (target === "thinking-waits") return waitBoxes(["model"], "Wait by model");
   if (target === "thinking-compactions") return recipe("thinking-compactions");
   // Exact quantiles of a whole library exceed the service's budget, so

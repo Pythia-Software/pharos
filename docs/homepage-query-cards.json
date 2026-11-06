@@ -20782,6 +20782,59 @@
       }
     },
     {
+      "id": "compactions-by-trigger",
+      "title": "Context compactions by trigger",
+      "description": "Recorded context compactions over the last {days} days, split by human, machine and unknown triggers.",
+      "dataset": "compactions",
+      "field": "occurred_at",
+      "category": "thinking",
+      "idea": "models-01",
+      "unit": "compactions",
+      "days": [
+        7,
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "compactions_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "trigger"
+          ],
+          "groupLimit": 10000,
+          "label": "Compactions by trigger"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "compactions_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300
+      },
+      "destination": {
+        "topic": "compaction",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "compactions",
+          "split": "trigger",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false
+        },
+        "dataset": "compactions",
+        "detailAction": "Explore Compaction"
+      },
+      "action": "Explore Compaction",
+      "note": "Counts recorded boundaries. Claude records manual or automatic triggers; Codex attribution is inferred from turn position. Unknown triggers remain visible. Replayed Codex boundaries are excluded."
+    },
+    {
       "id": "message-labels-trend",
       "title": "Message labels over time",
       "description": "Stored message labels over the last {days} days.",
@@ -21442,8 +21495,8 @@
         "overview": true,
         "state": {}
       },
-      "action": "Explore Waiting and Compaction",
-      "note": "Same request population as Waiting and Compaction, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency."
+      "action": "Explore Waiting",
+      "note": "Same request population as Waiting, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency."
     },
     {
       "dataset": "model_requests",
@@ -21457,6 +21510,7 @@
       "idea": "models-01",
       "unit": "compactions",
       "id": "thinking-compactions",
+      "retired": true,
       "title": "Context compactions",
       "description": "Requests that follow a context compaction, day by day by model, over the last {days} days.",
       "where": [
@@ -21493,8 +21547,8 @@
         "open": "thinking:conversation",
         "coverWhere": true
       },
-      "action": "Explore Waiting and Compaction",
-      "note": "One compaction is a request whose stream compacted its context since the previous request. Waiting and Compaction pairs the waits, context and output before and after each compaction within one stream, model and effort."
+      "action": "Explore Waiting",
+      "note": "Legacy request-based proxy: one request whose stream compacted since the previous request. The Compaction dashboard counts boundary events directly, including multiple boundaries between requests."
     },
     {
       "dataset": "model_requests",
@@ -21661,7 +21715,7 @@
         "state": {},
         "open": "thinking:coverage"
       },
-      "action": "Explore Waiting and Compaction",
+      "action": "Explore Waiting",
       "note": "Includes missing timestamps, stale anchors, cross-stream links and excluded durations. The overview explains how timing is reconstructed and provides source-specific validation."
     },
     {
