@@ -24,6 +24,7 @@ export function conversationRowURL(row: Row, message?: unknown, at?: unknown, ca
 export function primaryUsageSource(dataset: UsageDataset, row: Row) {
   if (dataset === "parallelism" && !identifier(row.conversation_id) && identifier(row.location)) return queryURL("library", { ...EMPTY_QUERY, orderBy: [{ field: "activity_at", dir: "desc" }], where: [{ field: "location", op: "=", value: row.location }] });
   if (dataset === "writing") return conversationRowURL({ workspace_id: row.id });
+  if(dataset === "people_message_labels") return conversationRowURL({workspace_id:row.source_workspace_id,conversation_id:row.source_conversation_id},row.message_id);
   const message = dataset === "writing_messages" ? row.id : dataset === "tool_calls" ? row.call_message_id : dataset === "skill_usages" ? row.evidence_message_id : row.message_id;
   const at = dataset === "model_requests" ? row.requested_at : dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : dataset === "skill_usages" ? row.created_at : row.started_at;
   return conversationRowURL(row, message, at, dataset === "tool_calls" ? row.call_id : undefined);
@@ -65,6 +66,9 @@ export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URL
 // Order is intentional: content/evidence first, then measures and provenance.
 // All other fields remain available in the native property picker.
 export const usageDetailFields: Record<UsageDataset, string[]> = {
+  people_message_labels:["source_links","title","sent_at","label","family","label_status","people_scope","message_id","repository_name"],
+  message_labels:["source_links","title","occurred_at","label","label_status","source","text","label_model","model","provider","kind","segment","subagent","labeled_at"],
+  compactions: ["source_links","occurred_at","trigger","trigger_evidence","provider","harness","model","repository_name","channel","machine_id","execution_machine_id"],
   model_requests: ["source_links","requested_at","model","effort","gap_seconds","timing_quality","tool_result_at","input_tokens","cache_read_input_tokens","output_tokens","reasoning_output_tokens","provider","harness","repository_name","machine"],
   tl1_attempts: ["source_links", "title", "project", "flavor", "configuration", "disposition", "started_at", "duration_ms", "cost_usd", "error_signature"],
   usage: ["source_links", "title", "first_usage_at", "last_usage_at", "repository_name", "model_effort", "session_kind", "total_tokens", "cost_usd", "price_status", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "cache_read_share", "attribution", "root_title", "energy_wh", "co2e_g", "carbon_tier"],
@@ -75,6 +79,7 @@ export const usageDetailFields: Record<UsageDataset, string[]> = {
   tools: ["channel", "machine_id", "execution_machine_id", "source_links", "tool_name", "command_name", "day", "repository_name", "model_effort", "session_kind", "source_kind", "provider", "tool_category", "command_category", "program", "subcommand", "mcp_server", "call_count", "error_count", "error_rate", "no_result_count", "rejected_count", "interrupted_count", "timeout_count", "truncated_count", "timed_count", "avg_duration_ms", "max_duration_ms", "result_tokens", "carried_tokens", "tool_cost_usd", "price_status"],
   mcp_calls: ["tool_name", "source_links", "called_at", "status", "arguments_json", "error_text", "query_source", "duration_ms", "result_count", "response_bytes", "estimated_output_tokens", "truncated"],
   skill_usages: ["channel", "machine_id", "execution_machine_id", "source_links", "skill_name", "skill_path", "evidence_type", "status", "content_bytes", "created_at", "tool_name", "title", "repository_name", "model_effort", "provider", "session_kind", "evidence_message_id", "body_message_id"],
+  rhythm: ["channel", "machine_id", "execution_machine_id", "source_links", "unit_label", "started_at", "actor", "initiator", "automation", "repository_name", "elapsed_hours", "active_hours", "messages", "typed_words", "turns", "peak_level", "provider", "model", "unit_id"],
   parallelism: ["channel", "machine_id", "execution_machine_id", "source_links", "unit_label", "started_at", "repository_name", "counting", "gap_minutes", "level", "repo_level", "unit_hours", "elapsed_hours", "repo_elapsed_hours", "parallel_elapsed_hours", "location", "provider", "model", "unit_id"],
   agent_events: ["source_links", "family", "sentence", "subject", "response", "source", "occurred_at", "title", "repository_name", "provider", "model", "probability", "event_model"],
   agent_event_messages: ["source_links", "occurred_at", "source", "events", "candidates", "title", "repository_name", "provider", "event_model"],

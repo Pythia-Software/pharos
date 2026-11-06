@@ -99,6 +99,20 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Check authoritative loads separately from cached tool features: an
+	// instruction backfill can change these without changing any call.
+	loadedRows, err := queryMapsContext(env.ctx, env.db, `SELECT i.conversation_id,MIN(NULLIF(i.first_seen_at,'')) loaded_at
+		FROM conversation_instructions i JOIN conversations c ON c.id=i.conversation_id
+		WHERE c.started_at>=? AND i.kind IN ('project','local','agents_md')
+		AND i.repo_path IN ('AGENTS.md','AGENTS.override.md','CLAUDE.md','GEMINI.md','.claude/CLAUDE.md')
+		GROUP BY i.conversation_id`, env.fromUTC)
+	if err != nil {
+		return nil, err
+	}
+	loadedAt := map[string]string{}
+	for _, row := range loadedRows {
+		loadedAt[firstString(row["conversation_id"])] = firstString(row["loaded_at"])
+	}
 	type hunt struct {
 		kind, file string
 		row        map[string]any
@@ -118,6 +132,12 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 			kind, file = instructionHunt(conv.Provider, firstString(row["tool_category"]), firstString(row["tool_name"]), firstString(row["program"]), firstString(row["command"]), firstString(row["file_path"]))
 		}
 		if kind == "" {
+			continue
+		}
+		// Inspecting instructions already in context is not evidence that
+		// the harness could not find them. A later load, a parent session's
+		// load, and unknown coverage do not rule out this session's hunt.
+		if at := loadedAt[firstString(row["conversation_id"])]; kind != "skill" && at != "" && at <= firstString(row["started_at"]) {
 			continue
 		}
 		hunts[root] = append(hunts[root], hunt{kind, file, row})

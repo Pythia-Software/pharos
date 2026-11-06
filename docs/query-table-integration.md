@@ -1,529 +1,108 @@
-# Query Table 0.9.9 in Pharos
-
-Pharos pins core, React, UI and codegen to the published npm **0.9.9** packages,
-and the Go adapter to the published **v0.9.9** module, with no replacement or
-local copy. The npm lockfile records registry URLs and integrities; `go.sum`
-records the released Go module. Clean builds use these pinned sources without
-another Query Table checkout.
-
-The [upstream inspection guide](https://github.com/Pythia-Software/query-table/blob/v0.9.8/docs/json-inspection-state.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.9/CHANGELOG.md)
-define the release contract. Optional worktree linking is described in
-[local development](query-table-local-development.md). The earlier
-[next-release handoff](query-table-next-release-handoff.md) is a historical record.
-
-## 0.9.9 changes
-
-0.9.9 changes only the Go SQLite backend; the npm packages are identical to
-0.9.8 apart from their versions. `ExecuteV2In` reduces box and histogram
-metrics of stored number fields from one shared native scan instead of sorting
-the population once per metric, and `ExecuteV2Rows` now computes them instead
-of returning `ErrRowsUnsupported`. Box means may differ from 0.9.8 by
-floating-point roundoff. Distributions of formulas or computed fields still use
-compiled plans, so Usage keeps its staged fallback for those. See the
-[upstream box and histogram guide](https://github.com/Pythia-Software/query-table/blob/v0.9.9/docs/backend-sqlite.md#box-plots-and-histograms).
-
-## 0.9.8 changes
-
-Native item property JSON inspectors now retain every inspection choice in `itemDetails.jsonInspections`. Pharos returns its custom JSON renderer directly so the published native property binding supplies controlled state and attention. The query surface passes one cancellable registry through native details; URL `detail:` reveal references load exact records/properties/paths, preserve focus and keep filters/pagination intact. See [URL view state](url-view-state.md) for the CLI contract, restoration tests and remaining upstream blockers.
-
-Core, React, UI, codegen and Go are pinned together; the completeness gate also checks codegen and the cross-language version. The [0.9.8 integration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.8/docs/json-inspection-state.md) defines the supported API.
-
-## 0.9.7 changes
-
-0.9.7 delivers every request in
-[the after-0.9.6 handoff](handoffs/query-table-after-0.9.6.md). This upgrade
-takes the type changes and the fixes that need no Pharos feature; the new
-capabilities are adopted in later changes.
-
-- **Where terms.** A term can be an OR of AND branches
-  (`{ any: [{ all: [a, b] }, c] }`). Pharos code that walks terms reads every
-  branch's predicates (`predicatesOf`) to find fields, describes the term as
-  "(a and b) or c", and rewrites it branch by branch or not at all
-  (`web/src/where-terms.ts`). Slice and category readers skip it, and the
-  message filter editor shows it as one removable condition. In Go, the SQL
-  dataset's WHERE, its indexed candidate source, the Machine Time matcher and
-  the map executor (`internal/querytable`) evaluate `WhereTerm.Branches()`.
-- **Grouping keys** are `GroupKey[]`; Pharos reads a key's column with
-  `groupKeyField`, and descriptions name a calendar key's interval.
-- **Minimums.** `AggSpec.MinCount` is a `MetricMinCount`. The native V2
-  reducer, the Machine Time cubes and the count-only fast path answer no
-  clause with an active minimum, so the adapter runs row, distinct and summed
-  minimums alike.
-- **Capabilities.** Pharos serves the library's own `Capabilities()` for V2
-  and V3, so it advertises `minCountMeasures`, `metricMinCountMeasures`,
-  `calendarCycles` and `calendarGroupKeys`.
-  `TestQueryV3RunsEveryAdvertisedShape` runs each over a SQL dataset and over
-  staged map rows. Host fast paths decline date grouping (cycles included),
-  calendar keys and minimums, so these shapes always reach the adapter.
-  Grouped Home previews pass `metricMinCountMeasures` to
-  `metricPopulationError`, as the library's own table does.
-- **Fixes taken as they are.** Chart label gutters, whole-key colours for
-  multi-key pies, bars and boxes, nearest-point picking on line and scatter
-  charts, fit-to-screen minimum widths for links and Detail and JSON buttons,
-  and the source-filter metadata flood. The browser suite's two 0.9.5
-  `KNOWN` entries are gone; its one entry is the open fit regression below.
-  Pharos keeps its metadata scheduler
-  (`web/src/query-metadata.ts`): the service runs one metadata scan at a time,
-  and keeping one request in flight stops waiting reads from holding HTTP/1
-  connections the rows need. The dashboard scatter still puts the breakdown
-  first, because scatter charts still colour by their first key.
-- **Host query state, grouped Detail and last-used persistence** are adopted;
-  see [usage query presentation](usage-query-presentation.md). Query Table
-  caps each host-state value at 4,000 characters, below the 28,000 (Analyze
-  keyword) and 24,000 (Search `text_builder`) Pharos accepted before, so older
-  links and saves with larger drafts no longer restore. `persistLast` covers
-  only the last-used query; Pharos still skips a failing default saved query
-  itself (`web/src/storage.ts`).
-- **Open regression.** Fitting floors a column at its whole cell content on
-  one line when the cell holds a link, so Analyze's wrapping title links keep
-  fitted tables wider than desktop viewports. The browser suite runs those
-  cases as todo through its `KNOWN` entry. See
-  [the fit handoff](handoffs/query-table-fit-wrapping-links.md).
-
-### Source proofs
-
-V2 executions over a SQL dataset that reach the adapter set
-`SQLiteV2Dataset.SourceGeneration` to `query_cache_generation`, read in the
-execution transaction, and share one `SQLiteSourceProofs` per catalog
-(`withSourceProofs`). Every write to a table a query reads advances that
-generation in its own transaction, so a proof describes exactly the snapshot
-that uses it. The first metric batch over a source in a generation proves its
-row count and integer bounds in one scan; later batches over the same source
-statement skip the per-row checks. Only metric requests set a generation; rows
-never use proofs. Query Table bounds a proof to the request's population and
-remembers a source too large to prove for the rest of the generation. Staged map
-copies are new in every request and are not proven. Query Table does not prove
-the tool ledger's joined source in practice: in an ad hoc experiment that pinned
-the generation, a stale proof was trusted for Human Words but not for tool
-calls (`TestAdapterMetricsFollowWritesBetweenRequests` covers Human Words with
-the real generation).
-
-`TestUsagePerformanceSQLHost` (`-tags probe`) times complete HTTP requests for
-Human Words' count and nine sums over 50,000 authored messages, with the host
-reducer (`nativeMetricsV2`) and through the adapter, within one generation
-(warm) and as the first request of a new one. Wall-clock medians of ten
-requests after a warmup, three process runs, on an Apple M3 Ultra (28 cores)
-under load average 7–15 from parallel work; responses were identical
-throughout:
-
-| Shape | Host reducer, warm | Host reducer, new generation | Adapter with proofs, warm | Adapter with proofs, new generation | Adapter without proofs |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Count and nine sums | 15.9 | 69.7 | 25.1 | 63.8 | 46.3 |
-| Grouped by day | 32.0 | 85.7 | 42.3 | 80.4 | 63.5 |
-| Grouped, filtered by provider | 33.7 | 88.1 | 43.8 | 94.1 | 65.0 |
-| Averages by day (host declines) | — | — | 47.1 | 86.1 | 68.9 |
-
-Milliseconds. Without proofs a new generation costs the adapter the same as a
-warm request (46.9, 63.9, 65.7 and 69.6 ms). `/query-v3` grouping does not use
-proofs and stayed at 53 ms.
-
-Generations advance in bursts. In the October 26–27 sync history, automatic
-syncs ran about every 5.5 minutes around the clock, each for about 25 seconds,
-and 185 of 193 wrote data; maintenance after a sync (authorship, rollups) writes
-again. A generation therefore lasts minutes, and the first request after each
-sync pays the proof.
-
-**Decision: `nativeMetricsV2` stays.** Within a generation the adapter is about
-10 ms (1.3–1.6×) behind it on these shapes; on a new generation the two cost
-the same, because the host reducer also rereads its bounds. Upstream's profile
-puts most of the remaining gap in Pharos's scratch lease and the adapter's
-compilation. Proofs are kept per source statement and arguments, so each
-projection and indexed window proves its own source once per generation, while
-the host's bounds cover a table's whole source and serve every filter. On this evidence the deletion is borderline and
-is left to a later decision. Proofs stay on for the adapter path: shapes the
-host declines, such as averages, run 1.5× faster warm and about 17–29 ms slower
-on a generation's first request, so proofs pay off from a source's second
-request in a generation.
-
-### Substring relations (measured, not adopted)
-
-0.9.7 lets a host give the SQLite executors a relation for a predicate. Pharos
-measured its trigram indexes over tool commands and authored text as exact
-relations for adapter V2 executions and `/query-v3`, in place of the host's
-narrowing of their sources, and kept the narrowing. `TestQueryTextPerformance`
-(`-tags probe`) times substring filters over 200,000 synthetic tool calls with
-60–500-byte commands: a selective needle (0.1% of calls), a broad one (14%) and
-the broad one negated. Wall-clock medians of ten requests after a warmup, two
-process runs each, alternating host narrowing (`15d7d34`) and relations on an
-Apple M3 Ultra under load average 7–14:
-
-| Request | Needle | Host narrowing | Relations |
-| --- | --- | ---: | ---: |
-| V2 count and average (adapter) | selective / broad / negated | 30 / 219 / 1,118 | 52 / 314 / 502 |
-| `/query-v3` grouping | selective / broad / negated | 32 / 343 / 1,810 | 52 / 407 / 1,292 |
-
-Milliseconds, mean of the two runs' medians. Rows and the host reducer use the
-host's own SQL and did not change.
-
-Relations made negated needles 1.4–2.2× faster but positive needles, the common
-case, 20–95 ms slower: in plain SQL the relation drives through the ID index in
-3 ms, while CPU profiles put the extra time in trigram phrase matching inside
-the adapter's population and reduction statements. They also removed no host
-code: the compile-only APIs never consult relations, so the indexed row window,
-`nativeMetricsV2`, the cube complement and record search's restricted source
-(`CompileSQLiteComputedRows`) still need the host's narrowing, and record search
-would have lost it. Revisit this when a release makes positive relations as
-cheap as narrowing inside the adapter.
-`TestQueryTextIndexesMatchTypedSubstringFilters` compares rows, adapter metrics
-(including a metric's own filter) and `/query-v3` groupings over narrowed
-sources with typed execution, ready and mid-backfill.
-
-## 0.9.6 changes
-
-The Go query-link codec (`EncodeQueryLink`, `DecodeQueryLink`) lets the
-[site map](site-map.md)'s link tools build and read links in Go. Metric
-windows, shares and whole intervals, and `--qt-touch-target-scale`, are
-available; Pharos keeps its own trend smoothing.
-
-## 0.9.5 changes
-
-Distinct filter values now open in a content-sized combobox menu independently
-of the compact filter input. Long names wrap and long lists scroll within the
-viewport, including in mobile filter dialogs. Freeform entry, pointer/keyboard
-selection and input focus are preserved, and stale suggestions are discarded.
-This resolves the [filter value menu handoff](handoffs/query-table-filter-value-menu.md).
-
-## 0.9.4 changes
-
-Ordinary V3 execution now owns eligible direct SQLite grouping and its exact
-fallback. Pharos passes the authorized narrow source and original request to
-`QueryDatasetV3.ExecuteIn`. The general `nativeGroupedRows` pre-reducer, its
-synthetic source rows/schema fields, MAX summary rewrites and source-total
-correction have been removed. Group identities, HAVING, ordering, paging,
-source budgets and result metrics remain library-owned. Source filters still
-select the full population before result paging.
-
-The frontend transport implements modern V2/V3 rows without legacy `fetchRows`.
-Computed-column previews negotiate those methods in Query Table. Library
-**Select all** prefers negotiated V3 with the execution schema and computed
-handshake, preserving canonical computed predicates and sorting even though the
-table catalogue describes those fields as derived. V2 is a fallback for
-V2-only transports; it cannot execute computed filters under Pharos's policy.
-Selection requests identities from offset zero and validates the response's
-schema, execution context and computed revisions.
-It rejects incomplete or oversized results before replacing the selection and
-shows failures in the toolbar. The legacy HTTP row routes remain available for
-older clients; current tables, previews and selection no longer need them.
-
-The synthetic HTTP probe at this upgrade measured ordinary V3 at 66 ms versus
-45 ms with the former host pre-reducer, with complete response parity. This
-trades about 22 ms on that 50,000-row fixture for removing the custom execution
-path. V2 measured 49–77 ms through the adapter versus 16–33 ms through
-Pharos's cached reducer at that release; see [source proofs](#source-proofs)
-for the current comparison. These are local warm medians, not production or
-concurrent-dashboard guarantees. See
-[the release's direct grouping contract](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/sqlite-direct-groups.md)
-and [preview migration](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/computed-columns.md#modern-row-transports).
-
-The existing scratch lease/connection policy is a separate host migration,
-tracked in [the schema-reload handoff](handoffs/query-table-schema-reload.md).
-
-## 0.9.3 changes
-
-SQLite V2 batches now fuse compatible scalar reductions across different
-fields. Guarded integer reductions can read resolved stored-column sources
-directly; unsupported storage and numeric domains retain exact decimal
-execution. Metric predicates, scopes, errors, sorting and budgets stay
-independent. This supplies QT-14's library capability without changing Pharos's
-requests.
-
-The release also qualifies scratch-table cleanup, handles interrupted creation,
-and returns V3 cleanup errors before reporting success. Successful caller-owned
-V2/V3 transactions may be committed after adapter cleanup; failures must roll
-back. Pharos still needs to drop its own staging tables and change its lease
-and connection policy before adopting that lifecycle. At that release there was
-no direct V3 grouping path.
-
-See the [manual-interventions audit](handoffs/query-table-manual-interventions.md)
-for host parity/timing results and the remaining removal decisions, and the
-[upstream performance/lifecycle guide](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/sqlite-performance-handoff.md)
-for the supported contract. Both general host SQL reducers remained enabled in
-0.9.3; 0.9.4 removes the V3 pre-reducer as described above.
-
-## 0.9.1 and 0.9.2 changes
-
-- **0.9.1** accepts an explicit host group budget up to 100,000 in SQLite V2
-  and V3. Usage opts into it; other datasets keep their budgets. It was the
-  last change Pharos patched locally, so the vendored backend, its Go
-  replacement and its fork test script are gone.
-- **0.9.2** speeds up `ExecuteV2Rows` (typed group keys, decimal sums by
-  scale). Usage answers its metrics with it, filtered or not, and selects its
-  hourly rows with `CompileRowFilter`; see `usageMetricsInMemory` and
-  `selectUsageHours`. On `TestUsagePerformanceFilteredMetrics` (20,000 daily
-  and 60,000 hourly synthetic rows, `-tags probe`) the Token summary takes
-  about 8 ms unfiltered and 3–11 ms filtered, against about 115–200 ms staged.
-  0.9.2's frontend packages also compute `shownRows` metrics from the
-  browser page when a transport lacks them; Pharos advertises native
-  `shownRows`, so its routes are unchanged.
-
-## 0.9.0 backend changes
-
-The release supplies representative-row reuse, validated staged values and
-error sidecars, fused scalar SQLite V3 summaries, and bounded native projection
-inlining that preserves expensive input evaluation and V2 reduction reuse.
-Pharos no longer carries its implementations of those four optimizations.
-The release also adds `ExecuteV2Rows` for metrics over authorized maps, which
-replaced Pharos's own in-memory Usage reducer. Pharos's native SQL path for
-plain counts and sums over SQL datasets remains host code.
-
-## 0.8.0 feature coverage
-
-| Release feature | Pharos integration |
-| --- | --- |
-| Group link columns (`op: "link"`), `linkTargets`, `onNavigate` | Every table's `DataTable` registers each dataset as a link target (`web/src/query-link-targets.ts`, built on `queryURL`), so template and query links, including those in saved or shared queries, open the right page. Plain clicks route through `pharosNavigate` without reloading; modified clicks keep native behavior. The Usage **Work** preset links each title to `/work/{workspace_id}`. |
-| Query patches (`applyPatch`, `matchPatch`, `removePatch`) | Usage **Group by** and **Compare** presets are patches that own grouping, columns and order. Highlighting matches a preset's grouping while ignoring HAVING, sorting, paging and layout edits. Link destinations can also carry patches. |
-| Per-metric `where` and `minCount`, `hiddenGroups` | The Go adapter advertises and executes both on v2 metrics and v3 queries for every dataset. Pharos's host paths honor them: the tool-call count fast path steps aside for filtered metrics, map-backed staging includes metric filter fields, and Usage metrics filtered on `hour` read hourly populations. Home cards check the advertised flags, note hidden groups, and never present a total when groups are hidden. |
-| Per-metric errors | One failing metric no longer fails its batch. Pharos discovers each metric's inputs separately, so an invalid metric cannot fail its siblings' staging or the Usage hourly split. |
-| Metric drilldown (`onInspect`, `inspectBucketQuery`, `groupSourceQuery`) | Clicking a metric bar, list row, value, box cohort or histogram bin filters the table to those records, including the metric's own filter. A grouped row's **Records** action uses `groupSourceQuery` with computed fields, and is disabled when a key cannot be matched exactly. |
-| `withGroupingKeys` and `exitGrouping` | The Usage **Rows** chip uses `exitGrouping`; presets enter and re-key grouping through `applyPatch`. |
-| Summary column `display`, metric formats from cell displays | The Usage cache rate is a fraction with a percent display. Pharos's render fallbacks for grouped summaries only apply when a summary has no display. Links saved before this change keep their 0–100 rendering. |
-| `SelectColumn.display` and `{ kind: "text", lines }` | Available from the standard column editor; Pharos never rewrites `select`, so overrides round-trip through links, saved queries and bookmarks. Schemas keep their existing defaults. |
-| Scalar set filters on `enum` fields | Every enum field with static options opts in to `filter.editor: "set"` (ANY / NONE, keeping empty rows). The Go loader ignores the editor hint; predicates are unchanged. |
-| `useQueryFilters` | Not needed: Pharos's record search editors edit a draft and apply it on submit. |
-| `URL_ENCODE`, clearer formula errors, large-text and calendar fixes | Supplied by the packages. The Go SQLite profile rejects `URL_ENCODE`, like other text functions, so it is browser-only. |
-
-## Earlier release features
-
-| Release feature | Pharos integration |
-| --- | --- |
-| Server grouping, HAVING, summaries, MEDIAN and representative rows | Every backend dataset negotiates V3; Usage presets and Home comparison tables use it. Source actions remain available through Records. |
-| Calendar intervals, IANA timezones, empty buckets and explicit ranges | Standard metric workbench and Home previews execute on the server, with dependency, population and scratch budgets. Daily Usage facts retain their daily granularity. |
-| Canonical computed source predicates, grouping and partial capabilities | Capability discovery uses `DescribeComputedPartialIn` on the V3 dataset; invalid graphs stay editable with per-definition diagnostics. V2 save validation uses the same partial API in a host transaction. Catalogues over 64 definitions are described in bounded batches. |
-| Independent collection URL parameters and explicit router lifecycle | Every table supplies top-level `queryParameter`; `pharos:route` calls `restoreLocation`. `restoration.ready` gates host query work and `active` pauses hidden tables. |
-| Compressed links, immutable snapshots and actionable HTTP failures | Save, Share, Bookmark and Home collections promote durable links. Snapshots use exported validation and `ResolveIn`/`SaveIn` inside the catalog's serialized quota transaction. The frontend preserves typed quota/access/conflict errors and leaves previous saves intact on failure. |
-| Item modals, popovers, expansions, property layouts and relationships | Complete item loaders, library-backed property preferences and authorized reference batches are enabled. Synthetic group identities never load source items. |
-| Configurable cell displays and searchable JSON inspectors | Standard table/column/property editors expose the release controls; MCP arguments use JSON display. |
-| Compact covers, visible limits, Other remainders, label wrapping and underline lists | Home covers use native `MetricView`/`MetricsCards` display options while destination queries retain their full results. |
-| Shared editor panels, menus, column-role themes and fit-to-screen persistence | The published UI components and theme supply these controls. Pharos sets role colors for light/dark appearances. |
-| SQLite metric reuse, reduction fusion, indexed windows and exact reductions | The released Go adapter supplies these optimizations; host source planning, connection leases and regression/benchmark fixtures remain in place. |
-
-The release's DuckDB backend, PostgreSQL adapter, standalone public demo and
-saved-query prototype are alternative integrations and examples. Pharos uses its
-existing SQLite catalog and library-backed saved-query UI; the standard
-`QueryBuilder` already provides Save/Update/Default actions. The optional
-`savedQueryControls` slot is available for a future custom presentation.
-
-## Schemas and build
-
-Every dataset uses its canonical JSON document in `schemas/`. The map-backed `parallelism` (estimated agent concurrency by local hour) and `findings` (one row per finding, from the Findings view) datasets back the Home cards for those areas; Usage rows also carry Carbon Impact estimates computed with the saved settings. Explicit
-`bindings.sqlite` bind to stable `r` column aliases owned by Pharos. Numeric
-formula fields opt into `expressionNumeric`; numeric/datetime grouping is
-explicit. Tool-call cost fields remain unbound because pricing requires host
-row enrichment and is not an SQL metric input.
-
-`web/generate-schemas.mjs` runs the upstream SQLite Go generator, formats its
-output, and copies the same JSON into the embedded frontend assets. Generated
-Go files are checked in. After editing a schema:
-
-```sh
-cd web
-npm ci --no-audit --no-fund
-npm run generate-schemas
-npm run check-schemas
-npm run typecheck
-npm test
-npm run build
-npm run check-bundle
-```
-
-The macOS build also generates schemas before bundling. Go schema tests compare
-every generated schema with the runtime SQLite loader.
-
-## HTTP and computation
-
-Legacy `/api/query/{dataset}`, `/distinct`, and `/field-stats` retain the v1
-contract and Pharos's optimized sources/rollups. V1 decoders reject v2-only
-settings; row bodies reject trailing JSON. Signed datetime operands now share
-the upstream duration grammar and one execution clock. The legacy
-`/aggregations` route was removed: it answers 410 Gone, telling a page loaded
-before an upgrade to reload. Every metric goes through `/metrics` or
-`/query-v3`.
-
-`/metrics` answers some requests itself, in the same result shape and with
-the adapter's values, and passes everything else to the adapter:
-
-- **Bare counts** of Tool calls come from the rollup (`countOnlyMetricsV2`).
-- **Machine Time's cubes** (calls, timed calls and total duration by
-  repository, activity, status and operation, and separately by day or month
-  and status) come from the cached tool-cube projection
-  (`machineTimeMetricsV2`), with a 50,000-group budget per metric, so months
-  of calls need not be read one by one. The page never crosses days with
-  operations, so a longer period adds few groups: on a library of a million
-  calls in October 2026 the largest cube had about 12,000 groups over 90 days
-  and 20,000 over all time.
-- **Plain integer counts and sums** grouped by text fields (`nativeMetricsV2`)
-  share one guarded SQL reduction and generation-scoped bounds/count caches.
-  Unsupported shapes and storage retain ordinary adapter execution, with
-  per-generation source proofs. Within a generation the host reducer is still
-  about 10 ms ahead of the adapter; see [source proofs](#source-proofs).
-- **Usage metrics** run through Query Table's `ExecuteV2Rows` over authorized
-  daily/hourly row maps, retaining exact decimal arithmetic without SQL staging.
-
-These run in a plain read transaction; requests the adapter executes lease
-memory-backed temporary storage. Usage's V2 metric group budget is 100,000,
-as V3's is; Tool summary keeps 10,000, and other datasets keep 2,000.
-
-V2 adds:
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/query/{dataset}/capabilities` | SQLite metric capabilities and current canonical computed execution envelope |
-| `POST /api/query/{dataset}/rows-v2` | Typed rows, computed projections and sorts, revision checks |
-| `POST /api/query/{dataset}/metrics` | Scalar formulas, paired X/Y, multi-key groups, top-N, MEDIAN, boxes/histograms |
-| `GET/PUT /api/query-computed-columns?dataset=pharos_{dataset}` | Canonical computed definitions with optimistic revisions |
-
-Metric batches return per-metric errors: a metric that exceeds a budget or
-fails to compile gets its own `error` with empty buckets while its siblings and
-the rows still return. Request-level problems (malformed bodies, stale
-revisions, cancellation) still fail the request.
-
-V3 adds `POST /api/query/{dataset}/query-v3` for grouped rows and calendar
-metrics across every supported dataset. `/capabilities` negotiates its profile
-and budgets. Source WHERE runs before summaries; result WHERE is HAVING, followed
-by result sorting/paging and metrics. Group rows have stable synthetic identities
-and retain enum/boolean/datetime types. Canonical computed predicates and summary
-inputs are resolved against the authorized store and revision envelope. The
-frontend uses V3 when grouping, calendar buckets or computed predicates require
-it; ordinary pages and metrics keep their existing V2 execution path.
-
-V3 allows 10 million matching source rows, 512 MiB of narrow staging, 10,000
-groups (100,000 for Usage) and 10,000 shown rows, with a 30-second deadline. Incomplete searches,
-invalid values, cancelled requests and exceeded budgets return errors rather
-than partial groups. The old 10,000-row browser population cap does not apply.
-See `query-table-local-development.md` for release builds and optional local links.
-
-These endpoints use Pharos authentication and same-origin checks. The computed
-DDL is additive and runs during catalog initialization. A computed save runs in
-one transaction, validates the edited definition's transitive graph, and preserves
-every previously valid definition. Invalid formulas, missing dependencies,
-cycles, and stale edits cannot introduce new broken definitions. If schema drift
-invalidates stored formulas, capabilities report per-definition diagnostics and
-advertise only valid graphs; the full catalogue remains available for repair,
-including one-at-a-time repairs of unrelated failures. V2 resolves canonical
-definitions and checks
-transitive revisions in the same transaction as execution. No signed plan token
-or retained cross-request snapshot is advertised.
-
-The browser loads the canonical store and capability handshake, passes both to
-`useQueryTable`, and exposes the expanded metric workbench and computed
-catalogue. Saves refresh capabilities before publishing the new local definition
-so the next request uses its current execution revision. Library v2 requests
-retain keyword match summaries/hits and semantic
-search explanations.
-
-Home previews use the same v2 capability handshake, canonical computed revisions,
-row projection and metric execution. Compatible cards share requests of up to
-20 metrics, with three concurrent workers, cancellation and a one-minute result
-cache. Library search context and shown-row paging remain part of the population.
-Native metric covers retain the full dashboard results; a bookmark's optional
-`coverMetricId` changes only its cover, while its URL opens every saved metric.
-Rates, distinct counts and distribution medians are not added into totals.
-
-Scalar `MEDIAN` is supported in both the browser core and the Go SQLite profile.
-Home comparison recipes use it directly; native box distributions expose exact
-quartiles and spread. Arbitrary scalar percentiles such as p95 remain unavailable.
-
-## Sources, limits, and performance
-
-SQL datasets preserve Pharos's trusted joins, pricing boundary, and exclusion
-of mirrored tool work. Command-search candidates use the existing trigram index;
-day/week/month equality can use indexed timestamp bounds. The full upstream
-predicate still checks candidates. A separate, complete substring index
-answers supported ASCII `contains` predicates of at least three characters
-exactly. Sources narrow by it, and the host's own row window, reducer and cube
-complement drop an exact term from their residual filter; Query Table's
-predicate relations were measured and not adopted
-([substring relations](#substring-relations-measured-not-adopted)). Other text
-operators, short or non-ASCII needles
-and incomplete indexes retain the ordinary predicate, and an OR uses the index
-only when every branch has it.
-
-Tool calls also have a narrow, transactionally maintained fact projection for
-identity, timing, activity, category, provider, and local calendar. Eligible
-counts and integer grouped summaries reduce these facts before staging and
-return compact groups to the adapter for identities, HAVING, ordering, paging,
-and result metrics. Fresh cube counts and supported text-complement reductions
-use the same read snapshot. Unsupported shapes retain general execution.
-See [Usage audit repairs](usage-audit-repairs.md) and the
-[upstream handoff](usage-query-upstream-handoff.md) for exactness boundaries and
-parity tests. Filter suggestions share a small host metadata queue, so they
-cannot fill the browser's connections ahead of foreground data requests.
-
-SQL timestamps bound as `utc-millis` must be ingested as fixed-width canonical
-UTC milliseconds. Those fields and trusted text IDs keep raw BINARY ordering so
-SQLite can use indexes before LIMIT. Selected fields and consumed formula
-inputs retain their storage/domain checks. Other datetime bindings normalize
-RFC3339 values.
-
-Map sources retain host enrichment/search and stage one temporary table per
-request; Usage metrics are the exception, answered from its rows in memory
-unless the executor reports a shape unsupported. Library stages only referenced selections, filters, ordering, metric
-inputs and transitive computed inputs, plus its identity field. Population reads
-retain the compact cache and add long text and costs only when referenced;
-unused payloads stay out of staging when an earlier request has widened the
-shared cache. Page
-enrichment still supplies the complete display row. The executor leases a
-connection, selects `temp_store=MEMORY` for the
-bounded request, and restores its previous setting before returning it to the
-pool. Temporary tables are rolled back; host page enrichment happens after the
-connection is released. Large text values and many concurrent requests still
-increase memory usage; the row caps are not a byte-level memory guarantee.
-
-V2 limits fail explicitly rather than returning approximate populations:
-
-- 20 metrics per batch; 10,000 shown rows; 2,000 result groups before top-N.
-- 250,000 matching rows by default; covered raw tool metrics allow 2 million.
-  Indexed SQL row windows allow 10 million matches while validating selected
-  values/computed inputs on the bounded page. Map staging retains 250,000.
-- A 30-second request deadline; row/metric bodies capped at 1 MB.
-- Adapter sample budgets: exact median and box populations are bounded; see the
-  upstream guide and diagnostics for per-group limits.
-
-Identical metric plans reuse results with independent mutable payloads.
-Different scalar formulas can share identical reductions; compatible reductions
-with identical validated input stages and grouping are combined in one scan.
-Reuse stays inside the authorized transaction. Distribution samples/edges keep
-the upstream execution path and exact semantics.
-
-Usage table rows remain daily. Metrics referencing `hour`, including through
-computed dependencies, use hourly ledger populations. Daily thresholds select
-days before hourly time bounds. `shownRows` hourly metrics expand only the
-selected daily page into its matching hours; their `processedRows` reports the
-expanded hourly population. Hour filters on row requests return the selected
-daily rows. Preparation/enrichment works with a one-connection pool.
-
-## Verification
-
-Run the release integration checks:
-
-```sh
-GOWORK=off go test ./...
-GOWORK=off go vet ./...
-go test -race ./internal/archive ./internal/querytable \
-  -run 'TestGeneratedQuerySchemas|TestQueryV2|TestRelativeDatetimeMapFiltering|TestLibraryQueryTableCombinesKeywordSearchWithFilters'
-go test ./internal/archive -run '^$' \
-  -bench 'BenchmarkQueryTableV2|BenchmarkPharosToolLedgerV2' \
-  -benchtime=1x -count=1 -benchmem
-```
-
-The upstream `backends/sqlite-tests` real-SQLite suite was also run with the
-race detector and vet against the module then patched. Integration coverage includes
-typed rows and every bound numeric SUM across the dataset schemas, aggregate/formula
-matrices, paired values, distribution sidecars/shared histogram edges, computed
-graphs/revisions, scope/window/order parity, storage guards, population/group
-budgets, cancellation, indexed candidates, auth/CSRF, and temporary cleanup.
-
-Synthetic and joined tool-ledger stress workloads use 10,000, 100,000, and
-250,000 rows. They include integer/fractional reductions, ratios, MEDIAN, boxes,
-histograms, indexed shown rows, twenty identical metrics, twenty distinct
-formulas, and twenty mixed metrics. Measurements and remaining optimization
-requests are in the upstream handoff. These are local stress measurements,
-not production latency guarantees. The earlier upgrade measurements are retained in the historical handoff;
-release validation uses the published packages and the checked-in browser fixtures.
-
-The production-data pass and its remaining 500 ms misses are documented in
-[query-performance.md](query-performance.md). `tools/query-bench.py` retains
-request fixtures, HTTP timings, diagnostics and result digests for repeatable
-comparisons. Small V3 summary/map populations use leased memory scratch storage;
-raw payload populations retain disk spill and the existing byte budget.
+# Query Table 1.0.0 in Pharos
+
+Pharos pins core, React, UI and codegen to the published npm **1.0.0** packages,
+and the Go backend to **v1.0.0**. The lockfile and `go.sum` record the released
+sources. There are no vendored copies, module replacements, package patches or
+build-time source rewrites. Optional upstream worktree linking is described in
+[local development](query-table-local-development.md); ordinary builds need no
+Query Table checkout.
+
+The [1.0.0 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.0),
+[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.0/docs/wire-protocol.md)
+and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.0/docs/errors.md)
+define the integration.
+
+## V3 execution
+
+`GET /api/query/:dataset/capabilities` supplies `queryCapabilities` from
+`QueryDatasetV3.Capabilities()` and the canonical `computedExecution` handshake.
+Every current table, chart, card preview, contribution evidence read, event
+example, filter suggestion, field statistic and identity lookup uses
+`POST /api/query/:dataset/query-v3`.
+
+The native React transport implements only `queryCapabilities` and
+`fetchQueryV3`. Native auxiliary requests use the released V3 builders. Host
+identity lookups use `fetchRowV3` against the source schema and omit collection
+searches; Tool Call inspection separately enriches its bounded payload from the
+existing domain detail endpoint. Standalone row readers use the same V3 wire
+stage. Preview batches retain metric identities, computed revisions and host
+search state, and validate the returned V3 envelope.
+
+The handler uses `DecodeQueryRequestV3`, so the evaluation clock and both query
+stages are required. `WriteQueryError` preserves typed status/code information
+and hides internal database errors. The client retains codes and HTTP statuses;
+resource limits are identified by code instead of matching an English message.
+Per-metric failures remain independent. Failed, unavailable or partial evidence
+never becomes a successful zero.
+
+Native `fit: "screen"` / `fit: "content"` state replaces `fitToScreen` in new
+queries. Upstream continues to normalize old saved links. The view-control
+ledger and generated site map use the 1.0.0 declarations; disclosure and JSON
+inspection ownership is unchanged. Fresh fitted views clear explicit column
+widths, matching the native Fit All to Screen action; saved layouts retain
+their sizing. See [URL view state](url-view-state.md).
+
+## Execution ownership and retained host responsibilities
+
+SQL datasets pass an authorized, projected SELECT and its bound arguments to
+`QueryDatasetV3.ExecuteIn`. Ungrouped rows and metrics run directly against that
+source; grouping and calendar scratch use the library's executor. Default row
+budget is 10,000; metric/group budgets are 10,000, or 100,000 for Usage and
+message labels. Staged map/group populations are bounded to ten million rows
+and 512 MiB. Limits fail explicitly.
+
+Pharos retains authorization, schema bindings, indexed candidate narrowing,
+keyword membership, source field discovery, domain row enrichment and temporary
+storage leases. Numeric bindings opt into bounded arithmetic. Map-backed
+datasets stage only the base fields required by the native source plan. Leases
+roll back host staging and restore connection settings, including cancellation;
+changing this lifecycle remains separate work.
+
+Usage's daily table and hourly ledger are different populations. Source filters
+first choose eligible days and hours. Metrics that depend on `hour`, including
+computed expressions and metric-local filters, run against hourly facts;
+`shownRows` expands the selected daily page to its hours. Other metrics and
+grouping stages use daily facts. Both metric populations execute through V3.
+Typed preselection also uses the published planner, preserving SQL NULL and date
+semantics rather than a local approximation.
+
+Legacy host row/metadata endpoints remain for older clients and internal domain
+APIs. The removed Query Table `/rows-v2` and `/metrics` operations return an
+upgrade/reload error; current consumers no longer negotiate or fall back to them.
+
+## Patch and workaround audit
+
+Removed in this migration:
+
+- V2 execution, its generic native count/sum reducers, count caches, source-proof
+  cache and indexed row-window execution overrides.
+- Machine Time's custom Query Table metric reductions and text-complement reducer.
+  Domain projections and their normal catalog APIs remain separate.
+- The frontend V2/V3 keyword transport switch and identical-request budget retry.
+- Stable API/source-filter proxies that worked around the old nullability effect.
+  The released UI now depends on `api.filterValues`, rather than the facade object.
+- The obsolete frontend metadata scheduler; V3 distinct scans retain the service's
+  metadata queue policy.
+
+Still needed: numeric metric renderers recognize only upstream's built-in unit
+renderer keys. Pharos retains its USD/token-to-`byte_size` presentation alias so
+those metrics keep their existing formatting. This is a host presentation
+workaround, not a modified package. Screen fitting still floors wrapping host
+links at their one-line width; the existing Usage browser TODO records this
+upstream layout limitation. JSON cell inspection/reveal gaps previously
+recorded in [the URL-state handoff](query-table-url-state-handoff.md) remain
+upstream capabilities to request, not reasons to patch a dependency.
+
+Dependency discovery for distinct-only requests currently plans an equivalent
+row projection because upstream omits the distinct target from `SourcePlan`.
+The original distinct request still executes through V3 unchanged.
+
+The released public source planner bounds identity plans used to short-circuit
+record keyword verification. Typed filters that leave more than ten million
+eligible records now fail explicitly before keyword matching. They must not
+silently search a truncated identity set. The remaining presentation and planner
+requests are recorded in [the 1.0.0 follow-up](handoffs/query-table-after-1.0.0.md).
+
+Earlier performance comparisons and removal decisions are historical evidence in
+[the manual-interventions audit](handoffs/query-table-manual-interventions.md),
+not timing claims for 1.0.0. This migration does not run manual benchmarks.
