@@ -615,8 +615,11 @@ no sum, cumulative or share.
     names. A period with no records is hatched, never a zero share.
   - Hover a cell for its share and the count behind it out of the period's
     total, or for its value.
-  - A legend selection limits the rows, and shares are then of the
-    selected groups.
+  - The row labels are the legend: each opens the legend's menu, so a
+    selection limits the rows (shares are then of the selected groups) and,
+    on a dashboard with a population, a row filters it. A distribution's
+    rows filter on the measure's band and have no selection. Smoothing's
+    Window is hidden: shares and pooled values do not change with it.
   - Without one of those (`trendLimits.heatmap`) it falls back to per
     interval and says why. Show as, Scale and Norm do not apply and are
     hidden.

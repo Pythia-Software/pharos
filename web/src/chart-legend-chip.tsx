@@ -3,10 +3,11 @@ import type { ChartSeries } from "./chart-series";
 import type { LegendAction } from "./chart-selection";
 import type { PopulationAction } from "./dashboard-population";
 
-// A legend value's menu. The selection only chooses what is drawn; where the
-// dashboard has a population (onPopulation), the last two items filter every
-// view and breakdown instead.
-export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false, onPopulation }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; onPopulation?: (action: PopulationAction) => void }) {
+// A legend value's menu. The selection (onAction) only chooses what is drawn;
+// where the dashboard has a population (onPopulation), the last two items
+// filter every view and breakdown instead. A chart without a selection, such
+// as a distribution heatmap's rows, offers only those.
+export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false, onPopulation }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction?: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; onPopulation?: (action: PopulationAction) => void }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const firstFocus = useRef(0);
@@ -57,7 +58,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
   }, [open]);
   function choose(action: LegendAction) {
     close(true);
-    onAction(action);
+    onAction!(action);
   }
   function filter(action: PopulationAction) {
     close(true);
@@ -85,10 +86,12 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       entries[next]?.focus();
     }}>
       <div className="usage-legend-menu-heading" title={item.label}>{!category ? <span className="usage-swatch" style={{ background: item.color }} /> : null}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
+      {onAction ? <>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>Replace the current selection</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-reset" disabled={!selectionActive} onClick={() => choose("clear")}>Show all values</button>
+      </> : null}
       {onPopulation ? <>
         <button type="button" role="menuitem" tabIndex={-1} className="usage-legend-menu-population" onClick={() => filter("keep")}><span>Count only this value</span><small>Population filter: every view and breakdown</small></button>
         <button type="button" role="menuitem" tabIndex={-1} onClick={() => filter("drop")}><span>Leave this value out</span><small>Population filter: every view and breakdown</small></button>

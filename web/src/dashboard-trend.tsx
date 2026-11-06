@@ -17,7 +17,8 @@ import { CreateDashboardCard } from "./create-dashboard-card";
 import { PopulationControl, usePopulation } from "./dashboard-population-control";
 import { withPopulationGroup, type PopulationAction } from "./dashboard-population";
 import { TrendHeatmap } from "./dashboard-heatmap";
-import { trendHeatmap } from "./dashboard-heatmap-model";
+import { trendHeatmap, type HeatmapRow } from "./dashboard-heatmap-model";
+import { ChartLegendChip } from "./chart-legend-chip";
 
 export type AmountFormat = (value: number, measure: AnalysisMeasure) => string;
 const percent = (value: number) => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
@@ -103,17 +104,29 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
   // The legend's population actions filter on the series' group; a series
   // with no single group (Other, a component) has none.
-  const populate = catalog.population && !catalog.components?.[view.split] && view.split !== noSplit ? (key: string, action: PopulationAction) => {
+  // A distribution heatmap's rows are its measure's band, so they filter on it.
+  const populateOn = (split: string) => catalog.population && !catalog.components?.[split] && split !== noSplit ? (key: string, action: PopulationAction) => {
     const value = built.series.find(item => item.key === key)?.value;
     if (value === undefined) return;
-    onFilter(current => withPopulationGroup(catalog, current, view.split, value, action));
+    onFilter(current => withPopulationGroup(catalog, current, split, value, action));
     // A selection on the same breakdown would hide what the population keeps.
     if (view.selection?.values.length) set({ selection: { values: [], excluded: false } });
   } : undefined;
+  const populate = populateOn(view.split);
   const action = onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined;
+  // A heatmap's rows are its legend: each selects, and filters the
+  // population, as a legend value does. A distribution has no selection.
+  const distribution = queried.split !== view.split, populateRow = populateOn(queried.split), selected = built.selected;
+  const rowLabel = (row: HeatmapRow) => {
+    const item = built.series.find(candidate => candidate.key === row.key);
+    if (!item || item.value === undefined || item.hiddenCount || (distribution && !populateRow)) return undefined;
+    const on = selected.length > 0 && (built.excluded ? !selected.includes(item.key) : selected.includes(item.key));
+    return <ChartLegendChip item={item} active={on} dimmed={selected.length > 0 && !on} selectionActive={selected.length > 0} soleSelection={on && !built.excluded && selected.length === 1}
+      onAction={distribution ? undefined : action => select(item.key, action)} onPopulation={populateRow && (action => populateRow(item.key, action))} />;
+  };
   if (view.display === "heatmap") return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, breakdown?.order ?? [], heatmapKind(catalog, view) === "value" ? "value" : "share")}
-      period={view.period} noun={heatmapKind(catalog, view) === "value" ? catalog.records.plural.toLowerCase() : source.catalog.measures[queried.metric].unit} rollingPeriods={view.rollingPeriods} format={amount} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
+      period={view.period} noun={heatmapKind(catalog, view) === "value" ? catalog.records.plural.toLowerCase() : source.catalog.measures[queried.metric].unit} rollingPeriods={view.rollingPeriods} format={amount} rowLabel={rowLabel} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {children}
     {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}

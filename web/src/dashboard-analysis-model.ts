@@ -415,7 +415,7 @@ export function heatmapKind(catalog: AnalysisCatalog, state: Pick<AnalysisState,
 export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): { catalog: AnalysisCatalog; state: T } {
   if (state.display !== "heatmap" || heatmapKind(catalog, state) !== "distribution") return { catalog, state };
   const measure = catalog.measures[state.metric], band = measure.band!, count = catalog.records.count!;
-  const counted: AnalysisMeasure = { ...catalog.measures[count], label: measure.label, where: [...measure.where ?? [], { field: catalog.breakdowns[band].fields[0], op: "is_not_null", value: "" }] };
+  const counted: AnalysisMeasure = { ...catalog.measures[count], where: [...measure.where ?? [], { field: catalog.breakdowns[band].fields[0], op: "is_not_null", value: "" }] };
   return { catalog: { ...catalog, present: undefined, measures: { ...catalog.measures, [state.metric]: counted } }, state: { ...state, split: band, selection: undefined } };
 }
 
