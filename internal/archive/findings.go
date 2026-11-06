@@ -17,7 +17,7 @@ import (
 
 // findingsVersion names the detectors' keys, wording, and metrics. A new
 // version rebuilds findings the next time the pass runs, even on the same day.
-const findingsVersion = "findings-v2"
+const findingsVersion = "findings-v3"
 
 // The pass observes the last findingWindowDays days: 28 for the gate and the
 // baseline, twelve weeks for sparklines, and 90 for savings after a copy.
@@ -846,6 +846,10 @@ func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, gene
 		err = c.refreshSafety(ctx)
 	}
 	if err == nil && full {
+		c.setFindingsPhase("grouping fixes")
+		err = c.refreshFixes(ctx, false)
+	}
+	if err == nil && full {
 		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
 			for key, value := range map[string]string{"findings_generation": generation, "findings_built_at": formatTime(c.clock()),
 				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds()), "findings_inputs_generation": inputs} {
@@ -1191,6 +1195,12 @@ func loadFindingRowsAt(ctx context.Context, q queryer, clock time.Time, where st
 		_ = jsonUnmarshalString(firstString(row["card_json"]), &item.Card)
 		_ = jsonUnmarshalString(firstString(row["metric_json"]), &item.Metric)
 		_ = jsonUnmarshalString(firstString(row["gate_json"]), &item.Stats)
+		// Recent counts were saved at the last detector pass. Expire them
+		// against today's clock so a quiet pattern cannot stay actionable
+		// merely because no new pass has run.
+		if seen, ok := parseTime(item.Stats.LastSeen); ok && seen.Local().Format("2006-01-02") < clock.Local().AddDate(0, 0, -(findingRecentDays-1)).Format("2006-01-02") {
+			item.Stats.Recent = 0
+		}
 		_ = jsonUnmarshalString(firstString(row["baseline_json"]), &item.Baseline)
 		_ = jsonUnmarshalString(firstString(row["impact_json"]), &item.Impact)
 		_ = jsonUnmarshalString(firstString(row["providers_json"]), &item.Providers)

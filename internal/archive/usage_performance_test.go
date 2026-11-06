@@ -32,7 +32,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -167,18 +166,19 @@ func TestUsagePerformanceMachineTime(t *testing.T) {
 				q := metricRequest(specs...)
 				q.Where = where
 				var elapsed, cpu []time.Duration
-				var result qt.SQLiteV2ExecutionResult
+				var result queryFixtureResult
 				for range 5 {
 					start, startCPU := time.Now(), processCPU()
-					tx, release, err := beginQueryV2(ctx, c.reader())
+					tx, release, err := beginQueryMemory(ctx, c.reader())
 					if err != nil {
 						t.Fatal(err)
 					}
-					var handled bool
-					result, handled, err = c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
+					d := queryFixtureFor("tool_calls", PharosToolCallsSchema())
+					d.SourceSQL = toolCallDataset.querySourceSQL(d.Schema)
+					result, err = d.executeFixtureIn(ctx, tx, nil, &q, qt.PlanOptions{Now: time.Now()})
 					release()
-					if err != nil || !handled {
-						t.Fatal(err, handled)
+					if err != nil {
+						t.Fatal(err)
 					}
 					elapsed, cpu = append(elapsed, time.Since(start)), append(cpu, processCPU()-startCPU)
 				}
@@ -201,121 +201,6 @@ func TestUsagePerformanceMachineTime(t *testing.T) {
 // answered before Query Table's in-memory executor), and staged through the
 // adapter alone. Hourly rows are selected once per filter, outside the timing,
 // as every path shares that step.
-func TestUsagePerformanceFilteredMetrics(t *testing.T) {
-	catalog, config := testCatalog(t)
-	s := testServer(t, config, catalog)
-	ctx := context.Background()
-	schema := PharosUsageSchema()
-	origin := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
-	var daily, hourly []map[string]any
-	for i := range 20_000 {
-		day := origin.AddDate(0, 0, i%180)
-		row := map[string]any{
-			"agent_session_id": fmt.Sprint("session-", i/5), "day": day.Format("2006-01-02"), "week": day.AddDate(0, 0, -int(day.Weekday()+6)%7).Format("2006-01-02"),
-			"month": day.Format("2006-01"), "repository_name": fmt.Sprint("repository-", i%10), "provider": []string{"claude", "codex", "antigravity"}[i%3],
-			"model": fmt.Sprint("model-", i%10), "model_family": fmt.Sprint("family-", i%5), "effort": nil,
-			"first_usage_at": day.Add(9 * time.Hour).Format(time.RFC3339), "last_usage_at": day.Add(11 * time.Hour).Format(time.RFC3339),
-		}
-		row["id"] = usageDailyID(row)
-		totals := map[string]int64{}
-		var cost float64
-		for h := range 3 {
-			hour := maps.Clone(row)
-			hour["hour"] = day.Add(time.Duration(9+h) * time.Hour).Format(time.RFC3339)
-			values := map[string]int64{"uncached_input_tokens": int64(100 + (i*7+h)%900), "cache_read_input_tokens": int64(1000 + (i*13+h)%9000),
-				"cache_creation_input_tokens": int64((i + h) % 300), "output_tokens": int64(20 + (i*3+h)%400), "unclassified_tokens": 0}
-			var total int64
-			for field, value := range values {
-				hour[field], totals[field], total = value, totals[field]+value, total+value
-			}
-			hour["total_tokens"], totals["total_tokens"] = total, totals["total_tokens"]+total
-			hour["cost_usd"] = float64(total) * 0.0000031
-			cost += hour["cost_usd"].(float64)
-			hourly = append(hourly, hour)
-		}
-		for field, value := range totals {
-			row[field] = value
-		}
-		row["cost_usd"] = cost
-		daily = append(daily, row)
-	}
-	sums := func(fields []string, groups ...string) []qt.AggSpec {
-		specs := []qt.AggSpec{}
-		for _, field := range fields {
-			specs = append(specs, qt.AggSpec{ID: field, Op: "sum", Field: field, GroupBy: groups})
-		}
-		return specs
-	}
-	types := []string{"uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "unclassified_tokens"}
-	summary := append(sums([]string{"total_tokens", "cost_usd", "uncached_input_tokens", "cache_read_input_tokens", "output_tokens"}),
-		qt.AggSpec{ID: "agent_sessions", Op: "count_distinct", Field: "agent_session_id"})
-	for _, surface := range []struct {
-		name  string
-		specs []qt.AggSpec
-	}{
-		{"token summary", summary},
-		{"weekly cost by provider", sums([]string{"cost_usd"}, "week", "provider")},
-		{"daily token types", sums(types, "day")},
-		{"hourly cost by provider", sums([]string{"cost_usd"}, "hour", "provider")},
-	} {
-		for _, filter := range []struct {
-			name  string
-			where []qt.WhereTerm
-		}{
-			{"unfiltered", nil},
-			{"repository", []qt.WhereTerm{{Field: "repository_name", Op: "=", Value: "repository-3"}}},
-			{"model", []qt.WhereTerm{{Field: "model", Op: "=", Value: "model-5"}}},
-			{"provider", []qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}},
-			{"90 days", []qt.WhereTerm{{Field: "first_usage_at", Op: ">=", Value: origin.AddDate(0, 0, 90).Format(time.RFC3339)}}},
-			{"repository contains", []qt.WhereTerm{{Field: "repository_name", Op: "contains", Value: "ITORY-1"}}},
-		} {
-			q := metricRequest(surface.specs...)
-			q.Where = filter.where
-			options := qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name, Now: time.Now()}
-			names, err := queryV2SourceFields(ctx, catalog.reader(), schema, nil, &q, options.Now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			hours, err := selectUsageHours(daily, hourly, q.Where)
-			if err != nil {
-				t.Fatal(err)
-			}
-			line := fmt.Sprintf("%-24s %-20s", surface.name, filter.name)
-			var answers []qt.SQLiteV2ExecutionResult
-			for _, path := range []string{"in memory", "staged", "adapter"} {
-				override(t, &nativeMetrics, path != "adapter")
-				var elapsed, cpu []time.Duration
-				var result queryV2ExecutionResult
-				for range 7 {
-					start, startCPU := time.Now(), processCPU()
-					d := queryV2Dataset("usage", schema)
-					if path == "in memory" {
-						var handled bool
-						result.SQLiteV2ExecutionResult, handled, err = s.metricsWithoutStaging(ctx, "usage", sqlDataset{}, d, q, options, daily, hours, false)
-						if err == nil && !handled {
-							t.Fatalf("%s: not answered in memory", line)
-						}
-					} else {
-						// The staged paths, without the in-memory executor ahead of them.
-						err = s.executeStagedQueryV2(ctx, "usage", sqlDataset{}, false, d, nil, &q, options, nil, daily, hours, names, &result)
-					}
-					if err != nil {
-						t.Fatal(line, path, err)
-					}
-					elapsed, cpu = append(elapsed, time.Since(start)), append(cpu, processCPU()-startCPU)
-				}
-				answers = append(answers, result.SQLiteV2ExecutionResult)
-				line += fmt.Sprintf("  %s %8v (cpu %8v)", path, medianDuration(elapsed[1:]).Round(10*time.Microsecond), medianDuration(cpu[1:]).Round(10*time.Microsecond))
-			}
-			for _, answer := range answers[1:] {
-				if !identical(answer, answers[0]) {
-					t.Fatalf("%s: paths disagree", line)
-				}
-			}
-			t.Log(line)
-		}
-	}
-}
 
 func processCPU() time.Duration {
 	var usage syscall.Rusage
@@ -330,168 +215,6 @@ func processCPU() time.Duration {
 // nine integer fields; fixture preparation is outside the measured requests.
 // Writing messages uses no tool cubes. Native SQL and ordinary Query Table use
 // the same catalog, indexes, filters and authorization through the real routes.
-func TestUsagePerformanceSQLHost(t *testing.T) {
-	c, config := testCatalog(t)
-	// Record the ledger as current, so that no request starts a rebuild that
-	// would replace the synthetic rows while they are measured.
-	want, _, err := c.authorshipGenerations()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.RebuildAuthorship(t.Context(), want); err != nil {
-		t.Fatal(err)
-	}
-	tx := seedTx(t, c.DB)
-	for i := range 5 {
-		id := fmt.Sprintf("sql-probe-%d", i)
-		provider := []string{"codex", "claude"}[i%2]
-		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at)
-			VALUES(?,'codex','local',?,'SQL probe','2026-09-01T00:00:00Z')`, id, id); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id)
-			VALUES(?,?,?,'local',?)`, id, id, provider, id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const population = 50_000
-	if _, err := tx.Exec(`WITH RECURSIVE samples(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM samples WHERE n+1<?)
-		INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,source_order,created_at)
-		SELECT 'sql-message-'||n,'sql-probe-'||(n%5),CAST(n AS TEXT),'user','message','Synthetic SQL probe','probe',n,
-		printf('2026-09-%02dT12:00:00.000Z',1+n%5) FROM samples`, population); err != nil {
-		t.Fatal(err)
-	}
-	columns := []string{"message_id", "conversation_id", "workspace_id", "sent_at", "day", "total_chars", "spans_json"}
-	values := []string{"id", "conversation_id", "conversation_id", "created_at", "substr(created_at,1,10)", "200", "'[]'"}
-	var words []string
-	for i, category := range authorshipCategories {
-		columns = append(columns, category+"_words")
-		value := fmt.Sprintf("((source_order+%d)%%7)", i)
-		values = append(values, value)
-		words = append(words, value)
-	}
-	columns, values = append(columns, "words"), append(values, strings.Join(words, "+"))
-	if _, err := tx.Exec("INSERT INTO message_authorship(" + strings.Join(columns, ",") + ") SELECT " + strings.Join(values, ",") + " FROM messages"); err != nil {
-		t.Fatal(err)
-	}
-	commitSeed(t, tx)
-	s := testServer(t, config, c)
-	override(t, &nativeMetrics, nativeMetrics)
-	measure := func(t *testing.T, path string, body any) {
-		t.Helper()
-		var expected any
-		// Each path runs warm, within one data generation, and as the first
-		// request of a new generation, which reads its source's bounds or
-		// proves it again.
-		type variant struct {
-			name               string
-			native, generation bool
-		}
-		variants := []variant{{"native/warm", true, false}, {"native/new-generation", true, true},
-			{"adapter/warm", false, false}, {"adapter/new-generation", false, true}}
-		grouped := strings.HasSuffix(path, "/query-v3")
-		if grouped {
-			variants = variants[2:] // V3 always uses ordinary Query Table execution.
-		}
-		for _, v := range variants {
-			nativeMetrics = v.native
-			var wall, cpu []time.Duration
-			for run := range 11 {
-				if v.generation {
-					write, finish, err := c.beginTrackedWrite(t.Context(), "probe")
-					if err != nil {
-						t.Fatal(err)
-					}
-					_, err = write.Exec("UPDATE query_cache_generation SET value=value+1 WHERE id=1")
-					if err == nil {
-						err = write.Commit()
-					}
-					finish()
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				start, startCPU := time.Now(), processCPU()
-				response := apiCall(t, s, config.APIToken, http.MethodPost, path, body)
-				elapsed, usedCPU := time.Since(start), processCPU()-startCPU
-				if response.Code != http.StatusOK {
-					t.Fatal(response.Code, response.Body.String())
-				}
-				var result any
-				if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-					t.Fatal(err)
-				}
-				metrics, ok := result.(map[string]any)["metrics"].([]any)
-				if !ok || len(metrics) == 0 {
-					t.Fatal("missing metrics", response.Body.String())
-				}
-				for _, metric := range metrics {
-					m := metric.(map[string]any)
-					if firstString(m["error"]) != "" || len(m["buckets"].([]any)) == 0 {
-						t.Fatal("metric failed", m)
-					}
-					for _, bucket := range m["buckets"].([]any) {
-						if firstString(bucket.(map[string]any)["error"]) != "" {
-							t.Fatal("bucket failed", bucket)
-						}
-					}
-				}
-				if grouped {
-					value := result.(map[string]any)
-					if value["sourceTotal"] != float64(population) || value["total"] != float64(5) || len(value["rows"].([]any)) != 2 {
-						t.Fatal("grouping lost source membership or result paging", value)
-					}
-					for i, want := range []float64{5, 20_000} {
-						bucket := metrics[i].(map[string]any)["buckets"].([]any)[0].(map[string]any)
-						if bucket["value"] != want {
-							t.Fatal("grouped metric scope changed", metrics)
-						}
-					}
-				}
-				if expected == nil {
-					expected = result
-				} else if !identical(expected, result) {
-					t.Fatalf("host and adapter responses differ: %s", response.Body.String())
-				}
-				if run > 0 {
-					wall, cpu = append(wall, elapsed), append(cpu, usedCPU)
-				}
-			}
-			t.Logf("%s rows=%d wall=%v cpu=%v", v.name, population,
-				medianDuration(wall).Round(10*time.Microsecond), medianDuration(cpu).Round(10*time.Microsecond))
-		}
-	}
-	// Averages are beyond the host reduction, so both variants of that shape
-	// run the adapter.
-	for _, shape := range []struct {
-		name, op string
-		groups   []string
-		where    []qt.WhereTerm
-	}{
-		{"scalar", "sum", nil, nil},
-		{"grouped", "sum", []string{"day"}, nil},
-		{"filtered", "sum", []string{"day"}, []qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}},
-		{"averaged", "avg", []string{"day"}, nil},
-	} {
-		t.Run("v2/"+shape.name, func(t *testing.T) {
-			q := metricRequest(qt.AggSpec{ID: "messages", Op: "count", GroupBy: shape.groups},
-				qt.AggSpec{ID: "words", Op: shape.op, Field: "words", GroupBy: shape.groups})
-			for _, category := range authorshipCategories {
-				q.Metrics = append(q.Metrics, qt.AggSpec{ID: category, Op: shape.op, Field: category + "_words", GroupBy: shape.groups})
-			}
-			q.Where = shape.where
-			measure(t, "/api/query/writing_messages/metrics", q)
-		})
-	}
-	t.Run("v3/grouped", func(t *testing.T) {
-		q := groupRequest("day", qt.SummaryColumn{ID: "messages", Op: "count"},
-			qt.SummaryColumn{ID: "words_total", Op: "sum", Field: "words"}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: "words"})
-		q.Result.OrderBy = qt.OrderBys{{Field: "day", Dir: "asc"}}
-		q.Result.Limit = 2
-		q.Metrics = []qt.AggSpec{{ID: "all_groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "messages", Scope: "shownRows"}}
-		measure(t, "/api/query/writing_messages/query-v3", q)
-	})
-}
 
 // TestQueryTextPerformance times substring filters on the tool ledger's
 // command, answered by its trigram index: rows, metrics the host reduces and
@@ -544,7 +267,7 @@ func TestQueryTextPerformance(t *testing.T) {
 	}{{"selective", "--flag-42 ", false}, {"broad", "git status", false}, {"excluded", "git status", true}} {
 		where := []qt.WhereTerm{{Field: "command", Op: "contains", Value: needle.value, Negated: needle.negated}}
 		t.Run(needle.name+"/rows", func(t *testing.T) {
-			q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile,
+			q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile,
 				WireQuery: qt.WireQuery{Select: []string{"id", "command", "started_at"}, Where: where, Limit: 50}}
 			measure(t, "/api/query/tool_calls/rows-v2", q)
 		})
@@ -615,53 +338,3 @@ func TestUsagePerformanceServer(t *testing.T) {
 
 // A captured /metrics request diagnoses the exact narrow SQL plan without
 // changing the isolated catalog. Set PHAROS_USAGE_REQUEST to its JSON body.
-func TestUsagePerformanceNativeMetrics(t *testing.T) {
-	c := usagePerformanceCatalog(t)
-	file := os.Getenv("PHAROS_USAGE_REQUEST")
-	if file == "" {
-		t.Skip("set PHAROS_USAGE_REQUEST")
-	}
-	body, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var q qt.MetricQuery
-	if err = json.Unmarshal(body, &q); err != nil {
-		t.Fatal(err)
-	}
-	schema := PharosToolCallsSchema()
-	d := queryV2Dataset("tool_calls", schema)
-	d.MaxPopulation = 2_000_000
-	table, err := c.queryTextDataset(t.Context(), "tool_calls", toolCallDataset)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Log("facts", table.scalarFacts, "text", table.queryText != nil)
-	consumed := whereFields(table.residualWhere(q.Where))
-	for _, m := range q.Metrics {
-		consumed = append(consumed, m.GroupBy...)
-		if m.Field != "" {
-			consumed = append(consumed, m.Field)
-		}
-	}
-	projected, covered := table.project(consumed).preferCoveringScan(q.Where)
-	d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, q.Where, time.Now())
-	t.Log("covered", covered, "facts source", strings.Contains(d.SourceSQL, "FROM tool_query_facts"))
-	plan, err := queryMapsContext(t.Context(), c.DB, "EXPLAIN QUERY PLAN SELECT r.week,r.activity,COUNT(*),SUM(r.duration_ms) FROM ("+d.SourceSQL+") r GROUP BY 1,2", d.SourceArgs...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, row := range plan {
-		t.Log(firstString(row["detail"]))
-	}
-	for i := 0; i < 2; i++ {
-		tx, err := c.DB.BeginTx(t.Context(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		started := time.Now()
-		result, handled, err := c.nativeMetricsV2(t.Context(), tx, d, q, qt.PlanOptions{Now: time.Now()}, &table)
-		_ = tx.Rollback()
-		t.Log("native", time.Since(started), "handled", handled, "err", err, "metrics", len(result.Metrics.Metrics))
-	}
-}

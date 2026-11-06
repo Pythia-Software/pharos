@@ -8,16 +8,20 @@ in [library labeling](library-labeling.md) (taxonomy `candidate-0.3`; the
 research is in [labeler-research/](labeler-research/README.md), the decision
 in [shipping-encoder.md](labeler-research/shipping-encoder.md)).
 
-**Status: prototype, off by default.** Labels are stored in the catalog,
-shown by `pharos labels status` and `pharos labels explain`, and highlighted
-in the conversation reader when its **Message labels** highlight is on
-([In the reader](#in-the-reader)). No query table or MCP tool reads them yet.
+**Off by default.** Labels are stored in the catalog, shown by
+`pharos labels status` and `pharos labels explain`, and highlighted in the
+conversation reader when its **Message labels** highlight is on
+([In the reader](#in-the-reader)). The [Message Labels dashboard and query pages](message-labels.md)
+explore the stored labels without running inference. Conversation timelines
+combine message labels, caller-text origin and recorded tool actions.
 
 ## Turning it on
 
-In **Settings → Background Updates → Message labels**, turn on **Enable
-message labels**. This saves `labels_enabled` in the library's configuration
-and applies it immediately, without restarting Pharos. The control stays
+In **Settings → Background Processing**, open the **Message labels** step
+and turn on **Message labels**. This saves `labels_enabled` in the library’s
+configuration and applies it immediately, without restarting Pharos. The
+**Agent events** step has its own **Agent events (preview)** switch for
+[agent events](agent-events.md). Disabled models appear under **Only when you ask**. The control stays
 visible while off, reports missing downloads or workers while on, and
 queues earlier messages for the background schedule. In the app, enabling
 also starts any missing model/runtime download. Turning it off prevents
@@ -35,13 +39,15 @@ runtime instead, and comes first:
 |---|---|---|
 | `labels_enabled` | — | `true` labels messages as the chain's last stage and in the Message labels background item, and downloads the model when it is missing (default `false`) |
 | `labels_model_dir` | `PHAROS_LABELS_MODEL_DIR` | the model directory (below); default the app bundle's, then the download |
-| `labels_variant` | — | `int8` (default) or `fp32` |
+| `labels_variant` | — | `int8` or `fp32`; managed downloads use the model release's default, while custom directories retain int8 unless set |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |
+| `labels_backend` | — | `auto` (default), `cpu`, or `mlx`; shared by message labels and agent events. MLX needs a verified FP32 companion ([Apple silicon GPU](#apple-silicon-gpu)) |
+| `labels_mlx_runtime` | `PHAROS_MLX_LIBRARY` | native MLX engine override; default `mlx/libpharos_mlx.dylib` beside the worker |
 | `labels_runtime` | `PHAROS_ORT_LIBRARY` | the ONNX Runtime library the worker loads; default the one beside the worker, then the download |
-| `labels_threads` | — | intra-op threads per worker (default 4) |
+| `labels_threads` | — | CPU intra-op threads per worker (default 4); Settings → Background Processing → Message labels → Threads; ignored by MLX GPU inference |
 | `labels_workers` | — | worker processes (default 1) |
 | `labels_batch_tokens`, `labels_max_batch` | — | a batch's padded-token budget (default 16,384) and row limit (64) |
-| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of workers × threads and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
+| `labels_thread_budget`, `labels_memory_budget_mb` | — | what every model's workers may use together: intra-op threads (default the larger of both models' workers × threads, message labels' and [agent events'](agent-events.md#the-pass), and half the cores; on battery, see [Scheduling and power](#scheduling-and-power)) and estimated memory (default 8,192 MB). A thread budget set here holds on battery too |
 | `labels_idle_seconds` | — | how long finished workers stay warm for the next run (default 120) |
 
 Relative paths resolve against the configuration file's folder. To build the
@@ -52,10 +58,189 @@ macos/fetch-onnxruntime.sh            # pinned release, SHA-256 checked, into bu
 CGO_ENABLED=1 go build -o build/pharos-labeler-ort ./cmd/pharos-labeler-ort
 ```
 
+## Apple silicon GPU
+
+The worker supports native C++ MLX inference for the Ettin 68M target-pooling
+Kestrel message classifier and Jayhawk event/sentence classifier. Tokenization,
+framing, thresholds and the worker protocol are shared with the CPU path.
+MLX runs compiled FP32 operations on Metal; Python is unnecessary at runtime.
+See [MLX compilation](https://ml-explore.github.io/mlx/build/html/usage/compile.html).
+
+The pinned MLX 0.32.4 **macOS 26 wheel** and its native engine require macOS
+26.2 or later and Apple silicon. These are the runtime binaries validated for
+this backend; this is not a claim about every MLX distribution. Pharos and its
+CPU worker retain their macOS 14 minimum. The app build bundles the engine,
+`libmlx.dylib`, `libjaccl.dylib`, `mlx.metallib` and license notices, signing
+nested libraries before the app. The service never links MLX.
+
+> **TODO (high priority): shrink the bundled MLX runtime.**
+>
+> The v0.8.7 app bundles approximately **238 MB** of MLX libraries, including
+> a **214 MB `mlx.metallib`**. This addition explains virtually all of the
+> installed-size jump from v0.8.5. Go stripping and LZMA reduce the download,
+> but the large GPU runtime remains in the installed app.
+>
+> Revisit upstream's `MLX_METAL_JIT=ON` and `MinSizeRel` build options. This
+> optimization is **deferred and unverified**. Keep the prebuilt runtime
+> until the following validation is complete:
+>
+> - Build a pinned upstream release on a Mac with a compatible SDK and the
+>   Metal compiler; retain safetensors support and required license notices.
+> - Measure installed and compressed sizes, first-use shader compilation,
+>   cached startup, steady inference and memory usage.
+> - Verify Kestrel and Jayhawk predictions and decisions across batch and
+>   sequence shapes, Apple silicon generations, and supported macOS versions.
+> - Verify CPU fallback, hardened signing, notarization and a Sparkle update
+>   round trip; review the minimum GPU OS version explicitly.
+>
+> Upstream guidance: [MLX binary-size minimization](https://ml-explore.github.io/mlx/build/html/install.html#binary-size-minimization).
+
+`auto` selects MLX only for a selected FP32 ONNX model with a verified MLX
+companion. Unsupported machines or unavailable native libraries use that same
+FP32 ONNX file on CPU, with a startup diagnostic. `mlx` requires the GPU backend
+and returns an error if it cannot start. Corrupt companions are errors; a
+running session never changes device silently. Ready metadata reports the
+actual runtime, device and provider. `cpu` forces ONNX Runtime.
+
+Version 1 downloads contain only int8 ONNX, so they continue on
+CPU. A prepared version 2 release kit includes int8, FP32 ONNX and MLX in each
+model archive. Its pending descriptor selects FP32 for managed downloads;
+after publication and pin promotion, enabling labels/events downloads those
+models and selects MLX automatically on supported Macs. End users need no
+model paths or companion configuration. Explicit int8 settings and custom
+model directories retain their existing behavior. CPU fallback for a selected
+FP32 model always uses FP32, preserving its model identity across devices.
+See [Cleanroom model publication](#cleanroom-model-publication).
+
+Build the native runtime and worker locally:
+
+```sh
+macos/build-labeler-mlx.sh build/mlx
+CGO_CFLAGS="-O2 -g -mmacosx-version-min=14.0" \
+  CGO_LDFLAGS="-mmacosx-version-min=14.0" CGO_ENABLED=1 go build -o build/pharos-labeler-ort ./cmd/pharos-labeler-ort
+```
+
+In an export environment with Python 3.11+, numpy, torch, onnx and safetensors,
+add each companion to a **copy** of its complete FP32 model directory:
+
+```sh
+python3 tools/export_labeler_mlx.py /path/to/message-model \
+  --checkpoint /path/to/message-checkpoint.pt \
+  --encoder-config /path/to/encoder-config.json --task kestrel
+python3 tools/export_labeler_mlx.py /path/to/event-model \
+  --checkpoint /path/to/event-checkpoint.pt \
+  --encoder-config /path/to/encoder-config.json --task jayhawk
+python3 tools/package_labeler_model.py /path/to/message-model --variant fp32 --out build/models
+```
+
+The exporter checks the supported encoder configuration and that every FP32
+checkpoint tensor occurs in the ONNX export (including transposed matrices).
+It writes `model.mlx.safetensors`, metadata identifying `ettin-68m-v1` and its
+task, the source ONNX SHA-256, and the companion digest in `manifest.json`.
+Both model loaders verify the digest and source identity. The native engine
+checks exact tensor names, shapes and FP32 types. The canonical model file
+and SHA in the protocol remain the FP32 ONNX reference. As with every model
+update, changing the manifest triggers the ledger's existing rebuild rule.
+
+Configure the converted directories in the library configuration:
+
+```toml
+labels_model_dir = "/path/to/message-model"
+labels_variant = "fp32"
+agent_events_model_dir = "/path/to/event-model"
+agent_events_variant = "fp32"
+labels_backend = "auto"
+# Development builds only; app bundles find these beside the worker:
+labels_worker = "/path/to/pharos/build/pharos-labeler-ort"
+labels_mlx_runtime = "/path/to/pharos/build/mlx/libpharos_mlx.dylib"
+# labels_runtime still locates ONNX Runtime for CPU fallback.
+```
+
+One GPU worker is admitted across both models, with at least 3,072 MB reserved
+from the existing memory budget. The native engine sets MLX's soft evaluation
+limit to 3 GiB and its unused-buffer cache limit to 512 MiB. These are allocator
+guidelines, not a hard process-memory cap; MLX can temporarily exceed them
+during evaluation. Without an explicit cache limit, varied batch shapes can
+retain tens of gigabytes of unused Metal buffers on a large-memory Mac.
+Closing the model also clears that buffer cache. Idle workers are evicted when
+the other model needs the GPU; active contention returns the existing
+budget-exhausted error.
+Admission conservatively reserves this capacity for eligible `auto` sessions
+even when startup subsequently falls back to CPU. Power, cancellation, restart
+and idle-expiry policies still apply. Batches respect the worker's 256-row and 16,384
+padded-token limits; Kestrel accepts 512 tokens and Jayhawk 768 per row.
+
+### Device status and GPU capacity
+
+Settings reports the execution device separately for Message labels and Agent
+events. Before a run, it combines the selected model variant with the worker's
+`--probe-mlx` capability check (OS, worker build, native engine and Metal device).
+The probe loads no model and runs no inference; results are cached for a minute
+and invalidated when the worker or engine changes. The label is **expected** until
+the worker's Ready handshake confirms its device. An automatic CPU fallback is
+shown explicitly, including after an idle worker exits. Replacing the model,
+worker or runtime invalidates that observation. Missing models and older/custom
+workers that cannot report capabilities show an unconfirmed device instead of
+guessing. A forced `mlx` configuration that cannot use GPU shows unavailable.
+
+**CPU threads** appears only for expected or confirmed CPU execution. The saved
+CPU target is retained for fallback. Changing it does not restart an active GPU
+worker; CPU fallback workers still retune. Threads remain a limit on ONNX
+intra-op parallelism, not an assignment of physical CPU cores or a cap on the
+whole process's CPU usage.
+
+Both passes prepare conversations in parallel before inference. Each run starts
+up to four preparation workers, bounded by its saved CPU thread target, Go's
+available parallelism and any explicit thread budget. This also feeds GPU
+inference; the saved CPU target still bounds preparation when the model uses
+MLX. Each worker owns its conversation caches and shares the thread-safe
+tokenizer and read-only catalog metadata. Results reach inference in the original
+conversation order, with at most one preparation window of conversations ahead
+of the existing inference queue. Runs with a message limit, and message-label
+diagnostics with exports or one-at-a-time execution, prepare serially to preserve
+their limits and ordering. Preparation concurrency is chosen at run start;
+live thread changes continue to retune CPU inference at batch boundaries.
+
+There is no GPU core-count or utilization-percentage control. This engine submits
+compiled operations to the default Metal stream; MLX's
+[streams](https://ml-explore.github.io/mlx/build/html/usage/using_streams.html)
+choose execution queues, while its
+[memory limit](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
+is an allocation guideline. Neither assigns a share of GPU cores. Increasing
+that memory limit would not by itself request more compute.
+
+Higher throughput can be investigated through batching and the CPU preparation
+pipeline. The current defaults allow 64 rows and 16,384 padded tokens per batch,
+two outstanding batches, and one GPU worker shared across models. The engine
+accepts up to 256 rows, but the token ceiling still applies. Increasing rows can
+help short inputs; longer inputs already fill the token budget. Extra workers or
+streams compete for the same device and memory and need measurement before
+changing admission policy. Keep the existing limits and automatic scheduling
+until representative end-to-end measurements show better throughput without
+unacceptable memory use or responsiveness. No GPU intensity slider is exposed.
+
+The optional Go integration test can recheck both native classifiers against
+ONNX Runtime with short and maximum-length mixed batches, output selection,
+padding and empty sentence slots:
+
+```sh
+PHAROS_MLX_TEST_MODELS="/path/to/message-model:/path/to/event-model" \
+  PHAROS_MLX_LIBRARY="$PWD/build/mlx/libpharos_mlx.dylib" \
+  PHAROS_ORT_LIBRARY="/path/to/libonnxruntime.dylib" \
+  go test -run TestMLXNativeParity -v ./cmd/pharos-labeler-ort
+```
+
+The native implementation was checked on an M3 Ultra against saved FP32 ONNX
+CPU outputs for 582 messages and 396 event candidates. All message label sets,
+event verdicts, family decisions and sentence decisions matched. Maximum
+probability differences were 0.000013 for messages and 0.000005 for events and
+sentences. These are corpus checks, not a guarantee of identical floating
+point values for every possible input.
+
 ## Commands
 
 ```sh
-pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--full] [--one-at-a-time] [--dry-run] [--json]
+pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--backend auto|cpu|mlx] [--full] [--one-at-a-time] [--dry-run] [--json]
 pharos [--config PATH] labels status [--json]
 pharos [--config PATH] labels explain MESSAGE_ID [--infer]
 pharos [--config PATH] labels fetch
@@ -266,6 +451,8 @@ run` apart. A second run reports that labeling is already running.
   time. A larger backlog (the first run on a library) continues as a
   background `analysis.labels` run (variant `backlog`) when this Mac is
   plugged in ([Scheduling and power](#scheduling-and-power)).
+- Every run takes conversations newest first (by start time), as agent
+  events do, so a backlog labels recent conversations before older history.
 - No page read starts labeling. Pages read whatever ledger exists.
 
 ## In the reader
@@ -278,20 +465,17 @@ from `readerHighlightOptions` in `reader-model.js`), in the full reader and in
 a library card's Browse preview. A library that has labeling on offers
 Message labels on every conversation:
 
-- **On**, each labeled message's text is highlighted in its family's hue:
-  Report, Control, Deliberation, Input, Feedback, Request, Frame, Difficulty
-  (`LABEL_FAMILIES` in `reader-model.js`, the reference categorical palette's
-  eight hues in that order, stepped for each theme). A message labeled only at
-  a root (asks or steers, responds or reports) is grey. The family is that
-  of the message's likeliest specific label; a legend lists the families the
-  conversation uses. Where labels and human writing cover the same text, the
-  label's hue wins; an agent event's sentence keeps its event hue.
-- **What is highlighted** is the text the labels describe: a person's typed
-  pieces when authorship finds them, otherwise the whole message
-  (`labelMask`). Pasted or quoted context in a typed message stays plain.
-- **Hovering** highlighted text shows the item's segment in words (typed
-  text, agent reply…) and its most specific labels, each with its family,
-  the model's probability and the taxonomy's definition (`messageLabelView`).
+- **On**, each labeled message's whole card is tinted in its likeliest
+  specific label's family hue: Report, Control, Deliberation, Input, Feedback,
+  Request, Frame or Difficulty. Root-only labels use grey. User prompts,
+  agent replies and expanded reasoning all use this treatment; pasted context
+  remains inside the same message card. Message labels never create text marks.
+- **Agent events** keep their sentence-level marks on top of the card tint,
+  controlled independently by the Agent events checkbox. Human writing retains
+  its own span-level highlighting when enabled.
+- **Hovering the card** shows its most specific accepted labels, their
+  probabilities and taxonomy definitions. Hovering an agent-event mark takes
+  precedence and shows that event instead.
 - **The setting** is view state, `reader_labels` in the URL (beside
   `reader_writing` and `reader_events`), so a copied link keeps it; the last
   choice is saved as the fallback for links without it. A checkbox only
@@ -299,14 +483,31 @@ Message labels on every conversation:
 - A conversation with a dirty mark, or never built, says "Still labeling
   this conversation" or "Not labeled yet" (the checkbox is disabled until
   it has labels).
-- **Only prose messages** are highlighted. Thinking and delegations render as
-  activity rows and are labeled but not shown yet.
+- **Reasoning** expands into a message card with its labels, sentence events
+  and raw source disclosure. Delegations remain activity rows. Timeline
+  inspection quotes also tint their whole retained message excerpt.
 
 `WorkConversation` attaches them (`messageLabelsAttacher` in `labels.go`):
 each message's `labels` (`segment`, `ids` in the model's order, `probs` for
 those ids), and the conversation's `labels` (`labeled`, `pending`, and the
 taxonomy rows its labels name). It only reads, and attaches nothing to a
 catalog without a ledger.
+
+## Fingerprints in result tables
+
+Library search and other workspace tables offer **Fingerprint** in the column
+chooser. Conversation and message tables offer their conversation's
+**Fingerprint** and, when the workspace is known, **Workspace fingerprint**.
+Selected fingerprints also appear in Library's conversation cards. Column
+selection, order and width travel with saved queries and copied URLs.
+
+These use the same compact message-label ribbon as label-search results:
+colors show accepted labels and hatching shows recorded branch overlap.
+A workspace combines its conversations in time order. Fingerprints load only
+when displayed, send no message bodies, and never start labeling. Each reads
+at most 2,400 retained events; **Sample** marks a truncated fingerprint.
+Pending conversations remain unlabeled without hiding accepted labels from
+other conversations in the workspace.
 
 ## Scheduling and power
 
@@ -335,8 +536,16 @@ schedule rather than one of their own:
 
   `labels_thread_budget`, when set, overrides the battery reduction too, and
   `labels_memory_budget_mb` applies to both. The runtime's budget is set
-  before each run (`Manager.SetBudget`): a smaller one stops idle workers
-  over it at once; workers in use finish their run.
+  before workers start (`Manager.SetBudget`): a smaller one stops idle workers
+  over it at once.
+- **CPU threads is a live target.** Message labels and agent events read their
+  Settings targets when workers start and every two minutes during an active
+  run. When the target changes, message labels finish their in-flight batches
+  and agent events finish their current scoring chunk, then replace the
+  workers with the new thread count. Queued work and finished results are
+  kept, and no app relaunch is needed. The shared budget and battery cap
+  still apply. GPU workers ignore thread changes; the CPU target remains saved
+  for fallback. Command-line runs keep the thread count they started with.
 - Low battery (under 20%) or Low Power Mode makes the item wait, as it does
   all background work, unless you Run now.
 
@@ -347,6 +556,7 @@ schedule rather than one of their own:
 | A batch keeps crashing workers, or the worker rejects it (`bad_request`, `run_failed`) | The batch is split and sent one item at a time, so one bad item fails only its message, which stays pending for the next run. |
 | Workers keep crashing (8 restarts in a row with no batch succeeding) | The run ends **interrupted**, keeping what it stored. |
 | A conversation cannot be built (a damaged row; a panic is caught) | It keeps its dirty mark for the next run; the others go on. A stored classification that no longer fits its message counts as none until authorship catches up. |
+| Another operation holds the catalog writer | Finished labels wait in the bounded pipeline, slowing inference until the writer is available. Waiting during a running backfill has no separate save deadline. On stop, all finished work shares one 30-second drain budget; work that cannot be saved stays pending for the next run. |
 | The labels cannot be stored | The run stops at once with the write's error. |
 
 The worker holds no file on the library's drive, so it never delays an eject.
@@ -488,9 +698,13 @@ model. To publish a new model version:
 
 1. Package the model directory:
    `python3 tools/package_labeler_model.py MODEL_DIR --out build/labeler --version N --descriptor internal/archive/labels/assets.json`.
-   It writes `build/labeler/<name>-N.tar.gz` with the manifest, the int8
-   ONNX file and the tokenizer at its root, checks them against the
-   manifest, and pins the archive's SHA-256 and size. The archive is
+   It writes `build/labeler/<name>-N.tar.gz` with the manifest, the selected
+   ONNX file and the tokenizer at its root (`--variant all` includes both ONNX
+   variants and the MLX companion). It checks them against the
+   manifest, and pins the archive's SHA-256 and size. A single-variant archive
+   also sets the managed download default to that variant. With `--variant all`,
+   the existing default is preserved (int8 when unset); use `--default-variant`
+   to select a different included variant. The archive is
    deterministic: packaging the same directory again gives the same bytes.
 2. On the deployment Mac, create the GitHub release `labeler-<name>-N` on
    `Pythia-Software/pharos` and attach that archive under its own name, for
@@ -501,6 +715,79 @@ model. To publish a new model version:
    that have an older one keep it until they label again with the new
    build, which downloads the new version beside it (rows record the model,
    so a switch relabels).
+
+### Cleanroom model publication
+
+The prepared MLX model releases are independent of the app release and its
+signing keys. Export and package on the development/research Mac; transfer
+only the finished release kit to the cleanroom. The cleanroom never needs
+checkpoints, Python ML packages, conversion tools or research directories.
+
+To prepare a new kit from already converted model directories:
+
+```sh
+python3 tools/prepare_labeler_release.py \
+  --message-model /path/to/converted-kestrel \
+  --event-model /path/to/converted-jayhawk \
+  --version 2 --out build/labeler-models-v2 \
+  --candidate internal/archive/labels/assets.mlx-v2.json \
+  --validation-report /path/to/native-mlx-validation.json
+```
+
+The source directories must include both ONNX variants, verified MLX weights
+and the tokenizer. The optional validation report carries aggregate parity
+results only. The tool verifies every archived file and writes:
+
+- `build/labeler-models-v2/`: both deterministic model archives, per-archive
+  checksum files, release notes, candidate `assets.json`, a provenance index,
+  an offline verifier/publisher and the supplied validation summary.
+- `build/labeler-models-v2.tar` and `.tar.sha256`: the portable handoff. No
+  model files or transfer archives belong in git.
+- `internal/archive/labels/assets.mlx-v2.json`: reviewed pending app pins.
+  **The active `assets.json` remains unchanged until publication succeeds.**
+
+Transfer the tar and its checksum file to the cleanroom, then verify and unpack:
+
+```sh
+shasum -a 256 -c labeler-models-v2.tar.sha256
+tar -xf labeler-models-v2.tar
+python3 labeler-models-v2/publish_labeler_models.py verify labeler-models-v2
+```
+
+The transferred publisher uses only Python 3.10+ and the cleanroom's existing
+`gh` login. From its clean `origin/master` checkout:
+
+```sh
+python3 /path/to/labeler-models-v2/publish_labeler_models.py \
+  publish /path/to/labeler-models-v2
+```
+
+This creates the two separate `labeler-<name>-2` draft releases, uploads their
+archives and checksum files, verifies GitHub's asset digests, and publishes
+with `--latest=false`. It leaves app releases and the Sparkle feed alone.
+Interrupted uploads reuse matching draft assets; conflicting or already
+published assets are never overwritten. No app-signing setup is involved.
+
+After both model releases are public, run this from a development checkout:
+
+```sh
+python3 /path/to/labeler-models-v2/publish_labeler_models.py \
+  promote /path/to/labeler-models-v2
+```
+
+Promotion verifies both published assets before updating only `model` and
+`agent_events_model` in the active descriptor, preserving runtime pins. Review,
+commit and merge that small pin change. The normal cleanroom app release then
+builds from clean `origin/master`; it embeds those pins and fetches the pinned
+MLX SDK for its native engine, without requiring the prepared model archives.
+End-user Macs fetch the model archives when labeling is enabled.
+
+The version 2 pins declare `default_variant: fp32`. This is a deliberate model
+migration: int8 and FP32 can yield different scores and some decisions. The
+existing model identity/rebuild rules rescore affected ledgers once. Keeping
+FP32 canonical on CPU and GPU avoids silently changing variants on fallback.
+The int8 files remain available for explicit `labels_variant = "int8"` and
+`agent_events_variant = "int8"` configurations.
 
 The app release itself needs nothing new: `pharos` embeds the descriptor,
 and `macos/build-app.sh` builds the worker into
@@ -802,8 +1089,8 @@ every output, as LAPWING did.
   which nothing removes yet (about 160 MB unpacked).
 - **Warm workers last `labels_idle_seconds`.** A run after that pays the
   worker's start-up again (about 0.5 s: process, 152 MB model, its SHA-256).
-- **Only the conversation reader shows labels**: no query table or MCP tool
-  reads them yet, and the reader leaves thinking and delegations plain. Hues
+- **Label presentation**: the reader, timelines and Message Labels/People
+  query surfaces show stored labels; delegations remain activity rows. Hues
   are told apart by the legend and hover as well as colour, but past three
   families on screen some pairs are hard to separate for colour-blind
   readers. Labels are not in the freshness

@@ -14,11 +14,14 @@ export const defaultTokenChart: TokenChartView = { metric: "cost", split: "model
 // would otherwise fill most of a sparse month with empty columns.
 const daily = { period: "day", nonzero: true } as const;
 export const dashboardDefaults: Record<string, AnalysisState> = {
+  compaction: { metric: "compactions", split: "trigger", ...daily },
+  labels:{metric:"messages",split:"family",period:"day",view:"trend_line",share:true},
   calls: { metric: "calls", split: "tool_name", view: "compare" },
   activity: { metric: "conversations", split: "provider_model", ...daily },
   tokens: { ...defaultTokenChart, ...daily },
   human: { metric: "typed", split: "none", ...daily },
   parallelism: { metric: "agent_hours", split: "level_band", ...daily },
+  habits: { metric: "wall_hours", split: "actor", ...daily },
   tools: { metric: "calls", split: "tool_category", view: "compare" },
   mcp: { metric: "calls", split: "tool_name", view: "compare" },
   carbon: { metric: "co2", split: "type", ...daily },

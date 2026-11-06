@@ -46,7 +46,10 @@ type sqlDataset struct {
 	// Joins to unique primary keys can be omitted when no consumed expression
 	// references them. Explicit pruning lets SQLite choose a covering count
 	// index before its later unused-LEFT-JOIN elimination pass.
-	optionalJoins      map[string]string
+	optionalJoins map[string]string
+	// Compound sources need to prune their inner projection too: SQLite may
+	// otherwise carry every UNION column through a coroutine for each row.
+	projectFrom        func([]string) string
 	pageFrom           string
 	pageIndexes        map[string]string
 	coveringIndex      string
@@ -102,6 +105,9 @@ func (d sqlDataset) project(fields []string) sqlDataset {
 		}
 	}
 	d.columns = columns
+	if d.projectFrom != nil {
+		d.from = d.projectFrom(fields)
+	}
 	if d.scalarFacts && d.pageFrom == "FROM tool_calls t" {
 		compact := true
 		for field := range columns {

@@ -163,9 +163,11 @@ describe("library drive, end to end", { skip }, () => {
     assert.match(await air.textContent(), /needs index/);
     await shoot(page.locator("#sourceGrid"), "hosts-needs-index");
     await page.goto(`${base}/settings/sync`);
-    await page.locator("#syncOperations summary").click();
-    await page.locator("#syncRunActions").getByRole("button", { name: "Index captured files" }).click();
-    // The index runs in the service; the page shows it finish.
+    const requested = page.waitForResponse(response => new URL(response.url()).pathname === '/api/background/run'
+      && response.request().method() === 'POST' && response.request().postDataJSON()?.item === 'preserve');
+    await page.getByRole("button", { name: "Run Preserve originals now", exact: true }).click();
+    assert.equal((await requested).status(), 202);
+    // Preserve originals captures this Mac and indexes retained captures from every Mac.
     await eventually(async () => (await api("/api/index")).hosts.find(host => host.id === hostB.id)?.sources.every(source => !source.needs_index), 300000);
     await page.goto(`${base}/settings/sources`);
     await air.waitFor();

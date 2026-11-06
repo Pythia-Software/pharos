@@ -1,13 +1,16 @@
+import {peopleMessageLabelCatalog} from "./people-message-labels";
+import {messageLabelConversationQuery,messageLabelResultParameters} from "./message-label-results-model";
 import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
 import { jsonInspectionTemplate } from "./query-inspection-contract";
 import { usageQuerySchema,usageActionQuery,fittedDefaultQuery } from "./usage-query-columns";
+import { withFingerprintColumn } from "./fingerprint-columns";
 import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
-import { analysisCycles, analysisDefaults, analysisReductions, analysisVersion, analysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, analysisCycles, analysisDefaults, analysisReductions, analysisVersion, allAnalysisViews, availableViews, canonicalState, compareModes, cycleUnavailable, noSplit, normalizeAnalysis, records, rollingOps, switchView, trendKind, validAnalysisState, viewUnavailable, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { dashboardDefaults } from "./dashboard-defaults";
 import { defaultThinking, thinkingBreakdowns, thinkingRangeDays, thinkingViews } from "./thinking-model";
 import { chartPeriods } from "./chart-period";
@@ -28,7 +31,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
+import { appSections, findingsPages, fixesPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -52,7 +55,7 @@ const fail = (message: string): never => { throw new Error(`site map: ${message}
 
 // ----- Datasets ----------------------------------------------------------------
 
-export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, loadSchema(document)])) as Record<QueryDataset, FieldSchema>;
+export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, withFingerprintColumn(loadSchema(document), name)])) as Record<QueryDataset, FieldSchema>;
 
 type FieldValue = { value: string; label?: string };
 type SiteField = { name: string; label: string; type: string; ops: string; values?: FieldValue[]; description?: string };
@@ -90,7 +93,7 @@ export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>):
   const merged = { ...dashboardDefaults[topic], ...chart } as AnalysisState;
   if (!validAnalysisState(catalog, merged)) return "invalid";
   if (merged.v !== analysisVersion || json(canonicalState(catalog, merged)) !== json(merged)) return "coercible";
-  const drawn = normalizeAnalysis(catalog, merged) as Record<string, unknown>;
+  const drawn = normalizeAnalysis(peopleMessageLabelCatalog(catalog,merged), merged) as Record<string, unknown>;
   const keys = chartKeys[(merged.view ?? "trend") as AnalysisView];
   return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
 }
@@ -111,8 +114,9 @@ export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Re
 // The keys a canonical analyze_chart holds for each view, in order: the
 // settings that view draws. A non-empty legend selection follows them.
 // Other keys are left out; the page fills them from its defaults.
+const trendKeys = ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "norm", "normPeriods", "seriesLimit"];
 export const chartKeys: Record<AnalysisView, string[]> = {
-  trend: ["v", "view", "metric", "split", "period", "hours", "days", "rollingPeriods", "rollingOp", "display", "scale", "share", "nonzero", "completePeriods", "norm", "normPeriods", "seriesLimit"],
+  trend: trendKeys, trend_line: trendKeys, trend_bar: trendKeys,
   compare: ["v", "view", "unit", "metric", "split", "reduce", "compareAs", "minSamples", "scale"],
   distribution: ["v", "view", "unit", "metric", "split", "minSamples", "scale"],
   scatter: ["v", "view", "unit", "metric", "metricY", "split", "scale", "scaleY"],
@@ -150,12 +154,13 @@ type Scalar = string | number | boolean;
 type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
 type Shape = { option: string; constraints: string[][]; fallback: string[] };
 const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
+const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric","split"]]),
+  shape("rollingOp", [["metric","split"]]), shape("period", [["metric", "split", "multiple_periods"]], ["metric", "split", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
 const drawShapes: Record<AnalysisView, Shape[]> = {
-  trend: [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric"]]),
-    shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])],
-  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
-  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
-  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
+  trend: trendShapes, trend_line: trendShapes, trend_bar: trendShapes,
+  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit","metric"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split", "unit", "metric", "reduce"]])],
+  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit","metric"]])],
+  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit","metric"]])],
   cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("reduce", [["metric"]], ["metric", "self"])],
 };
 // The defaults normalizeAnalysis fills multiple_periods' inputs with.
@@ -169,7 +174,7 @@ function candidates(catalog: AnalysisCatalog, option: string): Scalar[] {
   const measures = Object.keys(catalog.measures);
   switch (option) {
     case "metric": case "metricY": return measures;
-    case "split": return [noSplit, ...Object.keys(catalog.breakdowns), ...Object.keys(catalog.components ?? {})];
+    case "split": return [...catalog.allowNoSplit === false ? [] : [noSplit], ...Object.keys(catalog.breakdowns), ...Object.keys(catalog.components ?? {})];
     case "unit": return [records, ...Object.keys(catalog.units)];
     case "reduce": return analysisReductions.map(([id]) => id);
     case "compareAs": return [...compareModes];
@@ -248,7 +253,7 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
   const options = drawShapes[view].map(rule => rule.option), merge = dashboardDefaults[topic] as Record<string, unknown>;
   const base = Object.fromEntries(Object.entries(defaults).filter(([name]) => !options.includes(name)));
   const choices: Array<[string, Array<Scalar | undefined>]> = options.map(option => [option, [...domains[option], ...option in merge ? [] : [undefined]]]);
-  if (view === "trend") choices.push(["multiple_periods", [false, true]]);
+  if (isTrendView(view)) choices.push(["multiple_periods", [false, true]]);
   const states: Array<{ chart: Record<string, unknown>; verdict: Verdict }> = [];
   const walk = (index: number, chart: Record<string, unknown>) => {
     if (index === choices.length) {
@@ -275,7 +280,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const start = { ...merge, v: analysisVersion } as AnalysisState;
   const moved = normalizeAnalysis(catalog, switchView(catalog, normalizeAnalysis(catalog, start), view)) as Record<string, unknown>;
   // Outside the trend a missing scale draws linear, as normalizedDashboardChart reads it.
-  const defaults = canonicalChart({ ...moved, v: analysisVersion, view, ...view === "trend" ? {} : { scale: moved.scale ?? "linear" } });
+  const defaults = canonicalChart({ ...moved, v: analysisVersion, view, ...isTrendView(view) ? {} : { scale: moved.scale ?? "linear" } });
   if (chartVerdict(topic, defaults) !== "valid") fail(`${topic} ${view} defaults are not drawn as given: ${json(defaults)}`);
   const keys = chartKeys[view];
   // Every key validAnalysisState checks in this view, drawn or not: a value
@@ -285,7 +290,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const domains: Record<string, Scalar[]> = Object.fromEntries(allChartKeys.filter(name => !numericKeys.includes(name) && (keys.includes(name) || checked(name))).map(option => [option, domainOf(topic, defaults, option)]));
   const numeric = numericOptions(topic, view, defaults);
   const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
-    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(catalog, item.merged as AnalysisState) as Record<string, unknown> }));
+    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(peopleMessageLabelCatalog(catalog,item.merged as AnalysisState), item.merged as AnalysisState) as Record<string, unknown> }));
   const drawing = states.filter(item => item.verdict !== "invalid");
   // Each rule from the drawings: what stays, what replaces it, and the fill.
   const rules: Rule[] = [];
@@ -363,6 +368,7 @@ function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
   const add = (key: string, value: unknown) => { if (!probes.has(key)) probes.set(key, []); if (!probes.get(key)!.some(item => json(item) === json(value))) probes.get(key)!.push(value); };
   for (const recipe of queryRecipes) if (recipe.destination?.topic === topic) for (const [key, value] of Object.entries(recipe.destination.chart)) add(key, value);
   for (let position = 0; position < Object.keys(catalog.measures).length; position++) add("metric", position);
+  for (const [key, values] of Object.entries(catalog.legacyValues ?? {})) for (const value of values) add(key, value);
   const names: LegacyName[] = [];
   for (const [key, values] of probes) for (const value of values) {
     const state = { ...base, [key]: value }, read = catalog.legacy(state as AnalysisState) as Record<string, unknown>;
@@ -375,13 +381,14 @@ function dashboardFacts(topic: UsageTopic) {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   if (catalog.dataset !== usageTopicDatasets[topic]) fail(`${topic} draws ${catalog.dataset} but opens ${usageTopicDatasets[topic]}`);
   const views = Object.fromEntries(availableViews(catalog).map(([view, label]) => [view, viewFacts(topic, view, label)]));
-  const unavailable = Object.fromEntries((["trend", "compare", "distribution", "scatter", "cycle"] as AnalysisView[]).flatMap(view => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
+  const unavailable = Object.fromEntries(allAnalysisViews.flatMap(([view]) => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
   return {
     dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic], ...legacyNames(topic),
+    ...catalog.trend.allSeries ? { series: { mode: "all", note: "Every matching label is shown; saved seriesLimit values do not fold labels into Other. Legend selections still apply." } } : {},
     defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults),
     views, ...Object.keys(unavailable).length ? { unavailable_views: unavailable } : {},
     measures: Object.fromEntries(Object.entries(catalog.measures).map(([id, measure]) => [id, { label: measure.label, unit: measure.unit, kind: trendKind(measure), additive: measure.additive, per_record_value: Boolean(measure.value), note: measure.note }])),
-    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.note ? { note: breakdown.note } : {} }])),
+    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.measures ? {measures:breakdown.measures,views:breakdown.views,source_dataset:"people_message_labels",note:"Each message counts once under its highest-confidence accepted specific label or that label's family. Groups add up to the message total. Only message-count metrics use this source."} : {}, ...breakdown.note ? { note: breakdown.note } : {} }])),
     components: Object.fromEntries(Object.entries(catalog.components ?? {}).map(([id, components]) => [id, { label: components.label, measures: components.measures, fallback: components.fallback, parts: components.parts.map(part => part.label) }])),
     units: {
       [records]: { label: catalog.records.label, plural: catalog.records.plural, note: catalog.records.note },
@@ -393,7 +400,7 @@ function dashboardFacts(topic: UsageTopic) {
 
 // The chart's option labels where a module names them.
 const optionLabels = {
-  view: Object.fromEntries(analysisViews),
+  view: Object.fromEntries(allAnalysisViews),
   reduce: Object.fromEntries(analysisReductions),
   window: Object.fromEntries(chartRanges.filter(([range]) => range !== "today").map(([range, label]) => [String(rangeDays(range)), range === "1d" ? "1 day" : label])),
 };
@@ -467,7 +474,7 @@ type SiteCard = {
   url: { path: string; params: Array<[string, ParamSpec]> };
 };
 export const recipeTextWindows = Object.fromEntries(rollingWindowDays.map(days => [String(days), Object.fromEntries(["{days}", "{period}", "{lastDays}"].map(token => [token, describeRecipeText(token, days)]))]));
-const cardPage = (recipe: QueryRecipe) => recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
+const cardPage = (recipe: QueryRecipe) => recipe.habits ? "analyze/habits" : recipe.thinking ? `analyze/${recipe.thinking.overview?"thinking-overview":"thinking-detail"}` : recipe.destination ? `analyze/${recipe.destination.topic}` : recipe.dataset === "library" ? "library" : recipe.dataset === "findings" ? "findings/table" : `analyze/query/${recipe.dataset}`;
 
 export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
   const windows = recipe.period ? [] : [...rollingWindowDays];
@@ -481,7 +488,7 @@ export function siteCard(recipe: QueryRecipe, clock: Date): SiteCard {
     const chart = JSON.parse(plain.searchParams.get("analyze_chart")!), topic = recipe.destination.topic;
     const drawn = normalizeAnalysis(analysisCatalogs[topic]!, canonicalState(analysisCatalogs[topic]!, { ...dashboardDefaults[topic], ...chart })) as Record<string, unknown>;
     card.chart = chart;
-    card.state = canonicalChart({ ...drawn, v: analysisVersion, ...drawn.view === "trend" ? {} : { scale: drawn.scale ?? "linear" } });
+    card.state = canonicalChart({ ...drawn, v: analysisVersion, ...isTrendView(drawn.view) ? {} : { scale: drawn.scale ?? "linear" } });
     if (chartVerdict(topic, card.state) !== "valid") fail(`${recipe.id}'s dashboard state is not drawn as given: ${json(card.state)}`);
     card.filters = decode(plain.searchParams.get("analyze_filters")!).where;
   }
@@ -574,8 +581,8 @@ const thinkingOptions = (detail: boolean): Option[] => [
   ...detail ? [thinkingOption("view", "The chart. Box-plot views split by model + effort when breakdown is none.", thinkingViews)] : [],
   thinkingOption("model", "A recorded model name (model_requests.model), or all."),
   thinkingOption("effort", "A recorded effort (model_requests.effort), or all."),
+  thinkingOption("groupBy", "The breakdown: one curve, panel, box or row per group. Waiting defaults to model.", thinkingBreakdowns),
   ...detail ? [
-    thinkingOption("groupBy", "The breakdown: one panel, box or row per group.", thinkingBreakdowns),
     thinkingOption("normalization", "Distributions as shares of each group or as counts.", ["share", "count"]),
     thinkingOption("sortBy", "Group order. Effort keeps low to high, Unreported last.", [["median", "Median wait"], ["p95", "95th percentile"], ["volume", "Requests"]]),
     thinkingOption("sortDirection", "Group order direction.", [["desc", "Descending"], ["asc", "Ascending"]]),
@@ -593,8 +600,9 @@ const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "rang
 // dashboard cannot become a page that takes only filters.
 type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
+  compaction: { catalog: true }, labels:{catalog:true},
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
-  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
+  tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
   agent_experience: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },
@@ -696,7 +704,7 @@ export function buildSiteMap(inputs: SiteInputs) {
       for (const dataset of Object.keys(usageDatasets) as UsageDataset[]) {
         const page = add({ path: `analyze/query/${dataset}`, title: usageDatasets[dataset].label, description: usageDatasets[dataset].description, route: "/analyze",
           fixed: { analyze_mode: "query", analyze_data: dataset }, dataset, builder: "queryURL",
-          options: [{ name: "return_topic", param: "analyze_topic", kind: "enum", default: usageDatasetTopics[dataset], values: Object.entries(usageTopics).map(([value, item]) => ({ value, label: item.label })), description: "Dashboard topic retained for return navigation, independent of the source dataset." }, whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset)]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
+          options: [{ name: "return_topic", param: "analyze_topic", kind: "enum", default: usageDatasetTopics[dataset], values: Object.entries(usageTopics).map(([value, item]) => ({ value, label: item.label })), description: "Dashboard topic retained for return navigation, independent of the source dataset." }, whereOption(`q_${dataset}`, dataset, [recordKeywordParameter(dataset),...(dataset==="message_labels"?messageLabelResultParameters:[])]), ...rollingWindowField(dataset) ? [windowOption("window_days", rollingWindowDays, `A rolling window on ${dataset}.window_field: its terms appended to the where terms, and window_mode=relative, window_days, window_field and window_dataset.`)] : []] });
         query.children!.push(page.path);
       }
     }
@@ -713,32 +721,37 @@ export function buildSiteMap(inputs: SiteInputs) {
         child({ path: `findings/${view}`, title: page.label, description: pageDescriptions[`findings/${view}`], route: "/findings", fixed: { view },
           ...view === "table" ? { dataset: "findings", builder: "queryURL", options: [whereOption("q_findings", "findings"), windowOption("window_days", rollingWindowDays, "A rolling window on findings.window_field, as for query tables.")] } : {} });
       }
-      const safety = child({ path: "findings/safety", title: "Risky actions", description: "Deterministically selected review questions with separate prompt baskets and handoff history.", route: "/findings", fixed: { optimize_area: "safety" }, children: [] });
+      const safety = child({ path: "findings/safety", title: "Risky actions", description: "Notices about likely dangerous agent actions, most dangerous checks first, with separate prompt baskets and handoff history.", route: "/findings", fixed: { optimize_area: "safety" }, children: [] });
       for (const page of safetyPages.slice(1)) {
         const view = new URL(page.href!, origin).searchParams.get("view")!;
         const node = add({ path: `findings/safety/${view}`, title: page.label, description: pageDescriptions[`findings/safety/${view}`], route: "/findings", fixed: { optimize_area: "safety", view },
           ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
         safety.children!.push(node.path);
       }
+      const fixes = child({ path: "findings/fixes", title: "Fixes", description: "Recurring problems agents run into that a change to guidance, environment, tools, setup or docs could prevent, grouped from agent events, with where each fix belongs, prompt baskets per place and handoff history.", route: "/findings", fixed: { optimize_area: "fixes" }, children: [] });
+      for (const page of fixesPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view },
+          ...view === "table" ? { dataset: "fixes", builder: "queryURL", options: [whereOption("q_fixes", "fixes")] } : {} }).path);
+      }
     }
     if (section.path === "work") {
-      node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer or sessions.";
+      node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer.";
       node.options = [
         { name: "work_id", param: "{work_id}", kind: "id", id: "work_id", description: "The work item (workspace) in the path." },
         ...readerParams.map(param => ({ name: param.name, param: param.name, kind: param.id ? "id" : param.name === "at" ? "datetime" : "text", ...param.id ? { id: param.id } : {},
           ..."requires" in param ? { requires: param.requires.map(name => needs(name)) } : {}, ..."conflicts" in param ? { conflicts: [...param.conflicts] } : {}, description: param.description })),
-        { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions." },
-        { name: "sessions", param: "sessions", kind: "enum", values: values(["hidden"]), conflicts: ["explorer"], description: "Hide the delegation explorer." },
+        { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions. Legacy explorer=parallel links open Timeline." },
         { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Sessions as a hierarchy, or ranked by one metric." },
         { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, requires: [needs("mode", "rank")], description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
-        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], requires: [needs("mode", "rank")], description: "In rank mode, the session's own metric (self) or with everything below it (all)." },
+        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], description: "The hierarchy and ranking show the session's own metrics (self) or with everything below it (all)." },
         { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], requires: [needs("mode", "rank")], description: "In rank mode." },
         { name: "collapsed", param: "delegation_collapsed", kind: "text", description: "Comma-separated session ids to collapse, sorted." },
         { name: "session", param: "delegation_session", kind: "text", description: "The selected session id." },
         { name: "range", param: "delegation_start", end_param: "delegation_end", kind: "range", description: "A time range in epoch milliseconds: delegation_start and delegation_end, end after start." },
       ];
       const delegationParams = Object.keys(delegationRouteValues({ mode: "rank", sort: "", scope: "", direction: "", collapsed: [], selected: "", range: [0, 1] }));
-      Object.assign(node, { delegation_params: delegationParams.filter(key => !["delegation_search", "delegation_matching"].includes(key)) });
+      Object.assign(node, { delegation_params: delegationParams.filter(key => !["delegation_search", "delegation_matching", "sessions"].includes(key)) });
     }
     if (section.path === "settings") {
       const root = inputs.settings.find(page => page.route === "/settings") ?? fail("no /settings panel");
@@ -751,7 +764,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   for(const node of Object.values(nodes))if(node.dataset&&node.options?.some(option=>option.kind==="where"&&option.param.startsWith("q_"))){
     const schema=siteSchemas[node.dataset as QueryDataset];
     const initial=fittedDefaultQuery(schema);
-    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
+    Object.assign(node,{query_default:node.path==="library"?freshSearch(schema).query:Object.hasOwn(usageDatasets,node.dataset)?usageActionQuery(node.dataset==="message_labels"?messageLabelConversationQuery(initial):initial,usageQuerySchema(schema,node.dataset as UsageDataset),node.dataset as UsageDataset):initial});
   }
   return {
     version: siteMapVersion,
@@ -770,7 +783,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),
     query_state: {
       select:"Ordered columns: {field, width?, render?, display?}[]; [] uses dataset defaults.",
-      fitToScreen:"Boolean; false keeps explicit widths.",
+      fit:"Sizing: screen/content; omitted keeps widths.",
       where:"Native filter terms and AND/OR groups; timestamps can be relative (-7d, +0s).",
       orderBy:"Ordered {field, dir:asc|desc, nulls?:first|last, extract?}[]",
       limit:"Page size", offset:"Zero-based result offset",

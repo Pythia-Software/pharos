@@ -62,6 +62,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("PHAROS_SUPPORT_DIR", support)
 	// Tests of the lookup point githubCLI at a stub.
 	githubCLI, githubPause = "pharos-test-no-gh", time.Millisecond
+	// GPU telemetry must not invoke ioreg in ordinary tests.
+	processGPU = &gpuSampler{now: time.Now}
 	// Tests of the drive checks stub the tools (see stubDriveTool).
 	driveTool = func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		return nil, fmt.Errorf("%s does not run in tests", name)
@@ -350,7 +352,7 @@ func apiCall(t testing.TB, server *Server, token, method, path string, body any)
 			t.Fatal(err)
 		}
 	}
-	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	request := queryFixtureHTTPRequest(method, path, bytes.NewReader(payload))
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}

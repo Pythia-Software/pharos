@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
@@ -88,179 +87,6 @@ func TestLegacyUsageRowsIncludeSelectedLineage(t *testing.T) {
 	}
 }
 
-func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.T) {
-	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 80)
-	if _, err := c.DB.Exec(`UPDATE tool_calls SET program=' '||char(10)||'git',model=' null ',mcp_server=' null ',started_at=NULL WHERE id='call-0';
- UPDATE tool_calls SET program='null',subcommand=' status ' WHERE id='call-1'`); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	if err := c.ensureToolRollup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// /metrics answers the same shapes from the projection exactly as the
-	// generic executor answers them from the calls, in the same order.
-	v2Schema := PharosToolCallsSchema()
-	generic := queryV2Dataset("tool_calls", v2Schema)
-	generic.SourceSQL = toolCallDataset.v2Source(v2Schema)
-	accelerated := func(q qt.MetricQuery) (qt.SQLiteV2ExecutionResult, bool, error) {
-		tx, release, err := beginQueryV2(ctx, c.reader())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer release()
-		return c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", v2Schema), q, qt.PlanOptions{Now: time.Now()})
-	}
-	midnight := func(year int, month time.Month, day int) string {
-		return time.Date(year, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
-	}
-	for _, groups := range [][]string{{}, {"repository_name", "activity", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
-		{"day", "status"}, {"month", "status"}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"},
-		{"model", "effort", "week"}, {"model_effort", "program", "subcommand", "tool_category", "command_category"}} {
-		for _, where := range [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "provider", Op: "=", Value: "absent"}},
-			{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}},
-			{{Field: "started_at", Op: ">=", Value: midnight(2026, 8, 31)}, {Field: "started_at", Op: "<", Value: midnight(2026, 9, 2)}, {Field: "status", Op: "=", Value: "ok"}},
-			{{Any: []qt.WhereClause{{Field: "day", Op: "=", Value: "2026-08-31"}, {Field: "day", Op: "=", Value: "2026-09-02"}}}},
-			{{Any: []qt.WhereClause{{Field: "repository_name", Op: "is_null"}, {Field: "repository_name", Op: "="}}}},
-			{{Field: "repository_name", Op: "="}}, {{Field: "repository_name", Op: "!="}}, {{Field: "mcp_server", Op: "!=", Value: "pharos"}},
-			{{Field: "tool_name", Op: "=", Value: "Bash", Negated: true}, {Field: "program", Op: "is_not_null"}},
-			{{Field: "model", Op: "is_null"}}, {{Field: "activity", Op: "=", Value: "git"}, {Field: "operation_name", Op: "!=", Value: "git status"}},
-			{{Field: "started_at", Op: ">=", Value: midnight(2026, 9, 1)}},
-			{{Field: "started_at", Op: "<", Value: midnight(2026, 9, 1)}},
-		} {
-			q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
-				qt.AggSpec{ID: "calls", Op: "count", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
-			q.Where = where
-			got, handled, err := accelerated(q)
-			if err != nil || !handled {
-				t.Fatalf("accelerator declined %v/%v: %v", groups, where, err)
-			}
-			want, err := generic.ExecuteV2(ctx, c.reader(), nil, &q, qt.PlanOptions{})
-			if err != nil || !same(got, want) {
-				left, _ := json.Marshal(got)
-				right, _ := json.Marshal(want)
-				t.Fatalf("accelerated metrics differ for %v/%v: %v\n got %s\nwant %s", groups, where, err, left, right)
-			}
-		}
-	}
-	for _, q := range []qt.MetricQuery{
-		metricRequest(qt.AggSpec{ID: "ids", Op: "count", GroupBy: []string{"id"}}),
-		metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "result_tokens"}),
-		metricRequest(qt.AggSpec{ID: "formula", Expression: "COUNT()", GroupBy: []string{"day"}}),
-		metricRequest(qt.AggSpec{ID: "top", Op: "count", GroupBy: []string{"tool_name"}, GroupLimit: 2}),
-		metricRequest(qt.AggSpec{ID: "shown", Op: "count", GroupBy: []string{"tool_name"}, Scope: "shownRows"}),
-		metricRequest(qt.AggSpec{ID: "filtered", Op: "count", GroupBy: []string{"tool_name"}, Where: []qt.WhereTerm{{Field: "status", Op: "=", Value: "ok"}}}),
-		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "duration_ms", Op: ">", Value: "100"}}, Metrics: []qt.AggSpec{{ID: "time", Op: "sum", Field: "duration_ms"}}},
-		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "tool_name", Op: "contains", Value: "Ba"}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
-		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
-	} {
-		if _, handled, err := accelerated(q); handled || err != nil {
-			t.Fatal("accelerator answered a raw-call shape", q, handled, err)
-		}
-	}
-	projection := func() []map[string]any {
-		t.Helper()
-		tx, err := c.reader().BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer tx.Rollback()
-		rows, err := c.machineTimeRowsIn(ctx, tx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return rows
-	}
-	before := projection()
-	if _, err := c.DB.Exec(`UPDATE tool_call_cube SET duration_ms_sum=123456; INSERT INTO meta(key,value) VALUES('tool_rollup_publication','next-publication') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
-		t.Fatal(err)
-	}
-	if after := projection(); reflect.DeepEqual(before, after) {
-		t.Fatal("cached facts survived a new cube publication")
-	}
-	c.derived.mu.Lock()
-	defer c.derived.mu.Unlock()
-	count := 0
-	for key := range c.derived.entries {
-		if len(key) >= 13 && key[:13] == "machine-time:" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatal("old cube projections retained", count)
-	}
-}
-
-func TestMachineTimeTimestampRangesRequireFreshCube(t *testing.T) {
-	for _, mutation := range []string{
-		"UPDATE meta SET value='older/" + toolRollupVersion + "' WHERE key='tool_rollup_generation'",
-		"UPDATE meta SET value='different' WHERE key='tool_rollup_built_full_revision'",
-		"UPDATE meta SET value='different' WHERE key='tool_rollup_timezone'",
-		"INSERT INTO tool_rollup_dirty(workspace_id,revision) VALUES('pending','test')",
-	} {
-		t.Run(mutation, func(t *testing.T) {
-			c, _ := testCatalog(t)
-			seedToolCalls(t, c, 4)
-			ctx := context.Background()
-			if err := c.ensureToolRollup(ctx); err != nil {
-				t.Fatal(err)
-			}
-			where := []qt.WhereTerm{
-				{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-				{Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-			}
-			accelerated := func(where []qt.WhereTerm) bool {
-				t.Helper()
-				tx, release, err := beginQueryV2(ctx, c.reader())
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer release()
-				q := metricRequest(qt.AggSpec{ID: "calls", Op: "count", GroupBy: []string{"tool_name"}})
-				q.Where = where
-				_, handled, err := c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
-				if err != nil {
-					t.Fatal(err)
-				}
-				return handled
-			}
-			rangeCount := func() (int64, bool) {
-				t.Helper()
-				tx, err := c.reader().BeginTx(ctx, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer tx.Rollback()
-				total, fresh, err := c.freshToolCubeRangeCount(ctx, tx, where)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return total, fresh
-			}
-			// Warm the projection before invalidation: cached facts cannot bypass guards.
-			if !accelerated(where) {
-				t.Fatal("fresh cube declined a whole-day range")
-			}
-			if total, fresh := rangeCount(); !fresh || total != 4 {
-				t.Fatal("range count", total, fresh)
-			}
-			if _, err := c.DB.Exec(mutation); err != nil {
-				t.Fatal(err)
-			}
-			if accelerated(where) {
-				t.Fatal("stale cube used for raw timestamp range")
-			}
-			if _, fresh := rangeCount(); fresh {
-				t.Fatal("stale range count")
-			}
-			if !accelerated(nil) {
-				t.Fatal("published cube queries changed")
-			}
-		})
-	}
-}
-
 func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 	c, cfg := testCatalog(t)
 	text := strings.Repeat("long pasted input ", 10000) + " rare-tail-match"
@@ -291,7 +117,7 @@ func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 			mix.Metrics = append(mix.Metrics, qt.AggSpec{ID: category, Op: "sum", Field: category + "_words"})
 		}
 		mix.Where = sample.where
-		result, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), nil, &mix)
+		result, err := s.executeQueryFixture(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), nil, &mix)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,8 +138,8 @@ func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 		}
 	}
 
-	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "typed_words"}, Where: []qt.WhereTerm{{Field: "text", Op: "contains", Value: "rare-tail-match"}}, OrderBy: qt.OrderBys{{Field: "typed_share", Dir: "asc"}, {Field: "words", Dir: "desc"}}, Limit: 50}}
-	got, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), &q, nil)
+	q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "typed_words"}, Where: []qt.WhereTerm{{Field: "text", Op: "contains", Value: "rare-tail-match"}}, OrderBy: []qt.OrderBy{{Field: "typed_share", Dir: "asc"}, {Field: "words", Dir: "desc"}}, Limit: 50}}
+	got, err := s.executeQueryFixture(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), &q, nil)
 	if err != nil || len(got.Rows.Rows) != 1 {
 		t.Fatal("long selected text rejected", err)
 	}
@@ -346,7 +172,7 @@ func TestUsageFusedSummariesMatchIndependentMetrics(t *testing.T) {
 			spec.Op = ""
 		}
 		metric := metricRequest(spec)
-		want, err := s.executeQueryV2(ctx, "usage", nil, PharosUsageSchema(), nil, &metric)
+		want, err := s.executeQueryFixture(ctx, "usage", nil, PharosUsageSchema(), nil, &metric)
 		if err != nil {
 			t.Fatal(summary.ID, err)
 		}
@@ -381,8 +207,8 @@ func TestMachineTimeCallDrilldownIndexParity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id"}, Where: where, OrderBy: qt.OrderBys{{Field: "started_at", Dir: "desc", Nulls: "last"}}, Limit: 9, Offset: 3}}
-		got, err := s.executeQueryV2(context.Background(), "tool_calls", nil, native, &q, nil)
+		q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id"}, Where: where, OrderBy: []qt.OrderBy{{Field: "started_at", Dir: "desc", Nulls: "last"}}, Limit: 9, Offset: 3}}
+		got, err := s.executeQueryFixture(context.Background(), "tool_calls", nil, native, &q, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
