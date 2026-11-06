@@ -438,7 +438,7 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 	// The status document carries resources (§10); the operations document
 	// and the eject check do not.
 	withResources := withLibraries && !fresh && strings.HasPrefix(path, "/api/status")
-	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker", OwnOnly: true}}
+	sampled := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
 	entries := []map[string]any{}
 	for index, library := range libraries {
 		service := map[string]any{"state": "stopped", "pid": nil, "started_at": nil, "restarts_10m": 0}
@@ -570,9 +570,9 @@ func (b *brokerOperations) libraryResources(entries []map[string]any, processes 
 			}
 		}
 		name, _ := entry["name"].(string)
-		entry["resources"] = summarizeResources(defaultString(name, "This library"), own)
+		entry["resources"] = withProcessGPU(summarizeResources(defaultString(name, "This library"), own))
 	}
-	return summarizeResources("Pharos", readings)
+	return withProcessGPU(summarizeResources("Pharos", readings))
 }
 
 // cleanDeadLeases deletes the unheld leases in dir: app-level commands (a

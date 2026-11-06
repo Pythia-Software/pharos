@@ -39,20 +39,20 @@ func TestHomeQueryRecipesV2(t *testing.T) {
 	for _, recipe := range tracker.Recipes {
 		t.Run(recipe.ID, func(t *testing.T) {
 			path := "/api/query/" + recipe.Dataset + "/metrics"
-			var request any = qt.MetricQuery{Version: 2, Profile: qt.SQLiteExpressionProfile, Where: recipe.Where, Limit: 50, Metrics: recipe.Measures}
+			var request any = queryFixtureMetrics{Version: 2, Profile: qt.SQLiteExpressionProfile, Where: recipe.Where, Limit: 50, Metrics: recipe.Measures}
 			if slices.ContainsFunc(recipe.Measures, func(metric qt.AggSpec) bool { return metric.DateGrouping != nil }) {
 				path = "/api/query/" + recipe.Dataset + "/query-v3"
 				request = qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: false,
 					Result: qt.WireQuery{Where: recipe.Where, Limit: 50}, Metrics: recipe.Measures}
 			} else if len(recipe.Measures) == 0 {
 				path = "/api/query/" + recipe.Dataset + "/rows-v2"
-				request = qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Where: recipe.Where, Limit: 3}}
+				request = queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Where: recipe.Where, Limit: 3}}
 			}
 			body, err := json.Marshal(request)
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+			r := queryFixtureHTTPRequest(http.MethodPost, path, strings.NewReader(string(body)))
 			r.Header.Set("Authorization", "Bearer "+config.APIToken)
 			w := httptest.NewRecorder()
 			server.ServeHTTP(w, r)
@@ -141,7 +141,7 @@ func TestHomeQueryCardGroupedDestinations(t *testing.T) {
 			}
 			request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
 				Source: qt.WireQuery{Where: recipe.Where, Limit: 50}, Grouping: &grouping,
-				Result: qt.WireQuery{Select: fields, Where: view.Having, OrderBy: qt.OrderBys{{Field: view.ValueField, Dir: "desc", Nulls: "last"}}, Limit: 3},
+				Result: qt.WireQuery{Select: fields, Where: view.Having, OrderBy: []qt.OrderBy{{Field: view.ValueField, Dir: "desc", Nulls: "last"}}, Limit: 3},
 			}
 			if view.CoverMetric != nil {
 				request.Metrics = []qt.AggSpec{*view.CoverMetric}

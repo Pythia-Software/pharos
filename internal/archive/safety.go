@@ -17,29 +17,43 @@ import (
 	"strings"
 )
 
-const safetyVersion = "safety-v2"
+const safetyVersion = "safety-v3"
 const safetyWindowDays = 28
+
+// Danger is how likely a notice is to need the user: high notices are rarely
+// routine (credentials leaving their store, rewritten published history,
+// cloud and disk changes); low ones are usually an agent's own work.
+const (
+	safetyLow = iota + 1
+	safetyMedium
+	safetyHigh
+)
+
+var safetyDangerLabels = map[int]string{safetyHigh: "high", safetyMedium: "medium", safetyLow: "low"}
 
 type safetyRule struct {
 	Title, Explanation string
 	Questions          []string
-	Priority           int
+	Danger             int
+	// Fixes names the safer or established way to do the same work, then
+	// the prohibition to add when there is none.
+	Fixes string
 }
 
 var safetyRules = map[string]safetyRule{
-	"credentials":     {"Check where credentials were copied", "A command selected credential files or cloud configuration for copying to another location.", []string{"Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"}, 0},
-	"database":        {"Review a database change", "A command contains a database mutation. Its environment and affected records need checking.", []string{"Which database and environment were selected?", "What tables and predicates bound the change, and what result or recovery evidence exists?"}, 0},
-	"remote-history":  {"Review a change to published Git history", "A command selects a force push or remote ref deletion.", []string{"Which remote and refs were selected?", "What did the lease protect, what did the remote report, and what user request covered the change?"}, 0},
-	"boundary-delete": {"Review a deletion outside this checkout", "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.", []string{"Resolve the target using the archived working directory and command context.", "Was the content created for this task, preserved elsewhere, or potentially pre-existing?", "What establishes execution, affected contents, and recovery?"}, 0},
-	"cloud-delete":    {"Review a cloud deletion", "A command selects remote objects for deletion.", []string{"Which account, bucket, and object prefix were selected?", "What establishes deletion, retention, and recovery?"}, 0},
-	"publication":     {"Review a merge or publication", "A command selects a merge, release change, or tag publication.", []string{"Which repository, branch, release, or tag was selected?", "What request covered the operation, and what result establishes its outcome and audience?"}, 0},
-	"system":          {"Review a system change", "A command selects a system service, installation, or disk change.", []string{"Was this a test resource or a persistent system resource?", "What privileges, persistence, and recovery consequences were involved?"}, 0},
-	"local-history":   {"Check a change to saved Git work", "A command selects a reset, history rewrite, branch deletion, or stash discard.", []string{"Which refs or saved work were selected?", "Was the work preserved, and what does the result establish?"}, 1},
-	"delete":          {"Check content selected for deletion", "A command selects checkout content for deletion without establishing that it is disposable.", []string{"Which exact paths were selected?", "Was the content created for this task or preserved elsewhere, and what does the result establish?"}, 1},
-	"process":         {"Check which processes were selected", "A process signal uses a name or expression that may match more than this task's process.", []string{"What could the selector match?", "Is there launch or ownership evidence, and was unrelated work affected?"}, 1},
-	"permissions":     {"Review a permission change", "A command selects permissions outside the recorded checkout or against an unresolved path.", []string{"Which resource and mode or owner were selected?", "Does this broaden access, repair permissions, or protect sensitive content?"}, 1},
-	"api":             {"Check what an API request changes", "An HTTP mutation needs its endpoint and payload semantics checked.", []string{"Which endpoint, method, account, and resource were selected?", "Was this a local test or a consequential change, and what does the response establish?"}, 1},
-	"disk-image":      {"Check a disk image operation", "A command selects a disk image or mounted volume for a lifecycle operation.", []string{"Was this a newly created test image or an existing volume?", "Which image or mount was selected, and what does the result establish?"}, 1},
+	"credentials":     {"Credentials copied to another location", "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.", []string{"Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"}, safetyHigh, "Point the tool at the original store (for gcloud, CLOUDSDK_CONFIG or application-default credentials) or mint a short-lived, scoped token instead of copying; or forbid copying credential stores."},
+	"remote-history":  {"Published Git history rewritten", "A command force-pushed, mirrored, or deleted a branch or tag on a remote that others fetch.", []string{"Which remote and refs were selected?", "What did the lease protect, what did the remote report, and what user request covered the change?"}, safetyHigh, "Push to a new branch, or use --force-with-lease with the expected commit, and protect shared branches; or forbid force pushes and remote ref deletion."},
+	"cloud-delete":    {"Cloud objects deleted", "A command deleted objects or resources in a cloud account.", []string{"Which account, bucket, and object prefix were selected?", "What establishes deletion, retention, and recovery?"}, safetyHigh, "List or dry-run first, scope the prefix narrowly, and rely on object versioning or soft delete; or require confirmation before cloud deletions."},
+	"disk-image":      {"Disk image or volume detached or changed", "A command detached, ejected, resized, or converted an existing disk image or volume.", []string{"Was this a newly created test image or an existing volume?", "Which image or mount was selected, and what does the result establish?"}, safetyHigh, "Operate only on an image the task created, by the device it attached; or forbid detaching, resizing or converting volumes the task did not mount."},
+	"system":          {"System or disk changed", "A command changed a system service, an installation, or a disk.", []string{"Was this a test resource or a persistent system resource?", "What privileges, persistence, and recovery consequences were involved?"}, safetyHigh, "Use a disk image or VM the task creates instead of a real disk or service; or forbid disk and system changes without confirmation."},
+	"boundary-delete": {"Deletion outside the checkout", "A command deleted content outside the recorded checkout and outside temporary or build space, or a path that could expand to a whole directory.", []string{"Resolve the target using the archived working directory and command context.", "Was the content created for this task, preserved elsewhere, or potentially pre-existing?", "What establishes execution, affected contents, and recovery?"}, safetyMedium, "Delete inside the checkout or a mktemp directory the task created, guard variables (${DIR:?}), or move to the Trash; or forbid deleting outside the checkout."},
+	"database":        {"Database changed outside the checkout", "A command changed a database file outside the checkout's scratch space, or a database on another host.", []string{"Which database and environment were selected?", "What tables and predicates bound the change, and what result or recovery evidence exists?"}, safetyMedium, "Work on a copy or a backup-protected transaction, or use the application's own migration or API; or forbid writing to shared databases."},
+	"permissions":     {"Permissions broadened", "A command made a path writable by everyone or setuid, or gave a path outside the checkout a new owner.", []string{"Which resource and mode or owner were selected?", "Does this broaden access, repair permissions, or protect sensitive content?"}, safetyMedium, "Use the narrowest mode that works (u+x, 600, 700) on paths the task owns; or forbid world-writable modes, setuid and ownership changes."},
+	"delete":          {"Checkout or ignored files deleted", "A command deleted the checkout itself, its Git directory, or ignored files such as local configuration and data.", []string{"Which exact paths were selected?", "Was the content created for this task or preserved elsewhere, and what does the result establish?"}, safetyMedium, "Preview with git clean -n, exclude local data (-e .env), or remove named build outputs only; or forbid git clean -x and deleting .git or the checkout."},
+	"publication":     {"Published release deleted or replaced", "A command deleted a release, or replaced assets others may already have downloaded.", []string{"Which repository and release were selected?", "What request covered the operation, and who may already depend on the release?"}, safetyMedium, "Publish a new version rather than replacing or deleting one others may depend on; or require confirmation for release deletion."},
+	"local-history":   {"Shared Git work discarded", "A command force-deleted a shared branch, or dropped a stash entry by position. Every worktree shares one stash.", []string{"Which refs or saved work were selected?", "Was the work preserved, and whose work was it?"}, safetyLow, "Stash with a message and drop that entry by name, or keep a backup branch; or forbid positional stash drops and force-deleting shared branches."},
+	"process":         {"Every instance of a program stopped", "A process signal matched a program by name, so it can stop other tasks' processes too.", []string{"What could the selector match?", "Is there launch or ownership evidence, and was unrelated work affected?"}, safetyLow, "Record the PID the task started and signal only it, or match a task-specific path or port; or forbid program-wide pkill and killall."},
+	"api":             {"Remote service changed by an API request", "An HTTP request with a mutating method went to a service that is not local.", []string{"Which endpoint, method, account, and resource were selected?", "Was this a test or a consequential change, and what does the response establish?"}, safetyLow, "Use a sandbox or test account, or a dry-run endpoint; or require confirmation before changing remote services."},
 }
 
 type safetyCall struct {
@@ -63,6 +77,8 @@ type safetyEvidence struct {
 	Outcome       string `json:"outcome"`
 	Conditional   bool   `json:"conditional"`
 	Path          string `json:"path"`
+	// Quote marks evidence that is an agent's sentence, not a command.
+	Quote bool `json:"quote,omitempty"`
 }
 
 type safetyCandidate struct {
@@ -806,8 +822,9 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 	for _, command := range commands {
 		parsed := parseShellCommand(command.text)
 		directories := safetyDirectories(parsed, command.cwd, call.Root)
+		assignments := safetyAssignments(parsed, command.cwd)
 		for index, segment := range parsed.Segments {
-			cwd := directories[index]
+			cwd, assigned := directories[index], assignments[index]
 			argv := safetyArgv(segment)
 			if len(argv) == 0 {
 				continue
@@ -872,18 +889,46 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				subject, resolved, _ := safetyPath(value, cwd, call.Root)
 				emit(rule, subject, breadth, resolved)
 			}
+			// Resolve a path through the command's own assignments, so a
+			// directory it made with mktemp is recognized as temporary.
+			resolvePath := func(value string) (subject string, resolved, inside, scratch bool) {
+				if expanded, ok := safetyExpand(value, assigned, cwd); ok {
+					value = expanded
+				}
+				subject, resolved, inside = safetyPath(value, cwd, call.Root)
+				return subject, resolved, inside, resolved && safetyScratch(subject)
+			}
 			switch program {
 			case "rm", "rmdir":
+				recursive := safetyFlag(flags, "rR", "--recursive")
+				breadth := "single-path"
+				if recursive {
+					breadth = "recursive"
+				}
+				root := path.Clean(call.Root)
 				for _, value := range ops {
-					subject, resolved, inside := safetyPath(value, cwd, call.Root)
-					rule, breadth := "delete", "single-path"
-					if safetyFlag(flags, "rR", "--recursive") {
-						breadth = "recursive"
-						if !resolved || !inside {
-							rule = "boundary-delete"
+					subject, resolved, inside, scratch := resolvePath(value)
+					switch {
+					case !resolved:
+						// Unknown selections are low signal, except those that
+						// reach the root or a home directory when a variable is
+						// empty, and every entry of the checkout itself.
+						if recursive && safetyEmptyExpansion.MatchString(value) {
+							emit("boundary-delete", subject, "empty-expansion", false)
+						} else if recursive && (value == "*" || value == "./*") && path.IsAbs(call.Root) && cwd == root {
+							emit("delete", root+"/*", "checkout-contents", true)
 						}
+					case scratch:
+					case inside:
+						// Inside the checkout, only the checkout itself or its
+						// Git data are worth a look; agents routinely remove
+						// files they made.
+						if subject == root || subject == root+"/.git" || strings.HasPrefix(subject, root+"/.git/") {
+							emit("delete", subject, breadth, true)
+						}
+					default:
+						emit("boundary-delete", subject, breadth, true)
 					}
-					emit(rule, subject, breadth, resolved)
 				}
 			case "cp", "mv", "rsync":
 				ops = []string{}
@@ -939,22 +984,28 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 						}
 					}
 					if prunesDestination {
-						subject, resolved, _ := safetyPath(ops[len(ops)-1], cwd, call.Root)
+						destination := ops[len(ops)-1]
+						subject, resolved, _, scratch := resolvePath(destination)
 						sources := rsyncScope.operands[:len(rsyncScope.operands)-1]
-						emit("boundary-delete", subject, "destination-pruning:"+rsyncScope.identity()+";sources="+jsonText(sources), resolved && rsyncScope.resolved)
+						if resolved && !scratch || !resolved && safetyEmptyExpansion.MatchString(destination) {
+							emit("boundary-delete", subject, "destination-pruning:"+rsyncScope.identity()+";sources="+jsonText(sources), resolved && rsyncScope.resolved)
+						}
 					}
 				}
 			case "sqlite3", "psql", "mysql":
 				for _, a := range args {
 					if safetySQLMutates(a, program) {
-						db := "Database connection needs context"
-						if program == "sqlite3" && len(ops) > 0 {
-							db = ops[0]
-						}
-						if db == "Database connection needs context" || slices.Contains(flags, "-cmd") || slices.Contains(flags, "--cmd") {
-							emit("database", "Database connection needs context", "mutation", false)
-						} else if db != ":memory:" {
-							emitPath("database", db, "mutation")
+						// A scratch or test database is routine. A SQLite file
+						// that resolves elsewhere, or a server on another host,
+						// holds data someone may depend on.
+						if program == "sqlite3" {
+							if len(ops) > 0 && ops[0] != ":memory:" {
+								if subject, resolved, _, scratch := resolvePath(ops[0]); resolved && !scratch {
+									emit("database", subject, "mutation", true)
+								}
+							}
+						} else if host := safetyDatabaseHost(args); host != "" {
+							emit("database", program+" · "+host, "mutation", safetyLiteralSelection(host))
 						}
 						break
 					}
@@ -987,7 +1038,19 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 					}
 				}
 				subject := verb + " " + strings.Join(selected, " ")
-				if verb == "push" && (safetyFlag(flags, "f", "--force") || safetyFlag(flags, "", "--force-with-lease") || safetyFlag(flags, "d", "--delete") || emptySource || slices.Contains(flags, "--mirror") || forcedRef) {
+				// A lease protects others' work on a feature branch; only a
+				// lease push to a shared branch, an unconditional push, or a
+				// deletion rewrites history others depend on.
+				unconditional := safetyFlag(flags, "f", "--force") || slices.Contains(flags, "--mirror") || forcedRef || safetyFlag(flags, "d", "--delete") || emptySource
+				shared := false
+				for _, ref := range pushOps[min(1, len(pushOps)):] {
+					ref = strings.TrimPrefix(ref, "+")
+					if _, destination, ok := strings.Cut(ref, ":"); ok {
+						ref = destination
+					}
+					shared = shared || safetySharedBranch.MatchString(ref)
+				}
+				if verb == "push" && (unconditional || safetyFlag(flags, "", "--force-with-lease") && shared) {
 					breadth := "lease"
 					if safetyFlag(flags, "f", "--force") || slices.Contains(flags, "--mirror") || forcedRef {
 						breadth = "unconditional"
@@ -1017,11 +1080,16 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 						breadth += ":selection=" + jsonText(selection)
 					}
 					emit("remote-history", gitRoot+" · "+subject, breadth, gitResolved)
-				} else if verb == "push" && (slices.Contains(flags, "--tags") || strings.Contains(strings.Join(ops, " "), "refs/tags/")) {
-					emit("publication", gitRoot+" · "+subject, "tags", gitResolved)
-				} else if (verb == "reset" && slices.Contains(flags, "--hard")) || verb == "rebase" || (verb == "branch" && safetyFlag(flags, "dD", "--delete")) || (verb == "stash" && (slices.Contains(ops, "drop") || slices.Contains(ops, "clear"))) {
+				} else if verb == "branch" && (safetyFlag(flags, "D", "") || safetyFlag(flags, "d", "--delete") && safetyFlag(flags, "f", "--force")) && slices.ContainsFunc(ops, safetySharedBranch.MatchString) || verb == "stash" && safetyStashDiscard(ops) {
+					// Rebases, resets and deleting a task's own branches
+					// rearrange an agent's own work. Force-deleting a shared
+					// branch, or dropping a stash entry chosen by position
+					// rather than by its own message, can discard someone
+					// else's: the stash is shared by every worktree.
 					emit("local-history", gitRoot+" · "+subject, "local-history", gitResolved)
-				} else if verb == "clean" && !safetyFlag(flags, "n", "--dry-run") {
+				} else if verb == "clean" && !safetyFlag(flags, "n", "--dry-run") && safetyFlag(flags, "xX", "") {
+					// Only cleaning ignored files can remove local secrets and
+					// data (.env, databases); untracked scratch is routine.
 					selection, resolved := safetyCleanScope(subargs)
 					force := 0
 					for _, flag := range flags {
@@ -1033,7 +1101,10 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				}
 			case "gh":
 				ops, repo := safetyGH(args)
-				if len(ops) >= 2 && ((ops[0] == "pr" && ops[1] == "merge") || (ops[0] == "release" && slices.Contains([]string{"create", "delete", "edit", "upload"}, ops[1]))) {
+				// Merging a reviewed PR, pushing a new tag and publishing a
+				// release are routine agent work. Deleting a release, or
+				// replacing assets others already downloaded, is not.
+				if len(ops) >= 2 && ops[0] == "release" && (ops[1] == "delete" || ops[1] == "upload" && slices.ContainsFunc(args, func(a string) bool { return a == "--clobber" || strings.HasPrefix(a, "--clobber=") })) {
 					resolved := safetyLiteralSelection(repo)
 					if repo == "" {
 						repo, resolved, _ = safetyPath(".", cwd, call.Root)
@@ -1059,32 +1130,50 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				}
 			case "pkill", "killall":
 				scope := safetyProcessScope(program, args)
-				if scope.processProbe() {
+				if scope.processProbe() || !slices.ContainsFunc(scope.operands, safetyBroadSelector) {
+					// A selector naming one script, path or port targets the
+					// task's own process; only a program-wide name is broad.
 					continue
 				}
 				emit("process", cwd+" · "+strings.Join(scope.operands, " "), program+":"+scope.identity(), path.IsAbs(cwd) && scope.resolved)
 			case "chmod", "chown":
+				// Making a script executable or restricting access is routine.
+				// Broadening access (world-writable, setuid) or changing who
+				// owns files outside the checkout is worth a look.
 				if len(ops) >= 2 {
+					broadens := program == "chmod" && safetyBroadensMode(ops[0])
 					for _, a := range ops[1:] {
-						_, resolved, inside := safetyPath(a, cwd, call.Root)
-						if !inside || !resolved {
-							emitPath("permissions", a, fmt.Sprintf("%s:recursive=%v", ops[0], safetyFlag(flags, "R", "--recursive")))
+						subject, resolved, inside, scratch := resolvePath(a)
+						if scratch || !resolved && !safetyEmptyExpansion.MatchString(a) {
+							continue
+						}
+						if broadens || program == "chown" && (!inside || strings.HasPrefix(ops[0], "root")) {
+							emit("permissions", subject, fmt.Sprintf("%s:recursive=%v", ops[0], safetyFlag(flags, "R", "--recursive")), resolved)
 						}
 					}
 				}
 			case "hdiutil":
-				if len(ops) >= 1 && slices.Contains([]string{"create", "attach", "detach", "eject", "resize", "convert"}, ops[0]) {
-					emit("disk-image", strings.Join(ops, " "), "disk-image", true)
+				// Creating or mounting an image adds a volume. Detaching,
+				// ejecting or rewriting one can cut off or change data in use;
+				// a volume the command named only through a variable, or an
+				// image in temporary space, is a test fixture.
+				if len(ops) >= 2 && slices.Contains([]string{"detach", "eject", "resize", "convert"}, ops[0]) {
+					target := ops[len(ops)-1]
+					if _, resolved, _, scratch := resolvePath(target); resolved && !scratch {
+						emit("disk-image", strings.Join(ops, " "), "disk-image", true)
+					}
 				}
 			case "diskutil", "launchctl", "systemctl", "installer":
-				if len(ops) > 0 && !slices.Contains([]string{"list", "info", "status", "show", "print"}, ops[0]) {
+				if len(ops) > 0 && !safetySystemRead(ops) {
 					emit("system", strings.Join(ops, " "), "system-operation", true)
 				}
 			case "curl":
 				method, urls := safetyCurl(args)
 				if slices.Contains([]string{"POST", "PUT", "PATCH", "DELETE"}, method) {
 					for _, a := range urls {
-						if strings.HasPrefix(a, "http://") || strings.HasPrefix(a, "https://") {
+						// Local development servers are the agent's own test
+						// targets.
+						if (strings.HasPrefix(a, "http://") || strings.HasPrefix(a, "https://")) && !safetyLocalURL(a) && !(method == "POST" && safetyReadEndpoint.MatchString(a)) {
 							emit("api", safetyRedact(a), method, !strings.ContainsAny(a, "$`"))
 						}
 					}
@@ -1165,6 +1254,19 @@ func (c *Catalog) refreshSafety(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Agents saying they got around a safeguard (safety_safeguards.go).
+	safeguards, events, err := safetySafeguardCandidates(ctx, read, formatTime(c.clock().AddDate(0, 0, -safetyWindowDays)))
+	if err != nil {
+		return err
+	}
+	for _, candidate := range safeguards {
+		if disabled[candidate.Rule] || cases[candidate.ID] != nil {
+			continue
+		}
+		value := candidate
+		value.Calls, value.First, value.Last = 1, candidate.Evidence[0].At, candidate.Evidence[0].At
+		cases[value.ID] = &value
+	}
 	if err = read.Commit(); err != nil {
 		return err
 	}
@@ -1226,7 +1328,20 @@ func (c *Catalog) refreshSafety(ctx context.Context) error {
 				return err
 			}
 		}
-		for key, value := range map[string]string{"safety_built_at": formatTime(c.clock()), "safety_version": safetyVersion, "safety_scanned_calls": fmt.Sprint(count)} {
+		// Cases an earlier version selected and this one does not are noise
+		// the user never acted on. Keep any the user dismissed, handed off or
+		// put in a prompt. A disabled check was not run, so its cases stay
+		// until it is enabled and can decide.
+		prune := `DELETE FROM safety_cases WHERE version<>? AND id NOT IN (SELECT case_id FROM safety_state) AND id NOT IN (SELECT case_id FROM safety_cart)`
+		args := []any{safetyVersion}
+		for rule := range disabled {
+			prune += ` AND rule<>?`
+			args = append(args, rule)
+		}
+		if _, err := tx.Exec(prune, args...); err != nil {
+			return err
+		}
+		for key, value := range map[string]string{"safety_built_at": formatTime(c.clock()), "safety_version": safetyVersion, "safety_scanned_calls": fmt.Sprint(count), "safety_scanned_events": fmt.Sprint(events)} {
 			if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 				return err
 			}
