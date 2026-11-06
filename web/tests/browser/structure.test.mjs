@@ -887,9 +887,15 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
 
 test("Background Processing items drag between all four columns for a week", { skip }, async t => {
   let document = structuredClone(defaultApi['GET /api/background']);
+  let heldRead = null, heldSave = null;
   const { page, calls } = await open(t, { url: '/settings/sync', viewport: { width: 1800, height: 1800 }, ready: '#backgroundSchedule .bg-col', api: {
-    'GET /api/background': () => document,
-    'POST /api/background/settings': ({ body }) => {
+    'GET /api/background': () => {
+      if (!heldRead) return document;
+      heldRead.started.resolve();
+      return heldRead.reply.promise;
+    },
+    'POST /api/background/settings': async ({ body }) => {
+      if (heldSave) await heldSave.promise;
       for (const [id, cadence] of Object.entries(body.temporary_cadences)) {
         const item = document.view.items.find(item => item.id === id);
         item.cadence = cadence || item.usual_cadence;
@@ -903,9 +909,34 @@ test("Background Processing items drag between all four columns for a week", { s
     },
   } });
   const schedule = page.locator('#backgroundSchedule');
+  // A poll already in flight must not undo a move, even when it finishes
+  // after the save. Hold responses by condition, without timing assumptions.
+  const stale = structuredClone(document);
+  heldRead = {started: Promise.withResolvers(), reply: Promise.withResolvers()};
+  await page.evaluate(() => { window.scheduleRefresh = window.pharosBackground.refresh(true); });
+  await heldRead.started.promise;
+  heldSave = Promise.withResolvers();
   // Empty the fourth column first: it must remain a destination for every item.
   const backup = schedule.locator('.bg-item[data-item="backup"]');
   await backup.locator('.bg-grip').dragTo(schedule.locator('.bg-col[data-cadence="daily"]'));
+  await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
+  assert.ok(document.view.unscheduled.includes('backup'), 'the task moves before the server answers');
+  // Cadence runs resolve membership on the server, which still has the old
+  // schedule. Task runs use an explicit ID and can remain available.
+  const cadenceRuns = schedule.locator('.bg-col-head .bg-run');
+  for (const run of await cadenceRuns.all()) assert.ok(await run.isDisabled());
+  assert.ok(await schedule.getByRole('button', {name: 'Run Update writing estimates now', exact: true}).isEnabled());
+  await cadenceRuns.evaluateAll(buttons => buttons.forEach(button => button.click()));
+  assert.ok(!calls.some(call => call.method === 'POST' && call.path === '/api/background/run'), 'no cadence runs before the move is saved');
+  const saved = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/background/settings'));
+  heldSave.resolve();
+  heldSave = null;
+  await saved;
+  await page.waitForFunction(() => !document.querySelector('#backgroundSchedule [data-item="backup"] .bg-state').textContent.includes('Saving'));
+  assert.ok(await schedule.locator('.bg-col[data-cadence="daily"] .bg-col-head .bg-run').isEnabled(), 'cadence runs resume after saving');
+  heldRead.reply.resolve(stale);
+  await page.evaluate(() => window.scheduleRefresh);
+  heldRead = null;
   await schedule.locator('.bg-col[data-cadence="daily"] .bg-item[data-item="backup"]').waitFor();
   for (const id of document.view.items.map(item => item.id)) {
     for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
