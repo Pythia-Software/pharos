@@ -270,10 +270,11 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		applyLineCounts(&call, input, details)
 		applyToolURLs(&call, input, content)
 		// Emitting request: the usage in the same provider event, otherwise the
-		// first usage reported at or after the call in its stream.
+		// first usage reported at or after the call in its stream. A call the
+		// person ran themselves took no request.
 		base := blockSuffixPattern.ReplaceAllString(message.NativeID, "")
 		call.RequestKey = byBase[base]
-		if call.RequestKey == "" {
+		if call.RequestKey == "" && message.Role != "user" {
 			for _, request := range perStream[call.Stream] {
 				// An advisor makes no calls, wherever its record is stored.
 				if request.FirstIndex >= index && !claudeAdvisorRequest(messages[request.FirstIndex]) {
