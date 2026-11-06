@@ -281,14 +281,14 @@ async function readJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   return body;
 }
 export function cellTitle(metric: Metric, spec: Spec) {
+  const raw = metric.value?.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  const shown = formatted(metric.value, spec.unit);
   const exact =
-    metric.value == null
+    metric.value == null || spec.unit === "usd" || raw === shown || `${raw}${spec.unit}` === shown.replace(/\s/g, "")
       ? ""
       : spec.unit === "date"
         ? `${localTime(metric.value)}\n`
-        : spec.unit === "usd"
-          ? `${formatUSD(metric.value)}\n`
-          : `${metric.value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${spec.unit}\n`;
+        : `${raw} ${spec.unit}\n`;
   return `${exact}${spec.definition}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
 }
 
@@ -1023,7 +1023,7 @@ export function DelegationExplorer({
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
                                       outline={n.outline}
                                       metadata={<>{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}<SessionAge start={n.start} prefix=" · " /></>}
-                                      title={`${n.label}\n${n.provider} · ${n.model} · Effort: ${n.effort || "unknown"}\n${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
+                                      title={`${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
                                       branch={mode === "hierarchy" ? sessionBranches.get(n.id) : undefined}
                                       folded={mode === "hierarchy" && !!n.child_count}
@@ -1188,7 +1188,7 @@ function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, openTim
     <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}<span role="columnheader">Timeline</span></div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} outline={n.outline} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · ${n.effort || "unknown"}`} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} outline={n.outline} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 10}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
       </div>
       {metrics.map(spec => {
@@ -1794,7 +1794,6 @@ export function ParallelActivity({
                   )}
                 </button>
                 <button
-                  title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · Effort: ${n.effort || "unknown"}`}
                   className="delegation-name"
                   onClick={() => openNode(n)}
                 >

@@ -361,8 +361,7 @@
   }
 
   // The Load row (docs/background-work.md §10): CPU, GPU, memory and disk in
-  // one row (in the app, every Pharos process on this Mac), with the
-  // server's line and each process's in the tooltip. CPU is % of one core,
+  // one row (in the app, every Pharos process on this Mac). CPU is % of one core,
   // as Activity Monitor shows it; I/O is what the processes read and write
   // per second, and Storage what the library keeps on its drive (from the
   // last drive check). A figure not measured yet is a dash, and I/O stays
@@ -381,12 +380,7 @@
     if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
     if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
-    const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
-    const partial = [resources.cpu_partial ? 'CPU' : '', resources.disk_partial ? 'I/O' : ''].filter(Boolean);
-    return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate and may temporarily undercount usage.` : '',
-      gpu ? `GPU: GPU time from these Pharos processes and their subprocesses, as a percentage of elapsed time (capped at 100%). ${gpu.partial ? 'Some clients need another sample; the measured portion may undercount usage. ' : ''}${Number.isFinite(gpu.utilization_percent) ? '' : 'Waiting for two samples or supported process counters. '}Sampled at most once every 5 seconds.` : '',
-      sizesStale ? 'Storage and WAL were last reported before the service stopped answering.' : 'Storage is the last drive measurement; WAL is the current catalog log size.',
-      ...processes].filter(Boolean).join('\n')};
+    return {metrics};
   }
 
   function attentionModel(item) {
@@ -744,7 +738,6 @@
       cell.append(label, node('b', '', metric.value));
       row.append(cell);
     }
-    if (load.tooltip) row.title = load.tooltip;
     return row;
   }
 

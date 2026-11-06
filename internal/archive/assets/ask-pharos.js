@@ -398,7 +398,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
       const first=session.conversation[0],last=session.conversation.at(-1),title=first?.prompt||session.draft||'Untitled chat';
       const button=document.createElement('a');button.href=askHistoryURL(location.href,session.id);button.className='pharos-history-entry cursor-interaction';
       button.setAttribute('aria-label','Open chat: '+title);button.setAttribute('aria-current',String(session.id===activeSessionId));button.dataset.sessionId=session.id;
-      const heading=document.createElement('span');heading.className='pharos-history-title';heading.textContent=title;heading.dataset.tooltip=title;
+      const heading=document.createElement('span');heading.className='pharos-history-title';heading.textContent=title;
       const meta=document.createElement('span');meta.className='pharos-history-meta';
       const count=session.questionCount??session.conversation.length;
       meta.textContent=[historyDate(session.updatedAt),last?.cli??session.selection.provider,count?count+' question'+(count===1?'':'s'):'Draft',session.id===activeSessionId?'Current':null].filter(Boolean).join(' \u00b7 ');

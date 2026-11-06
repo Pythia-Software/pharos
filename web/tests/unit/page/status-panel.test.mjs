@@ -158,12 +158,10 @@ test("the schedule and load stay out while the snapshot has none", () => {
   assert.ok(filled.load);
 });
 
-test("the load row is CPU, RAM and disk in one row, the server's line and each process's in its tooltip; in the app, every Pharos process's", () => {
+test("the load row shows CPU, RAM and disk for the library or the app process tree", () => {
   const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, disk_bytes_per_second: 12e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
   const own = plain(model(view({ resources: library, library: { drive: { name: "Euclid", ejectable: true }, path: "/Volumes/Euclid/Pharos", storage_bytes: 48e9, wal_bytes: 64e6 } })).load);
   assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"]]);
-  assert.ok(own.tooltip.startsWith("Library line\n"));
-  assert.ok(own.tooltip.endsWith("Service line\nTerminal line"));
   // The broker's total, when the store has one, wins over the library's.
   const app = plain(model(view({ resources: library }, { resources: { label: "Machine line", cpu_percent: 337, memory_bytes: 8.2e9, disk_bytes_per_second: null, processes: [] } })).load);
   assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—"], "a figure not measured yet is a dash");
@@ -178,8 +176,6 @@ test("the broker load remains visible during a service timeout, and partial rate
     lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
   assert.equal(unavailable.available, false);
   assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["12%", "2.0 GB", "4.0 MB/s", "last 48 GB"]);
-  assert.match(unavailable.load.tooltip, /may temporarily undercount/);
-  assert.match(unavailable.load.tooltip, /last reported/);
 });
 
 test("GPU load is scoped to Pharos processes, including idle and unavailable states", () => {
@@ -188,7 +184,6 @@ test("GPU load is scoped to Pharos processes, including idle and unavailable sta
     const result = load({ utilization_percent: percent });
     assert.equal(result.metrics.find(metric => metric.id === "gpu").value, value);
     assert.equal(result.metrics.find(metric => metric.id === "gpu").label, "GPU");
-    assert.match(result.tooltip, /these Pharos processes and their subprocesses/);
   }
   assert.ok(!load(undefined).metrics.some(metric => metric.id === "gpu"));
   const app = model(view({ resources: { cpu_percent: 12, gpu: { utilization_percent: 10 } } },
@@ -206,7 +201,6 @@ test("WAL appears only above one decimal GB, including a last known size", () =>
   }
   assert.equal(load(1e9 + 1).metrics.find(metric => metric.id === "wal").value, "1.0 GB");
   assert.equal(load(2e9, true).metrics.find(metric => metric.id === "wal").value, "last 2.0 GB");
-  assert.match(model(view({resources: {cpu_percent: 1, gpu: {utilization_percent: 10, partial: true}}})).load.tooltip, /may undercount/);
 });
 
 const at = Date.parse("2026-10-27T12:00:00Z");
