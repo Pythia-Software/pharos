@@ -1115,6 +1115,7 @@ func TestAuthorshipDiffStoreAndInterruptedChunks(t *testing.T) {
 	// Inputs can change after the full pass has read them. Its progress
 	// must not overwrite the last time it actually caught up.
 	execSQL(t, c.DB, `UPDATE meta SET value='2026-08-01T00:00:00Z' WHERE key='authorship_complete_at'`)
+	refinementInputs, _ := c.metaValue(t.Context(), "authorship_refinement_inputs")
 	changed := false
 	concurrent := withWorkProgress(t.Context(), func(work activityWork) {
 		if work.Phase == "saving authorship" && !changed {
@@ -1128,8 +1129,17 @@ func TestAuthorshipDiffStoreAndInterruptedChunks(t *testing.T) {
 	if complete, _ := c.metaValue(t.Context(), "authorship_complete_at"); !changed || complete != "2026-08-01T00:00:00Z" || !c.authorshipQuickPending() {
 		t.Fatalf("concurrent source edit claimed completion: changed=%v complete=%s pending=%v", changed, complete, c.authorshipQuickPending())
 	}
+	if receipt, _ := c.metaValue(t.Context(), "authorship_refinement_inputs"); receipt != refinementInputs {
+		t.Fatal("concurrent source edit published a refinement receipt")
+	}
+	if pending, err := c.authorshipRefinementPending(t.Context()); err != nil || !pending {
+		t.Fatalf("concurrent source edit lost refinement eligibility: %v %v", pending, err)
+	}
 	if err := c.RefineAuthorship(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if pending, err := c.authorshipRefinementPending(t.Context()); err != nil || pending {
+		t.Fatalf("completed retry remains pending: %v %v", pending, err)
 	}
 
 }
@@ -1971,6 +1981,44 @@ func TestAuthorshipQuickPreservesConcurrentEditsAndCancellation(t *testing.T) {
 	if err := reopened.DB.QueryRow(`SELECT typed_words FROM message_authorship WHERE message_id='m'`).Scan(&typed); err != nil || typed != 3 {
 		t.Fatalf("restart stored the wrong source: %d %v", typed, err)
 	}
+	if err := reopened.refineAuthorship(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := reopened.metaValue(t.Context(), "authorship_refinement_inputs")
+	execSQL(t, reopened.DB, `UPDATE messages SET text='Refine this new writing' WHERE id='m'`)
+	interrupted, stop := context.WithCancel(t.Context())
+	defer stop()
+	interrupted = withWorkProgress(interrupted, func(work activityWork) {
+		if work.Phase == "saving authorship" && work.Done > 0 {
+			stop()
+		}
+	})
+	if err := reopened.refineAuthorship(interrupted, false); err == nil {
+		t.Fatal("interrupted refinement reported success")
+	}
+	if got, _ := reopened.metaValue(t.Context(), "authorship_refinement_inputs"); got != receipt {
+		t.Fatal("interrupted refinement acknowledged its input revision")
+	}
+	if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || !pending {
+		t.Fatalf("interrupted refinement lost its pending work: %v %v", pending, err)
+	}
+	if err := reopened.refineAuthorship(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		previous := time.Local
+		defer func() { time.Local = previous }()
+		time.Local = time.FixedZone("Changed writing calendar", 7*60*60)
+		if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || !pending {
+			t.Fatalf("calendar change reused old refinement: %v %v", pending, err)
+		}
+		if err := reopened.refineAuthorship(t.Context(), false); err != nil {
+			t.Fatal(err)
+		}
+		if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || pending {
+			t.Fatalf("refinement did not accept its new calendar: %v %v", pending, err)
+		}
+	}()
 }
 
 func TestAuthorshipQuickDeadlineAndExactSuffix(t *testing.T) {
