@@ -221,6 +221,12 @@ func heredocDelimiter(rest string) string {
 // shellWords splits a simple command into words, removing quotes. It stops at
 // a redirection so "cat <<EOF" and "go test > log" read as cat and go test.
 func shellWords(text string) []string {
+	words, _ := shellWordsRest(text)
+	return words
+}
+
+// shellWordsRest also returns the text from the first redirection on.
+func shellWordsRest(text string) ([]string, string) {
 	words := []string{}
 	var word strings.Builder
 	inWord := false
@@ -260,14 +266,16 @@ func shellWords(text string) []string {
 				inWord = true
 			}
 		case '<', '>':
+			start := index
 			if inWord && isAllDigits(word.String()) {
+				start -= word.Len()
 				word.Reset()
 				inWord = false
 			}
 			if inWord {
 				words = append(words, word.String())
 			}
-			return words
+			return words, text[start:]
 		default:
 			word.WriteByte(char)
 			inWord = true
@@ -276,7 +284,7 @@ func shellWords(text string) []string {
 	if inWord {
 		words = append(words, word.String())
 	}
-	return words
+	return words, ""
 }
 
 func matchSubstitution(text string, start int) int {
@@ -418,7 +426,7 @@ var shellOptionArguments = map[string]map[string]bool{
 }
 
 // shellSetupPrograms prepare the shell rather than do the work.
-var shellSetupPrograms = map[string]bool{"mktemp": true, "mkdir": true, "for": true, "while": true, "until": true, "if": true, "case": true, "select": true, "[": true, "[[": true, "test": true, "cd": true, "pwd": true, "pushd": true, "popd": true, "export": true, "set": true, "unset": true, "source": true, ".": true, "true": true, ":": true, "echo": true, "printf": true, "sleep": true, "trap": true, "shopt": true, "local": true, "declare": true, "alias": true}
+var shellSetupPrograms = map[string]bool{"mktemp": true, "mkdir": true, "for": true, "while": true, "until": true, "if": true, "case": true, "select": true, "[": true, "[[": true, "test": true, "cd": true, "pwd": true, "pushd": true, "popd": true, "export": true, "set": true, "unset": true, "source": true, ".": true, "true": true, ":": true, "echo": true, "printf": true, "sleep": true, "trap": true, "shopt": true, "local": true, "declare": true, "alias": true, "nvm": true}
 
 // shellKeywords introduce the command that follows them in a compound
 // command ("then cat x", "do go test"); they are not programs.
@@ -438,6 +446,9 @@ func shellProgram(text string) (string, string) {
 			continue
 		}
 		consumes, wrapper := shellWrappers[path.Base(word)]
+		if word == "command" && index+1 < len(words) && (words[index+1] == "-v" || words[index+1] == "-V") {
+			break // "command -v go" looks go up rather than running it.
+		}
 		if !wrapper {
 			break
 		}
@@ -507,14 +518,20 @@ func shellProgram(text string) (string, string) {
 	options := shellOptionArguments[program]
 	for position := 0; position < len(rest); position++ {
 		word := rest[position]
-		if strings.HasPrefix(word, "-") {
+		if strings.HasPrefix(word, "-") || (program == "cargo" && strings.HasPrefix(word, "+")) {
 			if options[word] {
 				position++
 			}
 			continue
 		}
-		if (word == "run" || word == "exec" || word == "x") && (program == "npm" || program == "pnpm" || program == "yarn" || program == "bun") && position+1 < len(rest) && !strings.HasPrefix(rest[position+1], "-") {
-			return program, word + " " + rest[position+1]
+		if (word == "run" || word == "exec" || word == "x" || word == "dlx") && (program == "npm" || program == "pnpm" || program == "yarn" || program == "bun") {
+			target := position + 1
+			if target < len(rest) && rest[target] == "--" {
+				target++
+			}
+			if target < len(rest) && !strings.HasPrefix(rest[target], "-") {
+				return program, word + " " + rest[target]
+			}
 		}
 		return program, word
 	}
@@ -540,7 +557,7 @@ var shellProgramCategories = map[string]string{
 	"ls": "list", "tree": "list", "du": "list", "df": "list", "pwd": "list", "eza": "list", "exa": "list",
 	"git": "vcs", "gh": "vcs",
 	"make": "build", "tsc": "build", "esbuild": "build", "swiftc": "build", "xcodebuild": "build", "gradle": "build", "mvn": "build", "cmake": "build", "ninja": "build", "vite": "build", "webpack": "build", "rollup": "build",
-	"pytest": "test", "jest": "test", "vitest": "test", "playwright": "test", "mocha": "test",
+	"pytest": "test", "jest": "test", "eslint": "test", "zcat": "read", "gzcat": "read", "nvm": "shell", "apply_patch": "file-write", "vitest": "test", "playwright": "test", "mocha": "test",
 	"brew": "package", "pip": "package", "pip3": "package", "uv": "package", "poetry": "package", "conda": "package", "apt": "package", "apt-get": "package", "rustup": "package",
 	"mktemp": "shell", "mv": "file-write", "cp": "file-write", "rm": "file-write", "mkdir": "file-write", "touch": "file-write", "chmod": "file-write", "ln": "file-write",
 	"tee": "file-write", "patch": "file-write", "rsync": "file-write", "unzip": "file-write", "zip": "file-write", "tar": "file-write", "rmdir": "file-write", "install": "file-write",
@@ -566,6 +583,50 @@ func shellCategory(program, subcommand, text string) string {
 			return "search"
 		}
 		return "vcs"
+	case "cat":
+		// "cat > file <<EOF" and "cat a b > c" write a file.
+		if authorshipOutputFile(text, authorshipShellSyntax(text)) {
+			return "file-write"
+		}
+		return "read"
+	case "gofmt":
+		switch {
+		case shellHasFlag(text, "-w"):
+			return "file-write"
+		case shellHasFlag(text, "-l", "-d"):
+			return "test"
+		}
+		return "read"
+	case "rustfmt":
+		if shellHasFlag(text, "--check") {
+			return "test"
+		}
+		return "file-write"
+	case "prettier":
+		switch {
+		case shellHasFlag(text, "--write", "-w"):
+			return "file-write"
+		case shellHasFlag(text, "--check", "-c", "--list-different", "-l"):
+			return "test"
+		}
+		return "read"
+	case "unzip":
+		if shellHasFlag(text, "-l", "-p", "-t", "-Z", "-v") {
+			return "read"
+		}
+		return "file-write"
+	case "gzip", "gunzip", "zstd", "xz", "unxz", "bzip2", "bunzip2":
+		// Without -c these replace the file they compress or expand.
+		if shellHasFlag(text, "-c", "--stdout", "-l", "--list", "-t", "--test") {
+			return "read"
+		}
+		return "file-write"
+	case "npx", "bunx", "pnpx", "uvx":
+		return shellRunnerCategory(text, program)
+	case "uv", "poetry":
+		if subcommand == "run" {
+			return shellRunnerCategory(text, "run")
+		}
 	case "sed":
 		words := shellWords(text)
 		for _, word := range words[1:] {
@@ -588,17 +649,26 @@ func shellCategory(program, subcommand, text string) string {
 		if len(verb) > 1 {
 			script = verb[1]
 		}
+		if first == "exec" || first == "x" || first == "dlx" {
+			return shellRunnerCategory(text, first)
+		}
+		// pnpm, yarn and bun run a package script named directly ("pnpm typecheck").
+		task := first
+		if first == "run" && script != "" {
+			task = script
+		}
 		switch {
-		case first == "test" || strings.HasPrefix(script, "test") || first == "vet" || first == "lint" || strings.HasPrefix(script, "lint") || script == "typecheck" || script == "check":
+		case strings.HasPrefix(task, "test") || task == "vet" || strings.HasPrefix(task, "lint") || strings.HasPrefix(task, "typecheck") ||
+			task == "check" || strings.HasPrefix(task, "check:") || task == "clippy":
 			return "test"
-		case first == "build" || first == "compile" || strings.HasPrefix(script, "build") || first == "generate":
+		case strings.HasPrefix(task, "build") || task == "compile" || task == "generate":
 			return "build"
 		case first == "install" || first == "i" || first == "ci" || first == "add" || first == "get" || first == "mod" || first == "remove" || first == "update" || first == "upgrade" || first == "uninstall":
 			return "package"
-		case first == "fmt" || first == "format" || script == "format" || script == "fmt":
+		case strings.HasPrefix(task, "fmt") || strings.HasPrefix(task, "format"):
 			return "file-write"
-		case first == "run" || first == "exec" || first == "x" || first == "start" || first == "dev" || first == "":
-			return "run"
+		case first == "list" || first == "ls" || first == "version" || first == "env" || first == "doc" || first == "view" || first == "info" || first == "outdated" || first == "why" || first == "tree":
+			return "read"
 		}
 		return "run"
 	case "python", "python3", "python3.11", "python3.12", "python3.13", "python3.14":
@@ -620,4 +690,125 @@ func shellCategory(program, subcommand, text string) string {
 		return "run"
 	}
 	return "other"
+}
+
+// shellRunnerOptions take a separate value in runners such as "npx -p pkg"
+// and "uv run --with pkg".
+var shellRunnerOptions = map[string]bool{"-p": true, "--package": true, "--with": true, "--python": true, "--project": true, "--directory": true,
+	"--from": true, "-C": true, "--dir": true, "--filter": true, "-F": true, "--env-file": true, "--group": true, "--extra": true}
+
+// shellRunnerCategory classifies the command a runner starts: the words after
+// the marker ("npx", "exec", "run") and the runner's own options. A runner
+// whose target is unknown, or absent, is a run.
+func shellRunnerCategory(text, marker string) string {
+	words, redirect := shellWordsRest(text)
+	start := -1
+	for index, word := range words {
+		if strings.ToLower(path.Base(word)) == marker {
+			start = index + 1
+			break
+		}
+	}
+	for start >= 0 && start < len(words) && strings.HasPrefix(words[start], "-") {
+		if words[start] == "--" {
+			start++
+			break
+		}
+		if shellRunnerOptions[words[start]] {
+			start++
+		}
+		start++
+	}
+	if start < 0 || start >= len(words) {
+		return "run"
+	}
+	// The runner's redirections apply to its target: "pnpm exec cat > f" writes f.
+	target := strings.TrimSpace(strings.Join(words[start:], " ") + " " + redirect)
+	program, subcommand := shellProgram(target)
+	if category := shellCategory(program, subcommand, target); category != "other" {
+		return category
+	}
+	return "run"
+}
+
+// shellHasFlag reports whether a simple command passes one of the flags,
+// alone or, for single-letter flags, combined ("-lw").
+func shellHasFlag(text string, flags ...string) bool {
+	for _, word := range shellWords(text) {
+		if word == "--" {
+			return false
+		}
+		for _, flag := range flags {
+			if word == flag || strings.HasPrefix(word, flag+"=") ||
+				(len(flag) == 2 && flag[0] == '-' && len(word) > 2 && word[0] == '-' && word[1] != '-' && strings.ContainsRune(word[1:], rune(flag[1]))) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shellScript returns the script of a command line that only hands it to a
+// shell, as in `/bin/zsh -lc "sed -n '1,9p' f"`, so the script's own commands
+// are classified rather than the shell.
+func shellScript(line string) (string, bool) {
+	words := []string{}
+	var word strings.Builder
+	inWord := false
+	var quote byte
+	for index := 0; index < len(line); index++ {
+		char := line[index]
+		switch {
+		case quote == '\'':
+			if char == '\'' {
+				quote = 0
+			} else {
+				word.WriteByte(char)
+			}
+		case quote == '"':
+			if char == '"' {
+				quote = 0
+			} else if char == '\\' && index+1 < len(line) && strings.IndexByte("\\\"$`\n", line[index+1]) >= 0 {
+				index++
+				if line[index] != '\n' {
+					word.WriteByte(line[index])
+				}
+			} else {
+				word.WriteByte(char)
+			}
+		case char == '\'' || char == '"':
+			quote = char
+			inWord = true
+		case char == '\\' && index+1 < len(line):
+			index++
+			word.WriteByte(line[index])
+			inWord = true
+		case char == ' ' || char == '\t':
+			if inWord {
+				words = append(words, word.String())
+				word.Reset()
+				inWord = false
+			}
+		case strings.IndexByte(";&|<>()`$\n#", char) >= 0:
+			// Anything the invoking shell would interpret first.
+			return "", false
+		default:
+			word.WriteByte(char)
+			inWord = true
+		}
+	}
+	if quote != 0 {
+		return "", false
+	}
+	if inWord {
+		words = append(words, word.String())
+	}
+	if len(words) != 3 || (words[1] != "-c" && words[1] != "-lc") {
+		return "", false
+	}
+	switch path.Base(words[0]) {
+	case "sh", "bash", "zsh":
+		return words[2], strings.TrimSpace(words[2]) != ""
+	}
+	return "", false
 }

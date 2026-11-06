@@ -108,23 +108,13 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "fixture" {
              patch.object(keychain.subprocess, 'check_output', return_value='/test/sdk\n') as discover, \
              patch.object(keychain.subprocess, 'run') as run:
             keychain.check_sparkle_access(Path('/test/Sparkle/bin'), 'pharos')
-        discover.assert_called_once_with(['xcrun', '--sdk', 'macosx26.5', '--show-sdk-path'], text=True)
+        discover.assert_not_called()
         compile_command = run.call_args_list[0].args[0]
-        self.assertIn('/test/sdk', compile_command)
+        self.assertEqual(Path(compile_command[1]).name, 'swift-toolchain.sh')
+        self.assertEqual(compile_command[2], 'compile')
         command = run.call_args_list[1].args[0]
         self.assertEqual(command[1:], ['check', '/test/release.keychain-db', 'pharos',
                                      '/test/Sparkle/bin/generate_keys', '/test/Sparkle/bin/sign_update'])
-
-    def test_sparkle_helper_honors_sdkroot_without_discovering_default_sdk(self):
-        sdk = '/custom SDK/MacOSX.sdk'
-        with patch.dict(os.environ, {'SDKROOT': sdk}), \
-             patch.object(keychain.subprocess, 'check_output', side_effect=FileNotFoundError('26.5 SDK unavailable')) as discover, \
-             patch.object(keychain.subprocess, 'run') as compile:
-            keychain.sparkle_access_command('/test/build', 'check', Path('/test/keychain'),
-                                            Path('/test/tools'), 'pharos')
-        discover.assert_not_called()
-        command = compile.call_args.args[0]
-        self.assertEqual(command[command.index('-sdk') + 1], sdk)
 
     def test_sparkle_access_failure_blocks_the_caller(self):
         with patch.object(keychain, 'sparkle_access_command', return_value=['check-access']), \
@@ -250,6 +240,61 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "fixture" {
              patch.object(keychain.os, 'killpg'):
             self.assertEqual(keychain.run_session(Path('/test/release.keychain-db'), ['release']), 0)
         self.assertEqual(current, original)
+
+
+class SwiftToolchainTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('swift_toolchain_test', SOURCE.with_name('swift_toolchain.py'))
+        self.toolchain = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.toolchain)
+
+    def test_explicit_sdk_and_cache_are_shared_by_compiler_and_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / 'custom SDK'
+            sdk.mkdir()
+            (sdk / 'SDKSettings.json').write_text('{"Version":"26.5"}')
+            with patch.dict(os.environ, {'SDKROOT': str(sdk), 'ADDITIONAL_SWIFT_DRIVER_FLAGS': ''}), \
+                 patch.object(self.toolchain, 'ROOT', root), \
+                 patch.object(self.toolchain.subprocess, 'check_output', side_effect=['/toolchain/swiftc\n', 'Swift test version\n']) as discover, \
+                 patch.object(self.toolchain.subprocess, 'run') as compile:
+                config = self.toolchain.configuration()
+                self.toolchain.compile_swift(['source with spaces.swift', '-o', 'output'], config)
+            self.assertEqual(discover.call_args_list[0].args[0], ['xcrun', '--find', 'swiftc'])
+            command = compile.call_args.args[0]
+            self.assertEqual(command[:3], ['/toolchain/swiftc', '-sdk', str(sdk.resolve())])
+            self.assertEqual(command[3:5], ['-module-cache-path', str(config[3])])
+            self.assertEqual(command[5:], ['source with spaces.swift', '-o', 'output'])
+            self.assertEqual(compile.call_args.kwargs['env']['SDKROOT'], str(sdk.resolve()))
+
+    def test_global_driver_flags_fail_before_any_compilation(self):
+        with patch.dict(os.environ, {'ADDITIONAL_SWIFT_DRIVER_FLAGS': '-module-cache-path /tmp/cache'}), \
+             patch.object(self.toolchain.subprocess, 'check_output') as discover:
+            with self.assertRaisesRegex(ValueError, 'Unset ADDITIONAL_SWIFT_DRIVER_FLAGS'):
+                self.toolchain.configuration()
+            discover.assert_not_called()
+
+    def test_failed_preflight_stops_release_before_keychain_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'calls'
+            python = root / 'python3'
+            python.write_text('#!/bin/sh\n'
+                              '# Model the Apple launcher injecting the wrong SDK when unset.\n'
+                              'SDKROOT=${SDKROOT:-/wrong/MacOSX.sdk}\n'
+                              'test "$SDKROOT" = /fake/sdk || exit 98\n'
+                              'printf "%s\\n" "$2" >> "$PHAROS_TEST_CALLS"\n'
+                              'case "$2" in sdk) echo /fake/sdk;; preflight) exit 42;; *) exit 99;; esac\n')
+            python.chmod(0o755)
+            xcrun = root / 'xcrun'
+            xcrun.write_text('#!/bin/sh\necho /fake/sdk\n')
+            xcrun.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                       PHAROS_TEST_CALLS=str(log), PHAROS_RELEASE_KEYCHAIN_SESSION='', SDKROOT='')
+            result = subprocess.run(['/bin/sh', str(SOURCE.with_name('release.sh')), '0.8.5'],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 42, result.stderr)
+            self.assertEqual(log.read_text().splitlines(), ['sdk', 'preflight'])
 
 
 class CredentialRehearsalTests(unittest.TestCase):

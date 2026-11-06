@@ -43,10 +43,12 @@ export function ThinkingFigure({
   title,
   children,
   note,
+  action,
 }: {
   title: string;
   children: (width: number) => React.ReactNode;
   note?: React.ReactNode;
+  action?: React.ReactNode;
 }) {
   const { ref, width } = useWidth(),
     [visible, setVisible] = useState(false);
@@ -60,7 +62,10 @@ export function ThinkingFigure({
   }, []);
   return (
     <figure className="thinking-figure" ref={ref}>
-      <figcaption>{title}</figcaption>
+      <figcaption>
+        {title}
+        {action}
+      </figcaption>
       {visible ? (
         children(width)
       ) : (
@@ -736,10 +741,21 @@ export function ThinkingHourly({
     </div>
   );
 }
-export function ThinkingCDF({ groups }: { groups: ThinkingGroup[] }) {
+export function ThinkingCDF({
+  groups,
+  action,
+  title = "How long are the waits?",
+  groupBy = "model",
+}: {
+  groups: ThinkingGroup[];
+  action?: React.ReactNode;
+  title?: string;
+  groupBy?: string;
+}) {
   return (
     <ThinkingFigure
-      title="How long are the waits?"
+      title={title}
+      action={action}
       note="Curves require 100 usable gaps from five conversations. Each curve is an individual-request quantile function at 1% steps."
     >
       {(width) => {
@@ -778,7 +794,7 @@ export function ThinkingCDF({ groups }: { groups: ThinkingGroup[] }) {
                       (g.cdf ?? []).map(([a, b]) => [xs(a), y + h - b * h]),
                     )}
                     fill="none"
-                    stroke={chartSeriesStyle("model_family", g.label).color}
+                    stroke={thinkingStyle(g, groupBy).color}
                     strokeWidth="2"
                   >
                     <title>
@@ -794,7 +810,7 @@ export function ThinkingCDF({ groups }: { groups: ThinkingGroup[] }) {
                   <span
                     key={g.key}
                     style={{
-                      color: chartSeriesStyle("model_family", g.label).color,
+                      color: thinkingStyle(g, groupBy).color,
                     }}
                   >
                     ● {g.label}

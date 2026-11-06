@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EMPTY_QUERY, applyQuery, loadSchema } from '@pythia-software/query-table-core';
 import usageSchema from '../../../../schemas/usage.schema.json';
 import writingSchema from '../../../../schemas/writing.schema.json';
-import { isSliceTerm, readSlice, updateSlice, withSlice } from '../../../src/chart-selection';
+import { isSliceTerm, readSlice, updateSlice, updateSliceValues, sliceGroupState, withSlice } from '../../../src/chart-selection';
 import { chartGesture, chartInspectionRange } from '../../../src/chart-inspection';
 const all = { values: [], excluded: false };
 const field = 'model_family';
@@ -54,6 +54,43 @@ test('only, additive toggle, exclusion, and reset have explicit selection semant
   assert.deepEqual(updateSlice(hidden, 'opus-5-5', 'toggle'), except);
   assert.deepEqual(updateSlice(except, 'gemini-3.8-flash', 'toggle'), all);
   assert.deepEqual(updateSlice(hidden, '', 'clear'), all);
+});
+
+test('category actions include all children atomically and preserve outside selections',()=>{
+ const group=['C.difficulty','C.difficulty.blocker','C.difficulty.ambiguity'],outside='C.report.finding';
+ assert.deepEqual(updateSliceValues(all,[...group,group[0]],'only'),{values:group,excluded:false});
+ assert.deepEqual(updateSliceValues(all,group,'exclude'),{values:group,excluded:true});
+ const mixed={values:[outside,group[0]],excluded:false};
+ const full=updateSliceValues(mixed,group,'toggle');
+ assert.deepEqual(full,{values:[outside,...group],excluded:false});
+ assert.deepEqual(updateSliceValues(full,group,'toggle'),{values:[outside],excluded:false});
+ assert.deepEqual(updateSliceValues({values:group,excluded:false},group,'toggle'),all);
+ assert.deepEqual(updateSliceValues(full,group,'clear'),all);
+ assert.deepEqual(updateSliceValues(mixed,[],'toggle'),mixed);
+});
+
+test('category additions reveal all partially excluded children and removals exclude the whole category',()=>{
+ const group=['a','b','c'],outside='outside',mixed={values:[outside,'a'],excluded:true};
+ const visible=updateSliceValues(mixed,group,'toggle');
+ assert.deepEqual(visible,{values:[outside],excluded:true});
+ const hidden=updateSliceValues(visible,group,'toggle');
+ assert.deepEqual(hidden,{values:[outside,...group],excluded:true});
+ assert.deepEqual(updateSliceValues(hidden,group,'toggle'),visible);
+ for(const selection of [all,{values:['a'],excluded:false},{values:['b'],excluded:true}])for(const value of group)for(const action of ['only','toggle','exclude','clear']){
+  assert.deepEqual(updateSliceValues(selection,[value],action),updateSlice(selection,value,action));
+ }
+});
+
+test('category state distinguishes neutral, full, mixed and hidden in either selection mode',()=>{
+ const group=['a','b'];
+ assert.deepEqual(sliceGroupState(all,group),{active:false,mixed:false,dimmed:false,soleSelection:false});
+ assert.deepEqual(sliceGroupState({values:group,excluded:false},group),{active:true,mixed:false,dimmed:false,soleSelection:true});
+ for(const excluded of [false,true]){
+  assert.deepEqual(sliceGroupState({values:['a'],excluded},group),{active:false,mixed:true,dimmed:false,soleSelection:false});
+  const values=excluded?group:['outside'];
+  assert.deepEqual(sliceGroupState({values,excluded},group),{active:false,mixed:false,dimmed:true,soleSelection:false});
+ }
+ assert.deepEqual(sliceGroupState({values:['outside'],excluded:true},group),{active:true,mixed:false,dimmed:false,soleSelection:false});
 });
 
 test('selection writes preserve date, repository, and unrelated model predicates', () => {

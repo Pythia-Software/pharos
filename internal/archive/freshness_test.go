@@ -55,7 +55,7 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("tool_ledger_generation", "7"), setMetaSQL("tool_rollup_generation", "7/"+toolRollupVersion),
 		setMetaSQL("tool_rollup_day", c.clock().Format("2006-01-02")), setMetaSQL("tool_rollup_timezone", toolRollupTimezone()),
 		setMetaSQL("tool_rollup_full_revision", "r1"), setMetaSQL("tool_rollup_built_full_revision", "r1"),
-		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"),
+		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"), setMetaSQL("authorship_complete_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
 		// Each completion was for the library's inputs as they are (7:3).
 		setMetaSQL("findings_inputs_generation", "7:3"), setMetaSQL("analysis_inputs:identities", "records:3"), setMetaSQL("analysis_inputs:git", "records:3"),
@@ -151,6 +151,25 @@ func runningOp(id, kind, subject string) freshnessOp {
 	return freshnessOp{ID: id, Kind: kind, Subject: subject, Label: row.Label, State: opRunning, Affects: parseAffects(row.Affects), Started: time.Now()}
 }
 
+func TestFreshnessMovedSearch(t *testing.T) {
+	f := newFreshnessFixture(t)
+	f.exec("INSERT INTO workspace_library_dirty(workspace_id) VALUES('w')", "DELETE FROM meta WHERE key='text_search_documents_version'")
+	for _, cadence := range []string{cadenceHourly, cadenceDaily, cadenceManual} {
+		f.exec("INSERT OR REPLACE INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + sqlQuote(currentHost().ID) + ",'search'," + sqlQuote(cadence) + "," + sqlQuote(formatTime(time.Now().Add(time.Hour))) + ")")
+		state, reason, next := freshScheduled, "scheduled-"+cadence, cadenceNext[cadence]
+		if cadence == cadenceManual {
+			state, reason, next = freshBehind, "deferred-by-schedule", nextManualIndex
+		}
+		rows := f.ledger(freshnessInput{})
+		for _, domain := range []string{"view", "search.text"} {
+			row := expectRow(t, rows, domain, state, reason, "")
+			if row.Next == nil || *row.Next != next {
+				t.Fatalf("%s on %s: %+v", domain, cadence, row)
+			}
+		}
+	}
+}
+
 // Conversations (conv:<source>) are current only as of the last check: the
 // scheduled index's success within its interval. Off schedule, after an
 // error or an interruption, their state is unknown, not guessed; an index
@@ -170,6 +189,18 @@ func TestFreshnessConversations(t *testing.T) {
 		{name: "current after a scheduled check", schedule: true,
 			seed:  []string{"INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at,indexed_at) VALUES(" + host + ",'claude'," + at(time.Minute) + "," + at(time.Minute) + "," + at(time.Hour) + ")"},
 			state: freshCurrent, asOfFromSeeding: true},
+		{name: "new conversations moved to daily", schedule: true,
+			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(2*time.Hour) + ")",
+				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','daily'," + at(-time.Hour) + ")"},
+			state: freshCurrent, asOfFromSeeding: true},
+		{name: "new conversations past their daily update", schedule: true,
+			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(48*time.Hour) + ")",
+				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','daily'," + at(-time.Hour) + ")"},
+			state: freshUnknown, reason: "overdue", next: nextDailyUpdate, asOfFromSeeding: true},
+		{name: "new conversations moved to only when you ask", schedule: true,
+			seed: []string{"INSERT INTO automatic_source_states(host_id,source_name,succeeded_at) VALUES(" + host + ",'claude'," + at(time.Minute) + ")",
+				"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES(" + host + ",'conversations','manual'," + at(-time.Hour) + ")"},
+			state: freshUnknown, reason: "manual-only", next: nextManualIndex, asOfFromSeeding: true},
 		{name: "never indexed", schedule: true, state: freshBehind, reason: "never-indexed", next: nextScheduledIndex},
 		{name: "catching up while an index runs", schedule: true, in: freshnessInput{ops: []freshnessOp{runningOp("op-index", "index.changes.manual", "")}},
 			state: freshBehind, reason: "indexing", catching: "op-index"},
@@ -279,6 +310,10 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "tools rollup of an older layout", domain: "an.tools", seed: []string{setMetaSQL("tool_rollup_generation", "7/old")}, state: freshBehind, reason: "version"},
 		{name: "tools rollup never built", domain: "an.tools", seed: []string{"DELETE FROM meta WHERE key='tool_rollup_generation'"}, state: freshBehind, reason: "never-built"},
 		{name: "writing classification behind", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed", asOf: "2026-10-27T08:00:00Z"},
+		{name: "writing progress is not coverage", domain: "an.authorship", seed: []string{
+			setMetaSQL("authorship_quick_at", "2026-10-27T12:00:00Z"),
+			`INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at) VALUES('a','r','2026-10-27T11:00:00Z','2026-10-27T11:01:00Z'),('b','r','2026-07-01T11:00:00Z','2026-10-27T10:01:00Z')`,
+		}, state: freshBehind, reason: "changed", count: 2, countKnown: true, unit: "message", asOf: "2026-10-27T08:00:00Z"},
 		{name: "writing classification caught up", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-author", "analysis.authorship", "")}}, state: freshBehind, reason: "running", catching: "op-author"},
 		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", seed: []string{"DELETE FROM meta WHERE key='upgrade_count'"}, state: freshUnknown, reason: "not-counted"},
@@ -422,7 +457,7 @@ func TestFreshnessAfterAutomaticIndexSchedulesAnalyses(t *testing.T) {
 	// Background Processing are on: each analysis waits for its item's
 	// cadence (§11), Frequently or Hourly before it has measurements.
 	rows, byDomain := ledger()
-	cadence := map[string]string{"an.identities": cadenceFrequent, "an.git": cadenceFrequent, "an.tools": cadenceFrequent, "an.authorship": cadenceHourly, "findings": cadenceHourly}
+	cadence := map[string]string{"an.identities": cadenceFrequent, "an.git": cadenceFrequent, "an.tools": cadenceFrequent, "an.authorship": cadenceFrequent, "findings": cadenceHourly}
 	for _, domain := range append(analyses, "findings") {
 		row := expectRow(t, byDomain, domain, freshScheduled, "scheduled-"+cadence[domain], "")
 		if row.Next == nil || *row.Next != cadenceNext[cadence[domain]] || row.Behind.Count != nil {

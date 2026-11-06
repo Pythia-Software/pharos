@@ -47,6 +47,8 @@ func getStatus(t *testing.T, server *Server, path string) statusSnapshot {
 // after its current unit. A Terminal command's lease makes the drive busy and
 // lists its work, which Pharos cannot stop.
 func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
+	gpuSampler, _ := readyGPU(os.Getpid(), 37)
+	override(t, &processGPU, gpuSampler)
 	override(t, &statusCoalesce, 10*time.Millisecond)
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
@@ -55,6 +57,9 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	// Load line; CPU from the second reading on.
 	override(t, &resourceSampleInterval, 0)
 	resources, _ := idle.raw["resources"].(map[string]any)
+	if gpu, _ := resources["gpu"].(map[string]any); gpu["utilization_percent"] != float64(37) || gpu["basis"] != gpuResourceBasis {
+		t.Fatalf("the service snapshot carries process GPU utilization: %#v", gpu)
+	}
 	processes, _ := resources["processes"].([]any)
 	if len(processes) == 0 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
 		!(resources["memory_bytes"].(float64) > 0) || resources["basis"] != resourceBasis || resources["sampled_at"] == nil ||
@@ -187,6 +192,26 @@ func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	override(t, &statusCoalesce, 0)
 	if got := library()["storage_bytes"]; got != float64(1_200_000) {
 		t.Fatalf("storage from the last drive check, to two figures: %v", got)
+	}
+}
+
+func TestStatusSnapshotCarriesCatalogWALSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.sqlite3")
+	if got := catalogWALBytes(path); got == nil || *got != 0 {
+		t.Fatalf("a missing WAL is empty: %v", got)
+	}
+	if err := os.WriteFile(path+"-wal", make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogWALBytes(path); got == nil || *got != 4096 {
+		t.Fatalf("WAL file size: %v", got)
+	}
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	want := catalogWALBytes(config.CatalogPath)
+	got := getStatus(t, server, "/api/status").Library["wal_bytes"]
+	if want == nil || got != float64(*want) {
+		t.Fatalf("WAL in service snapshot: got %v, want %v", got, want)
 	}
 }
 
@@ -849,6 +874,8 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		return command.Process.Pid
 	}
 	servicePID, commandPID, stuckPID := sleeper(), sleeper(), sleeper()
+	gpuSampler, gpuReads := readyGPU(commandPID, 62)
+	override(t, &processGPU, gpuSampler)
 	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}), "attention": []any{},
 			"resources": map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}}, http.StatusOK)
@@ -875,13 +902,27 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		return found
 	}
 	document := broker.statusDocument(context.Background())
-	if got, want := pids(document["resources"]), []int{os.Getpid(), servicePID, commandPID, stuckPID}; !slices.Equal(got, want) {
-		t.Fatalf("the machine's total: %v, want %v", got, want)
+	// The broker is this test process, so other tests' children still
+	// running in it are its workers, after the processes it was asked about.
+	total := document["resources"].(*resourceSummary)
+	if total.GPU == nil || total.GPU.UtilizationPercent == nil || *total.GPU.UtilizationPercent != 62 || *gpuReads != 1 {
+		t.Fatalf("one process GPU sample for the broker and library totals: %+v (%d reads)", total.GPU, *gpuReads)
 	}
-	if total := document["resources"].(*resourceSummary); !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+	want := []int{os.Getpid(), servicePID, commandPID, stuckPID}
+	if got := pids(total); len(got) < len(want) || !slices.Equal(got[:len(want)], want) ||
+		slices.ContainsFunc(total.Processes[len(want):], func(r resourceReading) bool { return !strings.HasPrefix(r.Role, "worker:") }) {
+		t.Fatalf("the machine's total: %v, want %v and any workers", got, want)
+	}
+	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
 		t.Fatalf("the total's line: %+v", total)
 	}
 	entries := document["libraries"].([]map[string]any)
+	for i, want := range []float64{62, 0} {
+		own := entries[i]["resources"].(*resourceSummary)
+		if own.GPU == nil || own.GPU.UtilizationPercent == nil || *own.GPU.UtilizationPercent != want {
+			t.Fatalf("library %d GPU is scoped to its own tree: %+v", i, own.GPU)
+		}
+	}
 	if got := pids(entries[0]["resources"]); !slices.Equal(got, []int{servicePID, commandPID}) {
 		t.Fatalf("Euclid's processes: %v", got)
 	}
@@ -896,6 +937,31 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	}
 	if _, ok := broker.statusDocumentChecked(context.Background(), true)["resources"]; ok {
 		t.Fatal("the eject check carries no resources")
+	}
+}
+
+func TestBrokerStatusTimeoutKeepsProcessResources(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("reading another process needs proc_pid_rusage")
+	}
+	command := exec.Command("sleep", "30")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { command.Process.Kill(); command.Wait() })
+	unresponsive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer unresponsive.Close()
+	broker := newBrokerOperations(filepath.Join(t.TempDir(), "operations.json"))
+	broker.client.Timeout = 20 * time.Millisecond
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true,
+		Child: &applicationEndpoint{URL: unresponsive.URL, Token: "t", PID: command.Process.Pid}}})
+	entry := broker.statusDocument(context.Background())["libraries"].([]map[string]any)[0]
+	if entry["snapshot"] != nil || entry["error"] == nil {
+		t.Fatalf("the service snapshot should have timed out: %#v", entry)
+	}
+	summary, _ := entry["resources"].(*resourceSummary)
+	if summary == nil || len(summary.Processes) == 0 || summary.Processes[0].PID != command.Process.Pid {
+		t.Fatalf("broker still samples the service after its status request times out: %+v", summary)
 	}
 }
 

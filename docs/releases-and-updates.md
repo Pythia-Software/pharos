@@ -52,6 +52,18 @@ has requested the release.
 
 The default is a Developer ID signed and notarized release.
 
+App builds use `-trimpath -ldflags='-s -w'` for both Go executables, removing
+build-machine paths and debug metadata before signing. For a local build with
+Go symbols and DWARF, set `PHAROS_DEBUG_SYMBOLS=1` and use a separate output
+directory, for example `PHAROS_DEBUG_SYMBOLS=1 macos/build-app.sh dist/debug`.
+To investigate a release, use its source tag and compiler version. Release
+disk images use ULMO (LZMA) compression, supported on macOS 10.15 and later,
+below the app's macOS 14 minimum. Compression happens before final image
+signing, notarization and update-feed signing.
+
+The remaining installed-size work is tracked in the high-priority
+[MLX runtime size TODO](local-labeler.md#apple-silicon-gpu).
+
 Use `macos/release.sh X.Y.Z --adhoc` to explicitly publish an ad hoc signed release.
 GitHub will host an ad hoc release, but it cannot be notarized. macOS may block the downloaded
 app on first launch. A user who trusts the download can try opening it, then
@@ -84,9 +96,26 @@ credentials stay in Keychain.
 
 Releases select the macOS 26.5 SDK by default: the standalone macOS 27
 Command Line Tools SDK references a SwiftUI macro plugin not included with
-those tools. The app build passes the selected SDK directly to `swiftc` using
-`-sdk`; Swift does not honor `SDKROOT` alone. Local app builds use the same
-default. Set `SDKROOT` explicitly to use another compatible SDK.
+those tools. SDK selection is exported in the shell before Python or the
+keychain wrapper runs: Apple's system Python launcher otherwise injects
+`SDKROOT=…/MacOSX.sdk`, which follows the newest SDK and can defeat the pinned
+default. The
+app, keychain helper, update verifier and DMG artwork compiler share
+`macos/swift-toolchain.sh` and its Python runner, which pass `-sdk` and a module cache keyed by SDK
+settings, compiler path and compiler version. Local app builds use the same
+configuration. Set `SDKROOT` explicitly to use another compatible SDK.
+
+Before unlocking signing keys, the release compiles a small SwiftUI `@State`
+executable for both architectures and runs the native one. It prints the SDK,
+compiler version and cache path so a toolchain failure is diagnosable before
+building the app or submitting it for notarization. This is a release build
+preflight, not a test-suite run. It never accesses signing keys. The DMG artwork
+is compiled and then invoked with ordinary executable arguments. Global
+`ADDITIONAL_SWIFT_DRIVER_FLAGS` are rejected: they can leak compiler options
+into Swift interpreter arguments. Pass supported configuration through
+`SDKROOT`; do not use global compiler flags to repair a release.
+To check the toolchain alone without signing or publishing, run
+`/bin/sh macos/swift-toolchain.sh preflight`.
 
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
@@ -180,6 +209,12 @@ ignored `build/`. Framework helpers are signed inside-out before the outer app;
 Developer ID releases retain hardened runtime and library validation. Ad hoc
 and self-signed local builds use a development-only library-validation exception.
 Generated framework binaries must not be committed.
+
+Model artifacts have a separate [cleanroom publication workflow](local-labeler.md#cleanroom-model-publication).
+The development Mac prepares the trained ONNX/MLX release kit; the cleanroom
+publishes those opaque archives. After verified model pins are committed and
+merged, the ordinary app release builds from source and pins without training
+files or model conversion dependencies.
 
 ### Separate development and deployment Macs
 
@@ -497,8 +532,9 @@ full signed installation test.
 
 ## Upgrading an existing library
 
-This build upgrades catalogs to schema 21 and writes capture manifest version 5,
-combining durable preservation with managed-library delivery safeguards. Earlier
+This build upgrades catalogs to schema 23 and writes capture manifest version 5,
+combining durable preservation, managed-library delivery safeguards and separate
+provisional/refined writing state, explicit suppression outcomes, and timestamped writing queues. Earlier
 builds refuse these versions. Take and verify a backup of
 both the catalog and captures before upgrading: rollback requires restoring
 the pre-upgrade catalog and capture tree together, not just replacing the app.

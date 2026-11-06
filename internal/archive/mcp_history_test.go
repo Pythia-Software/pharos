@@ -43,7 +43,7 @@ func TestMCPRequestedArchiveSourceProjection(t *testing.T) {
 		}
 	}
 	server := testServer(t, config, catalog)
-	request := httptest.NewRequest(http.MethodPost, "/api/query/mcp_calls", strings.NewReader(`{"select":["tool_name","query_source"],"where":[{"field":"query_source","op":"=","value":"claude"}],"limit":10}`))
+	request := queryFixtureHTTPRequest(http.MethodPost, "/api/query/mcp_calls", strings.NewReader(`{"select":["tool_name","query_source"],"where":[{"field":"query_source","op":"=","value":"claude"}],"limit":10}`))
 	request.Header.Set("Authorization", "Bearer test-token")
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -93,7 +93,7 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 	if response := call("does_not_exist", map[string]any{}); response["result"].(map[string]any)["isError"] != true {
 		t.Fatalf("unknown tool did not report error: %#v", response)
 	}
-	change := httptest.NewRequest(http.MethodPost, "/api/mcp/enabled", strings.NewReader(`{"enabled":false}`))
+	change := queryFixtureHTTPRequest(http.MethodPost, "/api/mcp/enabled", strings.NewReader(`{"enabled":false}`))
 	change.Header.Set("Authorization", "Bearer test-token")
 	change.Header.Set("Content-Type", "application/json")
 	changed := httptest.NewRecorder()
@@ -139,7 +139,7 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 	}
 	query := func(path, body string) map[string]any {
 		t.Helper()
-		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request := queryFixtureHTTPRequest(http.MethodPost, path, strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-token")
 		request.Header.Set("Content-Type", "application/json")
 		response := httptest.NewRecorder()

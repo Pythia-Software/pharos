@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 // The app icon's palette. `masthead` matches the top of the web header so the
@@ -1100,6 +1101,21 @@ final class ArchiveWKWebView: WKWebView {
         var title: String { highlighted ? "Remove Highlight" : "Highlight \(noun)" }
     }
     var contextTarget: ContextTarget?
+
+    /// The local file a right-clicked Markdown link names, once the service
+    /// has found it (`data-file-path` on the link). `launchable` is the
+    /// service's verdict that opening it would run something.
+    struct ContextFile {
+        let url: URL
+        let launchable: Bool
+
+        init?(_ body: Any?) {
+            guard let object = body as? [String: Any], let path = object["path"] as? String, path.hasPrefix("/") else { return nil }
+            url = URL(fileURLWithPath: path)
+            launchable = object["launchable"] as? Bool != false
+        }
+    }
+    var contextFile: ContextFile?
     /// Whether the page offers `window.pharosPageAction` (the main page does;
     /// setup windows do not).
     var pageActions = false
@@ -1119,6 +1135,7 @@ final class ArchiveWKWebView: WKWebView {
     /// `highlight`/`reveal`, so the copied link brings attention to it.
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
+        if let file = contextFile, FileManager.default.fileExists(atPath: file.url.path) { insertFileItems(file, into: menu) }
         let copy = NSMenuItem(title: "Copy Page Link", action: #selector(copyPageLink(_:)), keyEquivalent: "")
         copy.target = self
         copy.isEnabled = Self.shareableLink(url) != nil
@@ -1137,9 +1154,100 @@ final class ArchiveWKWebView: WKWebView {
         for item in items { menu.insertItem(item, at: index); index += 1 }
     }
 
+    /// WebKit's link items would load or download the service's copy of the
+    /// file, so a file link gets Finder's items in their place.
+    static let fileLinkReplacedItems: Set<String> = ["WKMenuItemIdentifierOpenLink", "WKMenuItemIdentifierOpenLinkInNewWindow", "WKMenuItemIdentifierDownloadLinkedFile", "WKMenuItemIdentifierCopyLink"]
+
+    private func insertFileItems(_ file: ContextFile, into menu: NSMenu) {
+        let replaced = { (item: NSMenuItem) in Self.fileLinkReplacedItems.contains(item.identifier?.rawValue ?? "") }
+        var index = menu.items.firstIndex(where: replaced) ?? 0
+        for item in menu.items where replaced(item) { menu.removeItem(item) }
+        func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = file.url
+            return item
+        }
+        let openWith = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+        openWith.submenu = openWithMenu(file.url)
+        // A click never runs a script or installer; choosing an app is explicit.
+        var items = (file.launchable ? [] : [item("Open", #selector(openContextFile(_:)))]) + [openWith, item("Show in Finder", #selector(revealContextFile(_:))), item("Copy Path", #selector(copyContextFilePath(_:)))]
+        index = min(index, menu.items.count)
+        if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
+        if index > 0, !menu.items[index - 1].isSeparatorItem { items.insert(.separator(), at: 0) }
+        for item in items { menu.insertItem(item, at: index); index += 1 }
+    }
+
+    /// Finder's Open With: the default app first, then the others that
+    /// claim the file's type, then Other… to choose any app.
+    private func openWithMenu(_ file: URL) -> NSMenu {
+        let menu = NSMenu()
+        let workspace = NSWorkspace.shared
+        let name = { (app: URL) in app.deletingPathExtension().lastPathComponent }
+        let preferred = workspace.urlForApplication(toOpen: file)
+        let others = workspace.urlsForApplications(toOpen: file).filter { $0 != preferred }
+            .sorted { name($0).localizedStandardCompare(name($1)) == .orderedAscending }
+        func item(_ app: URL, _ title: String) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(openContextFileWith(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = [file, app]
+            let icon = workspace.icon(forFile: app.path)
+            icon.size = NSSize(width: 16, height: 16)
+            item.image = icon
+            return item
+        }
+        if let preferred {
+            menu.addItem(item(preferred, "\(name(preferred)) (default)"))
+            if !others.isEmpty { menu.addItem(.separator()) }
+        }
+        for app in others { menu.addItem(item(app, name(app))) }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let other = NSMenuItem(title: "Other…", action: #selector(chooseContextFileApp(_:)), keyEquivalent: "")
+        other.target = self
+        other.representedObject = file
+        menu.addItem(other)
+        return menu
+    }
+
+    @objc private func openContextFile(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(file)
+    }
+
+    @objc private func openContextFileWith(_ sender: NSMenuItem) {
+        guard let urls = sender.representedObject as? [URL], urls.count == 2 else { return }
+        NSWorkspace.shared.open([urls[0]], withApplicationAt: urls[1], configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    @objc private func chooseContextFileApp(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        let picker = NSOpenPanel()
+        picker.directoryURL = URL(fileURLWithPath: "/Applications")
+        picker.allowedContentTypes = [.application]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Open"
+        picker.message = "Choose an application to open \"\(file.lastPathComponent)\"."
+        picker.begin { response in
+            guard response == .OK, let app = picker.url else { return }
+            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+
+    @objc private func revealContextFile(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    @objc private func copyContextFilePath(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(file.path, forType: .string)
+    }
+
     override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
         super.didCloseMenu(menu, with: event)
         contextTarget = nil
+        contextFile = nil
         pageActions = false
     }
 
@@ -1250,10 +1358,14 @@ struct ArchiveWebView: NSViewRepresentable {
       new MutationObserver(reportBackground).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
       matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportBackground);
       reportBackground();
-      // The native context menu offers to highlight what was right-clicked.
+      // The native context menu offers to highlight what was right-clicked,
+      // and Open With for a link to a local file.
       document.addEventListener('contextmenu', event => {
-        const target = event.target instanceof Element ? window.pharosView?.contextTarget?.(event.target) : null;
-        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, pageActions: typeof window.pharosPageAction === 'function'});
+        const element = event.target instanceof Element ? event.target : null;
+        const target = element ? window.pharosView?.contextTarget?.(element) : null;
+        const link = element?.closest('.markdown-link[data-file-path]');
+        const file = link ? {path: link.dataset.filePath, launchable: link.dataset.fileLaunchable !== 'false'} : false;
+        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextFile: file, pageActions: typeof window.pharosPageAction === 'function'});
       }, true);
     })();
     """
@@ -1461,6 +1573,10 @@ struct ArchiveWebView: NSViewRepresentable {
             }
             if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
                 webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
+                // Only the service's own page may offer to open files on this Mac.
+                let page = message.frameInfo.request.url
+                let ownPage = message.frameInfo.isMainFrame && page?.scheme == origin.scheme && page?.host == origin.host && page?.port == origin.port
+                webView.contextFile = ownPage ? ArchiveWKWebView.ContextFile(body["contextFile"]) : nil
                 webView.pageActions = body["pageActions"] as? Bool == true
                 return
             }
