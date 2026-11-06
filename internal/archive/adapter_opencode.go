@@ -395,17 +395,28 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 	}
 	locator := func(message string) string { return fmt.Sprintf("%s#%s:%s", origin, id, message) }
 	// A fork starts with a copy of its source's messages up to the cut, each
-	// with the source's data, usage included, under the ID <fork event>_<seq>.
-	// The copies stay, as the fork's history, but their requests are the
-	// source's, which counts them; the fork's totals start at zero.
-	inherited := ""
-	if firstString(session["fork_session_id"]) != "" {
+	// with the source's data, usage and tool runs included, under the ID
+	// <fork event>_<seq>; the fork's totals start at zero. The source counts
+	// the copies, so while it exists they are left to it. A deleted source
+	// may have been indexed before, so the copies stay as the fork's history
+	// but without their usage.
+	inherited, sourced := "", false
+	if source := firstString(session["fork_session_id"]); source != "" {
 		for _, message := range messages {
 			if suffix := "_" + strconv.FormatInt(message.seq, 10); strings.HasSuffix(message.id, suffix) && len(message.id) > len(suffix) {
 				inherited = strings.TrimSuffix(message.id, suffix)
 				break
 			}
 		}
+		if err := tx.QueryRowContext(a.context(), `SELECT EXISTS(SELECT 1 FROM session_v2 WHERE id=?)`, source).Scan(&sourced); err != nil {
+			return nil, nil, err
+		}
+	}
+	copied := func(message row) bool {
+		return inherited != "" && message.id == inherited+"_"+strconv.FormatInt(message.seq, 10)
+	}
+	if sourced {
+		messages = slices.DeleteFunc(messages, copied)
 	}
 	// What the session totals beyond its messages: requests whose messages
 	// an undo deleted, and title generation, which no message records.
@@ -515,7 +526,7 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				item.Text = firstString(mapValueDefault(failure["data"])["message"], failure["message"], failure["name"], jsonText(failure))
 				add(item)
 			}
-			if tokens := mapValue(data["tokens"]); tokens != nil && (inherited == "" || message.id != inherited+"_"+strconv.FormatInt(message.seq, 10)) {
+			if tokens := mapValue(data["tokens"]); tokens != nil && !copied(message) {
 				usage := opencodeTokenUsage(tokens)
 				for key, value := range usage {
 					sums[key] += value
