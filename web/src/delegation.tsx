@@ -118,7 +118,6 @@ type Props = {
   workspace: string;
   conversation: string;
   contextHost: HTMLElement | null;
-  headingHost?: HTMLElement | null;
   statsHost?: HTMLElement | null;
   readerHost?: HTMLElement | null;
   compact?: boolean;
@@ -433,7 +432,6 @@ export function DelegationExplorer({
   workspace,
   conversation,
   contextHost,
-  headingHost,
   statsHost,
   readerHost,
   compact = false,
@@ -781,29 +779,25 @@ export function DelegationExplorer({
       added.forEach((el) => el.remove());
     };
   }, [contextHost, data, conversation]);
+  const headingHost = contextHost?.closest(".conversation-head")?.querySelector(".conversation-title-line");
   const heading = shownSession && (
     <div
       className="delegation-session-heading"
       data-session={shownSession.id}
     >
-      <span className="delegation-session-number">
-        Session {shownSession.outline}
-      </span>
-      <div>
-        <strong>{shownSession.label}</strong>
-        <small>
-          {shownSession.provider} ·{" "}
-          {shownSession.model || "model unknown"} ·{" "}
-          {shownSession.effort || "unknown"}
-        </small>
-      </div>
+      <h2>{shownSession.label}</h2>
+      <small>
+        Session {shownSession.outline} ·{" "}
+        {shownSession.provider} ·{" "}
+        {shownSession.model || "model unknown"} ·{" "}
+        {shownSession.effort || "unknown"}
+      </small>
     </div>
   );
   const context =
     contextHost &&
     createPortal(
       <>
-        {!headingHost && heading}
         <div className="delegation-context">
           {current
             .filter((n) => n.external_parent)

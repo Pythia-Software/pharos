@@ -8393,6 +8393,16 @@
       "reason": "Workspace session pane visibility uses the shared sidebar_visible URL field."
     },
     {
+      "key": "12e75abb01435e45:0",
+      "file": "web/src/workspace-inbox.ts",
+      "owner": "update",
+      "tag": "aria-expanded",
+      "control": "close",
+      "disclosure": true,
+      "contract": "view.sidebar_visible",
+      "reason": "The sessions sidebar collapse control writes the shared sidebar_visible URL field, paired with the reopen control."
+    },
+    {
       "key": "d91066140391c046:0",
       "file": "web/src/workspace-inbox.ts",
       "owner": "update",

@@ -1576,7 +1576,7 @@ try{await loadConversation(index)}catch(error){if(ticket===mounting&&host.isConn
 if(ticket!==mounting||!host.isConnected)return;
 c.title||=w.title;showReader(renderConversation(c,roots));
 const panel=host.querySelector('.conversation-panel');bindReaderView(panel);
-if(delegationExplorer){const context=node('div');panel.querySelector('.conversation-head').prepend(context);delegationExplorer.conversation(c.id,context)}
+if(delegationExplorer){const context=node('div');panel.querySelector('.conversation-title-content > .chips').after(context);delegationExplorer.conversation(c.id,context)}
 if(conversations.length>1&&!window.pharosDelegation){const choice=node('div','conversation-choice'),label=node('label','',`Showing conversation #${index+1} from this workspace`);selector=node('select','conversation-selector');selector.id='workspaceConversation';selector.setAttribute('aria-label','Choose conversation from this workspace');label.htmlFor=selector.id;conversations.forEach((other,i)=>{const option=node('option','',conversationLabel(i));option.value=String(i);selector.append(option)});selector.value=String(index);selector.onchange=()=>selectConversation(Number(selector.value));choice.append(label,selector);panel.querySelector('.conversation-head').prepend(choice)}
 if(panel.hasFailures){let cursor=0;const jump=node('button','button-with-icon','Next failed action');jump.title='Navigate reported tool failures; this does not indicate the session outcome';jump.onclick=()=>{const filter=host.querySelector('input[type=search]');filter.value='';filter.dispatchEvent(new Event('input'));const target=panel.revealFailure(cursor++);if(!target)return;target.scrollIntoView({behavior:'smooth',block:'center'});target.querySelector('summary')?.focus()};host.querySelector('.conversation-toolbar').append(jump)}
 };
@@ -1615,13 +1615,13 @@ const mountExplorer=()=>{
 if(delegationExplorer||!explorer.isConnected||!window.pharosDelegation||!window.pharosInbox)return;
 host.querySelector('.conversation-choice')?.remove();
 const openOverview=()=>{rememberReader();const params=new URLSearchParams(location.search);params.delete('conversation');params.delete('message');params.delete('at');params.delete('call');history.pushState(null,'',`/work/${encodeURIComponent(id)}${params.size?'?'+params:''}`);workspaceInbox.setViewer(false);syncNavigator()};
-workspaceInbox=window.pharosInbox.mount({root,workspace:id,title:w.title,overview:[...root.children].filter(el=>el!==host),reader:host,onOverview:openOverview,onLayout:(compact,splitReader)=>delegationExplorer?.layout(compact,splitReader)});
+workspaceInbox=window.pharosInbox.mount({root,workspace:id,overview:[...root.children].filter(el=>el!==host),reader:host,onOverview:openOverview,onLayout:(compact,splitReader)=>delegationExplorer?.layout(compact,splitReader)});
 // One conversation with no parent reads as one page. Its sessions arrive
 // later; if they nest after all, the reader keeps the conversation open
 // beside the workspace sessions.
 const inbox=workspaceInbox;inbox.setMerged(conversations.length===1&&!conversations[0].parent_id);
 const readerIndex=activeIndex>=0?activeIndex:focusIndex>=0||matchedIndex>=0||inbox.merged?initialIndex:-1;
-delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[readerIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,readerHost:host,splitReader:inbox.viewing&&!inbox.merged,openOverview,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
+delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[readerIndex]?.id||'',contextHost:null,statsHost:workspaceStats,readerHost:host,splitReader:inbox.viewing&&!inbox.merged,openOverview,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
 // The bundle can arrive after an initial deep-linked reader. Rebuild that
 // reader inside the new scroll container so its rails and search use the pane.
 if(activeIndex>=0&&routeConversation()){
