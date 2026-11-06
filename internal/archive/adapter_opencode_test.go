@@ -163,8 +163,9 @@ func TestOpenCodeSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 // opencodeMoreRows add a session with each other kind of message, and a fork
 // of ses_parts that starts with copies of its messages.
 const opencodeMoreRows = `
+-- Its totals hold its compactions' usage too.
 INSERT INTO session_v2 VALUES('ses_more','p1',NULL,NULL,NULL,'more','/work/app','More','2.2.5',0.0,'{}',
-  200,20,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793722000000,1793722010000);
+  280,27,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793722000000,1793722010000);
 INSERT INTO session_message VALUES('r1','ses_more','user',1,1793722000000,1793722000000,'{"text":"Tidy up"}');
 INSERT INTO session_message VALUES('r2','ses_more','synthetic',2,1793722000100,1793722000100,'{"text":"The user switched to plan mode."}');
 INSERT INTO session_message VALUES('r3','ses_more','system',3,1793722000200,1793722000200,'{"text":"Stay in /work/app."}');
@@ -173,12 +174,18 @@ INSERT INTO session_message VALUES('r5','ses_more','shell',5,1793722000400,17937
 -- Its content list is empty; its parts are in session_part.
 INSERT INTO session_message VALUES('r6','ses_more','assistant',6,1793722000500,1793722001000,'{"model":{"id":"big-pickle"},"content":[],"tokens":{"input":200,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
 INSERT INTO session_part VALUES('r6','ses_more',0,'text',NULL,1793722000900,1793722000900,'{"type":"text","text":"Done."}');
-INSERT INTO session_message VALUES('r7','ses_more','compaction',7,1793722002000,1793722002000,'{"summary":"Tidied the repo."}');
+-- A compaction that failed, which leaves the context as it was, a request
+-- whose edit the person refused, one that completed with a model of its own,
+-- and one still running.
+INSERT INTO session_message VALUES('r7','ses_more','compaction',7,1793722001500,1793722001500,'{"status":"failed","reason":"auto","error":{"type":"provider.transport","message":"Connection reset"},"tokens":{"input":10,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('r8','ses_more','assistant',8,1793722001600,1793722001900,'{"model":{"id":"big-pickle"},"content":[{"type":"tool","id":"call_denied","name":"edit","state":{"status":"error","input":{"filePath":"a.go"},"error":{"type":"permission.rejected","message":"Permission denied by the user"}},"time":{"created":1793722001700,"completed":1793722001800}},{"type":"text","text":"Not edited."}],"tokens":{"input":30,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('r9','ses_more','compaction',9,1793722002000,1793722002000,'{"status":"completed","reason":"auto","summary":"Tidied the repo.","model":{"id":"small-pickle","providerID":"opencode"},"tokens":{"input":40,"output":4,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('r10','ses_more','compaction',10,1793722002500,1793722002500,'{"status":"running","reason":"manual","summary":""}');
 -- A subagent's session, where a command run from its prompt is still the person's.
 INSERT INTO session_v2 VALUES('ses_more_sub','p1',NULL,'ses_more',NULL,'more-sub','/work/app','Check','2.2.5',0.0,'{}',
   30,20,0,0,0,'explore','{"id":"big-pickle","providerID":"opencode"}',1793722003000,1793722004000);
-INSERT INTO session_message VALUES('k1','ses_more_sub','shell',8,1793722003000,1793722003000,'{"command":"go vet","status":"completed","exit":0,"output":""}');
-INSERT INTO session_message VALUES('k2','ses_more_sub','assistant',9,1793722003500,1793722004000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Vetted."}],"tokens":{"input":30,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('k1','ses_more_sub','shell',11,1793722003000,1793722003000,'{"command":"go vet","status":"completed","exit":0,"output":""}');
+INSERT INTO session_message VALUES('k2','ses_more_sub','assistant',12,1793722003500,1793722004000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Vetted."}],"tokens":{"input":30,"output":20,"reasoning":0,"cache":{"read":0,"write":0}}}');
 -- The fork's totals count only its own request.
 INSERT INTO session_v2 VALUES('ses_fork','p1',NULL,NULL,'ses_parts','fork','/work/app','Parts fork','2.2.5',0.0,'{}',
   50,5,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793723000000,1793723001000);
@@ -186,17 +193,19 @@ INSERT INTO session_message VALUES('evt_ab_1','ses_fork','user',1,1793721000000,
 INSERT INTO session_message VALUES('evt_ab_2','ses_fork','assistant',2,1793721000500,1793721001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Hello, world"},{"type":"tool","id":"call_f","name":"shell","state":{"status":"completed","input":{"command":"ls"},"content":[{"type":"text","text":"a.txt"}],"metadata":{"exit":0}},"time":{"created":1793721000600,"completed":1793721000700}}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
 INSERT INTO session_message VALUES('msg_f3','ses_fork','user',3,1793723000000,1793723000000,'{"text":"Now in French"}');
 INSERT INTO session_message VALUES('msg_f4','ses_fork','assistant',4,1793723000500,1793723001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Bonjour"}],"tokens":{"input":50,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}');
--- A fork whose source was deleted, with a copied command.
+-- A fork whose source was deleted, with a copied command and compaction.
 INSERT INTO session_v2 VALUES('ses_orphan','p1',NULL,NULL,'ses_gone','orphan','/work/app','Orphan fork','2.2.5',0.0,'{}',
   7,3,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793724000000,1793724001000);
 INSERT INTO session_message VALUES('evt_cd_1','ses_orphan','shell',1,1793720000000,1793720000000,'{"command":"make","status":"completed","exit":0,"output":"ok"}');
 INSERT INTO session_message VALUES('evt_cd_2','ses_orphan','assistant',2,1793720000500,1793720001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Built"}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
-INSERT INTO session_message VALUES('msg_o3','ses_orphan','user',3,1793724000000,1793724000000,'{"text":"Again"}');
-INSERT INTO session_message VALUES('msg_o4','ses_orphan','assistant',4,1793724000500,1793724001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Rebuilt"}],"tokens":{"input":7,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('evt_cd_3','ses_orphan','compaction',3,1793720002000,1793720002000,'{"status":"completed","reason":"auto","summary":"Built it.","tokens":{"input":40,"output":4,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('msg_o3','ses_orphan','user',4,1793724000000,1793724000000,'{"text":"Again"}');
+INSERT INTO session_message VALUES('msg_o4','ses_orphan','assistant',5,1793724000500,1793724001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Rebuilt"}],"tokens":{"input":7,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}');
 `
 
 // What OpenCode adds to a prompt is context, a command the person ran is a
-// call, a compaction is a boundary, parts replace an empty content list, and
+// call, a compaction that ended is a request and one that completed a
+// boundary, parts replace an empty content list, and
 // a fork leaves the messages it copied to its source, or keeps them without
 // their usage once the source is gone.
 func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
@@ -211,7 +220,8 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 		return strings.Join(out, " ")
 	}
 	more := records["ses_more"].Conversations[0].Messages
-	if got, want := kinds(more), "user:message system:context system:context system:context user:tool_call tool:tool_result assistant:message system:metadata system:metadata"; got != want {
+	if got, want := kinds(more), "user:message system:context system:context system:context user:tool_call tool:tool_result assistant:message system:metadata "+
+		"system:metadata system:error assistant:tool_call tool:tool_result assistant:message system:metadata system:metadata system:metadata"; got != want {
 		t.Fatalf("messages\n got %s\nwant %s", got, want)
 	}
 	if !strings.Contains(more[1].Text, `"source":"opencode_synthetic"`) || !strings.Contains(more[3].Text, `"source":"opencode_skill:tidy"`) || !strings.Contains(more[3].Text, "Run gofmt first.") {
@@ -221,8 +231,31 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 		result.Text != `{"content":"not a repo","details":{"exit_code":1},"is_error":true,"tool":"shell"}` {
 		t.Fatalf("shell call %+v result %+v", call, result)
 	}
-	if more[6].Text != "Done." || !isCompactionMarker(more[8]) {
-		t.Fatalf("parts %+v compaction %+v", more[6], more[8])
+	if more[6].Text != "Done." || !isCompactionMarker(more[15]) {
+		t.Fatalf("parts %+v compaction %+v", more[6], more[15])
+	}
+	// Each compaction that ended is a request with its own model; only the
+	// one that completed resets the context the next request reads.
+	requests, calls := buildToolLedger(more, records["ses_more"].Conversations[0].Model)
+	ids := []string{}
+	for _, request := range requests {
+		ids = append(ids, fmt.Sprintf("%s:%s:%v", request.NativeID, request.Model, request.CompactedBefore))
+	}
+	if got, want := strings.Join(ids, " "), "r6:big-pickle:false r7:big-pickle:false r8:big-pickle:false r9:small-pickle:false"; got != want {
+		t.Fatalf("requests\n got %s\nwant %s", got, want)
+	}
+	// A refused edit holds no content but its error.
+	refused := 0
+	for _, call := range calls {
+		if call.CallID == "call_denied" {
+			refused++
+			if call.Status != "error" || call.ErrorType != "permission_denied" || call.ErrorSignature == "" {
+				t.Fatalf("refused edit %+v", call)
+			}
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("%d refused edits in %+v", refused, calls)
 	}
 	for _, conversation := range records["ses_more"].Conversations {
 		if conversation.NativeID != "ses_more_sub" {
@@ -237,7 +270,7 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 	if got := kinds(fork.Conversations[0].Messages); got != "user:message assistant:message system:metadata" || fork.Metadata["forked_from"] != "ses_parts" {
 		t.Fatalf("fork %s %+v", got, fork.Metadata)
 	}
-	if got := kinds(records["ses_orphan"].Conversations[0].Messages); got != "user:tool_call tool:tool_result assistant:message user:message assistant:message system:metadata" {
+	if got := kinds(records["ses_orphan"].Conversations[0].Messages); got != "user:tool_call tool:tool_result assistant:message system:metadata user:message assistant:message system:metadata" {
 		t.Fatalf("orphaned fork %s", got)
 	}
 
@@ -254,6 +287,9 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 	}
 	if got := usage("ses_parts"); got != 110 {
 		t.Fatalf("source usage %d", got)
+	}
+	if got := usage("ses_more"); got != 280+27 {
+		t.Fatalf("usage with compactions %d, want the totals' %d", got, 280+27)
 	}
 	if n := countRows(t, c, `SELECT COUNT(*) FROM tool_calls WHERE provider='opencode' AND call_id='r5:shell'`); n != 1 {
 		t.Fatalf("%d calls for the command the person ran", n)
@@ -369,6 +405,15 @@ func TestOpenCodeUsageCountsEachRequestOnce(t *testing.T) {
 	}
 	if got := session("ses_parts"); got != 110 {
 		t.Fatalf("parts session usage %d", got)
+	}
+	// The subagent's launch is its conversation.
+	workspace := ""
+	if err := c.DB.QueryRow(`SELECT workspace_id FROM conversations WHERE native_id='ses_root'`).Scan(&workspace); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := c.delegationSnapshot(t.Context(), workspace)
+	if err != nil || len(snapshot.Nodes) != 2 {
+		t.Fatalf("delegation nodes %+v %v", snapshot, err)
 	}
 	// call_1 and call_2 split m2's 50 output tokens.
 	if n := countRows(t, c, `SELECT COUNT(*) FROM tool_calls WHERE provider='opencode' AND call_id IN ('call_1','call_2') AND output_tokens=25`); n != 2 {
@@ -495,6 +540,20 @@ func TestOpenCodeReadsOnlyTheSessionThatChanged(t *testing.T) {
 	if parsed := ingestSource(t, c, source).Parsed; parsed != 1 {
 		t.Fatalf("after an undo: %d sessions parsed", parsed)
 	}
+
+	// Usage no message records, as title generation's, leaves time_updated.
+	db, err = sql.Open("sqlite", filepath.Join(root, "opencode.db"))
+	if err == nil {
+		_, err = db.Exec(`UPDATE session_v2 SET tokens_input=tokens_input+123 WHERE id='ses_parts'`)
+		db.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed = ingestSource(t, c, source).Parsed
+	if got := countRows(t, c, `SELECT COALESCE(SUM(u.total_tokens),0) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN conversations v ON v.id=a.conversation_id WHERE v.native_id='ses_parts'`); got != 233 || parsed != 1 {
+		t.Fatalf("after usage alone: %d tokens, %d sessions parsed", got, parsed)
+	}
 }
 
 // A database in the 1.x schema is reported, read live or from either kind of
@@ -538,6 +597,23 @@ func TestOpenCodeOlderSchemaIsReportedNotSkipped(t *testing.T) {
 	source.Options = map[string]any{"sqlite_record_capture": true}
 	adapter, _ = MakeAdapter(source)
 	reported("copied before indexing", c.Ingest(adapter, nil).Error)
+
+	// Beside the 2.x tables, a session a 1.x release wrote after OpenCode
+	// moved its sessions is reported, and the rest are read. One moved and
+	// deleted since in 2.x, older than every moved one left, is not.
+	mixed := t.TempDir()
+	opencodeDatabase(t, filepath.Join(mixed, "opencode.db"), opencodeRows+`
+CREATE TABLE session (id text PRIMARY KEY, time_created integer NOT NULL); CREATE TABLE message (id text); CREATE TABLE part (id text);
+INSERT INTO session VALUES('ses_deleted',1793710000000),('ses_root',1793720000000),('ses_child',1793720004200),('ses_parts',1793721000000),('ses_v1',1793730000000);`)
+	source = SourceConfig{Name: "opencode", Kind: "opencode", Path: mixed, Account: "local", Enabled: true}
+	adapter, _ = MakeAdapter(source)
+	ingested := c.Ingest(adapter, nil)
+	if !strings.Contains(fmt.Sprint(ingested.Error), "1 session only in the schema of releases before 2.0") {
+		t.Fatalf("mixed: %v", ingested.Error)
+	}
+	if n := countRows(t, c, `SELECT COUNT(*) FROM conversations WHERE provider='opencode' AND native_id IN ('ses_root','ses_child','ses_parts')`); n != 3 {
+		t.Fatalf("mixed: %d sessions read", n)
+	}
 }
 
 // A session deleted in OpenCode between two captures, before either was
