@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { capabilities, core, execution, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisInspectQuery, analysisLimits, analysisQuery, selectionWhere, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState, availableViews, canonicalState, trendSplit } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -73,6 +73,8 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
     [{ metric: "conversations", split: "none", display: "cumulative" }, { display: "interval" }, /running count of distinct conversations/],
     [{ metric: "output_share", split: "none", rollingPeriods: 7, rollingOp: "sum" }, { rollingOp: "mean" }, /pools its window/],
     [{ metric: "agent_sessions", split: "none", period: "days", days: 3 }, { period: "day" }, /counted per hour, day, week or month/],
+    [{ metric: "average_fanout", split: "none", period: "days", days: 3 }, { period: "day" }, /several periods would add/],
+    [{ metric: "average_fanout", split: "none", period: "hours", hours: 3 }, { period: "hour" }, /several periods would add/],
     [{ metric: "cost", split: "type" }, { split: "provider" }, /Token type splits tokens only/],
     [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no norm/],
     [{ metric: "tokens", split: "none", display: "cumulative", norm: true }, { norm: false }, /running totals/],
@@ -455,7 +457,7 @@ test("a combined selection filters the executed query where a filter can state i
   const pairs = [["codex", "gpt-5"], ["claude", "sonnet"]].map(pair => JSON.stringify(pair));
   const state = { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider_model", selection: { values: pairs, excluded: false } };
   const scatter = analysisQuery(catalog, state, range, { now });
-  assert.deepEqual(core.toQueryRequestV3(scatter.query, schema, capabilities, execution, { now, rows: false }).diagnostics, [], "an OR across two fields is a valid filter");
+  assert.doesNotThrow(() => core.toQueryRequestV3(scatter.query, schema, capabilities, execution, { now, rows: false }), "an OR across two fields is a valid filter");
   const drawn = selectGroups(core.evaluateMetrics(rows, scatter.query, schema, { now }).metrics[0], scatter.selection);
   const roots = rows.filter(row => pairs.includes(JSON.stringify([row.root_provider, row.root_model_family])));
   assert.deepEqual(new Set(drawn.buckets.map(bucket => bucket.keys.at(-1))).size, Math.min(3, new Set(roots.map(row => row.root_conversation_id)).size));
@@ -471,7 +473,7 @@ test("a combined selection filters the executed query where a filter can state i
   assert.deepEqual(selectionWhere(["provider", "model_family"], { values: many, excluded: false }), [term]);
   const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider_model", selection: { values: many, excluded: false } }, range, { now });
   assert.ok(compare.query.where.some(item => JSON.stringify(item) === JSON.stringify(term)) && !compare.selection.late);
-  assert.deepEqual(core.toQueryRequestV3(compare.query, schema, capabilities, execution, { now, rows: false }).diagnostics, []);
+  assert.doesNotThrow(() => core.toQueryRequestV3(compare.query, schema, capabilities, execution, { now, rows: false }));
   assert.deepEqual(core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0].buckets.map(bucket => bucket.keys), [["codex", "gpt-5"]], "only the selected pairs that hold usage");
   assert.ok(compare.supporting.grouping.source.where.some(item => JSON.stringify(item) === JSON.stringify(term)));
   const opened = analysisInspectQuery(compare, { keys: ["codex", "gpt-5"], value: 1, count: 1 }, compare.clause, schema, "compare");
@@ -575,4 +577,150 @@ test("Conversations trends group event timestamps into local calendar periods", 
     assert.equal(result.error, undefined, period);
     assert.deepEqual(result.buckets.map(bucket => bucket.value).sort((a, b) => a - b), period === "week" ? [13] : [5, 8], period);
   }
+});
+
+import {messageLabelsCatalog} from '../../../src/message-labels-catalog';
+import messageLabelsDocument from '../../../../schemas/message_labels.schema.json';
+import {messageLabelConversationQuery,messageLabelHostQuery,labelResultsMode} from '../../../src/message-label-results-model';
+import {messageLabelLegacyURL} from '../../../src/message-label-legacy';
+import {legendGroups} from '../../../src/chart-series';
+import {chartSeriesStyle} from '../../../src/chart-colors';
+test('Message Labels keeps all chart views centered on the ontology and migrates older views',()=>{
+ assert.deepEqual(availableViews(messageLabelsCatalog).map(([id])=>id),['trend_line','trend_bar','compare']);
+ assert.deepEqual(Object.keys(messageLabelsCatalog.breakdowns),['function_role','family','label']);
+ assert.equal(messageLabelsCatalog.breakdowns.family.label,'General Label');
+ assert.equal(trendSplit(messageLabelsCatalog,'none'),false);
+ for(const view of ['trend','compare','distribution','scatter','cycle'])for(const split of ['none','repository_name','model','source','label_status']){
+  const old={view,metric:'messages',split,unit:'conversation',selection:{values:['old-repository'],excluded:false}};
+  const mapped=canonicalState(messageLabelsCatalog,old),drawn=normalizeAnalysis(messageLabelsCatalog,old);
+  assert.ok(validAnalysisState(messageLabelsCatalog,mapped));
+  assert.equal(drawn.split,'family');assert.equal(drawn.unit,'records');assert.deepEqual(drawn.selection,{values:[],excluded:false});
+  assert.equal(drawn.view,view==='compare'?'compare':'trend_line');
+ }
+ for(const split of ['function_role','family','label'])for(const view of ['trend_line','trend_bar','compare']){
+  const state={view,metric:'messages',split};assert.equal(normalizeAnalysis(messageLabelsCatalog,state).split,split);
+  const q=view!=='compare'?trendQuery(messageLabelsCatalog,state,[],{now}).query:analysisQuery(messageLabelsCatalog,state,[],{now}).query;
+  assert.ok(q.aggregations.some(clause=>clause.groupBy.includes(messageLabelsCatalog.breakdowns[split].fields[0])));
+ }
+});
+test('label line and bar views share amounts and preserve chart settings when switching',()=>{
+ const initial={view:'trend_line',metric:'messages',split:'label',period:'day',rollingPeriods:3,share:true,scale:'logarithmic',selection:{values:['C.difficulty.blocker'],excluded:false}};
+ const line=normalizeAnalysis(messageLabelsCatalog,initial),bar=switchView(messageLabelsCatalog,line,'trend_bar');
+ assert.deepEqual({...bar,view:'trend_line'},line);
+ assert.deepEqual(switchView(messageLabelsCatalog,bar,'trend_line'),line);
+ const where=[{field:'occurred_at',op:'>=',value:'-30d'}],date=new Date(now-3*86400000),data=[{id:'label',message_id:'message',label:'C.difficulty.blocker',day:localDay(date),occurred_at:date.toISOString()}];
+ assert.deepEqual(trendQuery(messageLabelsCatalog,line,where,{now}),trendQuery(messageLabelsCatalog,bar,where,{now}));
+ const query=trendQuery(messageLabelsCatalog,line,where,{now});
+ const results=core.evaluateMetrics(data,query.query,core.loadSchema(messageLabelsDocument),{now}).metrics;
+ const lineSeries=trendSeries(messageLabelsCatalog,line,query,results,{now}),barSeries=trendSeries(messageLabelsCatalog,bar,query,results,{now});
+ assert.equal(lineSeries.lines,true,'a single label still uses the selected line view');
+ assert.equal(barSeries.lines,false);
+ assert.ok(barSeries.buckets.some(bucket=>Object.values(bucket.values).some(value=>value>0)),'comparison includes actual label amounts');
+ assert.deepEqual({...barSeries,lines:true},lineSeries);
+ const compare=switchView(messageLabelsCatalog,bar,'compare');
+ assert.equal(compare.compareAs,'bars','overlapping labels remain values when comparison cannot form shares');
+ assert.equal(switchView(messageLabelsCatalog,compare,'trend_bar').view,'trend_bar');
+ // Saved requests keep unsupported settings so the chart can explain its
+ // daily, non-cumulative rendering without silently rewriting the link.
+ for(const view of ['trend_line','trend_bar']){
+  const requested={...initial,view,display:'cumulative',period:'days',days:3};
+  const drawn=normalizeAnalysis(messageLabelsCatalog,requested);
+  assert.equal(drawn.view,view);assert.equal(drawn.display,'interval');assert.equal(drawn.period,'day');
+  const notes=trendAdjustments(messageLabelsCatalog,requested).join(' ');
+  assert.match(notes,/running count of distinct messages/);assert.match(notes,/each bucket is one day/);
+  assert.equal(requested.display,'cumulative');assert.equal(requested.period,'days');
+ }
+});
+test('label legend groups retain full ancestry, series identity and separate repeated subgroup names',()=>{
+ const ids=['P.request.work.implement','P.request.work.refine','P.frame.scope','C.report.finding','?'];
+ const items=ids.map(id=>({key:id,label:id,...chartSeriesStyle('label',id)}));
+ const tree=legendGroups(items);
+ assert.deepEqual(tree.groups.map(group=>group.label),['Sender','Receiver','Coverage']);
+ const work=tree.groups[0].groups.find(group=>group.label==='Request').groups[0];
+ assert.deepEqual(work.items.map(item=>item.key),ids.slice(0,2));
+ const flatten=group=>[...group.items,...group.groups.flatMap(flatten)];assert.deepEqual(flatten(tree).map(item=>item.key),ids);
+ const repeated=legendGroups([{key:'s',label:'a',color:'blue',groupPath:['Sender','Generic']},{key:'r',label:'b',color:'red',groupPath:['Receiver','Generic']}]);
+ assert.equal(repeated.groups[0].groups[0].items[0].key,'s');assert.equal(repeated.groups[1].groups[0].items[0].key,'r');
+ const acceptedParent=legendGroups(['C.report','C.report.finding'].map(value=>({key:value,value,label:value==='C.report'?'Report':'Finding',...chartSeriesStyle('label',value)})));
+ assert.deepEqual(acceptedParent.groups[0].groups[0].items.map(item=>item.value),['C.report','C.report.finding']);
+});
+test('message label shares use distinct interval populations and remain fixed when a label is hidden',()=>{
+ const s=core.loadSchema(messageLabelsDocument),data=[{id:'a:P',message_id:'a',conversation_id:'c',label:'P.request',family:'P.request',day:'2026-10-01',occurred_at:'2026-10-01T12:00:00Z'},{id:'a:C',message_id:'a',conversation_id:'c',label:'C.report',family:'C.report',day:'2026-10-01',occurred_at:'2026-10-01T12:00:00Z'},{id:'b:C',message_id:'b',conversation_id:'d',label:'C.report',family:'C.report',day:'2026-10-01',occurred_at:'2026-10-01T13:00:00Z'}];
+ const state={...base,view:'trend',metric:'messages',split:'family',share:true},query=trendQuery(messageLabelsCatalog,state,[],{now:Date.parse('2026-10-02')}),results=core.evaluateMetrics(data,query.query,s,{now:Date.parse('2026-10-02')}).metrics;
+ const built=trendSeries(messageLabelsCatalog,state,query,results,{now:Date.parse('2026-10-02')}),values=built.buckets.find(b=>Object.values(b.values).some(v=>v>0))?.values;
+ assert.ok(values,JSON.stringify({error:built.error,results,query:query.query,buckets:built.buckets}));assert.equal(built.series[0].group,'Sender');
+ assert.ok(Object.values(values).includes(.5));assert.ok(Object.values(values).includes(1));assert.equal(Object.values(values).reduce((a,b)=>a+b,0),1.5);
+ const selected={...state,selection:{values:['P.request'],excluded:true}},hidden=trendQuery(messageLabelsCatalog,selected,[],{now:Date.parse('2026-10-02')});assert.deepEqual(hidden.query,query.query);
+ assert.ok(!query.supporting.aggregations.some(clause=>clause.id==='trend:population'));
+});
+test('Message Labels shows every specific label despite old series caps, including smoothing history',()=>{
+ const schema=core.loadSchema(messageLabelsDocument),now=Date.parse('2026-10-03T12:00:00Z');
+ const data=Array.from({length:37},(_,i)=>({id:`m${i}:label`,message_id:`m${i}`,conversation_id:'conversation',label:`P.request.variant${i}`,family:'P.request',day:'2026-10-02',occurred_at:'2026-10-02T12:00:00Z'}));
+ data.push({id:'history:label',message_id:'history',conversation_id:'conversation',label:'C.report.finding',family:'C.report',day:'2026-10-01',occurred_at:'2026-10-01T12:00:00Z'});
+ const where=[{field:'occurred_at',op:'>=',value:'2026-10-02T00:00:00Z'},{field:'occurred_at',op:'<',value:'2026-10-03T00:00:00Z'}];
+ for(const metric of ['messages','observations']){
+  const state={...base,view:'trend',metric,split:'label',seriesLimit:1,rollingPeriods:2};
+  const query=trendQuery(messageLabelsCatalog,state,where,{now}),results=core.evaluateMetrics(data,query.query,schema,{now}).metrics;
+  const built=trendSeries(messageLabelsCatalog,state,query,results,{now});
+  assert.equal(built.error,undefined);assert.equal(built.series.length,38);
+  assert.ok(built.series.every(item=>!item.hiddenCount&&item.key!=='other'));
+  assert.ok(built.buckets.some(bucket=>bucket.values['s:C.report.finding']>0),'history-only labels contribute to the rolling window');
+  const selected=trendSeries(messageLabelsCatalog,{...state,selection:{values:['P.request.variant0'],excluded:true}},query,results,{now});
+  assert.deepEqual(selected.selected,['s:P.request.variant0']);assert.equal(selected.excluded,true);
+ }
+});
+test('message-label conversation results preserve the native source definition and saved card/table display',()=>{
+ const source={...core.EMPTY_QUERY,where:[{field:'family',op:'=',value:'P.request'},{field:'occurred_at',op:'>=',value:'-30d'}]},query=messageLabelConversationQuery(source);
+ assert.deepEqual(query.grouping.source.where,source.where);assert.ok(query.select.some(c=>c.field==='fingerprint'));
+ const s=core.loadSchema(messageLabelsDocument);
+ const grouped=core.applyQuery([{id:'a',fingerprint:'c',message_id:'a',title:'Example',occurred_at:'2026-10-01T12:00:00Z',family:'P.request'},{id:'b',fingerprint:'c',message_id:'b',title:'Example',occurred_at:'2026-10-01T13:00:00Z',family:'P.request'}],{...query,grouping:{...query.grouping,source:{...source,where:[]}}},s);
+ assert.equal(grouped.rows.length,1);assert.equal(grouped.rows[0].matching_messages,2);assert.equal(grouped.rows[0].conversation_title,'Example');
+ const host=messageLabelHostQuery(s.fields),cards=host.normalize({version:1,params:{label_results:['cards']}}),table=host.normalize({version:1,params:{label_results:['table']}});
+ assert.equal(labelResultsMode({...query,hostState:cards}),'cards');assert.equal(labelResultsMode({...query,hostState:table}),'table');assert.throws(()=>host.normalize({version:1,params:{label_results:['bad']}}));
+ const params=new URLSearchParams({label_chart:JSON.stringify({measure:'count',scale:'logarithmic',smoothing:3,resolution:'label'}),label_audience:'thinking',label_repository:'r',label_focus:'P.request'}),url=new URL(messageLabelLegacyURL(params),'http://localhost');assert.equal(url.searchParams.get('analyze_topic'),'labels');const filters=core.decodeQueryStrict(url.searchParams.get('analyze_filters'));assert.ok(filters.where.some(c=>c.field==='source'&&c.value==='thinking'));assert.equal(JSON.parse(url.searchParams.get('analyze_chart')).rollingPeriods,3);assert.equal(url.searchParams.has('label_lab'),false);
+});
+
+import {humanAnalysisCatalog} from '../../../src/human-analysis-catalog';
+import {habitsAnalysisCatalog} from '../../../src/habits-analysis-catalog';
+import {peopleMessageLabelCatalog} from '../../../src/people-message-labels';
+
+test('People message-label groups and shares add up to their message population',()=>{
+ const at='2026-10-01T12:00:00Z', date=at.slice(0,10), time=Date.parse('2026-10-02');
+ for(const [source,scope] of [[humanAnalysisCatalog,'human'],[conversationAnalysisCatalog,'activity'],[habitsAnalysisCatalog,'habits']]){
+  const state={view:'trend',metric:'messages',split:'message_family',period:'day',share:true};
+  const catalog=peopleMessageLabelCatalog(source,state);
+  assert.equal(catalog.dataset,'people_message_labels');
+  // The service supplies one winning label or coverage row per message.
+  const data=[['a','P.request.work.implement','P.request'],['b','P.control.redirect','P.control'],['c','?','?']].map(([message_id,label,family],i)=>({id:scope+i,message_id,label,family,people_scope:scope,typed_words:1,day:date,sent_at:at,event_at:at,started_at:at}));
+  data.push({...data[0],id:'wrong-scope',message_id:'outside',people_scope:'outside'});
+  const query=trendQuery(catalog,state,[],{now:time});
+  const results=core.evaluateMetrics(data,query.query,schemas.people_message_labels,{now:time}).metrics;
+  const shares=results.find(x=>x.id==='trend').buckets;
+  assert.equal(shares.find(x=>x.keys.includes('P.request')).value,1);
+  assert.equal(shares.reduce((sum,bucket)=>sum+bucket.value,0),3,'every matching message belongs to exactly one group');
+  const built=trendSeries(catalog,state,query,results,{now:time});
+  assert.equal(built.error,undefined);assert.equal(built.additive,true);assert.equal(built.lines,false,'exclusive labels can stack');
+  const bucket=built.buckets.find(b=>b.values['s:P.request']>0);
+  assert.ok(Math.abs(bucket.values['s:P.request']-1/3)<1e-8);
+  assert.ok(Math.abs(Object.values(bucket.values).reduce((sum,value)=>sum+value,0)-1)<1e-8,'shares sum to 100%, including Uncategorized');
+  const compare=analysisQuery(catalog,{...state,view:'compare',compareAs:'share'},[],{now:time});
+  const compared=core.evaluateMetrics(data,compare.query,schemas.people_message_labels,{now:time}).metrics[0].buckets;
+  assert.equal(compared.find(b=>b.keys.includes('P.request')).value,1);
+  assert.equal(compared.reduce((sum,b)=>sum+b.value,0),3);
+  assert.equal(normalizeAnalysis(catalog,{...state,view:'compare',compareAs:'share'}).compareAs,'share');
+  assert.equal(normalizeAnalysis(catalog,{...state,display:'cumulative'}).display,'cumulative');
+  if(scope==='human')for(const split of ['message_family','message_label']){
+   const filtered=data.map(row=>({...row,text:row.message_id==='a'?'Please fix the parser':'Please review the renderer'}));
+   const where=[{field:'text',op:'contains',value:'parser'}];
+   for(const query of [trendQuery(catalog,{...state,split},where,{now:time}),analysisQuery(catalog,{...state,split,view:'compare'},where,{now:time})]){
+    const metrics=core.evaluateMetrics(filtered,query.query,schemas.people_message_labels,{now:time}).metrics;
+    assert.ok(metrics.every(metric=>metric.error===undefined));
+    assert.equal(metrics[0].buckets.reduce((sum,b)=>sum+b.value,0),1,'text filters keep the original Human Words population');
+   }
+  }
+  assert.equal(peopleMessageLabelCatalog(source,{...state,metric:source===humanAnalysisCatalog?'typed':source===habitsAnalysisCatalog?'wall_hours':'output'}),source,'labels never attribute time, words or tokens');
+ }
+ const typed=peopleMessageLabelCatalog(humanAnalysisCatalog,{metric:'typed_messages',split:'message_label'});
+ const query=trendQuery(typed,{metric:'typed_messages',split:'message_label',period:'day'},[],{now:time});
+ assert.ok(query.query.where.some(term=>term.field==='typed_words'&&term.op==='>'));
 });

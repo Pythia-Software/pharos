@@ -483,11 +483,6 @@ function messageLabelView(message,taxonomy=[]){
   const segment=message.labels.segment||'';
   return{family:labels.find(label=>label.family)?.family||'',segment,segmentName:LABEL_SEGMENTS[segment]||segment,labels};
 }
-// The text a message's labels describe: a person's typed pieces when the
-// classification finds them, otherwise all of it. Typed text stays '1'
-// (human-written); the rest is '2'.
-function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
-
 // Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
 // message where something happened (an obstacle, a discovery, a workaround),
 // with what it was about (subject) and what the agent did (response). Ranges
@@ -507,10 +502,36 @@ function messageEventView(message,text=eventText(message)){
   const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
   const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
   const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
-  const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
+  const view=events.filter(event=>fits(event.sentence)).map(event=>({id:event.id??null,target:event.target?.message_id?event.target:null,kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
     probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
     sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
-  return view.length?view:null;
+  return view.length?mergeEventSentences(view,text):null;
+}
+// Two events on near-identical sentences show as one mark: their sentences
+// merge into the span covering both, and the mark's popover lists every
+// label with the text once (eventTipView). The rule (nearSameSpan,
+// eventSpanGroups) lives in event-spans.js, shared with the timeline and
+// fingerprint ribbons. Each event keeps its id (and its own range as
+// ownSentence), so a link to either still selects the merged mark.
+function mergeEventSentences(view,text){
+  const merged=[...view];
+  for(const group of eventSpanGroups(view.map(event=>event.sentence))){
+    const span=[Math.min(...group.map(index=>view[index].sentence[0])),Math.max(...group.map(index=>view[index].sentence[1]))];
+    for(const index of group){const event=view[index];if(span[0]!==event.sentence[0]||span[1]!==event.sentence[1])merged[index]={...event,ownSentence:event.sentence,sentence:span,sentenceText:text.slice(span[0],span[1]).trim()}}
+  }
+  return merged;
+}
+// What one mark's popover shows: each label once (the likelier, if a kind
+// repeats), then each distinct text once: what was said, what it was about,
+// what it did next (followUp picks the clause worth showing) and the earlier
+// text it points back at. Text already said is not repeated under another
+// heading.
+function eventTipView(events,followUp=event=>event.responseText){
+  const labels=new Map();for(const event of events){const key=event.group+'|'+event.kind,seen=labels.get(key);if(!seen||(event.probability??0)>(seen.probability??0))labels.set(key,{label:event.label,group:event.group,kind:event.kind,probability:event.probability})}
+  const once=values=>[...new Set(values.map(value=>String(value||'').trim()).filter(Boolean))];
+  const said=once(events.map(event=>event.sentenceText)),fresh=values=>once(values).filter(value=>!said.includes(value));
+  const fields=[['Said',said],['About',fresh(events.map(event=>event.subjectText))],['What it did next',fresh(events.map(followUp))],['Points back at',once(events.map(event=>event.target?.text?'“'+event.target.text+'”':''))]];
+  return {labels:[...labels.values()],fields:fields.filter(([,values])=>values.length)};
 }
 // The distinct sentences a message's events mark, in text order: the events'
 // own sentences, and their subject and response sentences (context).
@@ -546,8 +567,64 @@ function eventsAtMark(events,mark){
 const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
 function markClass(flag){
   if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  const target=flag.charCodeAt(0)-EVENT_TARGET_BASE;if(target>=0&&target<EVENT_TARGET_SPANS*2)return `event-target event-target-at-${target>>1}`+(target&1?' human-written':'');
   const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
   const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
+}
+// Two-sided events (agent_event_links.go): an event whose sentence points
+// back at earlier text (a quote of the person's words, a prompt sentence it
+// shares specific words with) carries a target: the message, UTF-16 offsets
+// into its stored text, and those words. The reader pairs both ends: the
+// observation (the event's sentence) and its target, numbered in reading
+// order. eventLinks lists the pairs whose target is in this conversation.
+function eventLinks(messages){
+  const present=new Set(messages.map(message=>message.id).filter(Boolean)),links=[],seen=new Set();
+  // Events on one (merged) sentence that point at the same text are one
+  // pair: one number, one arc, every label. ids lists them all; id is the
+  // first, the one the reader writes to reader_event_link.
+  const sameTarget=(a,b)=>a.message_id===b.message_id&&(Number.isInteger(a.start)&&Number.isInteger(b.start)&&Number.isInteger(a.end)&&Number.isInteger(b.end)?nearSameSpan([a.start,a.end],[b.start,b.end]):String(a.text??'')===String(b.text??''));
+  for(const message of messages){
+    const view=messageEventView(message);if(!view)continue;
+    for(const event of view)if(event.id&&event.target&&present.has(event.target.message_id)&&!seen.has(event.id)){seen.add(event.id);
+      const weak=event.target.method==='overlap'||!event.target.strong;
+      const pair=links.find(link=>link.message===message.id&&link.sentence[0]===event.sentence[0]&&link.sentence[1]===event.sentence[1]&&sameTarget(link.target,event.target));
+      if(pair){pair.ids.push(event.id);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
+      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
+  }
+  links.forEach((link,index)=>{link.n=index+1});
+  return links;
+}
+// The pair an event id belongs to (any of its merged events' ids).
+function eventLinkFor(links,id){return links.find(link=>link.id===id||link.ids?.includes(id))||null}
+// The spans a message's targets cover in the text the reader shows, each
+// with the links pointing at it. Offsets apply when the shown text is the
+// stored text there; otherwise (a prompt shown without its harness wrapper)
+// the target's words are found in it. A target whose words are not shown is
+// left out.
+function eventTargetSpans(text,links){
+  const spans=new Map();
+  for(const link of links){
+    const t=link.target,words=String(t.text??'');if(!words)continue;
+    let start=Number.isInteger(t.start)&&text.slice(t.start,t.end)===words?t.start:text.indexOf(words);
+    if(start<0){const at=text.toLowerCase().indexOf(words.toLowerCase());if(at<0)continue;start=at}
+    const key=start+':'+(start+words.length),span=spans.get(key)??{range:[start,start+words.length],links:[]};span.links.push(link.id);spans.set(key,span);
+  }
+  return [...spans.values()].sort((a,b)=>a.range[0]-b.range[0]||a.range[1]-b.range[1]);
+}
+// eventTargetMask paints target spans over mask (see eventMask): one flag per
+// span, keeping whether the text under it was the person's writing, so a
+// target in a prompt stays marked as human-written too.
+const EVENT_TARGET_BASE=0xFA00,EVENT_TARGET_SPANS=400;
+function eventTargetMask(text,spans,mask=''){
+  if(!spans?.length)return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0');
+  spans.slice(0,EVENT_TARGET_SPANS).forEach((span,index)=>{for(let at=span.range[0];at<span.range[1]&&at<flags.length;at++)flags[at]=String.fromCharCode(EVENT_TARGET_BASE+index*2+(flags[at]==='1'?1:0))});
+  return flags.join('');
+}
+// The other end of a link: from an observation to its target, and back.
+function eventLinkEnd(links,id,from){
+  const link=eventLinkFor(links,id);if(!link)return null;
+  return from==='target'?{side:'observation',message:link.message,link}:{side:'target',message:link.target.message_id,link};
 }
 // Highlights: the kinds of marks the reader can show, each switched on or
 // off on its own. Each is a boolean view field, so a link keeps the choice,
@@ -559,7 +636,7 @@ function markClass(flag){
 const READER_HIGHLIGHTS=[
   {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
   {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
-  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Each message in the hue of what it does (message classifier). Hover highlighted text for its labels.'}];
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
 // each has anything to show (available, else why not in title), a note on
 // its coverage, and a legend of the hues it uses here (label families or
@@ -573,7 +650,7 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
     if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
       const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
       options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:`${count} event${count===1?'':'s'} in ${views.length} of ${summary.messages_read??0} agent messages read`,
-        legend:EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)}))});continue}
+        legend:[...EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)})),...(views.flat().some(event=>event.target)?[{name:'Earlier text an event points back at (numbered pairs)',className:'event-target-legend'}]:[])]});continue}
     const summary=conversation?.labels;if(!summary)continue;
     const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
     options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',
@@ -661,6 +738,25 @@ function markdownInline(text,parent,depth=0,mask=''){
     }else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1,flags.slice(size,-size))}
     parent.children.push(element);offset=match.index+token.length;
   }parent.children.push(...markdownText(text.slice(offset),mask.slice(offset)));
+  parent.children=markdownMarkRuns(parent.children);
+}
+// A highlight that crosses inline code, emphasis or a link is one mark: an
+// inline element whose text one mark covers entirely moves inside the mark
+// (mark[code[...]] rather than code[mark[...]]), and neighbours with the same
+// mark join it, so "hello `code` world" highlighted whole is one <mark>, not
+// three pieces with the code's padding between them. Only an element the
+// highlight starts or ends inside keeps its own mark.
+function markdownMarkRuns(children){
+  const covered=item=>{if(!item||typeof item==='string'||item.icon)return null;if(item.tag==='mark')return item.className;const only=item.children.length===1?item.children[0]:null;return only&&typeof only==='object'&&only.tag==='mark'?only.className:null};
+  const result=[];
+  for(const item of children){
+    const className=covered(item);if(className===null){result.push(item);continue}
+    const inner=item.tag==='mark'?item.children:[{...item,children:item.children[0].children}],last=result[result.length-1];
+    // Marks in result are this function's own copies, so extending one is safe.
+    if(last&&typeof last==='object'&&last.tag==='mark'&&last.className===className)last.children.push(...inner);
+    else result.push({...markdownElement('mark',className),children:[...inner]});
+  }
+  return result;
 }
 function markdownTree(text,depth=0,mask=''){
   let source=String(text);

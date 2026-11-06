@@ -538,9 +538,13 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	return p, nil
 }
 
-// Ready is the workers' handshake (the first worker's, when the pool
-// started; restarted workers run the same binary and model).
-func (p *Pool) Ready() Ready { return p.ready }
+// Ready is the latest worker handshake. Auto may select a different device
+// when a crashed worker restarts, so callers must not retain its initial device.
+func (p *Pool) Ready() Ready {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ready
+}
 
 // Restarts is how many times the pool restarted a worker.
 func (p *Pool) Restarts() int {
@@ -652,6 +656,9 @@ func (p *Pool) worker(ctx context.Context, index int) (*Worker, error) {
 			continue
 		}
 		slot.worker = worker
+		p.mu.Lock()
+		p.ready = worker.Ready
+		p.mu.Unlock()
 	}
 }
 

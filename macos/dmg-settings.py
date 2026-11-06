@@ -2,7 +2,8 @@
 # dmgbuild supplies `defines` from its -D options.
 app = defines["app"]
 
-format = "UDZO"
+# LZMA is supported since macOS 10.15, below the app's macOS 14 minimum.
+format = "ULMO"
 compression_level = 9
 files = [(app, "Pharos.app")]
 symlinks = {"Applications": "/Applications"}

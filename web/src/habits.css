@@ -1,0 +1,77 @@
+/* Habits panel (habits.tsx): streak tiles, calendars, punchcard, day shape. */
+.habits-panel { display: grid; gap: 16px; margin-bottom: 22px; min-width: 0; }
+.habits-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; }
+.habits-streaks { margin: 0; }
+.habits-streak.habits-today-done strong { color: var(--sea); }
+.habits-streak small, .habits-panel .mcp-metric small { display: block; margin-top: 3px; color: var(--muted); font-size: var(--fs-xs); }
+.habits-card { min-width: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.habits-card h3 { margin: 0 0 4px; font: 650 var(--fs-lg)/1.25 var(--serif); }
+.habits-card > p.muted { margin: 0 0 12px; font-size: var(--fs-sm); }
+.habits-card-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px; }
+.habits-scroll { max-width: 100%; overflow-x: auto; }
+.habits-calendar { max-width: 100%; overflow-x: auto; }
+.habits-card .habits-controls { margin: 8px 0 10px; }
+.habits-calendar rect { cursor: pointer; fill: color-mix(in srgb, var(--line) 55%, transparent); }
+.habits-calendar rect.habits-level-1 { fill: color-mix(in srgb, var(--habit) 30%, var(--panel)); }
+.habits-calendar rect.habits-level-2 { fill: color-mix(in srgb, var(--habit) 55%, var(--panel)); }
+.habits-calendar rect.habits-level-3 { fill: color-mix(in srgb, var(--habit) 78%, var(--panel)); }
+.habits-calendar rect.habits-level-4 { fill: var(--habit); }
+.habits-calendar rect.habits-excused { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 1; }
+.habits-calendar rect.habits-today { stroke: var(--ink); stroke-width: 1; }
+.habits-calendar rect.habits-selected { stroke: var(--accent); stroke-width: 2; }
+.habits-calendar-you { --habit: var(--sea); }
+.habits-calendar-agents { --habit: var(--accent); }
+.habits-calendar-automated { --habit: var(--gold); }
+.habits-axis { fill: var(--muted); font: 10px var(--sans); }
+.habits-calendar-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
+.habits-calendar-row .habits-calendar { flex: 0 1 auto; min-width: 0; }
+.habits-day { display: grid; gap: 8px; flex: 1 0 170px; max-width: 220px; font-size: var(--fs-sm); }
+.habits-day input { padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: 12px var(--sans); }
+.habits-day p { margin: 0; font-size: var(--fs-xs); }
+.habits-day dl { display: grid; gap: 1px; margin: 0; }
+.habits-day dt { color: var(--muted); font-size: var(--fs-xs); }
+.habits-day dt:not(:first-child) { margin-top: 5px; }
+.habits-day dd { margin: 0; font-weight: 650; }
+.habits-day dd small { margin-left: 6px; color: var(--muted); font-weight: 400; }
+.habits-day button, .habits-vacations button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: 12px var(--sans); cursor: pointer; }
+.habits-vacation[aria-pressed="true"] { border-color: var(--gold); }
+.habits-dot-negative { fill: none; stroke-width: 1.5; }
+.habits-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .habits-pair { grid-template-columns: minmax(0, 1fr); } }
+.habits-charts-pair > .habits-card { min-width: 0; }
+.habits-charts-pair .habits-scroll > svg { display: block; }
+.habits-days-chart { min-width: 0; width: 100%; }
+.habits-days-chart svg { display: block; max-width: 100%; }
+.habits-chart-inspection { min-width: 0; }
+.habits-chart-fit { height: 100%; }
+.habits-chart-inspection [data-habits-mark] { cursor: pointer; }
+.habits-chart-inspection [data-habits-mark]:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
+.usage-chart-tip.habits-chart-popover { position: fixed; z-index: 100; max-width: min(320px, calc(100vw - 16px)); }
+.habits-pace > p { margin: 2px 0 12px; color: var(--muted); font-size: var(--fs-sm); }
+.habits-pace > .habits-card-title { margin-bottom: 4px; }
+.habits-pace h3 { margin: 0 0 4px; font: 650 var(--fs-lg)/1.25 var(--serif); }
+.habits-health { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+@media (max-width: 900px) { .habits-health { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .habits-health { grid-template-columns: minmax(0, 1fr); } }
+.habits-grid { stroke: var(--line); }
+.habits-span { fill: color-mix(in srgb, var(--muted) 30%, transparent); }
+.habits-excused { opacity: .45; }
+.habits-automations { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.habits-automations :is(th, td) { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.habits-automations thead th { color: var(--muted); font-size: var(--fs-xs); font-weight: 650; }
+.habits-strip { fill: var(--gold); }
+.habits-settings summary { cursor: pointer; font-weight: 650; }
+.habits-settings h4 { margin: 14px 0 6px; font-size: var(--fs-sm); }
+.habits-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+.habits-settings-grid label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: var(--fs-xs); }
+.habits-settings-grid input { padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: 13px var(--sans); }
+.habits-vacations { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
+.habits-vacations li { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 4px; }
+/* A Habits section drawn as a Home card's cover (habits-charts.tsx). */
+.habits-cover { display: block; flex: 1 1 auto; min-height: 0; width: 100%; }
+.habits-cover .habits-calendar { overflow: visible; height: 100%; }
+.habits-cover .habits-days-chart { height: 100%; }
+.habits-cover svg { display: block; }
+.habits-card-title, .habits-streaks-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.habits-card-title h3 { margin: 0 0 4px; }
+.habits-streaks-head .habits-controls { flex: 1 1 auto; }

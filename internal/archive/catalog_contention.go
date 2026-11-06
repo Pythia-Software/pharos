@@ -48,12 +48,15 @@ func (c *Catalog) retryCatalogWrite(ctx context.Context, operation string, waiti
 			waiting()
 		}
 		timer := time.NewTimer(delay)
+		resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			resume()
 			return ctx.Err()
 		case <-timer.C:
 		}
+		resume()
 	}
 }
 
@@ -95,6 +98,8 @@ func (c *Catalog) acquireWriteGate(ctx context.Context) (func(), error) {
 	}
 	tracker.waiting.Add(1)
 	defer tracker.waiting.Add(-1)
+	resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
+	defer resume()
 	select {
 	case gate <- struct{}{}:
 		return func() { <-gate }, nil
@@ -164,12 +169,19 @@ func (c *Catalog) trackWriter(label string) func() {
 // active list covers this process; an absent holder can be in another process
 // or on another Mac sharing the catalog.
 func (c *Catalog) beginTrackedWrite(ctx context.Context, label string) (*sql.Tx, func(), error) {
+	return c.beginTrackedWriteUsing(ctx, label, c.DB)
+}
+
+// A retained connection can prepare TEMP data before acquiring the writer.
+func (c *Catalog) beginTrackedWriteUsing(ctx context.Context, label string, db catalogTransactionStarter) (*sql.Tx, func(), error) {
 	started := time.Now()
 	release, err := c.acquireWriteGate(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	tx, err := c.beginWrite(ctx)
+	resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
+	tx, err := beginCatalogWrite(ctx, db)
+	resume()
 	waited := time.Since(started)
 	if waited >= time.Second || err != nil {
 		fmt.Fprintf(os.Stderr, "Catalog writer acquisition: operation=%s pid=%d waited=%s %s error=%v\n", label, os.Getpid(), waited.Round(time.Millisecond), c.writerSummary(), err)

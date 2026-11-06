@@ -126,7 +126,7 @@ func (c *classifier) claimStructuredQuestionAnswers(l *labeler, input authorInpu
 			questions := c.questions[input.ConversationID]
 			for i := len(questions) - 1; i >= 0; i-- {
 				q := questions[i]
-				if q.title != answer.title {
+				if !q.at.Before(input.SentAt) || q.title != answer.title {
 					continue
 				}
 				option, generated := questionOption(q.options, answer.value)

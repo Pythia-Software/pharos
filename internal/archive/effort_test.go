@@ -111,7 +111,7 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "effort-tokens", Expression: "SUM([total_tokens])", GroupBy: []string{"hour", "effort"}, Scope: scope})
 			q.Where = []qt.WhereTerm{{Field: "effort", Op: "=", Value: high}}
 			q.Limit = 1
-			v2Result, err := testServer(t, config, catalog).executeQueryV2(context.Background(), "usage", nil, v2Schema, nil, &q)
+			v2Result, err := testServer(t, config, catalog).executeQueryFixture(context.Background(), "usage", nil, v2Schema, nil, &q)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -420,6 +420,78 @@ func TestEffortTL1InitialConfigurationRespectsTranscriptChanges(t *testing.T) {
 			}
 			if !reflect.DeepEqual(efforts, []string{"high", "low", ""}) || conversation.Effort != "" {
 				t.Fatalf("initial setting overwrote transcript changes: %v (final %q)", efforts, conversation.Effort)
+			}
+		})
+	}
+}
+
+func TestInferenceSpeedIngestionAndReplay(t *testing.T) {
+	cases := []struct {
+		provider, file, body string
+		first                inferenceSpeed
+	}{
+		{"codex", "rollout-speed.jsonl", strings.Join([]string{
+			`{"type":"session_meta","payload":{"id":"speed","model":"gpt-test"}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test","service_tier":"priority"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:01:00Z","payload":{"response_id":"fast-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:02:00Z","payload":{"response_id":"standard-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+		}, "\n"), inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+		{"canonical", "speed.json", `{"id":"speed","conversations":[{"id":"speed","provider":"codex","service_tier":"priority","messages":[{"id":"fast","role":"assistant","text":"first"},{"id":"standard","role":"assistant","service_tier":null,"text":"second"}]}]}`, inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+		{"canonical", "explicit-speed.json", `{"id":"speed","conversations":[{"id":"speed","provider":"claude","messages":[{"id":"fast","role":"assistant","speed":"fast","text":"first","raw_text":"{\"message\":{\"id\":\"request-fast\",\"usage\":{\"service_tier\":\"standard\",\"input_tokens\":10,\"output_tokens\":1}}}"},{"id":"standard","role":"assistant","speed":"standard","text":"second","raw_text":"{\"message\":{\"id\":\"request-standard\",\"usage\":{\"service_tier\":\"priority\",\"input_tokens\":10,\"output_tokens\":1}}}"}]}]}`, inferenceSpeed{Speed: "fast", ServiceTier: "standard", Source: "speed"}},
+		{"chatgpt", "conversations.json", `[{"id":"speed","mapping":{"a":{"message":{"id":"fast","author":{"role":"assistant"},"content":{"parts":["first"]},"create_time":1,"metadata":{"model_slug":"gpt-test","service_tier":"priority"}}},"b":{"message":{"id":"standard","author":{"role":"assistant"},"content":{"parts":["second"]},"create_time":2,"metadata":{"model_slug":"gpt-test"}}}}}]`, inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+	}
+	for _, sample := range cases {
+		t.Run(sample.provider+"/"+sample.file, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			root := t.TempDir()
+			writeSourceFile(t, filepath.Join(root, sample.file), sample.body)
+			adapter, err := MakeAdapter(SourceConfig{Name: "speed", Kind: sample.provider, Path: root, Account: "local", Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := c.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			rows, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY created_at,source_order")
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("messages %+v: %v", rows, err)
+			}
+			if rows[0]["speed"] != sample.first.Speed || rows[0]["service_tier"] != sample.first.ServiceTier || rows[0]["speed_source"] != sample.first.Source || rows[1]["speed"] != "standard" {
+				t.Fatalf("normalized messages %+v", rows)
+			}
+			retained := storedMessageRecords(rows)
+			var replay []MessageRecord
+			if err := json.Unmarshal([]byte(jsonText(retained)), &replay); err != nil {
+				t.Fatal(err)
+			}
+			for i := range replay {
+				if normalized := normalizeMessageInference(replay[i]); normalized.Speed != retained[i].Speed || normalized.ServiceTier != retained[i].ServiceTier || normalized.SpeedSource != retained[i].SpeedSource {
+					t.Fatalf("replay changed inference settings: %+v", normalized)
+				}
+			}
+			if sample.provider == "codex" || sample.file == "explicit-speed.json" {
+				requests, err := queryMaps(c.DB, "SELECT speed,service_tier,speed_source FROM model_requests ORDER BY sequence")
+				if err != nil || len(requests) != 2 {
+					t.Fatalf("request configuration %+v: %v", requests, err)
+				}
+				for i, request := range requests {
+					for _, field := range []string{"speed", "service_tier", "speed_source"} {
+						if request[field] != rows[i][field] {
+							t.Fatalf("request %d lost %s: %+v; message %+v", i, field, request, rows[i])
+						}
+					}
+				}
+				if _, err := c.DB.Exec("UPDATE model_requests SET speed='standard',service_tier=NULL,speed_source='assumed_standard';UPDATE tool_ledger_state SET version='before-speed-policy'"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.BackfillToolLedger(t.Context(), nil); err != nil {
+					t.Fatal(err)
+				}
+				rebuilt, err := queryMaps(c.DB, "SELECT speed,service_tier,speed_source FROM model_requests ORDER BY sequence")
+				if err != nil || !reflect.DeepEqual(requests, rebuilt) {
+					t.Fatalf("request replay lost configuration: %+v %v", rebuilt, err)
+				}
 			}
 		})
 	}

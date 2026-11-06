@@ -1,27 +1,28 @@
 import { readWindowChoice } from "./day-window";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
-import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
+import { migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
 import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, supportsToday, type QueryPreview, type QuerySuggestion, type WindowActivity } from "./curiosity-data";
 import { loadUsageHistory } from "./usage-history";
 import { queryFromURL, queryHasTimeFilter, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
-import { categoryForQuery } from "./query-categories";
+import { categoryForQuery, queryCategories, type QueryCategory } from "./query-categories";
 import { QueryCard } from "./query-card";
 import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
 import { AskPharosHome } from "./ask-pharos";
 import { cardTemplates } from "./card-library-model";
-import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
-import { dashboardCardPresentation, dashboardCardWindow, readDashboardCard } from "./dashboard-card-model";
+import { collectCardTemplate, DASHBOARD_CARD_ACTION, dashboardCardGroups, dashboardCardLabels, dashboardCardPresentation, dashboardCardSource, dashboardCardWindow } from "./dashboard-card-model";
+import { cardGroupsFor, withCardGroups, type CardGroups } from "./card-cover";
+import { CardGroupsField } from "./card-groups-field";
 import { EMPTY_QUERY } from "@pythia-software/query-table-core";
 
 function collectionSpec(item: Bookmark) {
   if (!item.dashboard) return queryFromURL(item.url, item.query);
-  try { const { dataset, where } = readDashboardCard(item.url); return { dataset, query: { ...EMPTY_QUERY, where }, window: undefined }; }
+  try { const { dataset, where } = dashboardCardSource(item.url); return { dataset, query: { ...EMPTY_QUERY, where }, window: undefined }; }
   catch { return { dataset: "usage" as const, query: EMPTY_QUERY, window: undefined }; } // The preview reports the invalid definition.
 }
 
@@ -47,7 +48,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const editor = useRef<HTMLDialogElement>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null), [editTitle, setEditTitle] = useState(""), [editDescription, setEditDescription] = useState("");
   const [editDays, setEditDays] = useState("");
-  const [editCover, setEditCover] = useState("");
+  const [editCover, setEditCover] = useState(""), [editGroups, setEditGroups] = useState("");
+  const [editAction, setEditAction] = useState(""), [editCategory, setEditCategory] = useState<QueryCategory>("usage");
   const [editError, setEditError] = useState("");
   const [feedback, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
@@ -63,8 +65,6 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       if (cancelled) return;
       activity.current = counts; setPool(suggestionPool(new Date(), cardTemplates(), counts));
     });
-    const templates = () => { setPool(suggestionPool(new Date(), cardTemplates(), activity.current)); setGeneration(value => value + 1); };
-    window.addEventListener("pharos:card-templates", templates);
     // A hidden tab notes new data and reruns its cards once it is shown.
     let stale = false;
     const refresh = () => { if (document.hidden) { stale = true; return; } stale = false; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); };
@@ -72,7 +72,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
     window.addEventListener("pharos:usage-refresh", refresh); window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
-    return () => { cancelled = true; window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
+    return () => { cancelled = true; window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:usage-refresh", refresh); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
   useEffect(() => { if (active) setGeneration(value => value + 1); }, [active]);
   useEffect(() => {
@@ -81,7 +81,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
     const jobs = [
-      ...collection.map(item => ({ id: item.id, spec: collectionSpec(item), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget } })),
+      ...collection.map(item => ({ id: item.id, spec: collectionSpec(item), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget, groups: item.maxGroups } })),
       ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, cover: item.cover, url: item.url, suggested: true } })),
     ];
     void loadCardPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
@@ -97,7 +97,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     const controller = new AbortController();
     // Prepare default library covers before its page is opened, without
     // mounting hundreds of offscreen charts. Foreground work finishes first.
-    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.defaultWindow ?? (recipe.days?.length === 1 ? recipe.days[0] : 7)));
+    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.days?.length === 1 ? recipe.days[0] : 7));
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
         await loadCardPreviews(items.slice(at, at + 8).map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), () => {}, controller.signal);
@@ -115,12 +115,14 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     return item && previews[id]?.state === "ready" && !errors[id] && !collectedTemplates.has(item.id) ? [item] : [];
   });
   useEffect(() => {
-    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditError(""); editor.current?.showModal(); }
+    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditGroups(editing.maxGroups === undefined ? "" : String(editing.maxGroups));
+      if (editing.dashboard) { let category: QueryCategory = "usage"; try { category = dashboardCardPresentation(editing.url, editing.dashboardTarget).category; } catch { /* The preview reports the invalid definition. */ } setEditAction(editing.action ?? DASHBOARD_CARD_ACTION); setEditCategory(editing.category ?? category); }
+      setEditError(""); editor.current?.showModal(); editor.current?.querySelector<HTMLInputElement>(".query-title")?.focus(); }
   }, [editing]);
 
   async function keep(item: QuerySuggestion, before?: string) {
     try {
-      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
+      const saved = await collectCardTemplate(item);
       if (before) moveBookmark(saved.id, before);
       setMessage(`Collected “${item.title}”.`); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));
@@ -152,19 +154,39 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const coverChoices = editingSpec?.query.grouping
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
+  // The chosen cover metric's groups; an empty count keeps the card's own.
+  let editingGroups: CardGroups | undefined;
+  if (editing?.dashboard) try { editingGroups = dashboardCardGroups(editing.url, editing.dashboardTarget); } catch { /* The preview reports the invalid definition. */ }
+  else if (editingSpec) {
+    const cover = !editCover ? undefined : editing!.cover?.metricId === editCover ? editing!.cover : { mode: editingSpec.query.grouping?.summaries.some(column => column.id === editCover) ? "result" as const : "source" as const, metricId: editCover };
+    editingGroups = cardGroupsFor(editingSpec.query, { recipe: editingRecipe, cover, metricId: editCover || undefined }, schemas[editingSpec.dataset]?.fields);
+  }
+  // One collected card as Home draws it; its editor draws the same card.
+  const presented = (item: Bookmark) => {
+    const spec = collectionSpec(item), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
+    let dashboardWindow = "Saved";
+    let dashboardPresentation: ReturnType<typeof dashboardCardPresentation> | undefined;
+    if (item.dashboard) try { dashboardWindow = dashboardCardWindow(item.url, item.dashboardTarget); dashboardPresentation = dashboardCardPresentation(item.url, item.dashboardTarget, item.maxGroups); } catch { /* The preview reports the invalid definition. */ }
+    return { spec, recipe, card: {
+      title: item.title, description: item.description ?? "A saved view of your work.", actionLabel: item.action ?? recipe?.action, url: item.url,
+      windowLabel: item.dashboard ? dashboardWindow : recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved",
+      category: item.category ?? dashboardPresentation?.category ?? recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query),
+      loadingSpec: dashboardPresentation?.loading ?? (spec ? (() => {
+        const chart = withCardGroups(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId }, item.maxGroups);
+        return cardLoadingPresentation(chart.query, { recipe, cover: chart.cover, metricId: item.coverMetricId, days: spec.window?.days });
+      })() : undefined),
+      preview: spec ? previews[item.id] : { state: "ready" as const, total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }, error: errors[item.id],
+    } };
+  };
+  const editingCard = editing && presented(editing).card;
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
     <div className="home-intro"><h1>{welcome}</h1><AskPharosHome /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
-        const spec = collectionSpec(item), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
-        let dashboardWindow = "Saved";
-        let dashboardPresentation: ReturnType<typeof dashboardCardPresentation> | undefined;
-        if (item.dashboard) try { dashboardWindow = dashboardCardWindow(item.url, item.dashboardTarget); dashboardPresentation = dashboardCardPresentation(item.url, item.dashboardTarget); } catch { /* The preview reports the invalid definition. */ }
-        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} actionLabel={recipe?.action} url={item.url} windowLabel={item.dashboard ? dashboardWindow : recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved"} category={dashboardPresentation?.category ?? recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
-          loadingSpec={dashboardPresentation?.loading ?? (spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined)}
-          preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
+        const { spec, recipe, card } = presented(item);
+        return <QueryCard key={item.id} id={item.id} {...card} before={insertBefore === item.id}
           onOpen={navigate} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
-          onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget } }) : undefined}
+          onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window, dashboard: item.dashboard ? item.url : undefined, dashboardTarget: item.dashboardTarget, groups: item.maxGroups } }) : undefined}
           onDragStart={event => dragStart(event, { saved: item.id }, item.url)} onDragEnd={finishDrag} onDrop={event => drop(event, item.id)} />;
       })}
       {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}
@@ -174,11 +196,13 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
       onRefresh={() => { clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       onAllCards={() => navigate("/cards")} />
-    <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
+    <dialog ref={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
-        const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? readWindowChoice(editDays) : undefined, editCover);
-        if (updated.url !== editing.url || updated.coverMetricId !== editing.coverMetricId) {
+        const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? readWindowChoice(editDays) : undefined, editCover,
+          editing.dashboard ? dashboardCardLabels(editing.url, editing.dashboardTarget, { action: editAction, category: editCategory }) : undefined,
+          !editingGroups ? undefined : editGroups.trim() ? Number(editGroups) : null);
+        if (updated.url !== editing.url || updated.coverMetricId !== editing.coverMetricId || updated.maxGroups !== editing.maxGroups) {
           setPreviews(current => { const next = { ...current }; delete next[editing.id]; return next; });
           setErrors(current => { const next = { ...current }; delete next[editing.id]; return next; });
         }
@@ -186,12 +210,17 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       } catch (error) { setEditError(String(error)); }
     }}>
       <h2 id="homeEditorTitle">Make this view yours</h2>
-      <label>Title<input autoFocus value={editTitle} maxLength={200} required onChange={event => setEditTitle(event.target.value)} /></label>
-      <label>Description<textarea value={editDescription} maxLength={500} onChange={event => setEditDescription(event.target.value)} /></label>
+      {editing && editingCard ? <div className="card-editor-stage">
+        <QueryCard id="card-draft" {...editingCard} title={editTitle} description={editDescription} onOpen={() => {}}
+          {...editing.dashboard ? { actionLabel: editAction, category: editCategory } : {}}
+          editing={{ onTitle: setEditTitle, onDescription: setEditDescription, ...editing.dashboard ? { onAction: setEditAction, onCategory: setEditCategory } : {} }} />
+      </div> : null}
+      <p className="home-editor-window-note">{editing?.dashboard ? "Name the card, describe it and choose its category and call to action in place. An empty call to action uses the default." : "Name the card and describe it in place."}</p>
       {Boolean(coverChoices.length) ? <label>Cover metric<select aria-label="Cover metric" aria-describedby="homeCoverHelp" value={editCover} onChange={event => setEditCover(event.target.value)}>
         <option value="">First metric</option>
         {coverChoices.map(metric => <option key={metric.id} value={metric.id}>{metric.label}</option>)}
       </select><small id="homeCoverHelp">Choose the value shown on this bookmark. The full comparison stays in the saved view.</small></label> : null}
+      {editingGroups ? <CardGroupsField groups={editingGroups} value={editGroups} onChange={setEditGroups} /> : null}
       {canEditWindow ? <label>Time window<select value={editDays} aria-describedby="homeWindowHelp" onChange={event => setEditDays(event.target.value)}>
         {!editingSpec?.window ? <option value="">Keep saved range</option> : null}
         {canChooseToday ? <option value="today">Today</option> : null}
