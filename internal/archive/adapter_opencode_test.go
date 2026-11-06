@@ -186,11 +186,19 @@ INSERT INTO session_message VALUES('evt_ab_1','ses_fork','user',1,1793721000000,
 INSERT INTO session_message VALUES('evt_ab_2','ses_fork','assistant',2,1793721000500,1793721001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Hello, world"}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
 INSERT INTO session_message VALUES('msg_f3','ses_fork','user',3,1793723000000,1793723000000,'{"text":"Now in French"}');
 INSERT INTO session_message VALUES('msg_f4','ses_fork','assistant',4,1793723000500,1793723001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Bonjour"}],"tokens":{"input":50,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}');
+-- A fork whose source was deleted, with a copied command.
+INSERT INTO session_v2 VALUES('ses_orphan','p1',NULL,NULL,'ses_gone','orphan','/work/app','Orphan fork','2.2.5',0.0,'{}',
+  7,3,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793724000000,1793724001000);
+INSERT INTO session_message VALUES('evt_cd_1','ses_orphan','shell',1,1793720000000,1793720000000,'{"command":"make","status":"completed","exit":0,"output":"ok"}');
+INSERT INTO session_message VALUES('evt_cd_2','ses_orphan','assistant',2,1793720000500,1793720001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Built"}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('msg_o3','ses_orphan','user',3,1793724000000,1793724000000,'{"text":"Again"}');
+INSERT INTO session_message VALUES('msg_o4','ses_orphan','assistant',4,1793724000500,1793724001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Rebuilt"}],"tokens":{"input":7,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}');
 `
 
 // What OpenCode adds to a prompt is context, a command the person ran is a
 // call, a compaction is a boundary, parts replace an empty content list, and
-// a fork keeps the messages it copied without counting their requests again.
+// a fork leaves the messages it copied to its source, or keeps them without
+// their usage once the source is gone.
 func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 	root := t.TempDir()
 	opencodeDatabase(t, filepath.Join(root, "opencode.db"), opencodeRows+opencodeMoreRows)
@@ -217,8 +225,11 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 		t.Fatalf("parts %+v compaction %+v", more[6], more[8])
 	}
 	fork := records["ses_fork"]
-	if got := kinds(fork.Conversations[0].Messages); got != "user:message assistant:message user:message assistant:message system:metadata" || fork.Metadata["forked_from"] != "ses_parts" {
+	if got := kinds(fork.Conversations[0].Messages); got != "user:message assistant:message system:metadata" || fork.Metadata["forked_from"] != "ses_parts" {
 		t.Fatalf("fork %s %+v", got, fork.Metadata)
+	}
+	if got := kinds(records["ses_orphan"].Conversations[0].Messages); got != "user:tool_call tool:tool_result assistant:message user:message assistant:message system:metadata" {
+		t.Fatalf("orphaned fork %s", got)
 	}
 
 	c, _ := testCatalog(t)
@@ -228,6 +239,9 @@ func TestOpenCodeOtherMessagesAndForks(t *testing.T) {
 	}
 	if got := usage("ses_fork"); got != 55 {
 		t.Fatalf("fork usage %d, want its own request's 55", got)
+	}
+	if got := usage("ses_orphan"); got != 10 {
+		t.Fatalf("orphaned fork usage %d, want its own request's 10", got)
 	}
 	if got := usage("ses_parts"); got != 110 {
 		t.Fatalf("source usage %d", got)
