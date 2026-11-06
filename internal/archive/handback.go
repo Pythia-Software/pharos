@@ -42,7 +42,7 @@ func normalizeHandbackMessages(messages []MessageRecord) []MessageRecord {
 		known[id] = true
 		normalized = append(normalized, MessageRecord{
 			NativeID: id, Role: "assistant", Kind: "message", Text: call.Text,
-			Model: call.Model, Effort: call.Effort, CreatedAt: message.CreatedAt,
+			Model: call.Model, Effort: call.Effort, Speed: call.Speed, ServiceTier: call.ServiceTier, SpeedSource: call.SpeedSource, CreatedAt: message.CreatedAt,
 			ParentNativeID: call.ParentNativeID, PreviousNativeID: call.PreviousNativeID,
 			EvidenceLocator: call.EvidenceLocator + ":input.message", Selected: call.Selected,
 		})

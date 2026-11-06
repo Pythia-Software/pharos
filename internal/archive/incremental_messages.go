@@ -12,21 +12,21 @@ type messageWriter struct {
 	states       map[string]messageWriteState
 }
 
-const messageWriteSQL = `INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender,reasoning_format)
-	VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
+const messageWriteSQL = `INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender,reasoning_format,speed,service_tier,speed_source)
+	VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
 	role=excluded.role,kind=excluded.kind,model=excluded.model,effort=excluded.effort,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
 	created_at=excluded.created_at,parent_native_id=excluded.parent_native_id,previous_native_id=excluded.previous_native_id,call_id=excluded.call_id,
-	evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender,reasoning_format=excluded.reasoning_format
+	evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender,reasoning_format=excluded.reasoning_format,speed=excluded.speed,service_tier=excluded.service_tier,speed_source=excluded.speed_source
 	WHERE (messages.role,messages.kind,messages.model,messages.effort,messages.text,messages.raw_text,messages.source_order,messages.created_at,
-		messages.parent_native_id,messages.previous_native_id,messages.call_id,messages.evidence_locator,messages.content_hash,messages.selected,messages.sender,messages.reasoning_format)
+		messages.parent_native_id,messages.previous_native_id,messages.call_id,messages.evidence_locator,messages.content_hash,messages.selected,messages.sender,messages.reasoning_format,messages.speed,messages.service_tier,messages.speed_source)
 	IS NOT (excluded.role,excluded.kind,excluded.model,excluded.effort,excluded.text,excluded.raw_text,excluded.source_order,excluded.created_at,
-		excluded.parent_native_id,excluded.previous_native_id,excluded.call_id,excluded.evidence_locator,excluded.content_hash,excluded.selected,excluded.sender,excluded.reasoning_format)`
+		excluded.parent_native_id,excluded.previous_native_id,excluded.call_id,excluded.evidence_locator,excluded.content_hash,excluded.selected,excluded.sender,excluded.reasoning_format,excluded.speed,excluded.service_tier,excluded.speed_source)`
 
 func newMessageWriter(tx *sql.Tx, conversation string) (*messageWriter, error) {
 	writer := &messageWriter{conversation: conversation, states: map[string]messageWriteState{}}
 	rows, err := tx.Query(`SELECT native_id,id,content_hash,role,kind,COALESCE(model,''),COALESCE(effort,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
 		COALESCE(created_at,''),COALESCE(parent_native_id,''),COALESCE(previous_native_id,''),COALESCE(call_id,''),
-		COALESCE(evidence_locator,''),selected,COALESCE(sender,''),COALESCE(reasoning_format,'') FROM messages WHERE conversation_id=?`, conversation)
+		COALESCE(evidence_locator,''),selected,COALESCE(sender,''),COALESCE(reasoning_format,''),COALESCE(speed,'standard'),COALESCE(service_tier,''),COALESCE(speed_source,'assumed_standard') FROM messages WHERE conversation_id=?`, conversation)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +36,7 @@ func newMessageWriter(tx *sql.Tx, conversation string) (*messageWriter, error) {
 		var selected int
 		message := &state.message
 		if err := rows.Scan(&native, &state.id, &state.hash, &message.Role, &message.Kind, &message.Model, &message.Effort, &message.Text, &message.RawText,
-			&message.SourceOrder, &message.CreatedAt, &message.ParentNativeID, &message.PreviousNativeID, &message.CallID, &message.EvidenceLocator, &selected, &message.Sender, &message.ReasoningFormat); err != nil {
+			&message.SourceOrder, &message.CreatedAt, &message.ParentNativeID, &message.PreviousNativeID, &message.CallID, &message.EvidenceLocator, &selected, &message.Sender, &message.ReasoningFormat, &message.Speed, &message.ServiceTier, &message.SpeedSource); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -53,6 +53,7 @@ func newMessageWriter(tx *sql.Tx, conversation string) (*messageWriter, error) {
 }
 
 func (writer *messageWriter) write(message MessageRecord) (string, bool, error) {
+	message = normalizeMessageInference(message)
 	message.accounting = nil
 	state, exists := writer.states[message.NativeID]
 	id := state.id
@@ -66,7 +67,7 @@ func (writer *messageWriter) write(message MessageRecord) (string, bool, error) 
 	}
 	_, err := writer.statement.Exec(id, writer.conversation, message.NativeID, message.Role, message.Kind, nilIfEmpty(message.Model), nilIfEmpty(message.Effort), message.Text,
 		nilIfEmpty(message.RawText), message.SourceOrder, nilIfEmpty(message.CreatedAt), nilIfEmpty(message.ParentNativeID), nilIfEmpty(message.PreviousNativeID),
-		nilIfEmpty(message.CallID), nilIfEmpty(message.EvidenceLocator), hash, boolInt(message.Selected), nilIfEmpty(message.Sender), nilIfEmpty(message.ReasoningFormat))
+		nilIfEmpty(message.CallID), nilIfEmpty(message.EvidenceLocator), hash, boolInt(message.Selected), nilIfEmpty(message.Sender), nilIfEmpty(message.ReasoningFormat), message.Speed, nilIfEmpty(message.ServiceTier), message.SpeedSource)
 	if err != nil {
 		return "", false, err
 	}

@@ -70,7 +70,8 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   // Token type splits a token total into its parts. Cost is priced per
   // request, not per token type, so cost by type shows providers, as the
   // Usage chart always has.
-  components: { type: { label: "Token type", measures: ["tokens"], parts: tokenTypes.map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color, optional: type.key === "unclassified_tokens" })), fallback: "provider" } },
+  components: { type: { label: "Token type", measures: ["tokens"], parts: tokenTypes.map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color, optional: type.key === "unclassified_tokens" })), fallback: "provider" },
+    input_type: { label: "Input token type", measures: ["input"], parts: tokenTypes.filter(type => ["uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].includes(type.key)).map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color })), fallback: "provider" } },
   cycle: { hour: { kind: "instant", field: "hour" }, weekday: { kind: "recorded-date", field: "day" } },
   // The hourly ledger answers hour; the others are recorded calendar dates.
   periods: { hour: "hour", day: "day", week: "week", month: "month" },

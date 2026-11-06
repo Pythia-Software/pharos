@@ -157,7 +157,7 @@ const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metri
   shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
 const drawShapes: Record<AnalysisView, Shape[]> = {
   trend: trendShapes, trend_line: trendShapes, trend_bar: trendShapes,
-  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
+  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"], ["metric"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
   distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
   scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
   cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("reduce", [["metric"]], ["metric", "self"])],
@@ -580,8 +580,8 @@ const thinkingOptions = (detail: boolean): Option[] => [
   ...detail ? [thinkingOption("view", "The chart. Box-plot views split by model + effort when breakdown is none.", thinkingViews)] : [],
   thinkingOption("model", "A recorded model name (model_requests.model), or all."),
   thinkingOption("effort", "A recorded effort (model_requests.effort), or all."),
+  thinkingOption("groupBy", "The breakdown: one curve, panel, box or row per group. Waiting defaults to model.", thinkingBreakdowns),
   ...detail ? [
-    thinkingOption("groupBy", "The breakdown: one panel, box or row per group.", thinkingBreakdowns),
     thinkingOption("normalization", "Distributions as shares of each group or as counts.", ["share", "count"]),
     thinkingOption("sortBy", "Group order. Effort keeps low to high, Unreported last.", [["median", "Median wait"], ["p95", "95th percentile"], ["volume", "Requests"]]),
     thinkingOption("sortDirection", "Group order direction.", [["desc", "Descending"], ["asc", "Ascending"]]),

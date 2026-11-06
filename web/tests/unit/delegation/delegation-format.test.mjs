@@ -72,6 +72,9 @@ test("metric cells use compact counts, durations and exact tooltips", () => {
   assert.equal(formatted(450, "ms"), "450ms");
   assert.equal(formatted(null), formatted(undefined, "usd"), "missing values share one placeholder");
   assert.match(cellTitle(metric(1000), spec("tokens", "count")).split("\n")[0], /^1[,.\s ]?000 count$/, "tooltips keep the exact value and unit");
+  for (const [value, unit] of [[600, "count"], [450, "ms"], [12.34, "usd"]]) {
+    assert.match(cellTitle(metric(value), spec("value", unit)), /^Definition for value\nobserved · 1\/1 /, "unabbreviated values need only definition and coverage");
+  }
   const missing = cellTitle(metric(null, "unknown"), spec("wait", "ms"));
   assert.match(missing, /^Definition for wait\nunknown · 0\/1 /, "a missing value starts with its definition");
 });

@@ -750,9 +750,28 @@ func TestMessageLabelsSettings(t *testing.T) {
 	if labels := read()["labels"].(map[string]any); labels["enabled"] != false || labels["can_change"] != true {
 		t.Fatalf("disabled settings must remain visible: %v", labels)
 	}
-	// Agent events sit beside labels; their switch is a preference.
+	// Agent events have their own step; their switch is a preference.
 	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
 		t.Fatalf("agent events settings must remain visible while off: %v", events)
+	}
+	for _, id := range []string{"labels", "agent_events"} {
+		view := read()["view"].(map[string]any)
+		found := false
+		for _, value := range view["items"].([]any) {
+			item := value.(map[string]any)
+			if item["id"] == id {
+				found = true
+				if item["state"] != "disabled" || item["cadence"] != cadenceManual || item["next_at"] != nil {
+					t.Fatalf("disabled model must be accessible without being scheduled: %v", item)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("disabled model %s has no step for its settings", id)
+		}
+		if !slices.ContainsFunc(view["unscheduled"].([]any), func(value any) bool { return value == id }) {
+			t.Fatalf("disabled model %s is not reachable in the unscheduled column", id)
+		}
 	}
 	if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/preferences", map[string]any{"set": map[string]any{agentEventsFlag: true}}); response.Code != http.StatusOK {
 		t.Fatalf("turn agent events on: %d %s", response.Code, response.Body.String())
@@ -785,12 +804,14 @@ func TestMessageLabelsSettings(t *testing.T) {
 		if enabled && (!strings.Contains(firstString(labels["status"]), "download") || !strings.Contains(firstString(labels["status"]), "worker")) {
 			t.Fatalf("missing runtime assets are not explained: %v", labels)
 		}
-		listed := false
+		var step map[string]any
 		for _, item := range document["view"].(map[string]any)["items"].([]any) {
-			listed = listed || item.(map[string]any)["id"] == "labels"
+			if item.(map[string]any)["id"] == "labels" {
+				step = item.(map[string]any)
+			}
 		}
-		if listed != enabled {
-			t.Fatalf("scheduled labels listed = %t, enabled = %t", listed, enabled)
+		if step == nil || (step["state"] != "disabled") != enabled {
+			t.Fatalf("labels step must remain reachable and reflect enabled = %t: %v", enabled, step)
 		}
 	}
 	// Each model's threads: saved to the configuration and read back, and
