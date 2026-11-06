@@ -188,6 +188,18 @@ worker; CPU fallback workers still retune. Threads remain a limit on ONNX
 intra-op parallelism, not an assignment of physical CPU cores or a cap on the
 whole process's CPU usage.
 
+Both passes prepare conversations in parallel before inference. Each run starts
+up to four preparation workers, bounded by its saved CPU thread target, Go's
+available parallelism and any explicit thread budget. This also feeds GPU
+inference; the saved CPU target still bounds preparation when the model uses
+MLX. Each worker owns its conversation caches and shares the thread-safe
+tokenizer and read-only catalog metadata. Results reach inference in the original
+conversation order, with at most one preparation window of conversations ahead
+of the existing inference queue. Runs with a message limit, and message-label
+diagnostics with exports or one-at-a-time execution, prepare serially to preserve
+their limits and ordering. Preparation concurrency is chosen at run start;
+live thread changes continue to retune CPU inference at batch boundaries.
+
 There is no GPU core-count or utilization-percentage control. This engine submits
 compiled operations to the default Metal stream; MLX's
 [streams](https://ml-explore.github.io/mlx/build/html/usage/using_streams.html)
