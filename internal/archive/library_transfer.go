@@ -308,13 +308,20 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 	return transferFile{SHA256: digest, Size: size}, nil
 }
 
-func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
-	files := []transferFile{}
-	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
-		return files, nil
+// Discovery and copying share the evidence boundary. A preflight must never
+// overlook a file that transfer would preserve, or mistake locks for history.
+func walkRetainedTree(ctx context.Context, source string, skipImports bool, visit func(string, fs.DirEntry) error) error {
+	if source == "" {
+		return nil
 	}
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -338,6 +345,13 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") || strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			return nil
 		}
+		return visit(path, entry)
+	})
+}
+
+func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
+	files := []transferFile{}
+	err := walkRetainedTree(ctx, source, skipImports, func(path string, _ fs.DirEntry) error {
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
 			return err

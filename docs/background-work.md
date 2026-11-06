@@ -649,10 +649,26 @@ whose `D` hold is `:w`, is classified as read-only.
 ### 4.4 Broker operations and other libraries
 
 The broker's verdict for a library also considers broker operations naming
-it. The delivery cycle stops (SIGTERMs) the services of both libraries in
-the pair before it captures and transfers (`deliveryCycle`,
-`application_jobs.go`); while it runs, both libraries are `busy`, with the
-blocker "Delivering history".
+it. The delivery cycle (`deliveryCycle`, `application_jobs.go`) first checks
+pending history, retained evidence and destination-specific source fingerprints
+without stopping either service or registering a delivery operation. An idle
+cycle leaves both services running. Capture stops only the pending library's
+service; the archive service stops only once transferable history is established.
+Archive availability is rechecked under the broker lock after preflight, so a
+disconnect during source discovery prevents delivery while allowing local capture.
+Operations name the pending library during capture and both libraries during
+transfer, with the blocker "Delivering history". Fingerprint checks retain
+content verification, including same-size/same-timestamp rewrites; they can read
+source files at utility disk priority, but do not parse, capture or transfer
+unchanged inputs.
+
+A completed capture/index records the retained input fingerprints before
+indexing and acknowledges them only after every index succeeds. While an archive
+is disconnected, unchanged captures wait locally without repeating processing.
+This receipt is separate from verified delivery acceptance. A pending delivery
+journal takes precedence over an empty source catalog and resumes the existing
+verified cleanup protocol. Unknown inputs or unreadable receipts are reported
+and retried at the bounded delivery cadence; they are never accepted as current.
 
 ## 5. Freshness domains
 
@@ -1704,7 +1720,7 @@ the same schedule from one declaration (`backgroundItems`):
 | Repositories & merges | the chain's GitHub, identities and Git stages | Frequently, adaptive | the three stages |
 | Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
 | Update writing estimates | bounded recent/history lanes with reserved capacity, durable per-message outcomes, and exact suffix reuse when cheap | Frequently | `analysis.authorship` |
-| Refine writing history | full historical classifier after the chain | Daily | `analysis.authorship.refine` |
+| Refine writing history | full historical classifier after the chain, when its input/version/calendar receipt is stale or work remains unfinished | Daily | `analysis.authorship.refine` |
 | Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
 | Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |
 | Agent events | the chain's agent events stage, only where the agent events switch (Settings → Background Processing) or `agent_events_enabled` is on (docs/agent-events.md) | Hourly, adaptive | `analysis.agent_events` (not its `backlog` runs) |
