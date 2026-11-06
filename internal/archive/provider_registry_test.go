@@ -100,7 +100,7 @@ func TestProvidersFixtureMatchesTheRegistry(t *testing.T) {
 	server := testServer(t, config, catalog)
 	// A source's Settings card says what its kind never records.
 	if code, sources := probeCall(t, server, http.MethodGet, "/api/sources", ""); code != http.StatusOK ||
-		!strings.Contains(jsonText(sources["items"]), `"not_recorded":["Git branch","Effort","Token usage"`) {
+		!strings.Contains(jsonText(sources["items"]), `"not_recorded":["Git branch","Effort","Speed","Token usage"`) {
 		t.Fatal(code, sources)
 	}
 	code, served := probeCall(t, server, http.MethodGet, "/api/providers", "")

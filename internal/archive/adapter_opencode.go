@@ -556,7 +556,7 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 			if tokens := mapValue(data["tokens"]); tokens != nil && !copied(message) {
 				item := base
 				item.Model = defaultString(firstString(mapValueDefault(data["model"])["id"]), conversation.Model)
-				add(opencodeUsage(item, message.id, tokens, sums))
+				add(opencodeUsage(item, message.id, tokens, data["native"], sums))
 			}
 			switch firstString(data["status"]) {
 			case "completed":
@@ -617,7 +617,7 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				add(item)
 			}
 			if tokens := mapValue(data["tokens"]); tokens != nil && !copied(message) {
-				add(opencodeUsage(base, message.id, tokens, sums))
+				add(opencodeUsage(base, message.id, tokens, data["native"], sums))
 			}
 		}
 	}
@@ -640,10 +640,15 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 
 // opencodeUsage is a request's usage record, which sums counts toward the
 // session's totals.
-func opencodeUsage(base MessageRecord, id string, tokens map[string]any, sums map[string]float64) MessageRecord {
+func opencodeUsage(base MessageRecord, id string, tokens map[string]any, native any, sums map[string]float64) MessageRecord {
 	usage := opencodeTokenUsage(tokens)
 	for key, value := range usage {
 		sums[key] += value
+	}
+	// The tier an OpenAI request was served in, from its response's metadata
+	// (serviceTier), which OpenCode keeps for the Responses protocol only.
+	if config, found := inferenceSetting(mapValueDefault(native)); found {
+		base = withInference(base, config)
 	}
 	base.NativeID, base.Role, base.Kind, base.RawText = id+":usage", "system", "metadata", ""
 	base.Text = jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": id})
