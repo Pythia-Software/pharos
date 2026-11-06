@@ -29,6 +29,8 @@ const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = e
 // A card's trailing window with whole days and a norm (buildCardTrend).
 const trailing = { rollingPeriods: 7, completePeriods: true, norm: true };
 const calls = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("calls", "compare")(metric, split, extra);
+// Agent Events compare at the dashboard's minimum of messages read.
+const events = (metric: string, split: string, extra: Partial<AnalysisState> = {}) => engine("agent_event_rates", "compare")(metric, split, { minSamples: 200, ...extra });
 const dashboards: Record<string, CardDashboard> = {
   "compactions-by-trigger": engine("compaction", "trend")("compactions", "trigger"),
  "message-labels-trend":engine("labels","trend_line")("messages","family",{share:true}),
@@ -155,6 +157,15 @@ const dashboards: Record<string, CardDashboard> = {
   "parallel-repositories": parallel("agent_hours", "repository_name", { view: "compare" }),
   "parallel-active-weekday": parallel("active_hours", "none", { view: "cycle", cycle: "weekday" }),
   "parallel-weekday": parallel("at_once", "none", { view: "cycle", cycle: "weekday" }),
+  // Agent Events: the cover's filters are the dashboard's population.
+  "agent-events-thinking-vs-reply": events("per_thousand", "source"),
+  "agent-events-groups-by-source": events("per_thousand", "group_source"),
+  "agent-events-delegated-turns": events("turn_share", "prompted_by"),
+  "agent-events-models-by-source": events("per_thousand", "model_source"),
+  "agent-events-repository-friction": events("per_thousand", "repository_name"),
+  "agent-events-ambiguity-by-length": events("turn_share", "prompt_length"),
+  "agent-events-subagent-kinds": events("per_thousand", "family_role"),
+  "agent-events-friction-trend": engine("agent_event_rates", "trend")("per_thousand", "family"),
 };
 
 function dashboardFor(recipe: QueryRecipe): CardDashboard {
