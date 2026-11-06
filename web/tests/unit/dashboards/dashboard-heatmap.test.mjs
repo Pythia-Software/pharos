@@ -45,7 +45,8 @@ test("rows sit at their place on a log axis, the zero bin apart below, and quant
   assert.deepEqual(heatmap.ticks.map(tick => tick.value), [0, 1, 2, 5]);
   assert.equal(heatmap.place(-1), heatmap.place(0));
   assert.equal(heatmap.place(1000), null);
-  assert.equal(heatmapShade(1, 4), 0.5);
+  assert.equal(heatmapShade(1, 4), Math.log(2) / Math.log(5));
+  assert.equal(heatmapShade(4, 4), 1);
   assert.equal(heatmapShade(0, 4), null);
 });
 
@@ -61,7 +62,7 @@ test("a bin, a cell and a card's grid say what they hold", () => {
   assert.match(heatmapCellText(heatmap, 0, 0, { ...options, rollingPeriods: 7 }), /7-period average/);
   const grid = heatmapGrid(heatmap, options);
   assert.deepEqual(grid.rows, ["12–14", "10–11"]);
-  assert.deepEqual(grid.cells, [[Math.sqrt(1 / 3), null], [1, null]]);
+  assert.deepEqual(grid.cells, [[Math.log(2) / Math.log(4), null], [1, null]]);
   assert.equal(grid.values[1][0], "3 sessions (75% of 4)");
   assert.deepEqual(grid.legend, ["0", "3"]);
 });

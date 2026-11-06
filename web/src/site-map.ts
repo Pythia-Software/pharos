@@ -636,13 +636,15 @@ export function buildSiteMap(inputs: SiteInputs) {
   const nodes: SiteNode[] = [];
   const add = (node: SiteNode) => { nodes.push(node); return node; };
   const opSets = new Map<string, { types: Set<string>; ops: string[] }>();
-  // A column without a type is text: browse_site's query page lists every
-  // column within one answer's budget.
+  // A column without a type is text, and one without a label is its name in
+  // words ("messages_bin" is "Messages bin"): browse_site's query page lists
+  // every column within one answer's budget.
+  const inWords = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).replaceAll("_", " ");
   const datasets = Object.fromEntries((Object.keys(schemaDocuments) as QueryDataset[]).map(name => {
     const schema = siteSchemas[name], detail = usageDetailsSchema(schema, name) ?? schema;
     return [name, { ...datasetLabel(name), schema_name: detail.name,
       properties: detail.fields.filter(field => field.property?.enabled !== false).map(field => ({ name: field.name, label: field.label ?? field.name, type: field.type, default: field.property?.default ?? false })),
-      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,label:field.label??field.name,...field.type==="text"?{}:{type:field.type}})), fields: datasetFields(schema, opSets) }];
+      ...rollingWindowField(name) ? { window_field: rollingWindowField(name) } : {}, columns: (Object.hasOwn(usageDatasets,name)?usageQuerySchema(schema,name as UsageDataset):schema).fields.map(field=>({name:field.name,...field.label && field.label!==inWords(field.name)?{label:field.label}:{},...field.type==="text"?{}:{type:field.type}})), fields: datasetFields(schema, opSets) }];
   }));
   const opKey = (signature: string) => [...opSets.get(signature)!.types].sort().join("|");
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);

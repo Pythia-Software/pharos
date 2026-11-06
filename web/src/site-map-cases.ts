@@ -128,16 +128,16 @@ export function motivatingExample(map: SiteMap) {
   return { name: "Anthropic Opus-class tokens per day, 7-day trailing average, by model", page: "analyze/tokens", topic: "tokens" as const, view: "trend", chart, filters, days: 30, verdict: chartVerdict("tokens", chart), url, decoded: decoded(url) };
 }
 
-// A partial population, as the legend writes it: Session Shape's length
-// bands as shares, with Antigravity CLI sessions left out (an exclusion keeps
+// A partial population, as the legend writes it: Session Shape's sessions
+// by length band, with Antigravity CLI sessions left out (an exclusion keeps
 // sessions with no harness) and only root agents counted. site_link takes the
 // same terms as filters; the dashboard shows them as Population chips.
 export function populationExample(map: SiteMap) {
   const info = map.analyze.dashboards.session_shape.views.compare;
-  const chart = canonicalChart(info.defaults, { view: "compare", metric: "sessions", split: "length_band", compareAs: "share" });
+  const chart = canonicalChart(info.defaults, { view: "compare", metric: "sessions", split: "length_band" });
   const filters = [{ any: [where("harness", "!=", "antigravity-cli"), where("harness", "is_null")] as WhereClause[] }, where("agent_kind", "=", "root")];
   const url = dashboardURL("session_shape", chart, filters, 30);
-  return { name: "Session length mix without Antigravity CLI, root agents only", page: "analyze/session_shape", topic: "session_shape" as const, view: "compare", chart, filters, days: 30, verdict: chartVerdict("session_shape", chart), url, decoded: decoded(url) };
+  return { name: "Sessions by length band without Antigravity CLI, root agents only", page: "analyze/session_shape", topic: "session_shape" as const, view: "compare", chart, filters, days: 30, verdict: chartVerdict("session_shape", chart), url, decoded: decoded(url) };
 }
 
 // Every card at one window, and at every window the first card of each way

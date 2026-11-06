@@ -52,7 +52,7 @@ export function TrendHeatmap({ title, controls, action, titleSlot, heatmap, peri
                 : <g key={column.key}>{rows.map((row, index) => {
                   const shade = heatmapShade(column.cells[index], heatmap.max);
                   return shade === null ? null : <rect key={index} x={at + 0.06} width={0.88} y={(1 - row.y1) * height} height={(row.y1 - row.y0) * height} className="dashboard-heatmap-cell"
-                    fillOpacity={0.1 + 0.9 * shade} data-chart-tooltip={heatmapCellText(heatmap, index, at, options)} />;
+                    fillOpacity={0.06 + 0.94 * shade} data-chart-tooltip={heatmapCellText(heatmap, index, at, options)} />;
                 })}</g>)}
               {placed.map(guide => <line key={guide.value} x1={0} x2={columns.length} y1={(1 - guide.y) * height} y2={(1 - guide.y) * height} className="dashboard-heatmap-guide" vectorEffect="non-scaling-stroke" />)}
               <path d={trace(column => column.p90)} className="dashboard-heatmap-trace is-p90" vectorEffect="non-scaling-stroke" />
@@ -64,6 +64,6 @@ export function TrendHeatmap({ title, controls, action, titleSlot, heatmap, peri
         </div>
       </ChartTooltip>}
     <p className="usage-dashboard-note dashboard-heatmap-key"><span className="dashboard-heatmap-ramp" aria-hidden="true" />
-      <span>Each column is one period; each cell, the {noun} whose {label.toLowerCase()} falls in that bin, darkest at {peak}. The solid line is each period's median, the dashed line its 90th percentile, both read from the bins.{placed.length ? " Dotted lines mark where each band starts." : ""} A hatched column had none.{smoothed}</span></p>
+      <span>Each column is one period; each cell, the {noun} whose {label.toLowerCase()} falls in that bin, darkest at {peak}, shaded on a log scale so sparse bins still show. The solid line is each period's median, the dashed line its 90th percentile, both read from the bins.{placed.length ? " Dotted lines mark where each band starts." : ""} A hatched column had none.{smoothed}</span></p>
   </div>;
 }

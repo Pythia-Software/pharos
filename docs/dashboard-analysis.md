@@ -591,45 +591,48 @@ no sum, cumulative or share.
   (`topicChartKeys`), so a link neither holds nor checks them. Session
   Shape is the one catalog that chooses
   ([its charts](session-shape.md#charts)).
-- **Heatmap.** Display = Heatmap draws one column per period and one row
-  per group of an ordered breakdown (one with `order`, such as Session
-  Shape's bands and archetype). What a cell holds depends on the measure
-  (`heatmapKind`):
-  - an additive measure's cell is the period's share of the measure in that
-    group (a *share* heatmap);
-  - a pooled rate's cell is the group's own value in that period, such as
-    the failure rate of sessions in each length band (a *value* heatmap);
-  - without a breakdown, a measure with a band of its own (`band`, such as
-    Session Shape's tool calls per typed message and its band) is drawn as
-    its distribution: the share of the period's records in each band, among
-    the records in the measure's population with a band (`heatmapSource`,
-    which counts them with the catalog's `records.count` measure).
+- **Heatmap.** Display = Heatmap draws a value on a continuous axis over
+  time, as an observability heatmap does: one column per period, the value
+  up the side, and each cell shaded by how much falls in that narrow range
+  of the value that period. It needs a breakdown whose value is binned
+  (`bins` on the breakdown, `heatmapAxis`):
+  - without a breakdown, a measure with such a band of its own (`band`,
+    such as Session Shape's tool calls per typed message) draws its
+    records' distribution, counted with the catalog's `records.count`
+    measure among the records in its population with a value;
+  - by such a band, an additive measure draws its total over the band's
+    value: sessions by length band is sessions by messages per session.
 
-  It reads the trend's own query and prepared buckets, so filters, smoothing
-  (each column then averages, or for a rate pools, its window), whole
-  periods and Refresh apply as they do to columns.
-  - Rows follow the breakdown's order, the highest at the top; groups
-    outside the order (Other, an unknown value) come after it, and a group
-    without a value last.
-  - One hue, shaded relative to the largest share drawn, which the key
-    names. A period with no records is hatched, never a zero share.
-  - Hover a cell for its share and the count behind it out of the period's
-    total, or for its value.
-  - The row labels are the legend: each opens the legend's menu, so a
-    selection limits the rows (shares are then of the selected groups) and,
-    on a dashboard with a population, a row filters it. A distribution's
-    rows filter on the measure's band and have no selection. Smoothing's
-    Window is hidden: shares and pooled values do not change with it.
-  - Without one of those (`trendLimits.heatmap`) it falls back to per
-    interval and says why. Show as, Scale and Norm do not apply and are
-    hidden.
+  The bins are fine and fixed (`value-bins.ts`): ten log bins a decade, or
+  whole numbers to 9 and then log bins, or linear steps. The service stores
+  each record's bin as its lower edge (`value_bins.go`), and both sides
+  compute edges by parsing the same decimal text, so they agree exactly
+  (`testdata/value-bins.json`). The trend groups by that field
+  (`heatmapSource`, every bin a series, none folded into Other) and lays
+  each bin at its true place on the axis: log for log and count bins, with
+  zero in its own row below, linear otherwise. It reads the trend's own
+  query and prepared buckets, so filters, smoothing (each column then
+  averages its window), whole periods and Refresh apply as they do to
+  columns.
+  - One hue, shaded on a log scale of the largest cell, which the key
+    names, so a burst in one bin does not wash out the rest. A period with
+    nothing is hatched.
+  - A solid line traces each period's median and a dashed one its 90th
+    percentile, read from the bins. Dotted guides mark where each of the
+    band's groups starts (`bins.edges`), labelled at the right.
+  - Hover a cell for its range, the amount in it and its share of the
+    period.
+  - Without such a breakdown (`trendLimits.heatmap`) it falls back to per
+    interval and says why. Show as, Scale, Norm and smoothing's Window do
+    not apply and are hidden.
   - The model is `dashboard-heatmap-model.ts` (`trendHeatmap`) and the
     component `dashboard-heatmap.tsx`. A card made from a heatmap draws it
     as a grid cover (`heatmapGrid`), as does a card recipe whose daily
-    cover asks for `timeline.display: "heatmap"`.
-  - Why not bin a measure's per-record value by period on the server: Query
-    Table's histograms bin each group with its own edges, so rows would not
-    line up across columns. Catalogs give such values fixed bands instead.
+    cover groups by a bin field and asks for `timeline.display: "heatmap"`.
+  - Why fixed bins stored with each record rather than Query Table's
+    histograms: those bin each group with its own linear edges, so rows
+    would not line up across columns, and a query cannot group by a
+    computed expression.
 
 ### Queries
 

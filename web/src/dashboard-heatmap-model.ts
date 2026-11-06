@@ -101,9 +101,10 @@ function axisTicks(bins: number[], scheme: BinScheme, place: (value: number) => 
   return values.flatMap(value => { const y = place(value); return y === null ? [] : [{ value, y }]; });
 }
 
-// A cell's shade, 0 to 1: the square root of its share of the largest cell,
-// so sparse bins stay visible beside a dense one. Empty cells have none.
-export const heatmapShade = (amount: number, max: number) => amount <= 0 || max <= 0 ? null : Math.sqrt(amount / max);
+// A cell's shade, 0 to 1, on a log scale of the largest cell: a burst of
+// one kind of session would otherwise wash out every other bin. Empty
+// cells have none.
+export const heatmapShade = (amount: number, max: number) => amount <= 0 || max <= 0 ? null : Math.log1p(amount) / Math.log1p(max);
 
 // A bin in words: "3", "10–11" or "1.2–1.5" (from the low edge, up to the
 // high one), as the value's format writes them.

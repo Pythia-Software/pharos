@@ -20454,21 +20454,21 @@
           "op": "count",
           "groupBy": [
             "day",
-            "archetype"
+            "typed_messages_bin"
           ],
           "groupLimit": 10000,
           "label": "Sessions per day",
           "display": {
             "kind": "auto",
-            "yLabel": "Share of sessions"
+            "yLabel": "Typed messages per session"
           }
         }
       ],
       "id": "session-archetype-mix",
       "title": "Your sessions by kind",
-      "description": "Each day's share of the sessions you typed in by archetype, over each trailing seven days in the last {days} days.",
+      "description": "Your sessions each day by the messages you typed in them, over the last {days} days.",
       "action": "Explore Session Shape",
-      "note": "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more). Shares divide each kind's sessions by all your sessions in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "note": "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more). Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
         "metricId": "ss_archetype_daily",
@@ -20487,6 +20487,11 @@
           "field": "archetype",
           "op": "!=",
           "value": "automated"
+        },
+        {
+          "field": "typed_messages_bin",
+          "op": "is_not_null",
+          "value": ""
         }
       ],
       "destination": {
@@ -20521,21 +20526,21 @@
           "op": "count",
           "groupBy": [
             "day",
-            "length_band"
+            "messages_bin"
           ],
           "groupLimit": 10000,
           "label": "Sessions per day",
           "display": {
             "kind": "auto",
-            "yLabel": "Share of sessions"
+            "yLabel": "Messages per session"
           }
         }
       ],
       "id": "session-length-mix",
       "title": "How long your sessions are",
-      "description": "Each day's share of your sessions by length band, over each trailing seven days in the last {days} days.",
+      "description": "Your sessions each day by their message count, over the last {days} days.",
       "action": "Explore Session Shape",
-      "note": "Length counts every message of the session's own stream; a delegated run is its own session. Shares divide each band's sessions by all your sessions in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "note": "Length counts every message of the session's own stream; a delegated run is its own session. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
         "metricId": "ss_length_band_daily",
@@ -20554,6 +20559,11 @@
           "field": "archetype",
           "op": "!=",
           "value": "automated"
+        },
+        {
+          "field": "messages_bin",
+          "op": "is_not_null",
+          "value": ""
         }
       ],
       "destination": {
@@ -21505,21 +21515,21 @@
           "op": "count",
           "groupBy": [
             "day",
-            "autonomy_band"
+            "autonomy_bin"
           ],
           "groupLimit": 10000,
           "label": "Sessions per day",
           "display": {
             "kind": "auto",
-            "yLabel": "Share of sessions"
+            "yLabel": "Tool calls per typed message"
           }
         }
       ],
       "id": "session-autonomy-trend",
       "title": "Tool calls per typed message over time",
-      "description": "Each day's share of your sessions by tool calls per typed message, over each trailing seven days in the last {days} days.",
+      "description": "Your sessions each day by tool calls per typed message, over the last {days} days.",
       "action": "Explore Session Shape",
-      "note": "Each session's tool calls divided by the messages you typed in it. Only sessions the tool ledger covers and whose prompts are all classified count. Shares divide each band's sessions by all your sessions with a value in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "note": "Each session's tool calls divided by the messages you typed in it. Only sessions the tool ledger covers and whose prompts are all classified count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
         "metricId": "ss_autonomy_band_daily",
@@ -21550,7 +21560,7 @@
           "value": "true"
         },
         {
-          "field": "autonomy_band",
+          "field": "autonomy_bin",
           "op": "is_not_null",
           "value": ""
         }
@@ -21587,21 +21597,21 @@
           "op": "count",
           "groupBy": [
             "day",
-            "turn_cycle_band"
+            "turn_cycle_bin"
           ],
           "groupLimit": 10000,
           "label": "Sessions per day",
           "display": {
             "kind": "auto",
-            "yLabel": "Share of sessions"
+            "yLabel": "Turn cycle (session median)"
           }
         }
       ],
       "id": "session-turn-cycle-trend",
       "title": "Turn cycle over time",
-      "description": "Each day's share of your sessions by their median turn cycle, over each trailing seven days in the last {days} days.",
+      "description": "Your sessions each day by their median turn cycle, over the last {days} days.",
       "action": "Explore Session Shape",
-      "note": "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count. Shares divide each band's sessions by all your sessions with a value in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "note": "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
         "metricId": "ss_turn_cycle_band_daily",
@@ -21622,7 +21632,7 @@
           "value": "automated"
         },
         {
-          "field": "turn_cycle_band",
+          "field": "turn_cycle_bin",
           "op": "is_not_null",
           "value": ""
         }
@@ -21659,21 +21669,21 @@
           "op": "count",
           "groupBy": [
             "day",
-            "context_band"
+            "context_peak_bin"
           ],
           "groupLimit": 10000,
           "label": "Sessions per day",
           "display": {
             "kind": "auto",
-            "yLabel": "Share of sessions"
+            "yLabel": "Peak context share"
           }
         }
       ],
       "id": "session-context-trend",
       "title": "Peak context over time",
-      "description": "Each day's share of your sessions by their largest request as a share of the model's context window, over each trailing seven days in the last {days} days.",
+      "description": "Your sessions each day by their largest request as a share of the model's context window, over the last {days} days.",
       "action": "Explore Session Shape",
-      "note": "Only sessions whose model's context window is known count. Shares divide each band's sessions by all your sessions with a value in the same seven days. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "note": "Only sessions whose model's context window is known count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
         "metricId": "ss_context_band_daily",
@@ -21699,7 +21709,7 @@
           "value": "true"
         },
         {
-          "field": "context_band",
+          "field": "context_peak_bin",
           "op": "is_not_null",
           "value": ""
         }

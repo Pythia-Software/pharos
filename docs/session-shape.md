@@ -238,7 +238,7 @@ AgentsView's penalty-from-100 health grade is deliberately not adopted.
 ## The dashboard
 
 Analyze → Session Shape (`?mode=dashboards&topic=session_shape`) opens on
-sessions by length band as a daily heatmap, each column a trailing week. It has no headline number and no
+sessions by length band as a daily heatmap of messages per session, each column a trailing week. It has no headline number and no
 grade, colours no value as good or bad, and shows each rate's sample size
 beside it. The note's Definitions button scrolls to the definitions at the
 foot of the page.
@@ -283,18 +283,26 @@ for them are ignored.
 
 | View | Measure and breakdown | Drawn as |
 |---|---|---|
-| Over time | a total (sessions, hours, calls, signals) by a band or archetype | share heatmap: each period's share in each band |
-| Over time | a rate by a band or archetype | value heatmap: the rate of each band's sessions |
-| Over time | tool calls per typed message, active time, turn cycle or peak context, no breakdown | distribution heatmap: each period's sessions in the measure's own band |
+| Over time | a total (sessions, hours, calls, signals) by a band or archetype | heatmap of the band's own value: length band draws messages per session, archetype typed messages per session, with the band edges as guides |
+| Over time | tool calls per typed message, active time, turn cycle or peak context, no breakdown | heatmap of the sessions by that value |
 | Over time | any other measure, no breakdown | a line with its norm |
 | Over time | a total by any other breakdown | stacked columns |
-| Over time | a rate by any other breakdown | a line per group |
+| Over time | a rate by any breakdown, a band included | a line per group |
 | Compare | any | bars |
 | Distribution, Two measures | long-tailed times and counts | a log axis; percentages linear |
 
-Time bucket, smoothing and range stay yours. The heatmap reads a band's
-change in mix better than stacked shares do: each cell is shaded on its
-own, so a thin band's movement shows.
+Time bucket, smoothing and range stay yours. The heatmap shows the whole
+distribution rather than six groups: a shift within a band, a second mode
+or a burst of one kind of session shows, with its median and 90th
+percentile traced over it.
+
+Each value the heatmaps draw has a fine bin field beside its band
+(`messages_bin`, `typed_messages_bin`, `tool_calls_bin`,
+`active_seconds_bin`, `autonomy_bin`, `turn_cycle_bin`,
+`context_peak_bin`): whole numbers to 9 and then ten log bins a decade for
+counts, ten log bins a decade for times and calls per typed message, and
+2.5% steps for peak context. They are computed when the dataset is read,
+like the bands.
 
 **Cards.** The Card Library's Session Shape category
 (`session-shape-card-recipes.ts`) has nineteen cards, each opening the
@@ -303,8 +311,8 @@ them, so most cards count only the sessions a person typed in
 (`archetype != automated`), which arrives as a dashboard filter.
 
 - Usage: where sessions come from (by harness), your sessions by kind and
-  how long your sessions are (each a heatmap of trailing-week shares by
-  archetype or length band), and where your active hours go (by
+  how long your sessions are (each a heatmap of trailing-week sessions by
+  typed messages or messages per session), and where your active hours go (by
   repository).
 - Shape: active time by session kind, turn cycle and tool calls per typed
   message by provider, each a box on a log axis, and peak context by model.
@@ -319,8 +327,8 @@ them, so most cards count only the sessions a person typed in
   the dashboard's Over time view does with a 7-day window and its norm, and
   states its sample.
 - Tool calls per typed message, turn cycle and peak context over time, each
-  a heatmap of the share of your sessions in each of its bands, over
-  trailing weeks, as the dashboard draws the measure without a breakdown.
+  a heatmap of your sessions by that value over trailing weeks, as the
+  dashboard draws the measure without a breakdown.
 
 A log axis cannot place zero, so the active time and tool calls per typed
 message cards leave out sessions with none. Sparklines of one-shot edit

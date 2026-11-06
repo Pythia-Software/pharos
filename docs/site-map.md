@@ -471,7 +471,7 @@ next:
 | `<node>/view` | Page controls with parameter names, types and choices; `<node>/view/<field>` gives structured templates and examples |
 | `<node>/view/global` | Shared navigation, guide, History, overlay and disclosure controls |
 | `<node>/targets` | Attention target families, source-discovered section IDs, and the tools/endpoints yielding dynamic IDs |
-| `<node>/query` | Query-table page default, dataset columns (name, label, and type unless text), time-window example, and the full native QueryState |
+| `<node>/query` | Query-table page default, dataset columns (name, label unless it is the name in words, and type unless text), time-window example, and the full native QueryState |
 | `<node>/query/types[/<name>]` | Transitive public types from the pinned Query Table release |
 | `<node>/filters` | The dataset's filterable fields |
 | `<node>/filters/<field>` | The field's operators, value format, and its values: an enum's own, or for text up to 50 of the most frequent current values |
