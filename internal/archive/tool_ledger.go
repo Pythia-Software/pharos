@@ -880,9 +880,11 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	call.Truncated = persisted || details["truncated"] == true || strings.Contains(content, "<persisted-output>") ||
 		strings.Contains(content, "Output truncated") || strings.Contains(content, "tokens truncated") || strings.Contains(content, "[... truncated")
 	benign := call.ExitCode != nil && *call.ExitCode == 1 && benignExitPrograms[call.Program] && len(call.Commands) <= 1
-	failed := isError || failedCommand || call.Interrupted || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
+	// An adapter names the harness policy (a hook) that turned a call down.
+	blocked := firstString(details["blocked_by"]) != ""
+	failed := isError || failedCommand || call.Interrupted || blocked || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
 		(call.ExitCode != nil && *call.ExitCode != 0 && !benign)
-	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted {
+	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted && !blocked {
 		failed = false
 	}
 	if !failed {
@@ -894,6 +896,10 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	}
 	if call.Interrupted {
 		call.ErrorType = "interrupted"
+		return
+	}
+	if blocked {
+		call.ErrorType = "hook_blocked"
 		return
 	}
 	head := strings.ToLower(clipText(content, 2000))
