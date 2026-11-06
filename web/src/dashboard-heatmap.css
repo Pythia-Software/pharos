@@ -22,3 +22,14 @@
 .dashboard-heatmap-key{display:flex;align-items:center;gap:8px}
 .dashboard-heatmap-ramp{flex:none;width:64px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in srgb,var(--heat-1) 10%,transparent),var(--heat-1))}
 @media (max-width:640px){.dashboard-heatmap-guide-label{display:none}}
+/* A distribution over fine bins (dashboard-histogram.tsx): bars on the
+   value's own axis, the median and 90th percentile marked. */
+.dashboard-histogram{display:grid;grid-template-rows:minmax(200px,clamp(200px,34vh,320px)) auto auto;margin-top:12px;min-width:0}
+.dashboard-histogram-area{position:relative;min-width:0;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.dashboard-histogram-area svg{position:absolute;inset:0;width:100%;height:100%;display:block;shape-rendering:crispEdges}
+.dashboard-histogram-bar{fill:var(--heat-1);fill-opacity:.85;cursor:pointer}
+.dashboard-histogram-bar:hover{fill-opacity:1}
+.dashboard-histogram-mark{position:absolute;transform:translateX(4px);font-size:var(--fs-xs);color:var(--ink);background:color-mix(in srgb,var(--panel,var(--bg)) 80%,transparent);padding:0 3px;border-radius:2px;pointer-events:none;white-space:nowrap}
+.dashboard-histogram-axis{position:relative;height:1.4em;font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.dashboard-histogram-axis span{position:absolute;top:2px;transform:translateX(-50%);white-space:nowrap}
+.dashboard-histogram-name{font-size:var(--fs-xs);color:var(--muted);text-align:center}

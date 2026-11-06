@@ -34,6 +34,14 @@ export type AnalysisMeasure = {
   // per-session ratios. Where that band has fine bins, Over time can draw
   // the measure's distribution as a heatmap (heatmapAxis).
   band?: string;
+  // The breakdown whose fine bins hold this measure's per-record value, for
+  // a measure without a band of its own: Distribution draws its histogram
+  // on those bins (distributionBins). A band implies it.
+  valueBins?: string;
+  // Why a distribution of this measure says nothing, such as a count of
+  // rare events that nearly every record has none of. Distribution then
+  // does not offer it.
+  noDistribution?: string;
   note: string;
 };
 // A ratio's part is a summed field, or a count of a field's non-empty values,
@@ -94,7 +102,10 @@ export type AnalysisRequest = { params?: Record<string, string>; note?: string }
 // A unit's key may combine fields, such as a conversation and a skill path:
 // one observation is then one pair, and a breakdown constant within the pair
 // (the skill's name) may be one of its fields.
-export type AnalysisUnit = { label: string; plural: string; key: string | string[]; where: WhereTerm[]; breakdowns: Record<string, string[]>; note: string };
+// A unit that is one record each (recordsAlike) distributes exactly as the
+// records do, so Distribution offers only one of them: the records for a
+// measure with a per-record value, the unit otherwise.
+export type AnalysisUnit = { label: string; plural: string; key: string | string[]; where: WhereTerm[]; breakdowns: Record<string, string[]>; note: string; recordsAlike?: boolean };
 export type AnalysisCatalog = {
   dataset: string;
   // A topic may limit its useful views and require a meaningful breakdown.
@@ -387,16 +398,18 @@ export function normalizeAnalysis<T extends AnalysisState>(catalog: AnalysisCata
   // A record distribution needs a per-record value: a measure without one
   // moves to the first unit, or where there are no units to the first
   // measure with a value (the Metric control disables the others).
+  if (next.view === "distribution" && catalog.measures[next.metric].noDistribution) next.metric = Object.keys(catalog.measures).find(id => !catalog.measures[id].noDistribution && (catalog.measures[id].value || firstUnit))!;
   if (next.view === "distribution" && next.unit === records && !catalog.measures[next.metric].value) {
     if (firstUnit) next.unit = firstUnit; else next.metric = Object.keys(catalog.measures).find(id => catalog.measures[id].value)!;
   }
+  if (next.view === "distribution" && next.unit !== records && catalog.units[next.unit].recordsAlike && catalog.measures[next.metric].value) next.unit = records;
   if (!splitValid(catalog, next.unit, next.split)) next.split = catalog.allowNoSplit === false ? catalog.trend.split : noSplit;
   Object.assign(next, presentation(catalog, next));
   // A cycle summarizes slot values: a box per slot by default, or their mean,
   // or their total where slot values add up (not ratios or distinct counts).
   if (next.view === "cycle") { if (state.reduce === undefined || !["total", "mean", "median"].includes(next.reduce) || next.reduce === "total" && !cycleTotal(catalog.measures[next.metric])) next.reduce = "median"; }
   else if (next.unit === records) next.reduce = "total";
-  else if (next.reduce === "total" && !unitTotal(catalog.measures[next.metric])) next.reduce = "mean";
+  else if (next.reduce === "total" && (!unitTotal(catalog.measures[next.metric]) || catalog.units[next.unit]?.recordsAlike)) next.reduce = "mean";
   if (next.compareAs === "share" && !shareable(catalog, next)) next.compareAs = "bars";
   return next;
 }
@@ -430,6 +443,15 @@ export function heatmapAxis(catalog: AnalysisCatalog, state: Pick<AnalysisState,
   }
   const bins = catalog.breakdowns[state.split]?.bins;
   return bins && measure.additive ? { breakdown: state.split, bins, counted: false } : undefined;
+}
+// A record distribution without a breakdown, of a measure whose value has
+// fine bins (its band's, or valueBins), is a histogram over those bins on
+// the value's own axis: a log axis gives a long tail its shape, where even
+// steps would put nearly every record in the first bar. Undefined otherwise.
+export function distributionBins(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "view" | "unit" | "metric" | "split">): AxisBins | undefined {
+  const measure = catalog.measures[state.metric], id = measure?.band ?? measure?.valueBins;
+  if (state.view !== "distribution" || state.unit !== records || state.split !== noSplit || !measure?.value || !id) return;
+  return catalog.breakdowns[id]?.bins;
 }
 // The heatmap's own breakdown: the fine bins, every one of them a series.
 export const heatmapBins = "heatmap:bins";
@@ -566,6 +588,9 @@ export function switchView<T extends AnalysisState>(catalog: AnalysisCatalog, in
 }
 
 export const unique = (terms: WhereTerm[]) => terms.filter((term, index) => terms.findIndex(other => JSON.stringify(other) === JSON.stringify(term)) === index);
+// Fine bins a histogram fetches: more than any value spans (binsSpanning).
+const binnedGroups = 400;
+const logDistribution = (state: Pick<ResolvedAnalysis, "view" | "scale">) => state.view === "distribution" && state.scale === "logarithmic";
 const log = (scale?: ChartScale) => ({ mode: scale === "logarithmic" ? "log" as const : "linear" as const });
 export const measureExpression = (measure: AnalysisMeasure) => measure.ratio ? `${partExpression(measure.ratio[0])}/NULLIF(${partExpression(measure.ratio[1])},0)` : measure.expression;
 // Grouped rows show a measure in its own format: a duration as a duration.
@@ -665,12 +690,17 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const stated = (fields: string[], base: WhereTerm[]) => selection && fields.length ? selectionWhere(fields, selection, predicateCount(base) + drilled) : undefined;
   // A threshold counts what is plotted: a distribution drops missing values
   // before grouping (records) or as a group filter (units).
-  const valued: WhereTerm[] = !unit && state.view === "distribution" ? [{ field: measure.value!, op: "is_not_null", value: "" }] : [];
+  // A log axis has no place for zero or less, so a log distribution draws
+  // only positive values (analysisNote says so).
+  // A binned histogram draws zero apart instead (distributionBins).
+  const binned = distributionBins(catalog, state), positive = logDistribution(state) && !binned;
+  const valued: WhereTerm[] = !unit && state.view === "distribution" ? [{ field: measure.value!, op: positive ? ">" : "is_not_null", value: positive ? "0" : "" }] : [];
   const recordWhere = [...sourceWhere, ...valued];
   // Outside shares there is no denominator to protect, so the selection
   // filters the executed query: no group or point limit can crowd a selected
   // group out. A share keeps every group and selects afterwards.
-  const unitHaving: WhereTerm[] = unit && (state.view === "distribution" || state.view === "compare" && state.reduce !== "count") ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
+  const unitHaving: WhereTerm[] = unit && state.view === "distribution" && positive ? [{ field: "analysis_value", op: ">", value: "0" }]
+    : unit && (state.view === "distribution" || state.view === "compare" && state.reduce !== "count") ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
   const filter = selection && !shares ? unit ? stated(groupFields, unitHaving) : stated(recordFields, run(recordWhere)) : undefined;
   if (selection && !shares && !filter) selection.late = true;
   // A records compare counts the catalog's samples; distributions take row
@@ -698,7 +728,9 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
 
   if (!unit) {
     const groupBy = breakdown?.fields ?? [];
-    const clause: AggregationClause = state.view === "distribution"
+    const clause: AggregationClause = binned
+      ? { id: "analysis", op: "count", groupBy: [binned.field], groupLimit: binnedGroups, sort: [{ key: "group0", dir: "asc" }], label: measure.label, display: { kind: "bar-vertical", maxGroups: binnedGroups, xLabel: measure.label, yLabel: catalog.records.plural, legendPosition: "none" } }
+      : state.view === "distribution"
       ? { id: "analysis", op: "count", groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...counted,
         distribution: breakdown ? { kind: "box", input: `[${measure.value}]`, whiskers: "tukey" } : { kind: "histogram", input: `[${measure.value}]` }, display: distributionDisplay(Boolean(breakdown)) }
       : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(breakdown)) };
@@ -942,7 +974,8 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   if (state.view === "cycle" && state.reduce === "total") parts.push(`Totals add up every ${state.cycle === "hour" ? "hour" : "day"} that falls on each bar.`);
   const narrowed = state.view === "scatter" ? [[measure, catalog.measures[state.metricY]], [catalog.measures[state.metricY], measure]].filter(([own, other]) => own.where?.length && !other.where?.length).map(([own, other]) => `${other.label} counts only ${own.label.toLowerCase()}'s records here.`) : [];
   if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both measures use the records matching both measures' populations.${narrowed.length ? ` ${narrowed.join(" ")}` : ""} Up to ${analysisLimits.points.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
-  if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value are left out.`);
+  if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value${logDistribution(state) && !distributionBins(catalog, state) ? ", or with zero, are left out: a log axis has no place for zero" : " are left out"}.`);
+  if (distributionBins(catalog, state)) parts.push(`Each bar is one narrow range of the value, on its own ${distributionBins(catalog, state)!.scheme.scale === "linear" ? "" : "log "}axis${distributionBins(catalog, state)!.scheme.scale === "linear" ? "" : "; zero sits apart at the left"}. Lines mark the median and 90th percentile, read from the bins.`);
   if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
   if (state.compareAs === "share" && state.view === "compare") parts.push("Shares divide each group by the total of all groups, including those folded into Other.");
   return parts.join(" ");

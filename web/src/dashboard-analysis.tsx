@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
-import { MetricCard, defaultRenderers, type MetricTheme } from "@pythia-software/query-table-ui";
+import { MetricCard, defaultRenderers, formatMetricOutput, type MetricTheme } from "@pythia-software/query-table-ui";
+import { BinnedHistogram, histogramOf } from "./dashboard-histogram";
 import { chartSeriesStyle, colorFields } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
-import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { onDatasetRefresh } from "./dataset-refresh";
@@ -62,7 +63,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
   const trend = isTrendView(view.view), limits = trendLimits(catalog, view);
   const grouped = (view.view === "compare" || view.view === "distribution" || view.view === "scatter") && Object.keys(catalog.units).length > 0;
   const unitOptions: Array<[string, string, string?]> = [[records, catalog.records.plural, view.view === "scatter" ? "A scatter pairs two measures of each conversation, session or run." : view.view === "distribution" && !measure.value ? "This measure has no value per record." : undefined],
-    ...Object.entries(catalog.units).map(([id, item]): [string, string] => [id, item.plural])];
+    ...Object.entries(catalog.units).map(([id, item]): [string, string, string?] => [id, item.plural, view.view === "distribution" && item.recordsAlike && measure.value ? `Each is one ${catalog.records.label.toLowerCase()}, so ${catalog.records.plural} draws the same distribution` : undefined])];
   const minimum = sampleThresholds.includes(view.minSamples) ? sampleThresholds : [...sampleThresholds, view.minSamples].sort((a, b) => a - b);
   const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`]),
     ...trend ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, limits.component(id)]) : []];
@@ -73,11 +74,11 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
   const content = <>
     {onView ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
     {grouped ? <ChartSelect label="Count each" value={view.unit} options={unitOptions} title="What one observation is" onChange={next => set({ unit: next })} /> : null}
-    <ChartSelect label={view.view === "scatter" ? "X metric" : "Metric"} value={view.metric} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, view.view === "distribution" && view.unit === records && !unit && !item.value ? `${item.label} has no value per ${catalog.records.label.toLowerCase()} to distribute` : trend ? notTrended(item) : undefined])} onChange={metric => set({ metric })} />
+    <ChartSelect label={view.view === "scatter" ? "X metric" : "Metric"} value={view.metric} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, view.view === "distribution" && item.noDistribution ? item.noDistribution : view.view === "distribution" && view.unit === records && !unit && !item.value ? `${item.label} has no value per ${catalog.records.label.toLowerCase()} to distribute` : trend ? notTrended(item) : undefined])} onChange={metric => set({ metric })} />
     {view.view === "scatter" ? <ChartSelect label="Y metric" value={view.metricY} options={Object.entries(catalog.measures).map(([id, item]): [string, string, string?] => [id, item.label, id === view.metric ? "Choose a different measure from X" : undefined])} onChange={metricY => set({ metricY })} /> : null}
     {view.view !== "cycle" ? <ChartSelect label={view.view === "scatter" ? "Color by" : "Breakdown"} value={view.split} options={breakdowns} title={trend ? "How each period is divided into series" : undefined}
       onChange={split => set({ split, selection: { values: [], excluded: false }, ...trend ? { seriesLimit: 15 } : {} })} /> : null}
-    {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
+    {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : id === "total" && unit.recordsAlike ? `Each is one ${catalog.records.label.toLowerCase()}: Count each ${catalog.records.plural} shows the same totals` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", measure.additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(measure) ? undefined : `${measure.label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
     {view.view === "compare" && adjustable ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
     {trend && adjustable && view.display !== "heatmap" ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
@@ -161,6 +162,13 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const empty = !result.loading && !error && entry && (!entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));
   const hidden = entry?.hiddenGroups ? `${entry.hiddenGroups.toLocaleString()} ${entry.hiddenGroups === 1 ? "group" : "groups"} hidden below the minimum of ${view.minSamples.toLocaleString()} ${sampleSubject(catalog, view)}.` : "";
 
+  // A distribution over fine bins draws its own histogram (distributionBins).
+  const bins = distributionBins(catalog, view);
+  const histogram = useMemo(() => {
+    if (!bins || !entry) return undefined;
+    const counts = entry.buckets.flatMap(bucket => bucket.keys[0] === null || bucket.keys[0] === undefined ? [] : [{ low: Number(bucket.keys[0]), count: Number(bucket.value) || 0 }]);
+    return { bins, chart: histogramOf(counts, bins), format: (value: number) => formatMetricOutput(value, bins.format).text };
+  }, [bins, entry]);
   // Box and bar rows have a fixed pitch; give a full day of hours its rows.
   const tall = (clause.display?.kind === "box" || clause.display?.kind === "bar-horizontal") && (entry?.buckets.length ?? 0) > 16;
   const population = usePopulation(catalog, schema, where);
@@ -172,6 +180,13 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     {controls}
     {error ? <p className="query-table-error" role="alert">{error}</p>
       : empty ? <p className="usage-analysis-empty" role="status">{analysisEmptyLabel(catalog, view)}</p>
+      : histogram && entry ? <div className="dashboard-card-anchor usage-chart"><div className="usage-chart-title"><h3>{clause.label}</h3></div>
+        <BinnedHistogram histogram={histogram.chart} label={histogram.bins.label} noun={subjects} format={histogram.format}
+          onSelect={low => {
+            const bucket = entry!.buckets.find(item => Number(item.keys[0]) === low);
+            const query = bucket && analysisInspectQuery(analysis, bucket, analysis.clause, schema, view.view);
+            if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
+          }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>
       : <div className="dashboard-card-anchor"><MetricCard className={tall ? "usage-analysis-tall" : undefined} clause={clause} result={presentation.metric as AggregationResultEntry | undefined} fields={view.view !== "cycle" ? schema.fields : analysis.native ? schema.fields.map(field => field.name === clause.dateGrouping?.field ? { ...field, label: view.cycle === "hour" ? "Local hour" : "Weekday" } : field) : [...schema.fields, ...cycleFields]} loading={result.loading} renderers={defaultRenderers} theme={hourTheme}
         onInspect={view.view === "cycle" && !analysis.native ? undefined : bucket => {
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);

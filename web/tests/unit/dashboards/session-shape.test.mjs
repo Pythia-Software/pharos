@@ -268,7 +268,7 @@ test("Session Shape heatmap cards: the card's grid of trailing seven-day session
     return Response.json(answerQuery(path.split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, ledger, schemas.session_shape, { now: cardNow }));
   };
   t.after(() => { Object.assign(global, prior); clearPreviewCache(); });
-  for (const id of ["session-length-mix", "session-archetype-mix", "session-autonomy-trend", "session-turn-cycle-trend", "session-context-trend"]) {
+  for (const id of ["session-length-mix", "session-archetype-mix", "session-autonomy-trend", "session-turn-cycle-trend", "session-context-trend", "session-active-time-trend", "session-length-hours", "session-length-tool-calls"]) {
     const { item } = cardItem(id);
     clearPreviewCache();
     const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
@@ -279,7 +279,7 @@ test("Session Shape heatmap cards: the card's grid of trailing seven-day session
     const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
     assert.equal(built.error, undefined, id);
     const axis = heatmapAxis(catalog, state);
-    const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: "day", noun: "sessions", label: axis.bins.label, rollingPeriods: 7 });
+    const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: "day", noun: item.unit ?? "sessions", label: axis.bins.label, rollingPeriods: 7 });
     assert.deepEqual(grid.columns, preview.grid.columns, `${id}: the same days`);
     assert.equal(grid.rows.length, preview.grid.rows.length, `${id}: the same bins`);
     assert.deepEqual(grid.values, preview.grid.values, id);

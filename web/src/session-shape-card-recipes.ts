@@ -28,10 +28,14 @@ const coverage = {
 // (session-shape-bands.ts), on its continuous axis. Only sessions with a
 // value count.
 const binned = "Each cell averages the day's sessions in one narrow range of the value over seven days.";
-function daily(id: string, title: string, description: string, split: keyof typeof bandBins, note: string, extra: Partial<QueryRecipe> = {}): QueryRecipe {
+const weighted = (what: string) => `Each cell averages the day's ${what} of sessions in one narrow range of the value over seven days.`;
+// A weight totals that field in each cell instead, as the dashboard's
+// heatmap of an additive measure by a band does.
+function daily(id: string, title: string, description: string, split: keyof typeof bandBins, note: string, extra: Partial<QueryRecipe> = {}, weight?: { field: string; label: string }): QueryRecipe {
   const bins = bandBins[split];
-  const metric: AggregationClause = { id: `ss_${split}_daily`, op: "count", groupBy: ["day", bins.field], groupLimit: 10000, label: "Sessions per day", display: { kind: "auto", yLabel: bins.label } };
-  return session({ id, title, description, action: "Explore sessions over time", note: `${note} ${binned}`, measures: [metric],
+  const metric: AggregationClause = { id: weight ? `ss_${split}_${weight.field}_daily` : `ss_${split}_daily`, ...weight ? { op: "sum" as const, field: weight.field } : { op: "count" as const }, groupBy: ["day", bins.field], groupLimit: 10000,
+    label: `${weight?.label ?? "Sessions"} per day`, display: { kind: "auto", yLabel: bins.label } };
+  return session({ id, title, description, action: "Explore sessions over time", note: `${note} ${weight ? weighted(weight.label.toLowerCase()) : binned}`, measures: [metric],
     cover: { mode: "source", metricId: metric.id, kind: "auto", maxGroups: 15, showOther: true, showLegend: false, showHeadline: false, timeline: { rollingPeriods: 7, display: "heatmap" } }, ...extra,
     where: [...extra.where ?? [], { field: bins.field, op: "is_not_null", value: "" }] });
 }
@@ -94,8 +98,8 @@ const activeTime = distribution("ss_active_time", { metric: "active_time", split
 const turnCycle = distribution("ss_turn_cycle", { metric: "turn_cycle", split: "provider", scale: "logarithmic", minSamples: 3 });
 const autonomy = distribution("ss_autonomy", { metric: "autonomy", split: "provider", scale: "logarithmic", minSamples: 3 });
 const contextPeak = distribution("ss_context_peak", { metric: "context_peak", split: "model_family", minSamples: 10 });
-// A log axis cannot place zero, so log cards leave out sessions with none.
-const positive = (field: string): WhereTerm => ({ field, op: ">", value: "0" });
+// A log axis cannot place zero, so a log distribution (and its card) leaves
+// out sessions with none (analysisQuery).
 const box = (metricId: string, minSamples: number, maxGroups = 6) => ({ mode: "source" as const, metricId, kind: "box" as const, maxGroups, minSamples, sampleUnit: "sessions", density: "compact" as const });
 
 export const sessionShapeCardRecipes: QueryRecipe[] = [
@@ -108,14 +112,14 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     `${archetypeNote} ${steeredNote}`, { where: [steered] }),
   daily("session-length-mix", "How long your sessions are", "Your sessions each day by their message count, over the last {days} days.", "length_band",
     `${lengthNote} ${steeredNote}`, { where: [steered] }),
-  session({ id: "session-active-time", title: "Active time by session kind", description: "Each session's active time over the last {days} days, by archetype; log axis.", idea: "rhythm-05", unit: "seconds", action: "Compare session active time", ...activeTime, where: [...activeTime.where, positive("active_seconds")],
+  session({ id: "session-active-time", title: "Active time by session kind", description: "Each session's active time over the last {days} days, by archetype; log axis.", idea: "rhythm-05", unit: "seconds", action: "Compare session active time", ...activeTime,
     note: "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with some active time count; kinds with fewer than three are left out.",
     cover: box("ss_active_time", 3) }),
   session({ id: "session-turn-cycle", title: "Turn cycle by provider", description: "Each session's median wait from your message to the agent's next one, over the last {days} days; log axis.", idea: "rhythm-07", unit: "seconds", action: "Compare turn cycles", ...turnCycle,
     note: "A session's turn cycle is the median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Only sessions with a turn cycle count; providers with fewer than three are left out.",
     cover: box("ss_turn_cycle", 3) }),
   session({ id: "session-autonomy", title: "Tool calls per typed message, by provider", description: "Each session's tool calls divided by the messages you typed in it, over the last {days} days; log axis.", idea: "models-02", unit: "calls per typed message", action: "Compare tool calls per typed message",
-    ...autonomy, where: [...autonomy.where, positive("autonomy"), steered], note: `${coverage.both} Sessions without a tool call are left out. ${steeredNote} Providers with fewer than three sessions are left out.`, cover: box("ss_autonomy", 3) }),
+    ...autonomy, where: [...autonomy.where, steered], note: `${coverage.both} Sessions without a tool call are left out. ${steeredNote} Providers with fewer than three sessions are left out.`, cover: box("ss_autonomy", 3) }),
   // Failures: by model, by session kind, over time.
   rate("session-model-failure-rates", "Failure rate by model", "Failed tool calls divided by all tool calls, by model, over the last {days} days.", "failure_rate", "model_family", "model failure rates", ["Failed calls", "Tool calls"],
     `${failureNote} Synthetic placeholder turns are left out; the dashboard opens with that filter.`, 20, { idea: "tools-01", where: [...toolData, notEqual("model_family", "<synthetic>")] }),
@@ -146,6 +150,13 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count."),
   bands("session-context-trend", "Peak context over time", "Your sessions each day by their largest request as a share of the model's context window, over the last {days} days.", "context_peak",
     coverage.window),
+  bands("session-active-time-trend", "Active time over time", "Your sessions each day by their active time, over the last {days} days.", "active_time",
+    "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with timestamps count."),
+  // Where the work goes, by how long the session is.
+  daily("session-length-hours", "Active hours by session length", "Active hours of your sessions each day by the session's message count, over the last {days} days.", "length_band",
+    `Active time adds the gaps between consecutive messages of 300 seconds or less. ${lengthNote} ${steeredNote}`, { unit: "hours", action: "Explore active hours by session length", where: [steered] }, { field: "active_hours", label: "Active hours" }),
+  daily("session-length-tool-calls", "Tool calls by session length", "Tool calls of your sessions each day by the session's message count, over the last {days} days.", "length_band",
+    `${lengthNote} ${coverage.tool} ${steeredNote}`, { unit: "calls", action: "Explore tool calls by session length", where: [steered, ...toolData] }, { field: "tool_calls", label: "Tool calls" }),
   // Context, and when you work.
   session({ id: "session-model-context", title: "Peak context by model", description: "Each session's largest request as a share of its model's context window, over the last {days} days.", idea: "context-02", unit: "percent", action: "Compare peak context", ...contextPeak,
     note: `${coverage.window} Models with fewer than ten sessions are left out.`, cover: box("ss_context_peak", 10, 8) }),
