@@ -572,9 +572,24 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-chart-bars:has(> .usage-chart-lines) > button { position: relative; }
 /* The trend wraps its parts only to report loading; they lay out as before. */
 .usage-analysis-trend { display: contents; }
-/* A norm or other reference level, above the columns and lines. */
+/* A reference level (the %ile control), above the columns and lines. */
 .usage-chart-reference { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--ink); opacity: .55; pointer-events: none; z-index: 1; }
 .usage-reference-swatch { height: 0; border-top: 2px dashed var(--ink); border-radius: 0; opacity: .55; vertical-align: 3px; }
+/* Each reference level draws its own line: the median solid, the mean and
+   the 75th percentile dashed, the upper percentiles dotted and fainter. */
+.usage-chart-reference[data-level="p50"], .usage-reference-swatch[data-level="p50"] { border-top-style: solid; }
+.usage-chart-reference[data-level^="p9"], .usage-reference-swatch[data-level^="p9"] { border-top-style: dotted; opacity: .5; }
+.usage-chart-reference[data-level="p99"], .usage-reference-swatch[data-level="p99"] { opacity: .4; }
+/* The %ile control: a trigger like a dashboard select, opening a small menu
+   of reference levels to tick. */
+.percentile-control { position: relative; }
+.percentile-control-trigger { position: relative; box-sizing: border-box; height: 30px; min-width: 88px; max-width: 100%; margin: 0; padding: 3px 28px 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.percentile-control-trigger:hover { border-color: var(--accent); }
+.percentile-control-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; display: grid; gap: 2px; min-width: 160px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 6px 20px rgb(0 0 0 / .12); font-size: var(--fs-sm); }
+.percentile-control-option { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.percentile-control-option:hover { background: var(--hover, rgb(127 127 127 / .08)); }
+.percentile-control-option:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+.percentile-control-clear { justify-self: start; margin-top: 2px; padding: 3px 6px; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
 .usage-chart-line-focus { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .usage-chart-line-focus::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1px dashed var(--muted); }
 /* Position markers in chart coordinates, but size them independently of the

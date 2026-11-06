@@ -116,7 +116,7 @@ test('saved dashboard trend previews match smoothing, cumulative totals, shares 
     assert.deepEqual(preview.buckets,expected.buckets);
     assert.deepEqual(preview.series,expected.series.filter(item=>!expected.selected.length || expected.selected.includes(item.key)!==expected.excluded));
     assert.equal(preview.dashboardTrend.prepared,true);
-    assert.equal(preview.dashboardTrend.reference,expected.norm);
+    assert.equal(preview.dashboardTrend.reference,expected.references?.[0]?.value);
   }
 });
 

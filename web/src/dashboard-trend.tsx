@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { isTrendView, changeState, noSplit, heatmapAxis, heatmapSource, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, changeState, noSplit, heatmapAxis, heatmapSource, percentileLabel, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, updateSliceValues, type LegendAction } from "./chart-selection";
@@ -94,8 +94,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   };
   const adjustments = trendAdjustments(catalog, requested);
   if (view.norm && !result.loading && built.normPoints !== undefined && built.normPoints < view.normPeriods) adjustments.push(built.normPoints
-    ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
-    : "No earlier point has a value, so there is no norm yet.");
+    ? `The reference levels read ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
+    : "No earlier point has a value, so there is no reference level yet.");
   const bounds = timeBounds(where, catalog.time);
   const population = usePopulation(catalog, schema, where);
   const title = `${trendTitle(catalog, view)}${population.suffix}`;
@@ -119,7 +119,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     const value = (amount: number) => axis.bins.format.kind === "percent" ? percent(100 * amount) : format(amount, { ...measure, format: axis.bins.format });
     const guides = (axis.bins.edges ?? []).flatMap((edge, index) => index === 0 || !band.order?.[index] ? [] : [{ value: edge, label: band.values?.[band.order[index]] ?? band.order[index] }]);
     return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-      <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme)}
+      <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme, view.percentiles)}
         period={view.period} noun={axis.counted ? catalog.records.plural.toLowerCase() : weight.unit} label={axis.bins.label} format={value} amount={weight.op === "count" ? undefined : amount => format(amount, weight)}
         rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
       {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
@@ -131,7 +131,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display === "heatmap" ? "interval" : view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
       rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={trendDrawing(catalog, view) === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
-      reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
+      references={built.references?.map(item => ({ value: item.value, level: item.level, label: `${percentileLabel(item.level)}, prior ${view.normPeriods}` }))}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
       selected={built.selected} excluded={built.excluded} onSelect={select} onSelectGroup={selectGroup} onPopulation={populate} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}

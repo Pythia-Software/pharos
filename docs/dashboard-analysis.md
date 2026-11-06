@@ -271,7 +271,7 @@ fields:
 | `share` | each trend series as a share of its bucket's total |
 | `nonzero` | values without zeroes: buckets with nothing drawn are left out, and lines pass over a series' zeroes; ignored with `share` |
 | `completePeriods` | whole periods only |
-| `norm`, `normPeriods` | a reference line at the mean of the `normPeriods` (30) points before the latest |
+| `percentiles`, `normPeriods` | the %ile control's reference levels, any of `mean`, `p50`, `p75`, `p90`, `p95`, `p99`: a line at each level of the `normPeriods` (30) points before the latest, or on a heatmap a trace of each period's percentile. `norm: true` is the older name for `["mean"]`, and the site map's agent-facing key |
 | `seriesLimit`, `selection` | series drawn before Other, and the legend selection: the breakdown's groups drawn (or hidden, when `excluded`) |
 | `v` | the link format, `2`; see [Selections and links](#selections-and-links) |
 
@@ -525,7 +525,9 @@ no sum, cumulative or share.
   days), a custom multi-day or multi-hour bucket starting before it is
   history, and buckets ending after the range's end or now are left out.
   For days this is `cardTrendDays`' `completeDays`.
-- **Norm.** The mean of the `normPeriods` (default 30) points before the
+- **%ile (reference levels).** Each chosen level (`percentiles`: the mean,
+  or the 50th, 75th, 90th, 95th or 99th percentile, interpolated; `levelOf`)
+  of the `normPeriods` (default 30) points before the
   latest drawn point, whatever the range: the stacked total of the drawn
   series for additive measures, or the one series otherwise. The query
   reaches back for those points and their smoothing windows, and every one
@@ -581,10 +583,12 @@ no sum, cumulative or share.
 - **Controls.** `AnalysisControls` is the one control bar for every view;
   the trend adds Show as (values or shares), Display, Time bucket,
   Smoothing with its Window (average or total), Periods (whole periods
-  only) and Norm.
+  only) and %ile, a multi-select of reference levels (`PercentileControl`;
+  a level the chart cannot draw is disabled with its reason,
+  `percentileLimit`).
 - **Chosen charts.** A catalog may choose each chart itself (`present`):
   given the view, measure and breakdown, how it is drawn — display, shares,
-  scale, norm, Compare's bars or shares, and for Over time whether it draws
+  scale, a default reference level, Compare's bars or shares, and for Over time whether it draws
   lines or bars (`trendDrawing`, without changing the state's view). The
   choice overrides what a link asked for, the controls for those settings
   are hidden, and the site map leaves them out of the topic's chart keys
@@ -623,8 +627,11 @@ no sum, cumulative or share.
   - Hover a cell for its range, the amount in it and its share of the
     period.
   - Without such a breakdown (`trendLimits.heatmap`) it falls back to per
-    interval and says why. Show as, Scale, Norm and smoothing's Window do
-    not apply and are hidden.
+    interval and says why. Show as, Scale and smoothing's Window do
+    not apply and are hidden. The %ile control chooses the traced
+    percentiles (median and 90th by default); a mean has no place in the
+    bins and is disabled. Hovering a column or cell lists each line's value
+    there, and each trace is labelled where it starts.
   - The model is `dashboard-heatmap-model.ts` (`trendHeatmap`) and the
     component `dashboard-heatmap.tsx`. A card made from a heatmap draws it
     as a grid cover (`heatmapGrid`), as does a card recipe whose daily

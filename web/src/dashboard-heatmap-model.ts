@@ -2,6 +2,7 @@ import type { ChartPeriod } from "./chart-period";
 import type { ChartBucket, ChartSeries } from "./chart-series";
 import { gridTicks, type GridCover } from "./grid-cover";
 import { binsSpanning, nextEdge, type BinScheme } from "./value-bins";
+import { heatmapPercentiles, percentileFraction, percentileLabel, type PercentileLevel } from "./dashboard-analysis-model";
 
 // The trend's heatmap: a value on a continuous axis over time. Each column
 // is a period, each row one fine bin of the value (value-bins.ts), and each
@@ -18,15 +19,19 @@ import { binsSpanning, nextEdge, type BinScheme } from "./value-bins";
 export type HeatmapRow = { low: number; high: number; zero: boolean; y0: number; y1: number };
 // A column's cells are the amounts in each row, 0 where none. An empty
 // period has a total of 0: no evidence, which the chart hatches.
-export type HeatmapColumn = { key: string; date: Date; total: number; windowSize?: number; cells: number[]; median: number | null; p90: number | null };
+// Each traced level (Heatmap.levels) is its place on the axis and its
+// value, read from the bins; null in an empty period.
+export type HeatmapLevel = { y: number; value: number };
+export type HeatmapColumn = { key: string; date: Date; total: number; windowSize?: number; cells: number[]; levels: Array<HeatmapLevel | null> };
 export type HeatmapTick = { value: number; y: number };
-export type Heatmap = { scheme: BinScheme; rows: HeatmapRow[]; columns: HeatmapColumn[]; max: number; ticks: HeatmapTick[]; place: (value: number) => number | null };
+export type Heatmap = { scheme: BinScheme; levels: PercentileLevel[]; rows: HeatmapRow[]; columns: HeatmapColumn[]; max: number; ticks: HeatmapTick[]; place: (value: number) => number | null };
 
 const logScale = (scheme: BinScheme) => scheme.scale !== "linear";
 
 // Bins from the series' values (each a bin's lower edge), every bin between
 // the lowest and highest included, laid out on the value's axis.
-export function trendHeatmap(buckets: ChartBucket[], series: ChartSeries[], scheme: BinScheme): Heatmap {
+export function trendHeatmap(buckets: ChartBucket[], series: ChartSeries[], scheme: BinScheme, asked: PercentileLevel[] = heatmapPercentiles): Heatmap {
+  const levels = asked.filter(level => percentileFraction(level) !== undefined);
   const keyed = new Map<number, string>();
   for (const item of series) {
     const value = item.value === undefined || item.value === "" ? NaN : Number(item.value);
@@ -49,7 +54,7 @@ export function trendHeatmap(buckets: ChartBucket[], series: ChartSeries[], sche
     const cells = bins.map(low => Math.max(0, bucket.values[keyed.get(low) ?? ""] ?? 0));
     for (const cell of cells) max = Math.max(max, cell);
     const sum = cells.reduce((all, cell) => all + cell, 0);
-    return { key: bucket.key, date: bucket.date, total: sum, ...bucket.windowSize ? { windowSize: bucket.windowSize } : {}, cells, median: quantile(rows, cells, sum, 0.5), p90: quantile(rows, cells, sum, 0.9) };
+    return { key: bucket.key, date: bucket.date, total: sum, ...bucket.windowSize ? { windowSize: bucket.windowSize } : {}, cells, levels: levels.map(level => quantile(rows, cells, sum, percentileFraction(level)!, log)) };
   });
   const place = (value: number) => {
     if (!rows.length) return null;
@@ -57,23 +62,26 @@ export function trendHeatmap(buckets: ChartBucket[], series: ChartSeries[], sche
     const y = at(value);
     return y < (zero ? below / total : 0) - 1e-9 || y > 1 + 1e-9 ? null : y;
   };
-  return { scheme, rows, columns, max, ticks: axisTicks(bins, scheme, place), place };
+  return { scheme, levels, rows, columns, max, ticks: axisTicks(bins, scheme, place), place };
 }
 
-// A quantile's place on the axis, interpolated within its bin: the bins
-// hold amounts, not the values, so it is as precise as a bin is narrow.
-function quantile(rows: HeatmapRow[], cells: number[], total: number, q: number): number | null {
+// A quantile's place on the axis and its value, interpolated within its
+// bin along the axis: the bins hold amounts, not the values, so it is as
+// precise as a bin is narrow. In the zero bin it is 0.
+function quantile(rows: HeatmapRow[], cells: number[], total: number, q: number, log: boolean): HeatmapLevel | null {
   if (total <= 0) return null;
   let below = 0;
   for (let index = 0; index < rows.length; index++) {
     const cell = cells[index];
     if (cell > 0 && below + cell >= q * total) {
-      const row = rows[index], within = (q * total - below) / cell;
-      return row.y0 + within * (row.y1 - row.y0);
+      const row = rows[index], within = (q * total - below) / cell, y = row.y0 + within * (row.y1 - row.y0);
+      if (row.zero) return { y, value: 0 };
+      return { y, value: log ? 10 ** (Math.log10(row.low) + within * (Math.log10(row.high) - Math.log10(row.low))) : row.low + within * (row.high - row.low) };
     }
     below += cell;
   }
-  return rows.at(-1)!.y1;
+  const last = rows.at(-1)!;
+  return { y: last.y1, value: last.high };
 }
 
 // Labels on the value axis: 1, 2 and 5 times powers of ten on a log axis
@@ -132,7 +140,20 @@ export function heatmapCellText(heatmap: Heatmap, row: number, column: number, {
   if (item.total <= 0) return `${when}\n${bin}\nNo ${noun} in this period`;
   const smoothed = rollingPeriods > 1 ? `, a ${rollingPeriods}-period average` : "";
   const share = (100 * value / item.total).toLocaleString(undefined, { maximumFractionDigits: 1 });
-  return `${when}\n${bin}\n${amount ? amount(value) : counted(value, rollingPeriods)} ${noun} (${share}% of ${amount ? amount(item.total) : counted(item.total, rollingPeriods)})${smoothed}`;
+  return [`${when}\n${bin}\n${amount ? amount(value) : counted(value, rollingPeriods)} ${noun} (${share}% of ${amount ? amount(item.total) : counted(item.total, rollingPeriods)})${smoothed}`, ...heatmapLevelLines(heatmap, column, format)].join("\n");
+}
+
+// What the traced lines are at a column: "Median: 35", "90th %ile: 280".
+export function heatmapLevelLines(heatmap: Heatmap, column: number, format: (value: number) => string = String): string[] {
+  return heatmap.levels.flatMap((level, index) => { const at = heatmap.columns[column].levels[index]; return at ? [`${percentileLabel(level)} line: ${format(at.value)}`] : []; });
+}
+
+// A column's own tooltip, for a place in it with no cell: the period, its
+// total and the traced levels.
+export function heatmapColumnText(heatmap: Heatmap, column: number, { period, noun, format = String, amount, rollingPeriods = 0 }: CellOptions): string {
+  const item = heatmap.columns[column], when = heatmapPeriodLabel(item.date, period);
+  if (item.total <= 0) return `${when}\nNo ${noun} in this period`;
+  return [`${when}\n${amount ? amount(item.total) : counted(item.total, rollingPeriods)} ${noun}${rollingPeriods > 1 ? `, a ${rollingPeriods}-period average` : ""}`, ...heatmapLevelLines(heatmap, column, format)].join("\n");
 }
 
 // The heatmap as a card's grid cover (grid-cover.ts): the highest bin at the
@@ -142,7 +163,7 @@ export function heatmapGrid(heatmap: Heatmap, { caption, ...options }: CellOptio
   return {
     rows: order.map(index => heatmapBinLabel(heatmap.rows[index], heatmap.scheme, options.format)), columns: heatmap.columns.map(column => heatmapPeriodLabel(column.date, options.period)),
     cells: order.map(index => heatmap.columns.map(column => heatmapShade(column.cells[index], heatmap.max))),
-    values: order.map(index => heatmap.columns.map((column, at) => column.cells[index] > 0 ? heatmapCellText(heatmap, index, at, options).split("\n").slice(2).join(" · ") : null)),
+    values: order.map(index => heatmap.columns.map((column, at) => column.cells[index] > 0 ? heatmapCellText(heatmap, index, at, options).split("\n")[2] : null)),
     tone: "sequential", legend: ["0", options.amount ? options.amount(heatmap.max) : counted(heatmap.max, rollingPeriods)], rowTicks: gridTicks(heatmap.rows.length, 5), columnTicks: gridTicks(heatmap.columns.length, 3),
     ...caption ? { caption } : {},
   };

@@ -212,7 +212,7 @@ function trailingCard(id, scale = 1, window = 7) {
   });
   assert.ok(card.points.some(point => point > 0), `${id}: the fixture has values`);
   assert.equal(built.normPoints, card.points.slice(0, -1).filter(point => point !== null).length);
-  assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.norm * scale} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.references?.[0]?.value * scale} != baseline ${card.baseline}`);
 }
 test("human-messages-per-day and human-conversations-per-day: 7-day means over complete days, with their norms", () => {
   trailingCard("human-messages-per-day");

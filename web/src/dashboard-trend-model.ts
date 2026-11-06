@@ -3,7 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
-import { isTrendView, heatmapAxis, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, heatmapAxis, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, percentileFraction, trendKind, unique, type AnalysisCatalog, type PercentileLevel, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -100,9 +100,10 @@ export type TrendSeries = {
   series: ChartSeries[]; buckets: ChartBucket[];
   // Series keys the legend selection draws, or hides when excluded.
   selected: string[]; excluded: boolean;
-  // The mean of the drawn values at the normPeriods points before the latest
-  // one, and how many of those points had a value.
-  norm?: number; normPoints?: number;
+  // Each level the state asks for (its percentiles: the mean, or a
+  // percentile) of the drawn values at the normPeriods points before the
+  // latest one, and how many of those points had a value.
+  references?: Array<{ level: PercentileLevel; value: number }>; normPoints?: number;
   cumulativeStart?: Date;
   // Non-additive series do not stack; they draw as lines. Their tooltip has
   // no total.
@@ -256,7 +257,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
       buckets=buckets.map(bucket=>{const total=totals.get(bucket.key)?.values.total??0;return {...bucket,values:Object.fromEntries(Object.entries(bucket.values).flatMap(([id,value])=>total>0?[[id,value/total]]:[]))};});
     }else if (state.share) buckets = shareBuckets(buckets);
   }
-  let norm: number | undefined, normPoints: number | undefined;
+  let references: TrendSeries["references"], normPoints: number | undefined;
   const nonzero = state.nonzero && !state.share;
   const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
   const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
@@ -265,7 +266,8 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     const points = buckets.filter(bucket => bucket.date.getTime() >= from && bucket.date.getTime() < to).map(bucket => additive ? drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)
       : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number" && !(nonzero && value === 0));
     normPoints = points.length;
-    norm = points.length ? points.reduce((sum, value) => sum + value, 0) / points.length : undefined;
+    // A state with only the older norm draws its mean.
+    if (points.length) references = (state.percentiles?.length ? state.percentiles : ["mean" as const]).map(level => ({ level, value: levelOf(points, level) }));
   }
   buckets = buckets.filter(bucket => !bucket.history);
   if (state.completePeriods) {
@@ -275,7 +277,16 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   }
   if (nonzero) buckets = withoutZeroes(buckets, drawn.map(item => item.key));
 
-  return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: drawing === "trend_line" || drawing !== "trend_bar" && !additive && series.length > 1, additive };
+  return { series, buckets, selected, excluded: chosen.excluded, references, normPoints, cumulativeStart: bounds.from ?? earliest, lines: drawing === "trend_line" || drawing !== "trend_bar" && !additive && series.length > 1, additive };
+}
+
+// A level of some values: their mean, or a percentile interpolated between
+// the two nearest values.
+export function levelOf(values: number[], level: PercentileLevel): number {
+  const fraction = percentileFraction(level);
+  if (fraction === undefined) return values.reduce((sum, value) => sum + value, 0) / values.length;
+  const sorted = [...values].sort((a, b) => a - b), at = (sorted.length - 1) * fraction, low = Math.floor(at);
+  return low + 1 < sorted.length ? sorted[low] + (at - low) * (sorted[low + 1] - sorted[low]) : sorted[low];
 }
 
 // The chart's title, in the dashboards' plain style.

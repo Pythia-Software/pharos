@@ -4,9 +4,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas } from "../helpers/recipes.mjs";
-import { heatmapAxis, heatmapBins, heatmapSource, normalizeAnalysis, trendAdjustments, validAnalysisState } from "../../../src/dashboard-analysis-model";
-import { trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
-import { heatmapBinLabel, heatmapCellText, heatmapGrid, heatmapShade, trendHeatmap } from "../../../src/dashboard-heatmap-model";
+import { heatmapAxis, heatmapBins, heatmapSource, normalizeAnalysis, percentileLimit, trendAdjustments, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { levelOf, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
+import { heatmapBinLabel, heatmapCellText, heatmapColumnText, heatmapGrid, heatmapShade, trendHeatmap } from "../../../src/dashboard-heatmap-model";
 import { binOf, binsSpanning, nextEdge } from "../../../src/value-bins";
 import { sessionShapeAnalysisCatalog } from "../../../src/session-shape-analysis-catalog";
 import fixture from "../../../../testdata/value-bins.json";
@@ -38,10 +38,16 @@ test("rows sit at their place on a log axis, the zero bin apart below, and quant
   assert.equal(heatmap.rows.at(-1).y1, 1);
   const [full, empty] = heatmap.columns;
   assert.equal(full.total, 4);
-  assert.deepEqual([empty.total, empty.median, empty.p90], [0, null, null]);
+  // The median and 90th percentile are traced unless asked otherwise.
+  assert.deepEqual(heatmap.levels, ["p50", "p90"]);
+  assert.deepEqual([empty.total, ...empty.levels], [0, null, null]);
   // Half the sessions are at or below 1: the median ends the 1 bin.
-  assert.ok(Math.abs(full.median - heatmap.rows[1].y1) < 1e-9);
-  assert.ok(full.p90 > heatmap.rows[8].y0 && full.p90 <= 1);
+  const [median, p90] = full.levels;
+  assert.ok(Math.abs(median.y - heatmap.rows[1].y1) < 1e-9);
+  assert.ok(Math.abs(median.value - 2) < 1e-9);
+  assert.ok(p90.y > heatmap.rows[8].y0 && p90.y <= 1 && p90.value >= 8);
+  // Other levels on request; a mean has no place in the bins.
+  assert.deepEqual(trendHeatmap(buckets, series([0, 1, 8]), { scale: "count" }, ["mean", "p75"]).levels, ["p75"]);
   assert.deepEqual(heatmap.ticks.map(tick => tick.value), [0, 1, 2, 5]);
   assert.equal(heatmap.place(-1), heatmap.place(0));
   assert.equal(heatmap.place(1000), null);
@@ -59,6 +65,9 @@ test("a bin, a cell and a card's grid say what they hold", () => {
   const options = { period: "day", noun: "sessions", label: "Messages" };
   assert.match(heatmapCellText(heatmap, 0, 0, options), /Messages 10–11\n3 sessions \(75% of 4\)/);
   assert.match(heatmapCellText(heatmap, 0, 1, options), /No sessions in this period/);
+  // Hovering says what the lines are and where they stand.
+  assert.match(heatmapCellText(heatmap, 0, 0, options), /Median line: [\d.]+\n90th %ile line: [\d.]+$/);
+  assert.match(heatmapColumnText(heatmap, 0, options), /4 sessions\nMedian line/);
   assert.match(heatmapCellText(heatmap, 0, 0, { ...options, rollingPeriods: 7 }), /7-period average/);
   const grid = heatmapGrid(heatmap, options);
   assert.deepEqual(grid.rows, ["12–14", "10–11"]);
@@ -116,4 +125,29 @@ test("over session rows, every bin is a series and each period's sessions add up
   assert.equal(heatmap.columns.reduce((sum, column) => sum + column.total, 0), 60);
   assert.equal(heatmap.rows[0].low, 1);
   assert.ok(heatmap.rows.every((row, index) => index === 0 || row.y0 >= heatmap.rows[index - 1].y1 - 1e-9), "rows ascend without overlap");
+});
+
+test("the %ile control's levels: a line's reference over earlier points, a heatmap's traces per period", () => {
+  const line = { view: "trend", metric: "sessions", split: "none" };
+  // The older norm reads as the mean; levels draw in their own order.
+  assert.deepEqual(normalizeAnalysis(catalog, { ...line, norm: true }).percentiles, ["mean"]);
+  const asked = normalizeAnalysis(catalog, { ...line, percentiles: ["p90", "mean"] });
+  assert.deepEqual([asked.percentiles, asked.norm], [["mean", "p90"], true]);
+  assert.ok(validAnalysisState(catalog, { ...line, percentiles: ["p50"] }));
+  assert.ok(!validAnalysisState(catalog, { ...line, percentiles: ["p42"] }));
+  // A heatmap traces its median and 90th percentile, and never a mean.
+  const heat = normalizeAnalysis(catalog, { ...line, metric: "autonomy", display: "heatmap" });
+  assert.deepEqual([heat.percentiles, heat.norm], [["p50", "p90"], false]);
+  assert.match(percentileLimit(catalog, heat, "mean"), /not a mean/);
+  assert.equal(percentileLimit(catalog, heat, "p99"), undefined);
+  assert.deepEqual(normalizeAnalysis(catalog, { ...line, metric: "autonomy", display: "heatmap", percentiles: [] }).percentiles, []);
+  // Shares have no reference level, so none is drawn and the control says why.
+  const shares = normalizeAnalysis(catalog, { ...line, split: "harness", share: true, percentiles: ["p50"] });
+  assert.deepEqual(shares.percentiles, []);
+  assert.match(percentileLimit(catalog, shares, "p50"), /Shares/);
+  assert.match(trendAdjustments(catalog, { ...line, split: "harness", share: true, percentiles: ["p50"] }).join(" "), /reference level/);
+  // Levels read a mean or interpolated percentiles of the earlier points.
+  assert.equal(levelOf([1, 2, 3, 10], "mean"), 4);
+  assert.equal(levelOf([1, 2, 3, 10], "p50"), 2.5);
+  assert.equal(levelOf([5], "p90"), 5);
 });

@@ -4543,6 +4543,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "8838351b5ea49acf:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "PercentileControl",
+      "control": "value={view.percentiles} onChange={percentiles => set({ percentiles, norm: undefined })}",
+      "contract": "dashboard",
+      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks. The %ile levels are analyze_chart.percentiles."
+    },
+    {
       "key": "8aa13a6d57cc800a:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4611,15 +4620,6 @@
       "owner": "AnalysisControls",
       "tag": "ScaleControl",
       "control": "value={view.scale!} onChange={scale => set({ scale })}",
-      "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
-    },
-    {
-      "key": "c44cfd6eb89a1568:0",
-      "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisControls",
-      "tag": "ChartSelect",
-      "control": "value={view.norm ? \"on\" : \"off\"} onChange={value => set({ norm: value === \"on\" })}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -6526,6 +6526,34 @@
       "control": "\"input\"",
       "contract": "view.find",
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
+      "key": "00936c79d5091590:0",
+      "file": "web/src/percentile-control.tsx",
+      "owner": "PercentileControl",
+      "tag": "input",
+      "control": "checked={value.includes(level)} onChange={() => toggle(level)}",
+      "contract": "dashboard",
+      "reason": "Each level, and None, report through PercentileControl's onChange to AnalysisControls, which writes analyze_chart.percentiles through changeState and the dashboard URL owner."
+    },
+    {
+      "key": "483a77c25372b894:0",
+      "file": "web/src/percentile-control.tsx",
+      "owner": "PercentileControl",
+      "tag": "button",
+      "control": "onClick={() => onChange([])}",
+      "contract": "dashboard",
+      "reason": "Each level, and None, report through PercentileControl's onChange to AnalysisControls, which writes analyze_chart.percentiles through changeState and the dashboard URL owner."
+    },
+    {
+      "key": "af2b45c00f4cdb35:0",
+      "file": "web/src/percentile-control.tsx",
+      "owner": "PercentileControl",
+      "tag": "button",
+      "control": "aria-label=\"%ile\" onClick={() => setOpen(current => !current)}",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Opens the %ile menu; whether it is open is a transient menu, not view state. The levels it ticks are analyze_chart.percentiles."
     },
     {
       "key": "502369976da84683:0",

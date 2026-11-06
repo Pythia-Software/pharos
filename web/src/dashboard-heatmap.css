@@ -4,14 +4,19 @@
 .dashboard-heatmap-name{grid-column:1/-1;font-size:var(--fs-xs);color:var(--muted);margin-bottom:4px}
 .dashboard-heatmap-yaxis{position:relative;min-width:3rem;font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 .dashboard-heatmap-yaxis span{position:absolute;right:0;transform:translateY(50%);white-space:nowrap;line-height:1}
-.dashboard-heatmap-area{position:relative;min-width:0;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.dashboard-heatmap-area{position:relative;min-width:0;overflow:visible;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
 .dashboard-heatmap-area svg{position:absolute;inset:0;width:100%;height:100%;display:block;shape-rendering:crispEdges}
 .dashboard-heatmap-cell{fill:var(--heat-1)}
 .dashboard-heatmap-gridline{stroke:color-mix(in srgb,var(--line) 55%,transparent);stroke-width:1}
 .dashboard-heatmap-guide{stroke:var(--muted);stroke-width:1;stroke-dasharray:1 3;opacity:.8}
 .dashboard-heatmap-guide-label{position:absolute;right:4px;transform:translateY(-2px);font-size:var(--fs-xs);color:var(--muted);background:color-mix(in srgb,var(--panel,var(--bg)) 80%,transparent);padding:0 3px;border-radius:2px;pointer-events:none;white-space:nowrap}
-.dashboard-heatmap-trace{fill:none;stroke:var(--ink);stroke-width:1.5;shape-rendering:geometricPrecision;pointer-events:none}
-.dashboard-heatmap-trace.is-p90{stroke-dasharray:4 3;opacity:.7}
+.dashboard-heatmap-trace{fill:none;stroke:var(--ink);stroke-width:1.5;shape-rendering:geometricPrecision;pointer-events:none;stroke-dasharray:6 3}
+/* As the line charts' reference levels: the median solid, upper percentiles dotted and fainter. */
+.dashboard-heatmap-trace[data-level="p50"]{stroke-dasharray:none}
+.dashboard-heatmap-trace[data-level^="p9"]{stroke-dasharray:2 3;opacity:.75}
+.dashboard-heatmap-trace[data-level="p99"]{opacity:.6}
+.dashboard-heatmap-trace-label{position:absolute;transform:translate(3px,-3px);font-size:var(--fs-xs);color:var(--ink);background:color-mix(in srgb,var(--panel,var(--bg)) 80%,transparent);padding:0 3px;border-radius:2px;pointer-events:none;white-space:nowrap}
+.dashboard-heatmap-column{shape-rendering:crispEdges}
 .dashboard-heatmap-hatch{stroke:color-mix(in srgb,var(--line) 70%,transparent);stroke-width:1}
 .dashboard-heatmap-axis{grid-column:2}
 .dashboard-heatmap-key{display:flex;align-items:center;gap:8px}

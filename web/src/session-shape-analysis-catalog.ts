@@ -84,7 +84,7 @@ const sessionBreakdowns: AnalysisCatalog["breakdowns"] = {
 // on a continuous axis, the band's edges as guides; a per-session measure
 // with a band of its own is, without a breakdown, the same heatmap of its
 // sessions. Totals by any other breakdown stack as columns, rates draw a
-// line per group, and a single series is a line with its norm. Long-tailed
+// line per group, and a single series is a line with its mean, until the %ile control asks for other levels. Long-tailed
 // times and counts are on a log axis outside Over time.
 const longTailed = new Set(["active_time", "turn_cycle", "autonomy", "calls_per_words", "messages", "typed_messages", "tool_calls", "active_hours"]);
 const axis = (metric: string) => longTailed.has(metric) ? "logarithmic" as const : "linear" as const;
@@ -93,8 +93,8 @@ function present({ view, metric, metricY, split }: { view: string; metric: strin
   if (isTrendView(view)) {
     if (heatmapAxis(sessionShapeAnalysisCatalog, { metric, split })) return { view: "trend", display: "heatmap", share: false, nonzero: false };
     const lines = { display: "interval", share: false, nonzero: false, scale: "linear" } as const;
-    if (split === noSplit) return { ...lines, view: "trend_line", norm: true };
-    return { ...lines, view: measure.additive ? "trend" : "trend_line", norm: false };
+    if (split === noSplit) return { ...lines, view: "trend_line", percentiles: ["mean"] };
+    return { ...lines, view: measure.additive ? "trend" : "trend_line" };
   }
   if (view === "compare") return { compareAs: "bars", scale };
   if (view === "scatter") return { scale, scaleY: axis(metricY) };

@@ -252,11 +252,11 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // lines with no total, and a reference value draws a labelled level line.
 // Without zeroes (nonzero), prepared buckets hold no zero values, and lines
 // pass over a series' missing points.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", reference, action, titleSlot, onSelect, onSelectGroup, onPopulation, onExpand, onRange, seriesHref }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], action, titleSlot, onSelect, onSelectGroup, onPopulation, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
   selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onPopulation?: (key: string, action: PopulationAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
-  prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
+  prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; references?: Array<{ value: number; label: string; level?: string }>;
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
   /** Draws the title and action there instead, such as in a page's heading. */
   titleSlot?: HTMLElement | null;
@@ -286,7 +286,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
   const grouped = forceBars && (!additive || scale === "logarithmic" && !percent);
-  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: reference?.value });
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: references.length ? Math.max(...references.map(item => item.value)) : 0 });
   const lineChart = geometry.lines;
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;
@@ -306,7 +306,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const present = (bucket: ChartBucket) => drawn.filter(item => additive ? (bucket.values[item.key] ?? 0) > 0 : bucket.values[item.key] !== undefined).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
     + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
-    + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + (reference ? `; ${reference.label} ${format(reference.value)}` : "") + (bucket.detail ? `; ${bucket.detail}` : "");
+    + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + references.map(item => `; ${item.label} ${format(item.value)}`).join("") + (bucket.detail ? `; ${bucket.detail}` : "");
   const path = (key: string) => timelinePath(buckets, key, y, additive, nonzero);
   const columnAt = (index: number) => bars.current?.querySelectorAll<HTMLButtonElement>(":scope > button")[index];
   useLayoutEffect(() => {
@@ -399,9 +399,9 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   };
   return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
     <div className="usage-chart-head">{titleSlot ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{titleText}</h2>{action}</div>, titleSlot) : <div className="usage-chart-title"><h3>{titleText}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
-    {series.length > 1 || legend || reference ? <div className="usage-chart-legend">
+    {series.length > 1 || legend || references.length ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? legendGroup(legendGroups(series)) : null}
-      {reference ? <span className="usage-legend-item usage-legend-reference" title={reference.label}><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
+      {references.map(item => <span key={item.label} className="usage-legend-item usage-legend-reference" title={item.label}><span className="usage-swatch usage-reference-swatch" data-level={item.level} aria-hidden="true" />{item.label} · {format(item.value)}</span>)}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
@@ -412,7 +412,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
         {lineChart && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
           {drawn.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke" d={path(item.key)} />)}
         </svg> : null}
-        {reference ? <div className="usage-chart-reference" style={{ bottom: `${y(reference.value)}%` }} aria-hidden="true" /> : null}
+        {references.map(item => <div key={item.label} className="usage-chart-reference" data-level={item.level} style={{ bottom: `${y(item.value)}%` }} aria-hidden="true" />)}
         {buckets.map((bucket, index) => {
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", tip?.pinned && tip.bucket.key === bucket.key && !drag ? "inspected" : "", picked && index >= picked.first && index <= picked.last ? "picked" : ""].filter(Boolean).join(" ");
           return <button key={bucket.key} type="button" aria-label={describe(bucket)} aria-pressed={Boolean(tip?.pinned && tip.bucket.key === bucket.key)} className={className} onMouseEnter={() => show(index)} onFocus={() => show(index)} onMouseLeave={hidePreview} onBlur={hidePreview}
@@ -442,7 +442,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
         </li>;
       })}</ul> : <div className="usage-chart-tip-more">Nothing in this {unit}</div>}
       {stacked && present(tip.bucket).length > 1 ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">Total</span><span className="usage-chart-tip-value">{format(total(tip.bucket))}{suffix}</span></div> : null}
-      {reference ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">{reference.label}</span><span className="usage-chart-tip-value">{format(reference.value)}{suffix}</span></div> : null}
+      {references.map(item => <div key={item.label} className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">{item.label}</span><span className="usage-chart-tip-value">{format(item.value)}{suffix}</span></div>)}
       {tip.bucket.detail ? <div className="usage-chart-tip-more">{tip.bucket.detail}</div> : null}
     </div> : null}
   </div>;

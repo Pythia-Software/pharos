@@ -74,7 +74,7 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
     [{ metric: "output_share", split: "none", rollingPeriods: 7, rollingOp: "sum" }, { rollingOp: "mean" }, /pools its window/],
     [{ metric: "agent_sessions", split: "none", period: "days", days: 3 }, { period: "day" }, /counted per hour, day, week or month/],
     [{ metric: "cost", split: "type" }, { split: "provider" }, /Token type splits tokens only/],
-    [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no norm/],
+    [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no reference level/],
     [{ metric: "tokens", split: "none", display: "cumulative", norm: true }, { norm: false }, /running totals/],
     [{ metric: "cache_read_share", split: "provider", norm: true }, { norm: false }, /no total across groups/],
   ];
@@ -166,7 +166,7 @@ test("values without zeroes leave out periods with nothing drawn, and zeroes fro
   assert.deepEqual(draw({ ...state, nonzero: true, share: true }).built.buckets.length, draw({ ...state, share: true }).built.buckets.length);
   const normed = { ...base, metric: "tokens", split: "none", norm: true, normPeriods: 20 };
   const [zeroes, without] = [draw(normed).built, draw({ ...normed, nonzero: true }).built];
-  assert.ok(without.normPoints < zeroes.normPoints && without.norm > zeroes.norm);
+  assert.ok(without.normPoints < zeroes.normPoints && without.references?.[0]?.value > zeroes.references?.[0]?.value);
   assert.equal(validAnalysisState(catalog, { ...state, nonzero: "yes" }), false);
 });
 
@@ -334,7 +334,7 @@ test("a group only smoothing or norm history holds is listed in Other, so series
   const state = { ...base, metric: "tokens", rollingPeriods: 7, norm: true };
   const byProvider = draw({ ...state, split: "provider" }, { where: week, data }).built, total = draw({ ...state, split: "none" }, { where: week, data }).built;
   assert.deepEqual(byProvider.series.find(item => item.key === "other")?.foldedValues, ["tl1"], "Other lists the history-only group");
-  assert.ok(Math.abs(byProvider.norm - total.norm) < 1e-9, `norm by provider ${byProvider.norm} != ${total.norm}`);
+  assert.ok(Math.abs(byProvider.references?.[0]?.value - total.references?.[0]?.value) < 1e-9, `norm by provider ${byProvider.references?.[0]?.value} != ${total.references?.[0]?.value}`);
   assert.ok(total.buckets.some(bucket => bucket.values.total > 0));
   byProvider.buckets.forEach((bucket, index) => {
     const stacked = byProvider.series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);

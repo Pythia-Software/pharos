@@ -3,7 +3,7 @@ import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type
 import { MetricCard, defaultRenderers, type MetricTheme } from "@pythia-software/query-table-ui";
 import { chartSeriesStyle, colorFields } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
-import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, selectGroups, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
 import { onDatasetRefresh } from "./dataset-refresh";
@@ -17,6 +17,7 @@ import { useOriginMetadata } from "./origin-dimensions";
 import { CreateDashboardCard } from "./create-dashboard-card";
 import { PopulationControl, usePopulation } from "./dashboard-population-control";
 import { selectionPopulation } from "./dashboard-population";
+import { PercentileControl } from "./percentile-control";
 
 // Runs an analysis query, again on Refresh, and tags results with their query
 // so a stale response never renders under new settings.
@@ -67,7 +68,7 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
     ...trend ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, limits.component(id)]) : []];
   const count = trendPeriodCount(view);
   // A catalog that chooses each chart (present) has no controls for what it
-  // chooses: shares, display, scale and the norm.
+  // chooses: shares, display and scale. The %ile levels stay the reader's.
   const adjustable = !catalog.present;
   const content = <>
     {onView ? <AnalysisViewControl catalog={catalog} state={view} onChange={onView} /> : null}
@@ -96,7 +97,8 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange, 
       note={view.rollingOp === "sum" ? "Trailing total · includes preceding history" : limits.rollingSum && measure.ratio ? "Pooled over the window · includes preceding history" : undefined} /> : null}
     {trend && view.rollingPeriods > 1 && view.display !== "cumulative" && view.display !== "heatmap" ? <ChartSelect label="Window" value={view.rollingOp} options={[["mean", measure.ratio ? "Pooled" : "Average"], ["sum", "Total", limits.rollingSum]]} title="Each point's trailing window: its average per period, or its total" onChange={rollingOp => set({ rollingOp })} /> : null}
     {trend ? <ChartSelect label="Periods" value={view.completePeriods ? "complete" : "all"} options={[["all", "Include partial"], ["complete", "Whole periods only"]]} title="Whole periods leave out the current period and a partial first one" onChange={value => set({ completePeriods: value === "complete" })} /> : null}
-    {trend && adjustable && view.display !== "heatmap" ? <ChartSelect label="Norm" value={view.norm ? "on" : "off"} options={[["off", "Off"], ["on", "Mean of earlier points", limits.norm]]} title={`A reference line at the mean of the ${view.normPeriods} periods before the latest point, whatever the range`} onChange={value => set({ norm: value === "on" })} /> : null}
+    {trend ? <PercentileControl value={view.percentiles} limit={level => percentileLimit(catalog, view, level)} onChange={percentiles => set({ percentiles, norm: undefined })}
+      title={view.display === "heatmap" ? "Lines tracing each period's percentiles, read from its bins" : `Reference lines at levels of the ${view.normPeriods} periods before the latest point, whatever the range`} /> : null}
   </>;
   // The trend's chart lays out its own control row.
   return trend ? content : <div className="usage-tools-controls usage-analysis-controls">{content}</div>;

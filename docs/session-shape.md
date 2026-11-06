@@ -278,14 +278,16 @@ The main chart's catalog is described in
 
 Session Shape chooses how each chart is drawn from its view, measure and
 breakdown (the catalog's `present`), rather than offering every display,
-share, scale and norm. Those controls are not shown, and a link's values
-for them are ignored.
+share and scale. Those controls are not shown, and a link's values
+for them are ignored. The %ile control stays: a single line starts with its
+mean, a heatmap with its median and 90th percentile, and either takes any
+other levels the reader ticks.
 
 | View | Measure and breakdown | Drawn as |
 |---|---|---|
 | Over time | a total (sessions, hours, calls, signals) by a band or archetype | heatmap of the band's own value: length band draws messages per session, archetype typed messages per session, with the band edges as guides |
 | Over time | tool calls per typed message, active time, turn cycle or peak context, no breakdown | heatmap of the sessions by that value |
-| Over time | any other measure, no breakdown | a line with its norm |
+| Over time | any other measure, no breakdown | a line with its mean (and any other %ile levels chosen) |
 | Over time | a total by any other breakdown | stacked columns |
 | Over time | a rate by any breakdown, a band included | a line per group |
 | Compare | any | bars |

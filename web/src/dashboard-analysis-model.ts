@@ -169,7 +169,8 @@ export type AnalysisCatalog = {
 // What a catalog's present chooses. For Over time, view chooses how the trend
 // is drawn (lines or bars, trendDrawing) while the state's view stays as it
 // was; the other views ignore it.
-export type AnalysisPresentation = Partial<Pick<AnalysisState, "view" | "display" | "share" | "nonzero" | "scale" | "scaleY" | "norm" | "compareAs">>;
+// Its percentiles are only a default: the %ile control stays the reader's.
+export type AnalysisPresentation = Partial<Pick<AnalysisState, "view" | "display" | "share" | "nonzero" | "scale" | "scaleY" | "compareAs" | "percentiles">>;
 // A catalog's choice for this state, limited to what the state's view uses.
 export function presentation(catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "view" | "metric" | "metricY" | "split" | "unit">): AnalysisPresentation {
   if (!catalog.present) return {};
@@ -198,10 +199,19 @@ export type AnalysisState = {
   scale?: ChartScale; scaleY?: ChartScale; cycle?: CalendarCycle; cycleOn?: string;
   // The trend's own settings.
   period?: ChartPeriod; hours?: number; days?: number; rollingPeriods?: number; rollingOp?: RollingOp; display?: AnalysisDisplay;
-  share?: boolean; nonzero?: boolean; completePeriods?: boolean; norm?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
+  share?: boolean; nonzero?: boolean; completePeriods?: boolean; normPeriods?: number; seriesLimit?: number; selection?: SliceSelection<string>;
+  // Reference levels (percentileLevels). A heatmap traces each across its
+  // periods; a line draws each, over the normPeriods points before the
+  // latest, as a level. norm: true is the older name for ["mean"].
+  percentiles?: PercentileLevel[]; norm?: boolean;
 };
+export const percentileLevels = ["mean", "p50", "p75", "p90", "p95", "p99"] as const;
+export type PercentileLevel = typeof percentileLevels[number];
+export const percentileLabel = (level: PercentileLevel) => level === "mean" ? "Mean" : `${level.slice(1)}th %ile`.replace("50th %ile", "Median");
+// A level as a fraction, for the percentiles; the mean has none.
+export const percentileFraction = (level: PercentileLevel) => level === "mean" ? undefined : Number(level.slice(1)) / 100;
 export type ResolvedAnalysis = AnalysisState & Required<Pick<AnalysisState, "view" | "unit" | "metricY" | "reduce" | "compareAs" | "minSamples" | "scaleY" | "cycle"
-  | "period" | "hours" | "days" | "rollingPeriods" | "rollingOp" | "display" | "share" | "nonzero" | "completePeriods" | "norm" | "normPeriods" | "seriesLimit">>;
+  | "period" | "hours" | "days" | "rollingPeriods" | "rollingOp" | "display" | "share" | "nonzero" | "completePeriods" | "norm" | "normPeriods" | "seriesLimit" | "percentiles">>;
 
 // Reserved ids: no catalog unit may be named records, nor a breakdown none.
 export const records = "records", noSplit = "none";
@@ -213,6 +223,8 @@ export const analysisReductions: Array<[AnalysisReduce, string]> = [["total", "T
 export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 export const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
   period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, nonzero: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
+// A heatmap traces its median and 90th percentile unless asked otherwise.
+export const heatmapPercentiles: PercentileLevel[] = ["p50", "p90"];
 // Groups drawn are fixed per display. The trend's seriesLimit is its own.
 export const barsShown = 12, slicesShown = 8;
 // The groups a view fetches, and the points a scatter draws; a test lowers
@@ -292,7 +304,8 @@ export function validAnalysisState(catalog: AnalysisCatalog, input: AnalysisStat
     && (state.display === undefined || oneOf(state.display, analysisDisplays)) && (state.scale === undefined || validChartScale(state.scale)) && validChartPresentation(state)
     && (state.rollingOp === undefined || oneOf(state.rollingOp, rollingOps))
     && [state.share, state.nonzero, state.completePeriods, state.norm].every(value => value === undefined || typeof value === "boolean")
-    && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000);
+    && (state.normPeriods === undefined || Number.isInteger(state.normPeriods) && state.normPeriods >= 1 && state.normPeriods <= 1000)
+    && (state.percentiles === undefined || Array.isArray(state.percentiles) && state.percentiles.every(level => oneOf(level, percentileLevels)) && new Set(state.percentiles).size === state.percentiles.length);
   if (!trendFields || state.v !== undefined && state.v !== analysisVersion) return false;
   if (isTrendView(state.view)) return (state.view === undefined || !viewUnavailable(catalog, state.view)) && has(catalog.measures, state.metric) && trendSplit(catalog, state.split)
     && (state.unit === undefined || state.unit === records || has(catalog.units, state.unit));
@@ -429,7 +442,7 @@ export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog,
   const weight: AnalysisMeasure = axis.counted ? { ...catalog.measures[catalog.records.count!], where: [...measure.where ?? [], valued] } : { ...measure, where: [...measure.where ?? [], valued] };
   return {
     catalog: { ...catalog, present: undefined, trend: { ...catalog.trend, allSeries: true }, measures: { ...catalog.measures, [state.metric]: weight }, breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [axis.bins.field] } } },
-    state: { ...state, split: heatmapBins, selection: undefined, norm: false },
+    state: { ...state, split: heatmapBins, selection: undefined, norm: false, percentiles: [] },
   };
 }
 
@@ -450,7 +463,7 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
     heatmap: heatmapAxis(catalog, state) ? undefined : state.split === noSplit ? `${measure.label} has no per-record value to draw as a heatmap`
       : !catalog.breakdowns[state.split]?.bins ? "A heatmap needs a breakdown over a continuous value, such as a band" : `${measure.label} does not add up across records, so a heatmap cannot total it`,
-    norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.display === "heatmap" ? "A heatmap draws a distribution, which has no norm" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
+    norm: state.display === "cumulative" ? "A reference level compares interval values, not running totals" : state.display === "heatmap" ? undefined : state.share ? "Shares have no reference level" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a reference level` : undefined,
     component, name,
   };
 }
@@ -464,7 +477,7 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (!has(catalog.measures, next.metric) || notTrended(catalog.measures[next.metric])) next.metric = catalog.trend.metric;
   if (!trendSplit(catalog, next.split)) next.split = catalog.trend.split;
   if (catalog.components?.[next.split] && !catalog.components[next.split].measures.includes(next.metric)) next.split = catalog.components[next.split].fallback;
-  const { view: _drawing, ...chosen } = presentation(catalog, next);
+  const { view: _drawing, percentiles: suggested, ...chosen } = presentation(catalog, next);
   Object.assign(next, chosen);
   next.share = next.share === true; next.nonzero = next.nonzero === true; next.completePeriods = next.completePeriods === true; next.norm = next.norm === true;
   // The trend's scale, resolved once for the control and the chart: a state
@@ -481,8 +494,28 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (multiplePeriods(next) && limits.multiple) next.period = baseUnit(next.period);
   if (limits.period(next.period)) next.period = "day";
   limits = trendLimits(catalog, next);
-  if (next.norm && limits.norm) next.norm = false;
+  next.percentiles = drawnPercentiles(next, askedPercentiles(next) ?? suggested ?? (next.display === "heatmap" ? heatmapPercentiles : []), limits.norm);
+  // The norm's query reaches back for the earlier points a level reads; a
+  // heatmap's levels are each period's own.
+  next.norm = next.percentiles.length > 0 && next.display !== "heatmap";
   return next;
+}
+
+// The levels a state asks for, in their order: its own, or the older norm.
+function askedPercentiles(state: AnalysisState): PercentileLevel[] | undefined {
+  if (Array.isArray(state.percentiles)) return state.percentiles;
+  return state.norm === true ? ["mean"] : undefined;
+}
+// A heatmap's bins give percentiles but no mean; a line's levels need one
+// reference value (unavailable says why not).
+function drawnPercentiles(state: Pick<ResolvedAnalysis, "display">, asked: PercentileLevel[], unavailable: string | undefined): PercentileLevel[] {
+  if (state.display === "heatmap") return percentileLevels.filter(level => level !== "mean" && asked.includes(level));
+  return unavailable ? [] : percentileLevels.filter(level => asked.includes(level));
+}
+// Why a level is unavailable for this chart, if it is.
+export function percentileLimit(catalog: AnalysisCatalog, state: ResolvedAnalysis, level: PercentileLevel): string | undefined {
+  if (state.display === "heatmap") return level === "mean" ? "A heatmap's bins give percentiles, not a mean" : undefined;
+  return trendLimits(catalog, state).norm;
 }
 
 // What normalizeTrend changed that the state asked for, in words, so the
@@ -502,7 +535,9 @@ export function trendAdjustments(catalog: AnalysisCatalog, input: AnalysisState)
   if (asked.display === "heatmap" && state.display !== "heatmap") notes.push(`${limits.heatmap}; values are shown per ${chartPeriodUnit(state.period)}.`);
   if (asked.rollingOp === "sum" && state.rollingOp !== "sum") notes.push(`${limits.rollingSum}; the window is pooled instead.`);
   if (asked.period !== state.period) notes.push(`${limits.period(asked.period) ?? limits.multiple}; each bucket is one ${chartPeriodUnit(state.period)}.`);
-  if (asked.norm === true && !state.norm) notes.push(`${trendLimits(catalog, state).norm}.`);
+  const levels = askedPercentiles(input) ?? [];
+  if (levels.length && !state.percentiles.length && trendLimits(catalog, state).norm) notes.push(`${trendLimits(catalog, state).norm}.`);
+  else if (state.display === "heatmap" && levels.includes("mean")) notes.push("A heatmap's bins give percentiles, not a mean; the mean is not drawn.");
   return notes;
 }
 const chartPeriodUnit = (period: ChartPeriod) => baseUnit(period);

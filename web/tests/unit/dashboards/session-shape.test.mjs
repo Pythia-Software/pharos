@@ -312,7 +312,7 @@ test("Session Shape trend cards: each pools its measure over 7 complete days, as
         const point = card.points[ends.indexOf(end)];
         assert.ok(point === null ? drawn.get(end) === null : Math.abs(drawn.get(end) - point) < 1e-9, `${id} ${window}d ${end}: ${drawn.get(end)} != ${point}`);
       }
-      if (window === 30) assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `${id}: norm ${built.norm} != baseline ${card.baseline}`);
+      if (window === 30) assert.ok(Math.abs(built.references?.[0]?.value - card.baseline) < 1e-9, `${id}: norm ${built.references?.[0]?.value} != baseline ${card.baseline}`);
     }
   }
 });
