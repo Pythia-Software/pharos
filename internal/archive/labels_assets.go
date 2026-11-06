@@ -32,8 +32,11 @@ import (
 // labelsAsset is one pinned download: a .tar.gz unpacked into
 // <support>/labeler/<name>-<version>/.
 type labelsAsset struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	// DefaultVariant chooses the canonical model in app-managed downloads.
+	// Older descriptors omit it and retain int8.
+	DefaultVariant string `json:"default_variant,omitempty"`
+	Name           string `json:"name"`
+	Version        string `json:"version"`
 	// URL may name {name} and {version}.
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
@@ -81,6 +84,15 @@ var labelsDownloadClient = &http.Client{Transport: &http.Transport{Proxy: http.P
 // transport timeout covers a body that stops mid-way, and a stalled
 // transfer would hold the one-per-Mac download lock indefinitely.
 var labelsDownloadStall = time.Minute
+
+// modelVariant preserves custom model directories and explicit settings.
+// Only the app-managed download adopts its release descriptor's default.
+func (a labelsAsset) modelVariant(configuredDir string) string {
+	if configuredDir == "" && a.DefaultVariant != "" {
+		return a.DefaultVariant
+	}
+	return "int8"
+}
 
 func (a labelsAsset) url() string {
 	return strings.NewReplacer("{name}", a.Name, "{version}", a.Version).Replace(a.URL)

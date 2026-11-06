@@ -62,7 +62,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/sync/run", false},
 		{http.MethodPost, "/api/query-computed-columns", false},
 	} {
-		if got := interactiveRead(httptest.NewRequest(route.method, route.path, nil)); got != route.query {
+		if got := interactiveRead(queryFixtureHTTPRequest(route.method, route.path, nil)); got != route.query {
 			t.Errorf("%s %s: query demand=%t, want %t", route.method, route.path, got, route.query)
 		}
 	}
@@ -93,10 +93,14 @@ func TestQueryPausingPreference(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			ctx, op := server.ops.begin(ctx, OperationSpec{Kind: "maintenance.search.text"})
+			defer op.Finish(nil)
+			reportWork(ctx, "Building text search", "message", 2, 10)
 			done := make(chan error, 1)
 			go func() { done <- catalog.queries.wait(ctx) }()
 			if step.on {
 				waitForIndexPause(t, catalog)
+				waitUntil(t, time.Second, "the operation to report its query wait", func() bool { return op.State() == opBlocked })
 				cancel()
 			}
 			select {
@@ -106,6 +110,9 @@ func TestQueryPausingPreference(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("index failed to progress with query pausing off")
+			}
+			if op.State() != opRunning {
+				t.Fatalf("query wait did not restore the operation's state: %s", op.State())
 			}
 		})
 	}
@@ -190,7 +197,7 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 
 			// A query arriving after the first commit must pause the next record
 			// without retaining either the writer gate or SQLite's write lock.
-			query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
+			query := queryFixtureHTTPRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
 			query.Header.Set("Authorization", "Bearer "+config.APIToken)
 			w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
 			queryDone := make(chan struct{})
@@ -401,6 +408,56 @@ func TestCatalogWriterSummaryNamesLocalWriter(t *testing.T) {
 	}
 }
 
+func TestCatalogWriterWaitReportsProgressAndRestoresState(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	reg := newOpRegistry("service")
+	ctx, op := reg.begin(t.Context(), OperationSpec{Kind: "maintenance.labels.query"})
+	defer op.Finish(nil)
+	reportWork(ctx, "Indexing message labels", "conversation", 2, 10)
+	release, err := catalog.acquireWriteGate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			release()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		tx, finish, err := catalog.beginTrackedWrite(ctx, "progress-wait")
+		if err == nil {
+			_ = tx.Rollback()
+			finish()
+		}
+		done <- err
+	}()
+	waitUntil(t, 5*time.Second, "the writer wait to appear in status", func() bool { return op.State() == opBlocked })
+	view := reg.views()[0]
+	if view.Reason != "catalog-busy" || operationStep(view)["fraction"] != 0.2 {
+		t.Fatalf("writer wait lost the reason or last committed progress: %+v", view)
+	}
+	release()
+	released = true
+	if err := <-done; err != nil || op.State() != opRunning {
+		t.Fatalf("writer wait failed to resume: %v (%s)", err, op.State())
+	}
+	op.Block("waiting-for-network", "the network")
+	resume := op.waitFor("catalog-busy", "the catalog writer")
+	resume()
+	if view := reg.views()[0]; view.State != opBlocked || view.Reason != "waiting-for-network" {
+		t.Fatalf("a nested wait replaced another owner's state: %+v", view)
+	}
+	op.Unblock()
+	resume = op.waitFor("catalog-busy", "the catalog writer")
+	op.Finish(context.Canceled)
+	resume()
+	if op.State() != opFailed {
+		t.Fatal("a wait resurrected a finished operation")
+	}
+}
+
 // A sync holds the catalog writer for seconds at a time. Every page read and
 // MCP tool answers from what is stored, leaving projections and history to
 // background work, so none of them waits for the writer.
@@ -505,7 +562,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	}
 	for _, request := range requests {
 		read, cancel := context.WithTimeout(ctx, 3*time.Second)
-		r := httptest.NewRequestWithContext(read, request.method, request.path, strings.NewReader(request.body))
+		r := queryFixtureHTTPRequest(request.method, request.path, strings.NewReader(request.body)).WithContext(read)
 		r.Header.Set("Authorization", "Bearer "+config.APIToken)
 		w := httptest.NewRecorder()
 		// Work that ignores the request's context would wait for the writer

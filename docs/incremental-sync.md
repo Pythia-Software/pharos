@@ -203,6 +203,12 @@ Settings → Background Processing and integrity issues expose:
   links, and user-maintained findings are not reset.
 - **Resume repair** reuses the job's generation and committed progress,
   including verified captures. It does not start another force generation.
+  A repair that completes supersedes the unfinished ones it redoes: those
+  started before it, within its sources (no sources means every source), of
+  its mode, or of any mode when it is a full recapture. Superseded repairs
+  are no longer offered to resume. The background index does not supersede
+  them, since it reads only this Mac's live sources and not other Macs'
+  captures.
 - **Verify all retained inputs** visits configured live inputs and captures
   across hosts, including the newest historical Conductor generation holding
   each deleted session. Library/source scopes are supported. Targeted
@@ -272,6 +278,12 @@ record field categories and signatures without transcript text. Repair alone
 does not dismiss an issue: the repaired unit must pass verification. Sampling
 does not certify the entire library, and a shared parser bug can still agree
 with the reference; provider fixtures remain necessary.
+
+Independent verification can discover changes before the next index pass.
+When a known unit's selected parts differ from its indexed input states, its
+check defers until indexing catches up instead of reporting index lag as
+corruption. Entirely untracked inputs are still checked for omissions; older
+captures remain eligible to verify their contribution to retained history.
 
 ## API
 

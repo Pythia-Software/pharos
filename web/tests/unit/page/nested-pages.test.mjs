@@ -1,7 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-model";
-import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, optimizePages, toggleNavigationSection } from "../../../src/app-navigation-model";
+import { analyzePages, appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, navigationPageURL, optimizePages, toggleNavigationSection } from "../../../src/app-navigation-model";
+import { usageTopics } from "../../../src/usage-workspace-model";
+
+test("every dashboard belongs to People, Agents or Outcomes and retains its destination", () => {
+  const params = new URLSearchParams('analyze_topic=human&analyze_days=7');
+  const before = params.toString();
+  for (const previews of [false, true]) {
+    const pages = analyzePages(params, previews), groups = pages.find(page => page.id === 'dashboards').children;
+    assert.deepEqual(groups.map(group => group.label), ['People', 'Agents', 'Outcomes']);
+    const dashboards = groups.flatMap(group => group.children);
+    const topics = Object.keys(usageTopics).filter(topic => previews || topic !== 'agent_experience');
+    assert.deepEqual(dashboards.map(page => page.id).sort(), topics.map(topic => `dashboards:${topic}`).sort());
+    assert.equal(new Set(dashboards.map(page => page.id)).size, dashboards.length);
+    for (const group of groups) {
+      assert.ok(group.children.length);
+      for (const page of group.children) {
+        const destination = new URL(page.href, 'https://pharos.test');
+        assert.equal(appLocation(destination.pathname, destination.searchParams).current, page.id);
+        assert.deepEqual(nestedPageTrail(pages, page.id).map(page => page.id), ['dashboards', group.id, page.id]);
+      }
+    }
+    assert.equal(nestedPageTrail(pages, 'dashboards:human')[1].label, 'People');
+    assert.equal(nestedPageTrail(pages, 'dashboards:thinking-detail')[1].label, 'Agents');
+    assert.equal(nestedPageTrail(pages, 'dashboards:carbon')[1].label, 'Outcomes');
+    assert.ok(pages.find(page => page.id === 'query').children.every(page => page.href));
+  }
+  assert.equal(params.toString(), before);
+});
 
 test("the app tree resolves global, nested, and legacy destinations without changing their queries", () => {
   const params = new URLSearchParams('analyze_mode=query&analyze_data=usage&q_usage=saved&analyze_days=7');
@@ -31,11 +58,11 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   ]) assert.equal(appLocation(path, new URLSearchParams(query)).current, current);
 });
 
-test("Optimize resolves separate efficiency and safety pages", () => {
+test("Optimize resolves separate efficiency, safety and fixes pages", () => {
   const sections = appSections([], new URLSearchParams());
   const optimize = sections.find(section => section.id === "findings");
-  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety"]);
-  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety"]);
+  assert.deepEqual(optimize.pages.map(page => page.id), ["findings", "safety", "fixes"]);
+  assert.deepEqual(optimizePages().map(page => page.id), ["findings", "safety", "fixes"]);
   for (const [path, query, trail] of [
     ["/findings", "", ["findings", "findings:dashboard"]],
     ["/findings", "list=watching&repo=example", ["findings", "findings:dashboard"]],
@@ -46,6 +73,10 @@ test("Optimize resolves separate efficiency and safety pages", () => {
     ["/findings", "optimize_area=safety&view=table", ["safety", "safety:table"]],
     ["/findings", "optimize_area=safety&view=settings", ["safety", "safety:settings"]],
     ["/findings", "optimize_area=safety&safety_list=handed_off&safety_case=example", ["safety", "safety:dashboard"]],
+    ["/findings", "optimize_area=fixes", ["fixes", "fixes:dashboard"]],
+    ["/findings", "optimize_area=fixes&fixes_item=x&fixes_list=dismissed", ["fixes", "fixes:dashboard"]],
+    ["/findings", "optimize_area=fixes&view=table&q_fixes=saved", ["fixes", "fixes:table"]],
+    ["/findings", "optimize_area=fixes&view=settings", ["fixes", "fixes:settings"]],
   ]) {
     const params = new URLSearchParams(query), before = params.toString();
     const selected = appLocation(path, params);
@@ -77,7 +108,7 @@ test("navigation and breadcrumbs follow the selected page at any depth", () => {
   assert.deepEqual(pages, before);
 });
 
-test("navigation groups default open and preserve each section's last toggle independently", () => {
+test("navigation groups preserve each section's choices independently of their defaults", () => {
   const initial = {};
   const sections = appSections([], new URLSearchParams());
   for (const section of sections) {
@@ -97,6 +128,17 @@ test("navigation groups default open and preserve each section's last toggle ind
   assert.equal(isNavigationSectionExpanded(reopened.findings, "findings"), false);
   assert.deepEqual(initial, {}, "toggles do not mutate earlier state");
   assert.equal(isNavigationSectionExpanded(closed.analyze, "query"), false);
+  const nested = toggleNavigationSection(reopened, 'analyze', 'dashboards:people');
+  const parentClosed = toggleNavigationSection(nested, 'analyze', 'dashboards');
+  const parentReopened = toggleNavigationSection(parentClosed, 'analyze', 'dashboards');
+  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboards:people'), false);
+  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboards:agents'), true);
+  assert.equal(isNavigationSectionExpanded(parentReopened.analyze, 'dashboards'), true);
+  assert.equal(isNavigationSectionExpanded({}, 'dashboards:people', false), false);
+  assert.equal(isNavigationSectionExpanded({}, 'dashboards:outcomes', true), true);
+  const opened = toggleNavigationSection({}, 'analyze', 'dashboards:people', false);
+  assert.equal(isNavigationSectionExpanded(opened.analyze, 'dashboards:people', false), true);
+  assert.equal(isNavigationSectionExpanded(nested.analyze, 'dashboards:people', true), false, 'explicit choices override the current-page default');
 });
 
 test("local page navigation preserves the complete destination and browser link semantics", () => {
@@ -113,4 +155,15 @@ test("local page navigation preserves the complete destination and browser link 
   for (const external of ["https://example.com/settings", "mailto:owner@example.com"])
     assert.equal(localPageNavigation(external, base, { button: 0 }), null);
   assert.equal(localPageNavigation(href, base, { button: 0, target: "_self" }), href);
+});
+
+test('sidebar presentation updates keep the picker open while page and query changes close it', () => {
+  const base = 'https://pharos.test/analyze?analyze_topic=tokens';
+  const presentation = new URL(base);
+  presentation.searchParams.set('nav_expanded', JSON.stringify({analyze:{'dashboards:outcomes':false}}));
+  presentation.searchParams.set('nav_collapsed', 'false');
+  assert.equal(navigationPageURL(presentation.href), navigationPageURL(base));
+  for (const destination of ['/settings', '/analyze?analyze_topic=human', '/analyze?analyze_topic=tokens&analyze_days=7', '/analyze?analyze_topic=tokens#chart']) {
+    assert.notEqual(navigationPageURL(new URL(destination, base).href), navigationPageURL(base));
+  }
 });

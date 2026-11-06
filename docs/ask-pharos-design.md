@@ -55,11 +55,31 @@ Reloading restores this tab's open overlay or floating progress panel, including
 the draft and page context. Closed or dismissed surfaces stay closed; restoring
 an overlay preserves the underlying page URI.
 
+Full screen is its own page, `/ask?ask_chat=ID`: the same composer, without its
+glow, filling the page's full width and height, its transcript above the editor.
+While working, the signal trace runs around the page's edge instead.
+Before the first question, the suggestions sit there instead, inside the
+composer, until the user types. The composer's full
+screen button opens it from Home or the overlay and keeps the page context chip;
+pressed again, it returns to the page it came from, where Home shows the chat
+inline and any other page reopens the overlay. Back, the navigation, or opening
+an answer also leave full screen; a pending question then floats as usual.
+
 ## Composer and responses
 
 The prompt editor expands automatically. Focus enlivens the whole composer and its SVG
 ribbon border. Provide light and dark appearances, a paper-plane send button, and
 an icon beside it to switch to ordinary search.
+
+An empty new chat cycles through the library's suggestion questions every
+twelve seconds, starting with a randomly chosen question. Questions currently
+readable in the suggestion carousel are excluded, including after scrolling,
+resizing or refreshing it. If none remain, use “Ask about your past work…”;
+when suggestions are hidden, the whole slate is available. The placeholder
+disappears immediately on focus and returns only when the editor is empty and
+unfocused. Rotation pauses and resets its idle time while focused, hidden,
+loading a chat, or holding a draft or context chip. Reduced motion keeps the
+invitation still. Existing chats use a short follow-up invitation instead.
 
 The expanded composer, floating progress panel and header button share the
 `createPharosGlow` effect in `assets/ask-glow.js` and the `.pharos-glow` styles.
@@ -68,6 +88,10 @@ it to another surface, call `setWorking` with the active request state, and
 `destroy` it when that surface is removed. Hue cycles slowly while idle and six
 times faster while working, preserving its current phase when speed changes.
 Only the decoration changes hue; content and panel fills retain their colors.
+Hue motion pauses while the decoration is not shown, such as a closed panel or
+full screen's composer, so hidden glows do not restyle every frame. Full screen's
+page-edge signal (`createPharosEdgeTrace`) animates only the transforms of four
+small streaks, one per side, so the compositor moves it without repainting.
 Reduced motion keeps both hue and loading trace still, with loading still visible.
 For an icon, supply its 24×24 SVG outline path to the same effect. The header's
 chat glyph uses this mode so its glow and loading trace follow the bubble inside
@@ -165,14 +189,14 @@ Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestio
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.
 
-The suggestion catalog in `assets/ask-model.js` interleaves questions about
-instructions, failures, tools, context, usage, models, delegation, prior work,
-findings and activity. Optional repository phrases use names from the Library's
-distinct repository values, and appear on only some eligible questions when
-at least two named repositories exist. Comparisons across repositories remain
-unqualified. Refresh changes both the page of ideas and the repository examples;
-missing metadata leaves the broad questions available. These are invitations to
-investigate, not claims that a pattern or a finding exists in the library.
+Suggestions are generic questions Pharos expects this library to answer
+well, chosen from what it noticed in the user's work; see
+[Ask suggestions](ask-suggestions.md). They never name what was noticed and
+carry no evidence line, so they read as invitations to a conversation rather
+than another set of cards. They appear only once Ask Pharos is enabled.
+Without enough data there are fewer suggestions, or none, never padding.
+Refresh asks for another seeded slate; opening the modal over a page leans
+the slate toward that page.
 
 Hide/Show suggestions remains above the cards. Its collapsed state is stored in
 the library's UI preferences (`pharos-ask-suggestions-hidden`), survives reloads
@@ -240,7 +264,7 @@ accessible in History; Clear does not delete saved chats. Ordinary search remain
 available. Clear keeps the selected CLI/model/effort for the next chat.
 
 Place the icon buttons inside the composer in this order: switch to ordinary
-search, History, Clear, picture in picture, Send/Stop. Show History only for an empty new composer, with no
+search, History, Clear, picture in picture, full screen, Send/Stop. Show History only for an empty new composer, with no
 submitted messages or draft. Show Clear whenever the composer has a draft or a
 conversation, as a text button floating in the composer's upper-right corner.
 In the modal, place a matching Close text button beside Clear. Their transparent

@@ -12,6 +12,38 @@ import { loadClassicScript, plain } from './helpers/classic-script.mjs';
 const model = loadClassicScript('ask-model.js',{TextEncoder,TextDecoder});
 const prompt = loadClassicScript('ask-prompt.js');
 
+test('prompt invitations rotate after idle time and restart the wait after editing or hiding',()=>{
+  const items=['A','B','C','D','E'].map(text=>({id:text,text}));
+  const hints=prompt.askPromptHints(()=>0),first=hints.update(items,items.slice(0,2)),seen=new Set([first]);
+  assert.equal(hints.advance(11999,false),first);
+  const next=hints.advance(1,false);assert.notEqual(next,first);seen.add(next);
+  hints.advance(11000,false);
+  assert.equal(hints.advance(60000,true),next,'focus, drafts, hidden surfaces and reduced motion hold the current invitation');
+  assert.equal(hints.advance(11999,false),next,'returning to idle starts a fresh reading period');
+  let current=hints.advance(1,false);seen.add(current);
+  for(let count=0;current!==first&&count<10;count++){current=hints.advance(12000,false);seen.add(current);}
+  assert.equal(current,first,'the invitations wrap around');
+  assert.deepEqual([...seen].sort(),['C','D','E'],'only questions outside the visible cards rotate');
+  assert.ok(seen.has(prompt.askPromptHints(()=>.99).update(items,items.slice(0,2))),'new surfaces can start at a different question');
+});
+
+test('prompt invitations follow suggestion visibility and refresh without repeating visible question text',()=>{
+  const items=['A','B','C','D'].map(text=>({id:text,text}));
+  const hints=prompt.askPromptHints(()=>0),fallback=hints.current();
+  assert.equal(hints.update(items,items.slice(0,2)),'C');
+  hints.advance(11000,false);
+  assert.equal(hints.update(items,items.slice(0,2)),'C','a redraw preserves the current question');
+  assert.equal(hints.advance(1000,false),'D','a redraw preserves the reading period');
+  assert.equal(hints.update(items,[items[3]]),'A','a question coming into view is replaced immediately');
+  assert.equal(hints.advance(11999,false),'A','replacement starts a fresh reading period');
+  assert.equal(hints.update(items,[...items,{id:'copy',text:'A'}]),fallback,'no spare question uses the generic invitation');
+  assert.equal(hints.update(items),'A','hiding suggestions makes the whole slate available');
+  assert.equal(hints.update([{id:'new',text:'A refreshed question'}]),'A refreshed question','refresh retires questions from the old slate');
+  assert.equal(hints.update([]),fallback,'an empty library uses the generic invitation');
+  assert.equal(hints.advance(60000,false),fallback);
+  assert.equal(hints.update([{id:'first',text:'Same question'},{id:'second',text:'Same question'}],[{id:'first',text:'Same question'}]),fallback,'duplicate question text is excluded regardless of identity');
+});
+
 test('Ask dialog starts a quarter down the window and grows around its original center',()=>{
   const layout=options=>plain(model.askDialogLayout({emptyHeight:194,...options}));
   const empty=layout({viewportHeight:1070,contentHeight:194});
@@ -106,6 +138,41 @@ test('glow traces cross their origin within one open path instead of splitting a
   }
 });
 
+test('shared Ask glow pauses its hue while the decoration is not shown, and resumes in phase', () => {
+  const events=[];
+  const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
+  let report,observed,disconnected=false;
+  class IntersectionObserver{constructor(callback){report=callback;}observe(target){observed=target;}disconnect(){disconnected=true;}}
+  const glow=loadClassicScript('ask-glow.js',{IntersectionObserver,matchMedia:()=>({matches:false,addEventListener(){},removeEventListener(){}})});
+  const layers=[{animate:()=>hue}];
+  const motion=glow.askGlowMotion({dataset:{}},layers);
+  assert.equal(observed,layers[0]);
+  events.length=0;
+  report([{isIntersecting:false}]);
+  assert.deepEqual(events,['pause'],'a hidden panel or full screen composer stops ticking');
+  report([{isIntersecting:true}]);
+  assert.deepEqual(events,['pause','play']);
+  motion.destroy();
+  assert.ok(disconnected);
+});
+
+test('the edge trace turns each corner as the previous side leaves, around one lap', () => {
+  const glow=loadClassicScript('ask-glow.js');
+  const width=1000,height=500,length=200,perimeter=3000;
+  const lanes=plain(glow.askEdgeTraceLanes({width,height,length}));
+  assert.deepEqual(lanes.map(lane=>lane.side),['top','right','bottom','left']);
+  assert.deepEqual(lanes.map(lane=>lane.start*perimeter),[0,1000,1500,2500],'each side starts as the signal reaches its corner');
+  for(const [index,lane] of lanes.entries()){
+    const next=lanes[(index+1)%lanes.length],ends=(lane.start+lane.travel)*perimeter,turns=next.start*perimeter+(next.start?0:perimeter);
+    assert.equal(ends-turns,length,`${lane.side} leaves while the next side enters, so the corner never goes dark`);
+    assert.ok(lane.travel<1,'a lane fits within its lap');
+    // Streaks start and finish entirely off their side.
+    const size=lane.axis==='X'?width:height;
+    assert.deepEqual([Math.min(lane.from,lane.to),Math.max(lane.from,lane.to)],[-length,size]);
+  }
+  assert.ok(lanes[0].from<lanes[0].to&&lanes[2].from>lanes[2].to,'the signal runs clockwise');
+});
+
 test('shared Ask glow respects reduced motion from startup, including while working', () => {
   const events=[];
   const hue={play:()=>events.push('play'),pause:()=>events.push('pause'),cancel(){},updatePlaybackRate(){}};
@@ -118,28 +185,23 @@ test('shared Ask glow respects reduced motion from startup, including while work
   motion.destroy();
 });
 
-test('prompt suggestions mix broad questions with real repository scopes only in multi-repository libraries', () => {
-  const suggestions=options=>plain(model.askPromptSuggestions(options));
-  const broad=suggestions();
-  for(const repositories of [[],['pharos'],['pharos','pharos',null,'','  ']]){
-    assert.deepEqual(suggestions({repositories}),broad);
-  }
-  const repositories=['pharos','query-table'];
-  const mixed=suggestions({repositories});
-  assert.equal(mixed.length,broad.length);
-  assert.equal(new Set(mixed).size,mixed.length);
-  assert.ok(mixed.some((text,index)=>text===broad[index]),'keep library-wide questions');
-  for(const name of repositories)assert.ok(mixed.some(text=>text.includes('“'+name+'” repository')));
-  assert.ok(mixed.every(text=>!text.includes('{scope}')),'never offer a template placeholder');
-  const varied=suggestions({repositories,variation:1});
-  assert.notDeepEqual(varied,mixed,'refresh can introduce another repository for the same question');
-  assert.equal(varied.find(text=>text==='Which repositories use the most tokens?'),'Which repositories use the most tokens?');
+test('suggestions keep only well-formed, distinct questions from the library', () => {
+  const items=plain(model.askSuggestionItems([
+    {id:'spend-where',text:' Where do my tokens go? '},
+    {id:'spend-where',text:'Where do my tokens go?'},
+    {id:'risk-review'},{text:'No id'},null,{id:'blank',text:'  '},
+    {id:'recall-similar',text:'Find earlier work I could build on in the 研究/<test> & tools repository.'},
+  ]));
+  assert.deepEqual(items,[{id:'spend-where',text:'Where do my tokens go?'},{id:'recall-similar',text:'Find earlier work I could build on in the 研究/<test> & tools repository.'}]);
+  assert.deepEqual(plain(model.askSuggestionItems(undefined)),[],'a missing list offers nothing rather than canned questions');
+  assert.equal(model.askSuggestionItems(Array.from({length:20},(_,i)=>({id:'f'+i,text:'Question '+i+'?'}))).length,12);
 });
 
-test('suggestion scopes preserve repository names as data, including punctuation and Unicode', () => {
-  const repositories=['研究/<test> & tools','owner/repo.with-dots'];
-  const suggestions=plain(model.askPromptSuggestions({repositories}));
-  for(const repository of repositories)assert.ok(suggestions.some(text=>text.includes('“'+repository+'” repository')));
+test('Ask keeps asking for suggestions while they are being chosen, backing off', () => {
+  const delays=Array.from({length:8},(_,attempt)=>model.askSuggestionRetryDelay(attempt));
+  assert.equal(delays[0],20000);
+  assert.ok(delays.every((delay,i)=>i===0||delay>=delays[i-1]),'never sooner than the last try');
+  assert.equal(delays.at(-1),300000,'a slow first run still gets picked up, every five minutes at most');
 });
 
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
@@ -238,6 +300,16 @@ test('chat URLs preserve unrelated parameters and support replacing and clearing
   for(const path of ['/library?text=cache','/analyze?analyze_topic=tools','/settings#models']){
     assert.equal(model.askHistoryURL('http://pharos.test'+path,'chat one'),'http://pharos.test/?ask_chat=chat+one');
   }
+  assert.equal(model.askHistoryURL('http://pharos.test/ask?ask_chat=old','saved'),'http://pharos.test/ask?ask_chat=saved','full screen keeps history on its page');
+});
+test('full screen opens the chat on the Ask page and returns to the page it came from', () => {
+  assert.equal(model.askFullscreenURL('http://pharos.test/analyze?analyze_topic=tools','chat one'),'http://pharos.test/ask?ask_chat=chat+one');
+  assert.equal(model.askFullscreenURL('http://pharos.test/?ask_chat=old',null),'http://pharos.test/ask');
+  const exit=(from,id='saved')=>plain(model.askFullscreenExit('http://pharos.test/ask?ask_chat=saved',from,id));
+  assert.deepEqual(exit('/analyze?analyze_topic=tools'),{href:'http://pharos.test/analyze?analyze_topic=tools',presentation:'modal'});
+  assert.deepEqual(exit('/?range=week'),{href:'http://pharos.test/?range=week&ask_chat=saved',presentation:'home'});
+  assert.deepEqual(exit('/home',null),{href:'http://pharos.test/home',presentation:'home'});
+  for(const from of [null,undefined,'','/ask?ask_chat=other','https://elsewhere.test/analyze','http://[bad'])assert.deepEqual(exit(from),{href:'http://pharos.test/?ask_chat=saved',presentation:'home'},String(from));
 });
 test('reload restores the tab surface only for the same page and chat', () => {
   const href='http://pharos.test/?ask_chat=saved-chat&range=week';
@@ -256,6 +328,8 @@ test('reload restores the tab surface only for the same page and chat', () => {
     assert.equal(model.askRestorePresentation('http://pharos.test/analyze?analyze_topic=tokens',{page:'/analyze?analyze_topic=tokens',presentation}),presentation);
   }
   assert.equal(model.askRestorePresentation('http://pharos.test/analyze',{page:'/analyze',presentation:'home'}),null);
+  assert.equal(model.askRestorePresentation('http://pharos.test/ask?ask_chat=saved-chat',{page:'/ask',id:'saved-chat',presentation:'page'}),'page');
+  assert.equal(model.askRestorePresentation('http://pharos.test/analyze',{page:'/analyze',presentation:'page'}),null);
 });
 test('history keeps server matches from later messages and only adds the current chat to unfiltered lists', () => {
   const first={id:'initial',updatedAt:1,conversation:[{prompt:'Initial topic'}]},second={id:'newer',updatedAt:2,conversation:[{prompt:'Another topic'}]};

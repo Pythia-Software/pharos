@@ -43,7 +43,7 @@ export function SourceQueryBuilder<Row>({ dataset, whereRow, ...props }: QueryBu
     get: (_, property) => Reflect.get(currentApi.current.query.grouping ? currentApi.current.grouping!.source : currentApi.current, property),
   }), []);
   return <div className="data-source-query" data-pharos-target={`control:q_${dataset}`}><QueryBuilder {...props} collapsed={props.collapsed??collapsed} onCollapsedChange={props.onCollapsedChange??setCollapsed} whereRow={<>
-    {dataset !== "findings" && dataset !== "safety" ? <SourceStatement dataset={dataset} /> : null}
+    {dataset !== "findings" && dataset !== "safety" && dataset !== "fixes" ? <SourceStatement dataset={dataset} /> : null}
     {whereRow ?? <QueryFilterRow api={sourceFilters} fields={props.api.query.grouping ? props.api.grouping!.source.schema.fields : props.fields} />}
   </>} /></div>;
 }

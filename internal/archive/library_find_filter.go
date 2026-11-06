@@ -13,6 +13,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
+
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -231,7 +233,7 @@ func (s *Server) libraryRows(ctx context.Context, values url.Values, fields libr
 		return nil, nil, err
 	}
 	if set.limited || set.search.Strategy != "" && !set.search.Complete {
-		return nil, nil, fmt.Errorf("search is incomplete (%s); workspace rows, counts and metrics are withheld because Limit applies after filtering and sorting. Narrow the search or retry", set.search.StopReason)
+		return nil, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: fmt.Sprintf("search is incomplete (%s); workspace rows, counts and metrics are withheld because Limit applies after filtering and sorting. Narrow the search or retry", set.search.StopReason)}
 	}
 	// searchRows returns a slice of its own, so it can be filtered in place.
 	rows = slices.DeleteFunc(rows, func(row map[string]any) bool { return set.matches[firstString(row["id"])] == nil })

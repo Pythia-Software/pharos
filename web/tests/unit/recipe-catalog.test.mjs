@@ -12,7 +12,7 @@ import { cardTemplates } from "../../src/card-library-model";
 import { usageDatasetTopics, readUsageWorkspace, usageDashboardReturn } from "../../src/usage-workspace-model";
 import { readDashboardQuery } from "../../src/usage-dashboard-model";
 import { trendQuery } from "../../src/dashboard-trend-model";
-import { analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-model";
+import { isTrendView, analysisQuery, validAnalysisState } from "../../src/dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "../../src/token-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../src/mcp-analysis-catalog";
 import { toolsAnalysisCatalog } from "../../src/tools-analysis-catalog";
@@ -36,22 +36,26 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
   const schema = schemas[recipe.dataset];
   assert.ok(schema, `${recipe.id}: unknown dataset ${recipe.dataset}`);
   const source = { ...core.EMPTY_QUERY, aggregations: recipe.measures, where: recipe.where ?? [] };
-  const measures = recipe.measures.some(metric => metric.dateGrouping)
-    ? core.toQueryRequestV3(source, schema, capabilities, execution, { now, rows: false })
-    : core.toMetricQuery(source, schema, execution);
-  assert.deepEqual(measures.diagnostics, [], "measures");
+  const measures = core.toQueryRequestV3(source, schema, capabilities, execution, { now, rows: false });
   assert.equal(measures.metrics.length, recipe.measures.length, "every measure is requested");
   // A description advertises the population, not how many groups the cover shows.
   assert.doesNotMatch(recipe.description, /\b(?:five|six|seven|eight|twelve|\d+) (?:largest|leading|busiest|repositories|models)\b|plus Other|top \d+/i);
 
   for (const days of windows(recipe)) {
     const suggestion = instantiateRecipe(recipe, days, clock), { query } = suggestion;
-    for (const rows of [false, true]) assert.deepEqual(core.toQueryRequestV3(query, schema, capabilities, execution, { now, rows }).diagnostics, [], `destination @${days}d`);
+    for (const rows of [false, true]) assert.doesNotThrow(() => core.toQueryRequestV3(query, schema, capabilities, execution, { now, rows }), `destination @${days}d`);
     const cover = cardCoverQuery(query, recipe);
-    assert.deepEqual(core.toQueryRequestV3(cover.query, schema, capabilities, execution, { now, rows: false }).diagnostics, [], `cover @${days}d`);
-    const restored = core.decodeQueryStrict(new URL(suggestion.url, "http://home.test").searchParams.get(`q_${recipe.dataset}`));
-    assert.deepEqual(restored, core.normalizeQueryState(query), `URL @${days}d`);
+    assert.doesNotThrow(() => core.toQueryRequestV3(cover.query, schema, capabilities, execution, { now, rows: false }), `cover @${days}d`);
     const url = new URL(suggestion.url, "http://home.test");
+    // A Habits section card opens the Habits page at its selectors, and
+    // draws from the habits summary rather than its query.
+    if (recipe.habits) {
+      assert.deepEqual([url.pathname, readUsageWorkspace(url.searchParams).mode, readUsageWorkspace(url.searchParams).topic], ["/analyze", "dashboards", "habits"]);
+      for (const [key, value] of Object.entries(recipe.habits.view)) assert.equal(url.searchParams.get(key), value, key);
+      continue;
+    }
+    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${recipe.dataset}`));
+    assert.deepEqual(restored, core.normalizeQueryState(query), `URL @${days}d`);
     if (Object.hasOwn(usageDatasetTopics, recipe.dataset)) {
       assert.equal(url.pathname, "/analyze", `Analyze route @${days}d`);
       assert.equal(readUsageWorkspace(url.searchParams).dataset, recipe.destination?.dataset ?? recipe.dataset);
@@ -67,10 +71,10 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
       assert.deepEqual(filters.query.where, cardDashboardWhere(recipe.dataset, recipe.destination.dataset, (query.grouping?.source ?? query).where), "dashboard carries compatible context");
       const catalog = catalogs[topic];
       if (catalog) assert.equal(validAnalysisState(catalog, chart), true, "the chart is a valid analysis state");
-      const dashboard = !catalog ? filters.query : (chart.view ?? "trend") === "trend" ? trendQuery(catalog, chart, filters.query.where, { now }).query : analysisQuery(catalog, chart, filters.query.where, { now }).query;
+      const dashboard = !catalog ? filters.query : isTrendView(chart.view) ? trendQuery(catalog, chart, filters.query.where, { now }).query : analysisQuery(catalog, chart, filters.query.where, { now }).query;
       // The SQLite service supports isolated source regex (unlike the generic
       // in-memory fake); wide Tools date ranges use that native capability.
-      for (const part of core.planMetricSeries(dashboard, schemas[recipe.destination.dataset], { now })?.queries ?? [dashboard]) assert.deepEqual(core.toQueryRequestV3(part, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }).diagnostics, [], `dashboard @${days}d`);
+      for (const part of core.planMetricSeries(dashboard, schemas[recipe.destination.dataset], { now })?.queries ?? [dashboard]) assert.doesNotThrow(() => core.toQueryRequestV3(part, schemas[recipe.destination.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now, rows: false }), `dashboard @${days}d`);
       assert.equal(suggestion.action, recipe.action);
       const details = new URL(cardDetailsURL(url.searchParams), "http://home.test");
       assert.equal(readUsageWorkspace(details.searchParams).mode, "query");

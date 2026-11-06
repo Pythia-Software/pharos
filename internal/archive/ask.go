@@ -48,6 +48,10 @@ type askTurn struct {
 	// open; the page notes them and does not open a lone remaining card.
 	Omitted       int               `json:"omitted,omitempty"`
 	Clarification *askClarification `json:"clarification,omitempty"`
+	// Suggestion is the suggested question's family when the prompt began
+	// as one; SuggestionEdited that the user rewrote it substantially.
+	Suggestion       string `json:"suggestion,omitempty"`
+	SuggestionEdited bool   `json:"suggestionEdited,omitempty"`
 }
 type askSession struct {
 	HostID             string       `json:"hostID"`
@@ -373,6 +377,12 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.ask.mu.Unlock()
 	fail := func(err error) { writeError(w, err, 400) }
 	switch r.URL.Path {
+	case "/api/ask/suggestions":
+		if r.Method != http.MethodGet {
+			fail(fmt.Errorf("GET required"))
+			return
+		}
+		s.askSuggestionsHTTP(w, r)
 	case "/api/ask/status":
 		if r.Method != http.MethodGet {
 			fail(fmt.Errorf("GET required"))
@@ -443,6 +453,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if body["enabled"] == true {
 			s.warmAskModels(triggerUser)
+			s.requestBackground("suggestions")
 		}
 		writeJSON(w, settings, 200)
 	case "/api/ask/models":
@@ -859,6 +870,8 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 		Draft      string
 		Selection  askSelection
 		Retry      bool
+		// Suggestion is the suggested question the prompt began as.
+		Suggestion struct{ ID, Text string }
 	}
 	fail := func(err error) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 		return askSession{}, askProvider{}, nil, nil, err
@@ -914,6 +927,10 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 			}
 			input.CurrentURI = turn.CurrentURI
 			input.Prompt = turn.Prompt
+			input.Suggestion.ID, input.Suggestion.Text = turn.Suggestion, ""
+			if !turn.SuggestionEdited {
+				input.Suggestion.Text = turn.Prompt
+			}
 			session.Conversation = session.Conversation[:i]
 			break
 		}
@@ -927,7 +944,12 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 			label = model.Label
 		}
 	}
-	session.Conversation = append(session.Conversation, askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Fast: input.Selection.Fast, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}})
+	turn := askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Fast: input.Selection.Fast, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}}
+	if askSuggestionFamilyKnown(input.Suggestion.ID) {
+		turn.Suggestion = input.Suggestion.ID
+		turn.SuggestionEdited = input.Prompt != strings.TrimSpace(input.Suggestion.Text) && askSimilar(input.Prompt, input.Suggestion.Text) < 0.6
+	}
+	session.Conversation = append(session.Conversation, turn)
 	session.Draft = input.Draft
 	session.ClarificationDraft = ""
 	session.UpdatedAt = time.Now().UnixMilli()
