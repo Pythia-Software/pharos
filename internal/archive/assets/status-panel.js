@@ -289,7 +289,7 @@
   const CADENCE_NAMES = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
   function operationOrigin(operation) {
     if (operation.kind === 'background.update') return '';
-    return {user: 'Started by you', schedule: 'Scheduled', chained: 'Follows other work'}[operation.trigger] || '';
+    return {user: 'Started by you', schedule: 'Scheduled'}[operation.trigger] || '';
   }
 
   // A line as one string, for tooltips and the other libraries' rows.
@@ -310,6 +310,10 @@
   // What runs for the selected library: the app's operations that touch it
   // (a transfer, a delivery), then its own.
   const currentOperations = view => [...(view?.appOperations || []), ...(view?.library?.operations || [])].filter(running);
+  const operationStartTime = operation => {
+    const time = Date.parse(operation.started_at);
+    return Number.isFinite(time) ? time : Infinity;
+  };
 
   // The panel's content, from the store's view. options.ejectState is the
   // panel's eject flow; options.verdict overrides the snapshot's verdict
@@ -318,10 +322,10 @@
   function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set(), now = Date.now()} = {}) {
     const library = view?.library || null;
     const operations = currentOperations(view);
-    // Show every active operation, with foreground work first. Maintenance
-    // can run alongside a scheduled pass and may have no schedule row.
-    const foreground = operations.filter(operation => operation.priority !== 'background');
-    const shown = [...foreground, ...operations.filter(operation => operation.priority === 'background')];
+    // Oldest first, so new work joins the end and child stages do not move
+    // their parent's row. IDs break ties consistently across snapshots;
+    // operations without a known start follow those with one.
+    const shown = operations.slice().sort((a, b) => operationStartTime(a) - operationStartTime(b) || a.id.localeCompare(b.id));
     const common = {lines: shown.map(operation => operationLine(operation, now)), attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
       return {available: false, title: PANEL_TITLE, library: view?.service?.name ? {name: view.service.name, drive: '', path: ''} : null, ...common, stateLabel: view?.service?.stateLabel || null,
