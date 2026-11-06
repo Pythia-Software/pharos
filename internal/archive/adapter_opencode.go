@@ -424,6 +424,10 @@ func (a *opencodeAdapter) conversation(tx *sql.Tx, tables map[string]bool, origi
 				break
 			}
 		}
+	}
+	// A deleted fork read from an older snapshot whose source a newer one
+	// holds can't tell what the source holds now, so it keeps its copies.
+	if source := firstString(session["fork_session_id"]); inherited != "" && (a.selected == nil || a.selected[source]) {
 		rows, err := tx.QueryContext(a.context(), `SELECT seq FROM session_message WHERE session_id=?`, source)
 		if err != nil {
 			return nil, nil, err
