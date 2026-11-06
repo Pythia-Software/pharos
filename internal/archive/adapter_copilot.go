@@ -338,6 +338,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 	// Each call's tool, whether it delegates, and where its record is.
 	type call struct {
 		tool      string
+		input     any
 		delegated bool
 		index     int
 		agent     string
@@ -469,16 +470,19 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 			case strings.TrimSpace(item.Text) != "":
 				add(item)
 			}
-			// What the person attached: a selection holds the text selected.
+			// What the person attached, as Copilot describes it: a selection
+			// holds the text selected, a GitHub reference its URL, number and
+			// title. A blob's inline bytes are left out.
 			attachments, _ := data["attachments"].([]any)
 			for index, raw := range attachments {
-				attachment := mapValue(raw)
+				attachment := maps.Clone(mapValue(raw))
 				if attachment == nil {
 					continue
 				}
+				delete(attachment, "data")
 				extra := item
 				extra.NativeID, extra.Kind = fmt.Sprintf("%s:attachment:%d", item.NativeID, index), "attachment"
-				extra.Text = jsonText(map[string]any{"type": attachment["type"], "path": firstString(attachment["filePath"], attachment["path"]), "name": attachment["displayName"], "text": attachment["text"], "selection": attachment["selection"]})
+				extra.Text = jsonText(attachment)
 				add(extra)
 			}
 		case "system.message":
@@ -513,7 +517,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				if request == nil {
 					continue
 				}
-				name := defaultString(request["name"], "tool")
+				name := defaultString(firstString(copilotMCPName(request), request["name"]), "tool")
 				callID := defaultString(request["toolCallId"], fmt.Sprintf("%s:call:%d", id, index))
 				item := base
 				item.NativeID, item.CallID, item.Role, item.Kind = fmt.Sprintf("%s:block:%d", id, index), callID, "assistant", "tool_call"
@@ -522,7 +526,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 					item.Kind = "delegation"
 				}
 				item.Text = jsonText(map[string]any{"tool": name, "input": request["arguments"]})
-				calls[callID] = &call{tool: name, delegated: delegated, index: add(item), agent: agentID}
+				calls[callID] = &call{tool: name, input: request["arguments"], delegated: delegated, index: add(item), agent: agentID}
 			}
 		case "tool.user_requested":
 			// A tool the person ran themselves, which no assistant message requests.
@@ -532,7 +536,7 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				item := base
 				item.NativeID, item.CallID, item.Role, item.Kind = callID+":user", callID, "user", "tool_call"
 				item.Text = jsonText(map[string]any{"tool": name, "input": data["arguments"]})
-				calls[callID] = &call{tool: name, index: add(item), agent: agentID}
+				calls[callID] = &call{tool: name, input: data["arguments"], index: add(item), agent: agentID}
 			}
 		case "session.compaction_complete":
 			// The boundary token accounting resets carried context at.
@@ -543,10 +547,15 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				add(item)
 			}
 		case "tool.execution_start":
-			// The call's own start, which its result's time is measured from.
+			// The call's own start, which its result's time is measured from,
+			// and, from older releases, the only record of its MCP server.
 			if c := calls[firstString(data["toolCallId"])]; c != nil {
 				if at, ok := parseTime(timestamp); ok {
 					c.started = at
+				}
+				if name := copilotMCPName(data); name != "" && name != c.tool && agents[c.agent] != nil {
+					c.tool = name
+					agents[c.agent].conversation.Messages[c.index].Text = jsonText(map[string]any{"tool": name, "input": c.input})
 				}
 				if c.agent == agentID && timestamp != "" {
 					agent.conversation.Messages[c.index].CreatedAt = timestamp
@@ -564,8 +573,14 @@ func (a *copilotAdapter) record(session copilotSession, events []map[string]any,
 				item.Kind = "delegation_result"
 			}
 			result := mapValueDefault(data["result"])
+			// content is what the model was sent, which token accounting
+			// reads; detailedContent, the full output such as a diff, is kept
+			// beside it when it says more.
 			payload := map[string]any{"tool": c.tool, "content": firstNonNil(result["content"], result["detailedContent"]), "is_error": data["success"] == false}
 			details := map[string]any{}
+			if detailed := firstString(result["detailedContent"]); detailed != "" && result["content"] != nil && detailed != firstString(result["content"]) {
+				details["detailed_content"] = detailed
+			}
 			if failure := mapValue(data["error"]); failure != nil {
 				details["error"] = firstString(failure["message"], failure["code"])
 			} else if failure := firstString(data["error"]); failure != "" {
@@ -810,4 +825,16 @@ func copilotTokenUsage(usage map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// copilotMCPName names an MCP tool mcp__<server>__<tool>, as other tools do,
+// from the server and tool Copilot records beside its own name for the call
+// (such as search-md-read_markdown_file); "" for a tool of no MCP server.
+func copilotMCPName(fields map[string]any) string {
+	server := firstString(fields["mcpConfigServerName"], fields["mcpServerName"])
+	tool := firstString(fields["mcpToolName"])
+	if server == "" || tool == "" {
+		return ""
+	}
+	return "mcp__" + server + "__" + tool
 }

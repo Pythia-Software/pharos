@@ -460,7 +460,7 @@ const vscodeNestedSession = `{"version":3,"sessionId":"nested-1","creationDate":
 {"value":" and "},{"kind":"inlineReference","inlineReference":{"uri":{"scheme":"file","path":"/work/app/main.go"},"range":{"startLineNumber":3}}},{"value":"."},
 {"kind":"toolInvocationSerialized","toolCallId":"n1","toolId":"runSubagent","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Explore","prompt":"Look around","result":"Found it","modelName":"Claude Haiku 4.5"}},
 {"kind":"toolInvocationSerialized","toolCallId":"n2","toolId":"runSubagent","subAgentInvocationId":"n1","isComplete":true,"toolSpecificData":{"kind":"subagent","agentName":"Deep","prompt":"Look deeper","result":"Deeper"}},
-{"kind":"toolInvocationSerialized","toolCallId":"n3","toolId":"mcp_weather_lookup","subAgentInvocationId":"n2","isComplete":true,"pastTenseMessage":{"value":"Ran weather lookup"},
+{"kind":"toolInvocationSerialized","toolCallId":"n3","toolId":"mcp_weather_lookup","subAgentInvocationId":"n2","isComplete":true,"pastTenseMessage":{"value":"Ran weather lookup"},"source":{"type":"mcp","label":"weather","serverLabel":"weather"},
   "toolSpecificData":{"kind":"input","rawInput":{"city":"Paris","units":"metric"}},"resultDetails":{"input":"{\"city\":\"Paris\"}","output":[{"type":"embed","isText":true,"value":"Service unavailable"}],"isError":true}}],
 "result":{"metadata":{"resolvedModel":"gpt-5-mini"}}}]}`
 
@@ -493,8 +493,124 @@ func TestVSCodeCopilotNestedSubagentsAndSavedToolData(t *testing.T) {
 	for _, message := range inner.Messages {
 		byID[message.NativeID] = message
 	}
-	if call, result := byID["request_n:block:7"], byID["request_n:block:7:result"]; call.Text != `{"input":{"city":"Paris","units":"metric"},"tool":"mcp_weather_lookup"}` ||
-		result.Text != `{"content":"Service unavailable","is_error":true,"tool":"mcp_weather_lookup"}` {
+	if call, result := byID["request_n:block:7"], byID["request_n:block:7:result"]; call.Text != `{"input":{"city":"Paris","units":"metric"},"tool":"mcp__weather__lookup"}` ||
+		result.Text != `{"content":"Service unavailable","is_error":true,"tool":"mcp__weather__lookup"}` {
 		t.Fatalf("MCP call %+v result %+v", call, result)
+	}
+}
+
+// vscodeHistorySession is a session with what a request may carry beside
+// its prompt: pasted code and a file attached, a reply VS Code flagged as
+// vulnerable, a background terminal's notice VS Code sent itself, calls the
+// person denied or skipped and an MCP server's call, compactions after an
+// earlier request's round and after one of the request's own, and requests
+// undone whole, after an undo stop, and hidden by an older release.
+const vscodeHistorySession = `{"version":3,"sessionId":"history-1","creationDate":1793718400000,"requests":[
+{"requestId":"r1","timestamp":1793718400000,"modelId":"copilot/gpt-5-mini","message":{"text":"Explain this code"},
+ "variableData":{"variables":[
+  {"kind":"paste","id":"q.sql1311","name":"q.sql 1 line","code":"SELECT name FROM users","value":"Copied Selection of Code: SELECT name FROM users","language":"sql","pastedLines":"1 line","fileName":"file:///work/q.sql","copiedFrom":{"uri":{"$mid":1,"scheme":"file","path":"/work/q.sql"},"range":{"startLineNumber":1,"startColumn":1,"endLineNumber":1,"endColumn":23}}},
+  {"kind":"file","id":"file-main","name":"main.go","value":{"$mid":1,"scheme":"file","path":"/work/main.go"}},
+  {"kind":"tool","id":"fetch","name":"fetch"}]},
+ "response":[{"kind":"markdownVuln","content":{"value":"It selects every user's name."},"vulnerabilities":[{"title":"SQL","description":"Unbounded"}]}],
+ "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":1000,"outputTokens":10,"toolCallRounds":[{"id":"round-r1","toolCalls":[]}]}}},
+{"requestId":"r2","timestamp":1793718401000,"modelId":"copilot/gpt-5-mini","isSystemInitiated":true,"systemInitiatedLabel":"make completed","terminalExecutionId":"term-1",
+ "message":{"text":"[Terminal term-1 notification: command completed with exit code 0.]\nTerminal output:\nok"},
+ "response":[{"value":"The build passed."}],
+ "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":400,"outputTokens":10,"summaries":[{"toolCallRoundId":"round-r1","text":"Summary of the explanation"}]}}},
+{"requestId":"r3","timestamp":1793718402000,"modelId":"copilot/gpt-5-mini","message":{"text":"Clean up"},"response":[
+ {"kind":"toolInvocationSerialized","toolCallId":"d1","toolId":"run_in_terminal","isComplete":true,"isConfirmed":{"type":0},"pastTenseMessage":{"value":"Ran rm -rf build"},"toolSpecificData":{"kind":"terminal","commandLine":{"original":"rm -rf build"}}},
+ {"kind":"toolInvocationSerialized","toolCallId":"d2","toolId":"copilot_createFile","isComplete":true,"isConfirmed":{"type":5},"pastTenseMessage":{"value":"Created notes.md"}},
+ {"kind":"toolInvocationSerialized","toolCallId":"d3","toolId":"copilot_readFile","isComplete":true,"isConfirmed":false,"pastTenseMessage":{"value":"Read secrets.txt"}},
+ {"kind":"toolInvocationSerialized","toolCallId":"m1","toolId":"mcp_weather-serve_lookup","isComplete":true,"isConfirmed":{"type":4},"pastTenseMessage":{"value":"Ran lookup"},
+  "source":{"type":"mcp","label":"Weather","serverLabel":"weather-server","collectionId":"c","definitionId":"d"}}],
+ "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":900,"outputTokens":20,"toolCallRounds":[
+  {"id":"round-3a","toolCalls":[{"id":"d1__vscode-1","name":"run_in_terminal","arguments":"{\"command\":\"rm -rf build\"}"},{"id":"d2__vscode-2","name":"create_file","arguments":"{}"}]},
+  {"id":"round-3b","toolCalls":[{"id":"d3__vscode-3","name":"read_file","arguments":"{}"},{"id":"m1__vscode-4","name":"mcp_weather-serve_lookup","arguments":"{\"city\":\"Paris\"}"}]}],
+  "summary":{"toolCallRoundId":"round-3a","text":"Summary of the clean up"}}}},
+{"requestId":"r4","timestamp":1793718403000,"modelId":"copilot/gpt-5-mini","shouldBeRemovedOnSend":{"requestId":"r4"},"message":{"text":"Undone prompt"},"response":[{"value":"Undone reply"}],
+ "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":1200,"outputTokens":5}}},
+{"requestId":"r5","timestamp":1793718404000,"modelId":"copilot/gpt-5-mini","shouldBeRemovedOnSend":{"requestId":"r5","afterUndoStop":"u1"},"message":{"text":"Edit it"},"response":[
+ {"value":"Kept part."},{"value":"\n` + "```" + `\n"},{"kind":"undoStop","id":"u1"},{"kind":"codeblockUri","uri":{"scheme":"file","path":"/work/q.sql"}},{"value":"edited\n` + "```" + `\n"},{"value":"Dropped part."}],
+ "result":{"metadata":{"resolvedModel":"gpt-5-mini","promptTokens":1300,"outputTokens":5}}},
+{"requestId":"r6","timestamp":1793718405000,"modelId":"copilot/gpt-5-mini","isHidden":true,"message":{"text":"Hidden prompt"},"response":[{"value":"Hidden reply"}]}]}`
+
+// What a request carries beside its prompt is kept, VS Code's own requests
+// are no person's, a declined call did not succeed, an MCP call names its
+// server, compactions bound what later requests re-read, and undone
+// requests stay indexed but are not what the session shows.
+func TestVSCodeCopilotSavedRequestState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Code", "User")
+	writeSourceFile(t, filepath.Join(root, "globalStorage", "emptyWindowChatSessions", "history-1.json"), vscodeHistorySession)
+	session := vscodeRecords(t, root)["history-1"]
+	if len(session.Conversations) != 1 {
+		t.Fatalf("conversations = %+v", session.Conversations)
+	}
+	main := session.Conversations[0]
+	byID := map[string]MessageRecord{}
+	for _, message := range main.Messages {
+		byID[message.NativeID] = message
+	}
+	if paste := byID["r1:attachment:0"]; paste.Kind != "attachment" || paste.Role != "user" ||
+		paste.Text != `{"name":"q.sql 1 line","path":"/work/q.sql","range":{"endColumn":23,"endLineNumber":1,"startColumn":1,"startLineNumber":1},"text":"SELECT name FROM users","type":"paste"}` {
+		t.Fatalf("pasted code = %+v", paste)
+	}
+	if file := byID["r1:attachment:1"]; file.Text != `{"name":"main.go","path":"/work/main.go","type":"file"}` {
+		t.Fatalf("attached file = %+v", file)
+	}
+	if _, ok := byID["r1:attachment:2"]; ok {
+		t.Fatal("a tool reference is an attachment")
+	}
+	if reply := byID["r1:block:0"]; reply.Role != "assistant" || reply.Kind != "message" || reply.Text != "It selects every user's name." {
+		t.Fatalf("flagged reply = %+v", reply)
+	}
+	if notice := byID["r2"]; notice.Role != "system" || notice.Kind != contextKind || !strings.Contains(notice.Text, `"source":"vscode_terminal_notification"`) {
+		t.Fatalf("terminal notice = %+v", notice)
+	}
+	if reply := byID["r2:block:0"]; reply.Text != "The build passed." {
+		t.Fatalf("reply to the notice = %+v", reply)
+	}
+	kinds := []string{}
+	for _, message := range main.Messages {
+		if strings.HasPrefix(message.NativeID, "r2") || strings.HasPrefix(message.NativeID, "r3") {
+			kinds = append(kinds, message.NativeID)
+		}
+	}
+	// The earlier request's round is compacted before the next prompt; the
+	// request's own after the last call of that round.
+	if got, want := strings.Join(kinds, " "), "r2:compaction:round-r1 r2 r2:block:0 r2:usage r3 r3:block:0 r3:block:0:result r3:block:1 r3:block:1:result r3:compaction:round-3a r3:block:2 r3:block:2:result r3:block:3 r3:block:3:result r3:usage"; got != want {
+		t.Fatalf("order\n got %s\nwant %s", got, want)
+	}
+	if denied := byID["r3:block:0:result"]; denied.Text != `{"content":"The user denied this tool call","details":{"confirmation":"denied","status":"declined"},"is_error":false,"tool":"run_in_terminal"}` {
+		t.Fatalf("denied = %+v", denied)
+	}
+	if mcp := byID["r3:block:3"]; mcp.Text != `{"input":{"city":"Paris"},"tool":"mcp__Weather__lookup"}` {
+		t.Fatalf("MCP call = %+v", mcp)
+	}
+	// Undone requests are indexed, not selected; what they used is spent.
+	for id, selected := range map[string]bool{"r4": false, "r4:block:0": false, "r4:usage": true, "r5": true, "r5:block:0": true, "r5:block:1": false, "r6": false, "r6:block:0": false, "r3": true} {
+		message, ok := byID[id]
+		if !ok || message.Selected != selected {
+			t.Fatalf("%s selected %v (found %v), want %v", id, message.Selected, ok, selected)
+		}
+	}
+	if session.Purpose != "Explain this code" || session.Outcome != "Kept part." {
+		t.Fatalf("purpose %q outcome %q", session.Purpose, session.Outcome)
+	}
+
+	requests, calls := buildToolLedger(main.Messages, main.Model)
+	compacted := []string{}
+	for _, request := range requests {
+		compacted = append(compacted, fmt.Sprintf("%s:%v", request.NativeID, request.CompactedBefore))
+	}
+	if got := strings.Join(compacted, " "); got != "r1:false r2:true r3:true r4:false r5:false" {
+		t.Fatalf("compacted before: %s", got)
+	}
+	got := []string{}
+	for _, call := range calls {
+		got = append(got, fmt.Sprintf("%s=%s:%s:%s:%s:%d", call.CallID, call.Status, call.ErrorType, call.Category, call.MCPServer, call.CarriedRequests))
+	}
+	// The calls before the compaction are not re-read by the requests after.
+	if want := "d1=error:user_rejected:command::0 d2=error:user_rejected:edit::0 d3=error:user_rejected:read::2 m1=ok::mcp:Weather:2"; strings.Join(got, " ") != want {
+		t.Fatalf("calls\n got %s\nwant %s", strings.Join(got, " "), want)
 	}
 }

@@ -78,6 +78,9 @@ func zedRows() []zedRow {
 			map[string]any{"Agent": map[string]any{"content": []any{use("call4", "terminal", map[string]any{"command": "ls docs"})},
 				"tool_results": map[string]any{"call4": result("call4", "terminal", "```\nREADME.md\n```", false)}}},
 			map[string]any{"Agent": map[string]any{"content": []any{text("Done.")}, "tool_results": map[string]any{}}},
+			// Compacting by hand adds an empty prompt, then the summary.
+			map[string]any{"User": map[string]any{"id": "e0000000-0000-4000-8000-000000000009", "content": []any{}}},
+			map[string]any{"Compaction": map[string]any{"Summary": "Earlier work summary"}},
 		},
 		"updated_at":               "2026-11-04T16:20:00Z",
 		"model":                    map[string]any{"provider": "anthropic", "model": "claude-sonnet-4-5"},
@@ -101,7 +104,8 @@ func zedRows() []zedRow {
 		"version": "0.2.0", "summary": "Old question",
 		"messages": []any{
 			map[string]any{"id": 0, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "What does a.go do?"}}, "tool_uses": []any{}, "tool_results": []any{}},
-			map[string]any{"id": 1, "role": "assistant", "segments": []any{map[string]any{"type": "thinking", "text": "Read it.", "signature": nil}, map[string]any{"type": "text", "text": "It parses flags."}},
+			map[string]any{"id": 1, "role": "assistant", "segments": []any{map[string]any{"type": "thinking", "text": "Read it.", "signature": nil}, map[string]any{"type": "RedactedThinking", "data": "opaque"},
+				map[string]any{"type": "text", "text": "It parses flags."}},
 				"tool_uses":    []any{map[string]any{"id": "old1", "name": "read_file", "input": map[string]any{"path": "a.go"}}},
 				"tool_results": []any{map[string]any{"tool_use_id": "old1", "is_error": false, "content": "package a"}}},
 			// The oldest threads keep a message's text whole.
@@ -213,7 +217,7 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	}
 	// What a mention brought in is not the prompt; "Resume" is not a turn.
 	want := "user:message assistant:reasoning assistant:message assistant:tool_call tool:tool_result assistant:tool_call tool:tool_result assistant:delegation tool:delegation_result assistant:metadata assistant:message system:metadata " +
-		"user:message assistant:tool_call tool:tool_result assistant:message system:metadata system:metadata"
+		"user:message assistant:tool_call tool:tool_result assistant:message system:metadata system:metadata system:metadata"
 	if got := cursorKinds(thread.Messages); got != want {
 		t.Fatalf("kinds = %s\nwant    %s", got, want)
 	}
@@ -234,8 +238,12 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	}
 	if usage(messages[11]) != `{"cache_creation_input_tokens":5,"cache_read_input_tokens":10,"input_tokens":100,"output_tokens":50}` ||
 		usage(messages[16]) != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":80,"output_tokens":20}` ||
-		usage(messages[17]) != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"input_tokens":120,"output_tokens":50}` {
-		t.Fatalf("usage = %s / %s / %s", messages[11].Text, messages[16].Text, messages[17].Text)
+		usage(messages[18]) != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":20,"input_tokens":120,"output_tokens":50}` {
+		t.Fatalf("usage = %s / %s / %s", messages[11].Text, messages[16].Text, messages[18].Text)
+	}
+	// A compaction is a boundary that keeps its summary.
+	if compaction := mapValueDefault(parseJSONValue(messages[17].Text)); !isCompactionMarker(messages[17]) || compaction["summary"] != "Earlier work summary" {
+		t.Fatalf("compaction = %+v", messages[17])
 	}
 	// The subagent's prompt is its parent's.
 	subagent := record.Conversations[1]
@@ -244,8 +252,18 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	}
 	// A thread of releases before the agent.
 	legacy := records[zedLegacyID]
-	if got := cursorKinds(legacy.Conversations[0].Messages); legacy.Title != "Old question" || got != "user:message assistant:reasoning assistant:message assistant:tool_call tool:tool_result system:metadata assistant:message" {
+	if got := cursorKinds(legacy.Conversations[0].Messages); legacy.Title != "Old question" || got != "user:message assistant:reasoning assistant:metadata assistant:message assistant:tool_call tool:tool_result system:metadata assistant:message" {
 		t.Fatalf("legacy thread = %s: %s", legacy.Title, got)
+	}
+	// Release 0.1.0 keeps a call's results on the user message after it.
+	older := (&zedAdapter{}).conversation("zed", "older", map[string]any{}, map[string]any{"version": "0.1.0", "messages": []any{
+		map[string]any{"id": 0, "role": "user", "segments": []any{map[string]any{"type": "text", "text": "Read a.go"}}},
+		map[string]any{"id": 1, "role": "assistant", "segments": []any{}, "tool_uses": []any{map[string]any{"id": "old2", "name": "read_file", "input": map[string]any{"path": "a.go"}}}},
+		map[string]any{"id": 2, "role": "user", "segments": []any{map[string]any{"type": "text", "text": ""}}, "tool_results": []any{map[string]any{"tool_use_id": "old2", "is_error": false, "content": "package a"}}},
+		map[string]any{"id": 3, "role": "assistant", "segments": []any{map[string]any{"type": "text", "text": "It is package a."}}},
+	}})
+	if got := cursorKinds(older.Messages); got != "user:message assistant:tool_call tool:tool_result assistant:message" || !strings.Contains(older.Messages[2].Text, "package a") {
+		t.Fatalf("0.1.0 thread = %s: %+v", got, older.Messages)
 	}
 	// A command's result that isn't text says nothing of how it ended.
 	var unread MessageRecord
@@ -256,6 +274,49 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 	// Only Zed's own tags are taken off an input.
 	if input := jsonText(zedToolInput(map[string]any{"type": "integer", "value": 7})); input != `{"type":"integer","value":7}` {
 		t.Fatalf("an untagged input = %s", input)
+	}
+}
+
+// A terminal command's outcome is the header Zed writes before its output,
+// which Zed saves as a result that did not fail; the output may say anything.
+func TestZedTerminalOutcomeIsZedsHeader(t *testing.T) {
+	for _, test := range []struct {
+		name, content, status, errorType string
+		exit                             int64
+		input                            map[string]any
+	}{
+		{"failed", "Command \"make\" failed with exit code 2.\n\n```\nmain.go:3: error\n```", "error", "", 2, nil},
+		{"failed with a note", "Note: this command ran WITHOUT an OS sandbox.\n\nCommand \"make\" failed with exit code 1.", "error", "", 1, nil},
+		{"output quoting a failure", "```\nCommand \"make\" failed with exit code 2.\n```", "ok", "", 0, nil},
+		{"output after a note", "Note: this command ran WITHOUT an OS sandbox because one could not be created (setup timed out. bwrap failed with exit code 1.).\n\n```\nCommand \"make\" failed with exit code 2.\n```", "ok", "", 0, nil},
+		{"no output", "Command executed successfully.", "ok", "", 0, nil},
+		{"timed out", "Command \"sleep 9\" timed out. Output captured before timeout:\n\n```\nwaiting: permission denied\n```", "error", "timeout", -1, nil},
+		{"timed out without a limit", "Command \"sleep 9\" timed out. No output was captured.", "error", "timeout", -1, map[string]any{"command": "sleep 9"}},
+		{"stopped after a note", "Note: this command ran WITHOUT an OS sandbox.\n\nThe user stopped this command. No output was captured before stopping.", "error", "interrupted", -1, nil},
+		{"stopped", "The user stopped this command. No output was captured before stopping.\n\nSince the user intentionally interrupted this command, ask them what they would like to do next.", "error", "interrupted", -1, nil},
+		{"terminated", "Command terminated unexpectedly. Output captured:\n\n```\nhalf\n```", "error", "", -1, nil},
+		{"an older release's failure", "Command failed or was interrupted.\nPartial output captured:\n\n```\nhalf\n```", "error", "", -1, nil},
+	} {
+		messages := []MessageRecord{}
+		add := func(message MessageRecord) { messages = append(messages, message) }
+		input := test.input
+		if input == nil {
+			input = map[string]any{"command": "make", "timeout_ms": 9000}
+		}
+		(&zedAdapter{}).tool(MessageRecord{NativeID: "call"}, "call", "terminal", input,
+			map[string]any{"tool_name": "terminal", "is_error": false, "content": test.content}, add)
+		_, calls := buildToolLedger(messages, "test")
+		if len(calls) != 1 {
+			t.Fatalf("%s: calls = %+v", test.name, calls)
+		}
+		call := calls[0]
+		exit := int64(-1)
+		if call.ExitCode != nil {
+			exit = *call.ExitCode
+		}
+		if call.Status != test.status || exit != test.exit || (test.errorType != "" && call.ErrorType != test.errorType) {
+			t.Errorf("%s: status %s, exit %d, error %s (%s)", test.name, call.Status, exit, call.ErrorType, messages[1].Text)
+		}
 	}
 }
 
