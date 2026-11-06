@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { queryRequest } from "./query-request";
+import { queryRow } from "./query-transport";
+import { loadSchema } from "@pythia-software/query-table-core";
+import mcpSchema from "../../schemas/mcp_calls.schema.json";
 
 export type MCPCall = { id: number; called_at: string; tool_name: string; arguments_json: string; status: string; error_text: string | null; duration_ms: number; response_bytes: number; estimated_output_tokens: number; result_count: number | null; truncated: boolean };
 
 // Table rows contain only the selected columns. Detail fields must be loaded
 // by identity, independently of the current column selection or saved view.
 export async function loadMCPCall(id: string, signal?: AbortSignal): Promise<MCPCall> {
-  const { row } = await queryRequest<{ row: MCPCall | null }>(`/api/query/mcp_calls/item?id=${encodeURIComponent(id)}`, { signal });
+  const row = await queryRow<MCPCall>("mcp_calls", loadSchema<MCPCall>(mcpSchema), id, signal);
   if (!row) throw new Error("This MCP call is no longer available. Only the latest 5,000 calls are retained.");
   return row;
 }

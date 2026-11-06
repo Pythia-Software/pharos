@@ -8,6 +8,13 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+Main agent: delegate broad repository exploration to one read-only subagent
+(Claude Code: Explore; Codex: spawn_agent) when available. Request a short
+summary of relevant files, symbols, tests, and suggested edit points, then
+implement from it; reread only what editing or verification needs. Keep small
+lookups local; if delegation is unavailable, use targeted searches.
+Prefer a subagent with the same model and effort level as the main agent.
+
 Split long tasks. Past a few hundred requests, write a short handoff in
 `.context/` (what's done, what's next, where things are) and continue in a
 fresh session.
@@ -70,6 +77,17 @@ not opt-outs. See `docs/url-view-state.md` and the JSON-inspector handoff.
 
 Do not build frontend bundles concurrently with Go compilation; Go embeds
 those files. Finish the build before starting Go checks.
+
+## Dashboard card defaults
+
+Dashboard card creation must derive its default title and context from the saved
+target's current controls and filters through `dashboardCardMetadata`. Catalog
+dashboards inherit `dashboard-card-copy.ts`; new bespoke targets must supply
+standalone names and describe the inputs their previews actually use. Keep the
+page heading and Card Library defaults on those same naming functions. Preserve
+author edits when switching targets or changing cover controls. Extend the
+discovered-target and control-change cases in `dashboard-card.test.mjs`; do not
+copy a static page heading or generic topic description into a creation path.
 
 ## Running tests
 
@@ -188,7 +206,8 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   - `slowTest(t)` for a test that takes seconds, so that `-short` skips it.
 
   `TestMain` keeps tests off this Mac: no `ioreg`, `scutil`, `diskutil` or
-  GitHub, no user git configuration, and catalogs without drive flushes.
+  GitHub, no user git configuration, and disposable files and catalogs without
+  drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
 - **Go tests run in several processes, one test at a time in each.**

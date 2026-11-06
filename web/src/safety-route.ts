@@ -1,3 +1,4 @@
+import { fitQueryToScreen } from "./query-fit";
 import { EMPTY_QUERY, encodeQuery, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
 export const safetyViews = ["", "table", "settings"] as const;
 export type SafetyView = typeof safetyViews[number];
@@ -23,7 +24,7 @@ export function safetyCheckTableURL(rule: string, { state, target }: { state?: s
   if (target) where.push({ field: "target", op: "=", value: target });
   const select = [{ field: "subject", width: 340 }, { field: "command", width: 400 }, ...target ? [] : [{ field: "target_label", width: 130 }], { field: "last_seen_at", width: 110 }, ...state ? [] : [{ field: "state", width: 110 }], { field: "cwd", width: 240 }];
   const url = new URL(safetyURL("table"), "http://localhost");
-  url.searchParams.set("q_safety", encodeQuery({ ...EMPTY_QUERY, where, orderBy: [{ field: "subject", dir: "asc" }], select, fitToScreen: true }));
+  url.searchParams.set("q_safety", encodeQuery(fitQueryToScreen({ ...EMPTY_QUERY, where, orderBy: [{ field: "subject", dir: "asc" }], select })));
   url.searchParams.set("query_layout", JSON.stringify({ safety: true }));
   return url.pathname + url.search;
 }

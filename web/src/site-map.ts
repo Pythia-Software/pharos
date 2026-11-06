@@ -1,9 +1,11 @@
+import {peopleMessageLabelCatalog} from "./people-message-labels";
 import {messageLabelConversationQuery,messageLabelResultParameters} from "./message-label-results-model";
 import { cardNavigationURL } from "./card-exploration";
 import controlAudit from "../../docs/view-controls.json";
 import { usageDetailsSchema } from "./usage-row-model";
 import { jsonInspectionTemplate } from "./query-inspection-contract";
 import { usageQuerySchema,usageActionQuery,fittedDefaultQuery } from "./usage-query-columns";
+import { withFingerprintColumn } from "./fingerprint-columns";
 import { viewContract } from "./view-contract";
 import { supportsToday } from "./curiosity-data";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, isFilterable, loadSchema, opsForField, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
@@ -29,7 +31,7 @@ import { emptyTextSearch, newRule, ruleLabels, scopes } from "./text-search-mode
 import { freshSearch } from "./search-composer-state";
 import { libraryHostParameters } from "./host-query-state";
 import { recordKeywordParameter } from "./record-keyword-model";
-import { appSections, findingsPages, safetyPages } from "./app-navigation-model";
+import { appSections, findingsPages, fixesPages, safetyPages } from "./app-navigation-model";
 import { idSources, legacyRoutes, optionalSettingsPages, pageDescriptions, readerParams, siteSections } from "./site-routes";
 import { schemaDocuments } from "./schema-documents";
 
@@ -53,7 +55,7 @@ const fail = (message: string): never => { throw new Error(`site map: ${message}
 
 // ----- Datasets ----------------------------------------------------------------
 
-export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, loadSchema(document)])) as Record<QueryDataset, FieldSchema>;
+export const siteSchemas = Object.fromEntries(Object.entries(schemaDocuments).map(([name, document]) => [name, withFingerprintColumn(loadSchema(document), name)])) as Record<QueryDataset, FieldSchema>;
 
 type FieldValue = { value: string; label?: string };
 type SiteField = { name: string; label: string; type: string; ops: string; values?: FieldValue[]; description?: string };
@@ -91,7 +93,7 @@ export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>):
   const merged = { ...dashboardDefaults[topic], ...chart } as AnalysisState;
   if (!validAnalysisState(catalog, merged)) return "invalid";
   if (merged.v !== analysisVersion || json(canonicalState(catalog, merged)) !== json(merged)) return "coercible";
-  const drawn = normalizeAnalysis(catalog, merged) as Record<string, unknown>;
+  const drawn = normalizeAnalysis(peopleMessageLabelCatalog(catalog,merged), merged) as Record<string, unknown>;
   const keys = chartKeys[(merged.view ?? "trend") as AnalysisView];
   return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
 }
@@ -152,13 +154,13 @@ type Scalar = string | number | boolean;
 type Rule = { option: string; fill?: Scalar; constraints: Array<{ given: string[]; allowed: unknown }>; fallback?: { given: string[]; values: unknown } };
 type Shape = { option: string; constraints: string[][]; fallback: string[] };
 const shape = (option: string, constraints: string[][], fallback: string[] = []): Shape => ({ option, constraints, fallback });
-const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric"]]),
-  shape("rollingOp", [["metric"]]), shape("period", [["metric", "multiple_periods"]], ["metric", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
+const trendShapes = [shape("metric", [[]]), shape("split", [["metric"]], ["metric", "self"]), shape("share", [["metric"], ["split"]]), shape("display", [["metric","split"]]),
+  shape("rollingOp", [["metric","split"]]), shape("period", [["metric", "split", "multiple_periods"]], ["metric", "split", "multiple_periods", "self"]), shape("norm", [["display"], ["share"], ["metric", "split"]])];
 const drawShapes: Record<AnalysisView, Shape[]> = {
   trend: trendShapes, trend_line: trendShapes, trend_bar: trendShapes,
-  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split"], ["unit", "metric", "reduce"]])],
-  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit"]])],
-  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit"]])],
+  compare: [shape("unit", [[]]), shape("metric", [[]]), shape("split", [["unit","metric"]]), shape("reduce", [["unit", "metric"]], ["unit", "metric"]), shape("compareAs", [["split", "unit", "metric", "reduce"]])],
+  distribution: [shape("unit", [["metric"]], ["metric"]), shape("metric", [["unit"]], ["unit"]), shape("split", [["unit","metric"]])],
+  scatter: [shape("unit", [[]]), shape("metric", [[]]), shape("metricY", [["metric"]], ["metric"]), shape("split", [["unit","metric"]])],
   cycle: [shape("unit", [[]]), shape("split", [[]]), shape("metric", [[]]), shape("cycle", [[]], ["self"]), shape("cycleOn", [["cycle"]]), shape("reduce", [["metric"]], ["metric", "self"])],
 };
 // The defaults normalizeAnalysis fills multiple_periods' inputs with.
@@ -289,7 +291,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const domains: Record<string, Scalar[]> = Object.fromEntries(allChartKeys.filter(name => !numericKeys.includes(name) && (keys.includes(name) || checked(name))).map(option => [option, domainOf(topic, defaults, option)]));
   const numeric = numericOptions(topic, view, defaults);
   const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
-    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(catalog, item.merged as AnalysisState) as Record<string, unknown> }));
+    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(peopleMessageLabelCatalog(catalog,item.merged as AnalysisState), item.merged as AnalysisState) as Record<string, unknown> }));
   const drawing = states.filter(item => item.verdict !== "invalid");
   // Each rule from the drawings: what stays, what replaces it, and the fill.
   const rules: Rule[] = [];
@@ -387,7 +389,7 @@ function dashboardFacts(topic: UsageTopic) {
     defaults: canonicalChart(views[(dashboardDefaults[topic].view ?? "trend")].defaults),
     views, ...Object.keys(unavailable).length ? { unavailable_views: unavailable } : {},
     measures: Object.fromEntries(Object.entries(catalog.measures).map(([id, measure]) => [id, { label: measure.label, unit: measure.unit, kind: trendKind(measure), additive: measure.additive, per_record_value: Boolean(measure.value), note: measure.note }])),
-    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.note ? { note: breakdown.note } : {} }])),
+    breakdowns: Object.fromEntries(Object.entries(catalog.breakdowns).map(([id, breakdown]) => [id, { label: breakdown.label, fields: breakdown.fields, ...breakdown.measures ? {measures:breakdown.measures,views:breakdown.views,source_dataset:"people_message_labels",note:"Each message counts once under its highest-confidence accepted specific label or that label's family. Groups add up to the message total. Only message-count metrics use this source."} : {}, ...breakdown.note ? { note: breakdown.note } : {} }])),
     components: Object.fromEntries(Object.entries(catalog.components ?? {}).map(([id, components]) => [id, { label: components.label, measures: components.measures, fallback: components.fallback, parts: components.parts.map(part => part.label) }])),
     units: {
       [records]: { label: catalog.records.label, plural: catalog.records.plural, note: catalog.records.note },
@@ -580,8 +582,8 @@ const thinkingOptions = (detail: boolean): Option[] => [
   ...detail ? [thinkingOption("view", "The chart. Box-plot views split by model + effort when breakdown is none.", thinkingViews)] : [],
   thinkingOption("model", "A recorded model name (model_requests.model), or all."),
   thinkingOption("effort", "A recorded effort (model_requests.effort), or all."),
+  thinkingOption("groupBy", "The breakdown: one curve, panel, box or row per group. Waiting defaults to model.", thinkingBreakdowns),
   ...detail ? [
-    thinkingOption("groupBy", "The breakdown: one panel, box or row per group.", thinkingBreakdowns),
     thinkingOption("normalization", "Distributions as shares of each group or as counts.", ["share", "count"]),
     thinkingOption("sortBy", "Group order. Effort keeps low to high, Unreported last.", [["median", "Median wait"], ["p95", "95th percentile"], ["volume", "Requests"]]),
     thinkingOption("sortDirection", "Group order direction.", [["desc", "Descending"], ["asc", "Ascending"]]),
@@ -599,7 +601,7 @@ const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "rang
 // dashboard cannot become a page that takes only filters.
 type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
-  labels:{catalog:true},
+  compaction: { catalog: true }, labels:{catalog:true},
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
   tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
   agent_experience: { catalog: true },
@@ -730,6 +732,12 @@ export function buildSiteMap(inputs: SiteInputs) {
           ...view === "table" ? { dataset: "safety", builder: "queryURL", options: [whereOption("q_safety", "safety")] } : {} });
         safety.children!.push(node.path);
       }
+      const fixes = child({ path: "findings/fixes", title: "Fixes", description: "Recurring problems agents run into that a change to guidance, environment, tools, setup or docs could prevent, grouped from agent events, with where each fix belongs, prompt baskets per place and handoff history.", route: "/findings", fixed: { optimize_area: "fixes" }, children: [] });
+      for (const page of fixesPages.slice(1)) {
+        const view = new URL(page.href!, origin).searchParams.get("view")!;
+        fixes.children!.push(add({ path: `findings/fixes/${view}`, title: page.label, description: pageDescriptions[`findings/fixes/${view}`], route: "/findings", fixed: { optimize_area: "fixes", view },
+          ...view === "table" ? { dataset: "fixes", builder: "queryURL", options: [whereOption("q_fixes", "fixes")] } : {} }).path);
+      }
     }
     if (section.path === "work") {
       node.builder = "conversationRowURL, then the delegation explorer's parameters (delegationRouteValues, empty ones left out), then explorer.";
@@ -740,7 +748,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         { name: "explorer", param: "explorer", kind: "enum", values: values(delegationTabs), default: delegationTabs[0], description: "How the delegation explorer shows sessions. Legacy explorer=parallel links open Timeline." },
         { name: "mode", param: "delegation_mode", kind: "enum", values: values(delegationModes), default: delegationModes[0], description: "Sessions as a hierarchy, or ranked by one metric." },
         { name: "sort", param: "delegation_sort", kind: "text", default: defaultDelegationSort, requires: [needs("mode", "rank")], description: "In rank mode, the metric id to rank by (the work's analysis lists them: tokens, cost, calls, errors …)." },
-        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], requires: [needs("mode", "rank")], description: "In rank mode, the session's own metric (self) or with everything below it (all)." },
+        { name: "scope", param: "delegation_scope", kind: "enum", values: values(delegationScopes), default: delegationScopes[0], description: "The hierarchy and ranking show the session's own metrics (self) or with everything below it (all)." },
         { name: "direction", param: "delegation_direction", kind: "enum", values: values(delegationDirections), default: delegationDirections[0], requires: [needs("mode", "rank")], description: "In rank mode." },
         { name: "collapsed", param: "delegation_collapsed", kind: "text", description: "Comma-separated session ids to collapse, sorted." },
         { name: "session", param: "delegation_session", kind: "text", description: "The selected session id." },
@@ -779,7 +787,7 @@ export function buildSiteMap(inputs: SiteInputs) {
     datasets, op_sets: Object.fromEntries([...opSets.keys()].map(signature => [opKey(signature), opSets.get(signature)!.ops])),
     query_state: {
       select:"Ordered columns: {field, width?, render?, display?}[]; [] uses dataset defaults.",
-      fitToScreen:"Boolean; false keeps explicit widths.",
+      fit:"Sizing: screen/content; omitted keeps widths.",
       where:"Native filter terms and AND/OR groups; timestamps can be relative (-7d, +0s).",
       orderBy:"Ordered {field, dir:asc|desc, nulls?:first|last, extract?}[]",
       limit:"Page size", offset:"Zero-based result offset",

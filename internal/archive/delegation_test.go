@@ -698,7 +698,7 @@ func TestDelegationOwnershipCyclesDoNotBreakAnalysis(t *testing.T) {
 	}
 }
 
-func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
+func TestDelegationFilesDeduplicateSuccessfulPaths(t *testing.T) {
 	c, config := testCatalog(t)
 	seedDelegation(t, c)
 	add := func(id, conv, session, name, category, status, file, absolute, repoPath, repo string) {
@@ -719,6 +719,23 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 	add("edit-other-repo", "nested", "nested-session", "Edit", "edit", "ok", "/other/a.go", "/other/a.go", "a.go", "repo-two")
 	add("edit-missing-path", "root", "embedded", "Edit", "edit", "ok", "", "", "", "")
 	add("read-excluded", "root", "root-session", "Read", "read", "ok", "/checkout-a/read.go", "", "read.go", "repo-one")
+	add("read-repeat", "root", "root-session", "Read", "read", "ok", "/checkout-a/read.go", "", "read.go", "repo-one")
+	add("read-shared", "child", "child-session", "Read", "read", "ok", "/checkout-b/read.go", "", "read.go", "repo-one")
+	add("read-second", "child", "child-session", "Read", "read", "ok", "/checkout-b/other.go", "", "other.go", "repo-one")
+	add("read-other-repo", "nested", "nested-session", "Read", "read", "ok", "/other/read.go", "", "read.go", "repo-two")
+	add("read-failed", "root", "root-session", "Read", "read", "error", "failed.go", "", "failed.go", "repo-one")
+	add("read-unconfirmed", "child", "child-session", "Read", "read", "no_result", "pending.go", "", "pending.go", "repo-one")
+	add("read-no-path", "root", "embedded", "Read", "read", "ok", "", "", "", "")
+	add("search-excluded", "root", "root-session", "Grep", "search", "ok", "search.go", "", "search.go", "repo-one")
+	add("list-ls", "root", "root-session", "LS", "read", "ok", "/checkout-a/src", "", "src", "repo-one")
+	add("list-dir", "root", "root-session", "list_dir", "read", "ok", "/checkout-a/tests", "", "tests", "repo-one")
+	add("list-directory", "child", "child-session", "list_directory", "read", "ok", "/checkout-b/docs", "", "docs", "repo-one")
+	add("list-mixed-case", "nested", "nested-session", "List_Directory", "read", "ok", "/other/lib", "", "lib", "repo-two")
+	add("list-no-path", "nested", "nested-session", "list_dir", "read", "ok", "", "", "", "")
+	add("list-shell", "root", "root-session", "Bash", "read", "ok", "/checkout-a/bin", "", "bin", "repo-one")
+	if _, err := c.DB.Exec(`UPDATE tool_calls SET command_category='list' WHERE id='list-shell'`); err != nil {
+		t.Fatal(err)
+	}
 	s, err := c.delegationSnapshot(context.Background(), "delegation-work")
 	if err != nil {
 		t.Fatal(err)
@@ -733,6 +750,11 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 		{s.ByID["nested-session"].Self["files"], 2, "partial"},
 		{s.ByID["root-session"].All["files"], 4, "partial"},
 		{s.Totals["files"], 4, "partial"},
+		{s.ByID["root-session"].Self["filesRead"], 1, "partial"},
+		{s.ByID["child-session"].Self["filesRead"], 2, "partial"},
+		{s.ByID["nested-session"].Self["filesRead"], 1, "observed"},
+		{s.ByID["root-session"].All["filesRead"], 3, "partial"},
+		{s.Totals["filesRead"], 3, "partial"},
 	} {
 		if !near(check.metric.Value, check.value) || check.metric.Quality != check.quality {
 			t.Fatalf("files metric %+v; want %v %s", check.metric, check.value, check.quality)
@@ -741,15 +763,62 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 	if s.ByID["embedded"].Self["files"].Value != nil {
 		t.Fatal("missing edit paths must remain unknown")
 	}
+	if s.ByID["embedded"].Self["filesRead"].Value != nil {
+		t.Fatal("missing read paths must remain unknown")
+	}
 	if s.Maxima["self"]["files"] != 2 || s.Maxima["all"]["files"] != 4 {
 		t.Fatal("file metrics need per-column maxima")
+	}
+	if s.Maxima["self"]["filesRead"] != 2 || s.Maxima["all"]["filesRead"] != 3 {
+		t.Fatal("directory listings must not inflate read-count maxima")
 	}
 	_, ranked := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=files&scope=all&direction=desc")
 	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "root-session" {
 		t.Fatal("file counts must support inclusive metric sorting")
 	}
+	_, ranked = delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=filesRead&scope=self&direction=desc")
+	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "child-session" {
+		t.Fatal("read counts must support self metric sorting")
+	}
 	if delegationFileKey("a.go", "", "", "", "root") == delegationFileKey("a.go", "", "", "", "child") {
 		t.Fatal("unresolved paths in different conversations must not collide")
+	}
+}
+
+func TestDelegationAgentEventsFollowMessageOwnership(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES
+ ('embedded','user',0),('launch-alias','nested-launch',0),('child-session','nested-launch',0);
+ INSERT INTO agent_events(message_id,conversation_id,source,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model) VALUES
+ ('user','root','reply','assumption',0.9,0,3,'one','','','[]','[]','test'),
+ ('user','root','reply','confusion',0.5,4,7,'two','','','[]','[]','test'),
+ ('user','root','reply','surprise',0.49,8,11,'low','','','[]','[]','test'),
+ ('nested-launch','child','thinking','assumption',0.8,0,3,'alias','','','[]','[]','test'),
+ ('nested-result','child','reply','surprise',0.9,0,3,'legacy','','','[]','[]','test'),
+ ('launch','root','reply','assumption',0.9,0,3,'root','','','[]','[]','test')`)
+	s, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		metric delegationMetric
+		want   float64
+	}{
+		{s.ByID["embedded"].Self["events"], 2},
+		{s.ByID["child-session"].Self["events"], 2},
+		{s.ByID["root-session"].Self["events"], 1},
+		{s.ByID["nested-session"].Self["events"], 0},
+		{s.ByID["root-session"].All["events"], 5},
+		{s.Totals["events"], 5},
+	} {
+		if !near(check.metric.Value, check.want) {
+			t.Fatalf("event count %+v; want %v", check.metric, check.want)
+		}
+	}
+	_, ranked := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=events&scope=all&direction=desc")
+	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "root-session" {
+		t.Fatal("agent event totals must support sorting")
 	}
 }
 

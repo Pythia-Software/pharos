@@ -74,6 +74,8 @@ func (c *Catalog) upgradeRunning() bool {
 // UpgradeSteps reports what an upgrade would do. A library indexed entirely by
 // this version has nothing pending.
 func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
+	checked := func(done int) { reportWork(ctx, "Checking required upgrades", "check", done, 7) }
+	checked(0)
 	count := func(query string, args ...any) (int64, error) {
 		var value int64
 		err := c.reader().QueryRowContext(ctx, query, args...).Scan(&value)
@@ -93,12 +95,14 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 			return nil, err
 		}
 	}
+	checked(1)
 	usage, err := count(`SELECT COUNT(*) FROM workspaces w WHERE EXISTS
 		(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id AND c.provider='claude')
 		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=w.id AND s.version=?)`, usageAttributionVersion)
 	if err != nil {
 		return nil, err
 	}
+	checked(2)
 	// Some conversations have no version to find (a Codex session whose file
 	// is gone), so the step is done once one full backfill pass completes.
 	var harness int64
@@ -110,23 +114,28 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 			return nil, err
 		}
 	}
+	checked(3)
 	instructions, err := c.pendingInstructions(ctx)
 	if err != nil {
 		return nil, err
 	}
+	checked(4)
 	reasoning, err := c.pendingReasoning(ctx)
 	if err != nil {
 		return nil, err
 	}
+	checked(5)
 	messageSearch, err := c.pendingMessageSearch(ctx)
 	if err != nil {
 		return nil, err
 	}
+	checked(6)
 	tools, err := count(`SELECT COUNT(*) FROM conversations c LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
 		WHERE s.conversation_id IS NULL OR s.version<>?`, toolLedgerVersion)
 	if err != nil {
 		return nil, err
 	}
+	checked(7)
 	state := c.upgrade()
 	state.mu.Lock()
 	defer state.mu.Unlock()

@@ -344,8 +344,13 @@ provisional; existing ideas are reused where they fit.
 - Service: `internal/archive/rhythm.go` (the `rhythm` dataset: one record per
   local hour × actor × top-level conversation) and `internal/archive/habits.go`
   (`/api/habits`: days, streaks, windows, punchcard, automations).
-- Page: `web/src/habits.tsx` (panel) over `web/src/habits-model.ts`, with
-  `habitsAnalysisCatalog` driving the standard views below it.
+- Page: `web/src/habits.tsx` over `web/src/habits-model.ts` supplies the
+  summary and automation/settings panels through `CatalogDashboard`'s
+  `before`/`after` slots. `habitsAnalysisCatalog` drives the standard chart
+  between them, independently of summary loading or failure. Chart styles,
+  inspection, range dragging, legend selection and supporting-query links
+  come from the shared dashboard components; panel button styles apply only
+  to vacation actions.
 - Settings: `pharos-habits-v1` (vacations, thresholds, engaged gap, day start), shared by the page, the menu bar and the `rhythm` records.
 - Cards: each section (streaks, calendar, punchcard, your days, pace,
   automatic runs) is a dashboard card target (`web/src/habits-card.ts`),

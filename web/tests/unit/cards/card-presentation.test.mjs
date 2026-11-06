@@ -35,12 +35,13 @@ test("a complete single-group metric becomes a value without altering its query 
   assert.equal(compactMetricPresentation(input).scalar, true, "observed zero is still a value");
 });
 test("single distributions, relationships, timelines and partial populations retain their chart", () => {
-  for (const variant of ["distribution", "paired", "calendar", "day", "partial", "limited", "null", "nonfinite"]) {
+  for (const variant of ["distribution", "paired", "calendar", "hour", "day", "week", "month", "line", "partial", "limited", "null", "nonfinite"]) {
     const input = preview(), { clause, result } = input.metrics[0];
     if (variant === "distribution") clause.distribution = { kind: "histogram", input: "[total_tokens]" };
     if (variant === "paired") clause.expressionY = "SUM([total_tokens])";
     if (variant === "calendar") clause.dateGrouping = { field: "at", interval: "hour" };
-    if (variant === "day") clause.groupBy = ["day"];
+    if (["hour", "day", "week", "month"].includes(variant)) clause.groupBy = [variant];
+    if (variant === "line") clause.display.kind = "line";
     if (variant === "partial") result.coverage = "partial";
     if (variant === "limited") result.groupCount = 10;
     if (variant === "null") result.buckets[0].value = null;

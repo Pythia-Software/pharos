@@ -632,8 +632,10 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 // 500k input tokens). The metric is the share of the scope's tokens from
 // conversations with the cause; the thresholds are fixed, so the bar does
 // not move as outliers shrink.
+// Tests lower the request threshold to exercise outliers with small fixtures.
+var runawayRequests int64 = 1000
+
 const (
-	runawayRequests    = 1000
 	runawayCompactions = 10
 	oversizedInput     = 500_000
 	// compactedInput is about the context an earlier compaction would keep.
@@ -685,7 +687,7 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 		repository := env.repositories[candidate.RepositoryID]
 		var steps []findingStep
 		if cause == "runaway" {
-			candidate.Metric.Threshold = runawayRequests
+			candidate.Metric.Threshold = float64(runawayRequests)
 			steps = []findingStep{
 				{Lever: "repo-instructions", Label: "A line in the instructions", Change: "Tell agents to split long tasks, and to write a short handoff (what's done, what's next, where things are) and start a fresh session when a task passes a few hundred requests."},
 				{Lever: "repo-tooling", Label: "A handoff skill", Change: "Add a skill that writes a checkpoint of the task's state, so a fresh session can pick it up."},
@@ -702,7 +704,7 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 			if cause == "runaway" {
 				return findingCard{Title: fmt.Sprintf("A few very long conversations in %s use much of its tokens", repository),
 					Explanation: fmt.Sprintf("%s this month ran past %s requests or %d compactions. They used %s of the repository's tokens.",
-						capitalize(countNoun(stats.Affected, "conversation")), thousands(runawayRequests), runawayCompactions, fractionPhrase(stats.Rate, "")),
+						capitalize(countNoun(stats.Affected, "conversation")), thousands(int(runawayRequests)), runawayCompactions, fractionPhrase(stats.Rate, "")),
 					ImpactNote: tokensPhrase(float64(stats.Tokens)), Steps: steps, ChartTitle: "Share of tokens from very long conversations", Rate: fractionPhrase(stats.Rate, "")}
 			}
 			return findingCard{Title: fmt.Sprintf("Conversations in %s carry very large contexts", repository),

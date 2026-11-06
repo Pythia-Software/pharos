@@ -15,6 +15,38 @@ import (
 	"time"
 )
 
+// A failed retained-file flush must be reported before replacing published
+// state, and its temporary copy must be removed. Exercise the file paths
+// whose real device flush ordinary fixtures skip.
+func TestRetainedWritePreservesPublishedFileOnFlushFailure(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		write func(string) error
+	}{
+		{"atomic file", func(path string) error { return writeFileAtomic(path, []byte("new"), 0o600) }},
+		{"capture state", func(path string) error { return writeFileDurably(path, []byte("new")) }},
+		{"library state", func(path string) error { return durableJSON(path, map[string]string{"state": "new"}) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "published")
+			if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			failure := errors.New("device flush failed")
+			override(t, &syncToDrive, func(*os.File) error { return failure })
+			if err := test.write(path); !errors.Is(err, failure) {
+				t.Fatalf("flush failure was lost: %v", err)
+			}
+			if data, err := os.ReadFile(path); err != nil || string(data) != "old" {
+				t.Fatalf("published state changed: %q, %v", data, err)
+			}
+			if files, err := os.ReadDir(filepath.Dir(path)); err != nil || len(files) != 1 {
+				t.Fatalf("unfinished copy left behind: %v, %v", files, err)
+			}
+		})
+	}
+}
+
 func walBytes(t *testing.T, catalog *Catalog) int64 {
 	t.Helper()
 	info, err := os.Stat(catalog.Path + "-wal")

@@ -115,7 +115,7 @@ function editMenuBarSettings(saved, id, destination) {
       case 'indexed': return [snapshot ? (ago(snapshot.indexed_at) ? `Indexed ${ago(snapshot.indexed_at)}` : 'Not indexed yet') : 'Checking last index…'];
       case 'words': return metric('Words typed', usage?.human_words?.toLocaleString());
       case 'tokens': return metric('Tokens used', usage && new Intl.NumberFormat(undefined, {notation: 'compact', maximumFractionDigits: 1}).format(usage.tokens));
-      case 'cost': return metric('Estimated API cost', usage && new Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD'}).format(usage.cost_usd));
+      case 'cost': return metric('Estimated API cost', usage && pharosCurrency.formatUSD(usage.cost_usd));
       case 'carbon': return metric('Estimated CO₂e', usage && `${new Intl.NumberFormat(undefined, {maximumSignificantDigits: 3}).format(usage.co2e_g >= 1000 ? usage.co2e_g / 1000 : usage.co2e_g)} ${usage.co2e_g >= 1000 ? 'kg' : 'g'}`);
       case 'streak': return metric('Your streak', usage?.streaks?.you);
       case 'agent_streak': return metric('Agent streak', usage?.streaks?.agents);

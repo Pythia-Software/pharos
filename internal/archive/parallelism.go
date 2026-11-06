@@ -295,12 +295,21 @@ func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) 
 		if err != nil {
 			return done, err
 		}
+		var pending int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM (SELECT 1 FROM parallelism_dirty LIMIT ?)", min(limit-done, parallelismBatch)).Scan(&pending); err != nil {
+			_ = tx.Rollback()
+			return done, err
+		}
+		completed := maintenanceBatch(ctx, tx, "Measuring parallel work", "conversation", pending,
+			"SELECT count(*) FROM parallelism_dirty")
 		batch, err := deriveParallelismBatch(ctx, tx, cutoff, min(limit-done, parallelismBatch))
 		_ = tx.Rollback()
 		if err != nil || len(batch) == 0 {
 			return done, err
 		}
-		if err := c.publishParallelism(ctx, batch); err != nil {
+		err = c.publishParallelism(ctx, batch)
+		completed(err)
+		if err != nil {
 			return done, err
 		}
 		done += len(batch)
@@ -887,10 +896,10 @@ func (c *Catalog) parallelismQueryRows(ctx context.Context, fields libraryFields
 }
 
 // mapRowsWhere is the row filter a map dataset may pre-select with, resolved
-// against the request's clock: the started_at window of parallelism, rhythm
-// and session_shape.
+// against the request's clock. Each source decides which predicates are safe
+// to apply before staging; the query engine still applies the full filter.
 func (s *Server) mapRowsWhere(dataset string, where []querytable.WhereTerm, clock time.Time) [][]querytable.WhereTerm {
-	if dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" || len(where) == 0 {
+	if dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" && dataset != "people_message_labels" || len(where) == 0 {
 		return nil
 	}
 	schema, err := s.queryTableSchema(dataset)

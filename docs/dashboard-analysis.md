@@ -41,6 +41,36 @@ covers; dashboard drilldowns and return navigation use the dashboard's own state
 The historical implementation phases and gap inventory below describe the audit
 that led to this adoption; consult the destination audit for current routing.
 
+## Titles and context when creating cards
+
+`dashboardCardMetadata` in `web/src/dashboard-card-model.ts` owns the defaults
+for every dashboard card target. The creation dialog reads the current chart
+and population into a URL, then derives both title and description from that
+definition. Switching targets or the card's group count updates unedited copy;
+author edits stay intact. Relative ranges keep their relative wording.
+
+Catalog dashboards share `dashboard-card-copy.ts`, which names the measure,
+view, grouping, unit and reduction, including shares, cumulative values and
+smoothing. Context describes the population filters, legend selection, range,
+thresholds and chart controls. Filter readings reuse the supporting query's
+schema labels and AND/OR/negation grammar. Defaults fit the editor's 200-character
+title and 500-character description limits; the URL retains the full definition.
+
+Habits, Thinking and the Parallelism ribbon supply their own naming and context
+functions. Habits' library recipes and page headings share the same names.
+These functions describe only inputs the target actually reads: the Habits
+summary and ribbon do not inherit the catalog chart's `analyze_filters`.
+Calendar context distinguishes the weeks visible on the card from the longer
+dashboard range. Thinking context describes the chosen grid, normalization and
+period; ribbon context includes counting, activity mode, gap and date selection.
+
+New catalogs inherit this behavior. New bespoke targets must supply meaningful
+standalone names and context through the same contract. The discovered-target
+matrix in `web/tests/unit/cards/dashboard-card.test.mjs` exercises registered
+catalog measures/views and all Thinking views/breakdowns; targeted cases check
+controls, predicates, Habits selectors, limits and relative windows. Extend these
+cases when adding a new target or control.
+
 ## Today and Last 24 hours
 
 Today runs from midnight in the viewing Mac's local timezone to the current
@@ -120,9 +150,15 @@ what each offers and why.
 - **Component breakdowns** (optional, `components`). These split a measure
   into its additive parts, which are fields rather than groups of records:
   Tokens' "Token type" is uncached input, cache reads, cache writes, output
-  and unclassified tokens. Each lists the `measures` it splits and a
+  and unclassified tokens. "Input token type" partitions input into uncached
+  input, cache reads and cache writes. Each lists the `measures` it splits and a
   `fallback` breakdown for any other measure (cost by token type shows
-  providers, as the Usage chart always has). Only the trend draws them.
+  providers, as the Usage chart always has). The trend draws them per period;
+  Compare groups with Count each set to records draws totals across the selected
+  range. Show as → Share of total draws those parts as a pie covering 100% of
+  the selected measure. Minimum sample thresholds do not remove components.
+  Selecting parts preserves the remaining total as Other. A slice opens records
+  with a positive amount of that component. Missing or partial totals are errors.
   A component breakdown may be **derived** (`derived`): its parts are
   computed rather than summed. The trend queries the summed `inputs.fields`
   per period, grouped further by `inputs.groupBy`, and `derive(totals,
@@ -350,7 +386,9 @@ can:
   count, mean, median or largest of units is another quantity, so
   `trendUnavailable` disables Over time for it, the View control shows the
   reason, and `switchView` leaves the state unchanged. A breakdown carries
-  across; a component breakdown becomes `none` in the other views.
+  across. A summed component breakdown also carries between Over time and
+  Compare groups; distribution and scatter need record fields, so use `none`.
+  Derived components remain available over time.
 
 ### Selections and links
 
@@ -770,7 +808,7 @@ around it. Its default view is the one it always opened on.
   conversations (distinct), the typed share of words (pooled), typed words
   per message with typed text (a conditional ratio), and the share of
   messages with copied text (a conditional ratio). Text source is a component breakdown of all user
-  words into the page's five groups (typed, likely pasted, copied or
+  words into five groups (typed, likely pasted, copied or
   re-sent, templates and attachments, harness and automation); Typed words
   by Text source is one total. Breakdowns: repository, app, provider, the
   three origin fields and the main category. Units: a conversation, and a
@@ -780,9 +818,11 @@ around it. Its default view is the one it always opened on.
   `channels`, `machines` and `providers` of a whole work become the
   message's own field, which adds up across groups. The dashboard keeps the
   authorship status (a finished classification reruns its queries), the
-  summary, the note on typed versus supplied text, and the message mix
-  (`MessageMix`, which shares words: messages carry no per-source
-  characters). The `writing` dataset stays a query table and the legacy
+  summary and the note on typed versus supplied text. The primary chart
+  offers Text category for all eight authorship categories, including as a
+  pie under Compare groups → All user words → Text category → Share of total.
+  These are shares of classified words; messages carry no per-source tokens.
+  The `writing` dataset stays a query table and the legacy
   page's chart; no card needs it as a unit source, since `work_id` on
   messages is the same work.
 - **Carbon** (`carbon-analysis-catalog.ts`). Usage records, as in Tokens

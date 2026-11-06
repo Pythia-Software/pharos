@@ -143,7 +143,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 		return nil, err
 	}
 	// Agent events (agent_events.go).
-	attachEvents, eventsSummary, err := c.agentEventsAttacher(conversationID)
+	attachEvents, eventsSummary, linkEvents, err := c.agentEventsAttacher(conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +184,7 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 	for _, message := range messages {
 		delete(message, "source_order")
 	}
+	linkEvents(messages)
 	if labels, err := labelsSummary(); err != nil {
 		return nil, err
 	} else if labels != nil {
