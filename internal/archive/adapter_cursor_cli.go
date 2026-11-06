@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -285,10 +287,17 @@ type cursorCLIRoot struct {
 
 // cursorCLIParseRoot reads a root (protoFields): field 1 lists its
 // messages' blob IDs, 5 the context meter (tokens used, then the window),
-// 8 its turns' blob IDs (cursorCLITurnTimes) and 9 the folder's URI. A blob that is not a root, as it lists no message
-// or anything but message IDs, is reported as nil.
+// 8 its turns' blob IDs (cursorCLITurnTimes) and 9 the folder's URI. A blob
+// that is not a root, as it lists no message or anything but message IDs, is
+// reported as nil. So is a prompt's blob, which a root never is: it holds its
+// text in field 1 and its message ID in field 2, a field roots do not have.
+// A reply step can hold 32 bytes in field 1 too; it is told apart by the turn
+// that names it (cursorCLITurnBlobs).
 func cursorCLIParseRoot(data []byte) *cursorCLIRoot {
 	fields := protoFields(data)
+	if len(fields[2]) > 0 {
+		return nil
+	}
 	root := &cursorCLIRoot{}
 	for _, value := range fields[1] {
 		id, ok := value.([]byte)
@@ -319,10 +328,68 @@ func cursorCLIParseRoot(data []byte) *cursorCLIRoot {
 
 // cursorCLITimes are when a chat's turns record their parts happened: each
 // prompt and reply by its text, in order for a text sent again, and each
-// call's start and end by its ID.
+// call's start and end by its ID. thoughts is the readable thinking the turns
+// keep, by what follows it (cursorCLIAnchor).
 type cursorCLITimes struct {
 	prompts, replies map[string][]string
 	calls            map[string][2]string
+	thoughts         map[string][]cursorCLIThought
+}
+
+// cursorCLIThought is a thinking step's text and when it began.
+type cursorCLIThought struct{ text, at string }
+
+// cursorCLIAnchor is what a thinking step leads to, so where its text goes:
+// the call it is followed by, by its ID, else the reply, by its text.
+func cursorCLIAnchor(call, reply string) string {
+	if call != "" {
+		return "call:" + call
+	}
+	return "reply:" + strings.TrimSpace(reply)
+}
+
+// thought is the thinking the turns keep for the reasoning part that
+// parts, a reply's content, holds at index: that of the step followed by
+// the reply's next text or call, the first not yet taken for it. A part
+// followed by neither has none.
+func (t cursorCLITimes) thought(parts []any, index int) (cursorCLIThought, bool) {
+	for _, part := range parts[index+1:] {
+		part := mapValueDefault(part)
+		anchor := ""
+		switch firstString(part["type"]) {
+		case "tool-call":
+			anchor = cursorCLIAnchor(firstString(part["toolCallId"]), "")
+		case "text":
+			if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
+				anchor = cursorCLIAnchor("", text)
+			}
+		}
+		if anchor == "" {
+			continue
+		}
+		list := t.thoughts[anchor]
+		if len(list) == 0 {
+			return cursorCLIThought{}, false
+		}
+		t.thoughts[anchor] = list[1:]
+		return list[0], true
+	}
+	return cursorCLIThought{}, false
+}
+
+// cursorCLITurnBlobs are the blob IDs a turn (field 1, an agent's turn)
+// names: its prompt's (1) and its steps' (2), in order.
+func cursorCLITurnBlobs(data []byte) (prompt string, steps []string) {
+	turn := protoFields(protoBytes(protoFields(data)[1]))
+	if id, ok := protoLast(turn[1]).([]byte); ok {
+		prompt = hex.EncodeToString(id)
+	}
+	for _, value := range turn[2] {
+		if id, ok := value.([]byte); ok {
+			steps = append(steps, hex.EncodeToString(id))
+		}
+	}
+	return prompt, steps
 }
 
 // next is the first time not yet taken for text in queue.
@@ -336,21 +403,21 @@ func (t cursorCLITimes) next(queue map[string][]string, text string) string {
 	return list[0]
 }
 
-// cursorCLITurnTimes reads the turns roots list. A turn blob's field 1
-// holds the prompt's blob ID (1) and its steps' (2). The prompt's blob holds
-// its text (1) and when it was sent (25, in ms); a step is a reply {1 text,
-// 2 started}, a tool call {57 call ID, 59 started, 60 ended}, or thinking.
+// cursorCLITurnTimes reads the turns roots list (cursorCLITurnBlobs). The
+// prompt's blob holds its text (1) and when it was sent (25, in ms); a step
+// (ConversationStep) is a reply (1: {1 text, 2 started}), a tool call (2:
+// {57 call ID, 59 started, 60 ended}) or thinking (3: {1 text, 3 started}).
+// Cursor keeps a model call's thinking only encrypted in its reply, but as
+// text in the step before the reply or call it led to, so a thinking step is
+// kept by the step that follows it; one followed by more thinking, or ending
+// the turn, cannot be told apart from its neighbour's and is not kept.
 func cursorCLITurnTimes(blobs map[string][]byte, roots []*cursorCLIRoot) cursorCLITimes {
-	times := cursorCLITimes{prompts: map[string][]string{}, replies: map[string][]string{}, calls: map[string][2]string{}}
+	times := cursorCLITimes{prompts: map[string][]string{}, replies: map[string][]string{}, calls: map[string][2]string{}, thoughts: map[string][]cursorCLIThought{}}
 	at := func(values []any) string {
 		if ms, ok := protoLast(values).(uint64); ok && ms > 0 {
 			return cursorCLITime(int64(ms))
 		}
 		return ""
-	}
-	blob := func(value any) map[int][]any {
-		id, _ := value.([]byte)
-		return protoFields(blobs[hex.EncodeToString(id)])
 	}
 	seen := map[string]bool{}
 	for _, root := range roots {
@@ -359,22 +426,37 @@ func cursorCLITurnTimes(blobs map[string][]byte, roots []*cursorCLIRoot) cursorC
 				continue
 			}
 			seen[id] = true
-			turn := protoFields(protoBytes(protoFields(blobs[id])[1]))
-			prompt := blob(protoLast(turn[1]))
+			promptID, steps := cursorCLITurnBlobs(blobs[id])
+			prompt := protoFields(blobs[promptID])
 			if text, sent := strings.TrimSpace(string(protoBytes(prompt[1]))), at(prompt[25]); text != "" && sent != "" {
 				times.prompts[text] = append(times.prompts[text], sent)
 			}
-			for _, value := range turn[2] {
-				step := blob(value)
+			var thought *cursorCLIThought
+			for _, stepID := range steps {
+				step, anchor := protoFields(blobs[stepID]), ""
 				if reply := protoFields(protoBytes(step[1])); len(reply) > 0 {
-					if text, started := strings.TrimSpace(string(protoBytes(reply[1]))), at(reply[2]); text != "" && started != "" {
+					text := strings.TrimSpace(string(protoBytes(reply[1])))
+					if started := at(reply[2]); text != "" && started != "" {
 						times.replies[text] = append(times.replies[text], started)
+					}
+					if text != "" {
+						anchor = cursorCLIAnchor("", text)
 					}
 				} else if call := protoFields(protoBytes(step[2])); len(call) > 0 {
 					if id := string(protoBytes(call[57])); id != "" {
 						times.calls[id] = [2]string{at(call[59]), at(call[60])}
+						anchor = cursorCLIAnchor(id, "")
+					}
+				} else if thinking := protoFields(protoBytes(step[3])); len(thinking) > 0 {
+					if text := string(protoBytes(thinking[1])); strings.TrimSpace(text) != "" {
+						thought = &cursorCLIThought{text: text, at: at(thinking[3])}
+						continue
 					}
 				}
+				if thought != nil && anchor != "" {
+					times.thoughts[anchor] = append(times.thoughts[anchor], *thought)
+				}
+				thought = nil
 			}
 		}
 	}
@@ -465,15 +547,28 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 	isMessage := func(id string) bool { data := blobs[id]; return len(data) > 0 && data[0] == '{' }
 	latest := strings.ToLower(firstString(meta["latestRootBlobId"]))
 	root := cursorCLIParseRoot(blobs[latest])
-	older := []*cursorCLIRoot{}
+	candidates := map[string]*cursorCLIRoot{}
 	for id, data := range blobs {
 		if id == latest || isMessage(id) {
 			continue
 		}
 		if candidate := cursorCLIParseRoot(data); candidate != nil {
-			older = append(older, candidate)
+			candidates[id] = candidate
 		}
 	}
+	// What a turn names, its prompt and steps, is not a root.
+	for _, candidate := range append([]*cursorCLIRoot{root}, slices.Collect(maps.Values(candidates))...) {
+		if candidate == nil {
+			continue
+		}
+		for _, turn := range candidate.turns {
+			prompt, steps := cursorCLITurnBlobs(blobs[turn])
+			for _, id := range append(steps, prompt) {
+				delete(candidates, id)
+			}
+		}
+	}
+	older := slices.Collect(maps.Values(candidates))
 	sort.SliceStable(older, func(i, j int) bool {
 		if len(older[i].messages) != len(older[j].messages) {
 			return len(older[i].messages) < len(older[j].messages)
@@ -646,8 +741,14 @@ func (a *cursorCLIAdapter) record(chat cursorCLIChat, meta, extra map[string]any
 				item.NativeID, item.Model = message.id+":"+strconv.Itoa(index), current
 				switch firstString(part["type"]) {
 				case "reasoning":
+					// The thinking is kept as text in the turn's steps; the
+					// reply holds it only encrypted.
+					thought, found := times.thought(parts, index)
 					if text := firstString(part["text"]); strings.TrimSpace(text) != "" {
 						add(reasoningRecord(item, text, "text", ""))
+					} else if found {
+						item.CreatedAt = defaultString(thought.at, item.CreatedAt)
+						add(reasoningRecord(item, thought.text, "text", ""))
 					} else if firstString(part["signature"]) != "" {
 						add(reasoningRecord(item, "", "", "encrypted"))
 					}
