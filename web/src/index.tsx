@@ -1,4 +1,5 @@
 import { formatUSD } from "./currency";
+import { installOverflowTitles } from "./overflow-tooltip";
 import { fitQueryToScreen } from "./query-fit";
 import { queryRow } from "./query-transport";
 import {messageLabelLegacyURL} from "./message-label-legacy";
@@ -295,7 +296,7 @@ const renderers: RenderRegistry<Row> = {
     const keys = query?.grouping ? groupKeyFields(query.grouping.keys) : null;
     const work = row.workspace_id ?? (!keys || keys.includes("id") ? row.id : undefined);
     if (work == null || work === "") return String(value ?? "Untitled work");
-    return <button className="qt-work-link" title={String(value ?? "")} onClick={(event) => {
+    return <button className="qt-work-link" data-overflow-title="" onClick={(event) => {
       event.stopPropagation();
       window.pharosOpenDetail?.(String(work));
     }}>{String(value ?? "Untitled work")}</button>;
@@ -306,14 +307,14 @@ const renderers: RenderRegistry<Row> = {
     return <span className="qt-pr-list">{prs.map((pr, index) => {
       const label = pullRequestLabel(pr);
       const url = pullRequestURL(pr, row.canonical_remote);
-      return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={label} onClick={event => event.stopPropagation()}>{label}</a>
-        : <span key={`${pr.host}:${pr.number}:${index}`} title={label}>{label}</span>;
+      return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>{label}</a>
+        : <span key={`${pr.host}:${pr.number}:${index}`}>{label}</span>;
     })}</span>;
   },
   conversation_link(context: CellContext<Row>) {
     const id = String(context.value ?? "");
     if (!id) return defaultRenderers.text(context);
-    return <a className="qt-conversation-link" href={`/conversation/${encodeURIComponent(id)}`} title={`Open conversation ${id}`} onClick={event => {
+    return <a className="qt-conversation-link" data-overflow-title="" href={`/conversation/${encodeURIComponent(id)}`} onClick={event => {
       event.stopPropagation();
       if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
@@ -1531,6 +1532,7 @@ function ToolLedgerBanner() {
   </div>;
 }
 
+installOverflowTitles(document);
 installAppNavigation();
 
 const dataGuideHost = document.createElement("div");

@@ -156,8 +156,7 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
 function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
  const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
  const inspector=useRibbonInspector();
- const fullName=[props.outline,props.name].filter(Boolean).join(' · ');
- const identity=root?<SessionIdentity name={props.name} outline={props.outline} metadata={props.metadata} depth={props.depth} branch={props.branch} folded={!!props.foldControl} current={props.current} openSession={props.openSession} title={`${fullName}\n${props.metadata}`}/>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
+ const identity=root?<SessionIdentity name={props.name} outline={props.outline} metadata={props.metadata} depth={props.depth} branch={props.branch} folded={!!props.foldControl} current={props.current} openSession={props.openSession}/>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
  const icons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
  // An Agent events row draws only its own events (with their arcs).
  const ownEvents=node.id==='events'||node.id.startsWith('events:')?new Set(node.items.flatMap(item=>item.event?[item.event.id]:[])):null;

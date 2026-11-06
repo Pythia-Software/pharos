@@ -7969,15 +7969,6 @@
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
     },
     {
-      "key": "59b4e8b59a53da9e:0",
-      "file": "web/src/thinking-dashboard.tsx",
-      "owner": "ThinkingDashboard",
-      "tag": "ChartSelect",
-      "control": "value={state.groupBy} onChange={(groupBy) => change({ groupBy: groupBy as ThinkingState[\"groupBy\"] }) }",
-      "contract": "view.thinking",
-      "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
-    },
-    {
       "key": "5d6904418ef58251:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -8059,6 +8050,15 @@
       "control": "value={state.effort} onChange={(effort) => change({ effort })}",
       "contract": "view.thinking",
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
+    },
+    {
+      "key": "bd85a04f4d5b42a4:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "ChartSelect",
+      "control": "value={!detail && state.groupBy === \"none\" ? \"model\" : state.groupBy} onChange={(groupBy) => change({ groupBy: groupBy as ThinkingState[\"groupBy\"] }) }",
+      "contract": "view.thinking",
+      "reason": "Breakdown on Waiting and Thinking writes thinking.groupBy through the shared useViewState binding; legacy none displays Waiting’s effective model default."
     },
     {
       "key": "c64385755bdd4887:0",

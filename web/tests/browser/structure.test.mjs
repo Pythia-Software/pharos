@@ -280,7 +280,9 @@ const ROUTES = [
   })),
   // The unified activity panel, idle and busy, in the browser and in the app
   // (other libraries).
-  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true]].map(([state, snapshot, managed]) => ({
+  ...[['idle', idleStatus, false], ['busy', busyStatus, false], ['busy in the app', busyStatus, true],
+    ['partial rates', {...busyStatus, resources: {...busyStatus.resources, cpu_partial: true, disk_partial: true, gpu: {...busyStatus.resources.gpu, partial: true}}}, false],
+  ].map(([state, snapshot, managed]) => ({
     name: `Unified activity panel ${state}`, url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
     managedLibrary: managed ? {id: 'local', name: 'Pending history', config: '/Users/test/Libraries/Pending/library.toml'} : null,
     api: managed ? {'GET /api/app/status/stream': eventStream(managedStatus(snapshot)), 'GET /api/app/status': managedStatus(snapshot)}
@@ -296,6 +298,13 @@ const ROUTES = [
         return cells.every(cell => Math.abs(cell.top - cells[0].top) < 1) && row.scrollWidth <= row.clientWidth;
       });
       assert.ok(oneLine, 'the resource metrics fit on one line');
+      if (state === 'partial rates') {
+        for (const id of ['cpu', 'gpu', 'io']) {
+          const cell = page.locator(`#pharosStatusPanel [data-key="load:${id}"]`);
+          assert.match(await cell.innerText(), /≥/, 'the undercount qualifier is visible');
+          assert.match(await cell.getAttribute('title'), /may undercount/, 'hover explains partial measurements');
+        }
+      }
     }, shown: '#pharosStatusPanel .pharos-status-items li',
   })),
   { name: "Unified activity panel background task", url: '/library?view=table', ready: '#queryTableLibrary .qt-row',
@@ -1160,6 +1169,55 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
   assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
 });
 
+
+test("clipped labels reveal hidden text and stop repeating it when they fit", { skip }, async t => {
+  const names = ["repository/shared-prefix-branch-name/feature-one", "repository/shared-prefix-branch-name/feature-two"];
+  const {page} = await open(t, {url: "/cards?cards=library&card_search=human-repository-words-trend", ready: ".query-chart-legend",
+    api: {"* /api/query/:dataset/:operation": call => {
+      const response = defaultApi["* /api/query/:dataset/:operation"](call);
+      if (!response?.metrics) return response;
+      return {...response, metrics: response.metrics.map(metric => {
+        const clause = call.body?.metrics?.find(clause => clause.id === metric.id);
+        if (!clause?.groupBy?.includes("repository_name") || !clause.groupBy.includes("day")) return metric;
+        const days = [...new Set(metric.buckets.map(bucket => bucket.keys[clause.groupBy.indexOf("day")]))];
+        const buckets = days.flatMap(day => names.map(name => ({keys: clause.groupBy.map(field => field === "day" ? day : name), value: 42, count: 1})));
+        return {...metric, buckets, groupCount: buckets.length};
+      })};
+    }},
+  });
+  const legend = page.locator(".query-chart-legend").first();
+  await legend.evaluate(element => {element.closest('.query-card').style.transform = 'rotate(2deg)';});
+  await legend.evaluate(element => {element.style.width = "160px";});
+  for (const name of names) {
+    const item = legend.locator("[data-chart-tooltip-label]").filter({hasText: name});
+    await item.hover();
+    await page.waitForFunction(name => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(name), name);
+  }
+  await legend.evaluate(element => {element.style.width = "100%";element.style.gridTemplateColumns = "1fr";});
+  await legend.locator("[data-chart-tooltip-label]").first().hover();
+  await page.waitForFunction(() => !document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])'));
+
+  // Classic labels, session names and inline work-preview parts use the same
+  // opt-in runtime; exercise single-line, ancestor and multiline clipping.
+  await page.evaluate(() => {
+    const host = document.createElement("div");host.id = "overflow-fixture";
+    host.style.cssText = "position:fixed;top:120px;left:10px;width:90px;z-index:20000;background:white";
+    host.innerHTML = '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span data-overflow-title>Repository with a hidden branch suffix</span></div><div data-overflow-title style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">A session title that wraps across several lines and has a hidden final suffix</div>';
+    document.body.append(host);
+  });
+  const labels = page.locator("#overflow-fixture [data-overflow-title]");
+  for (const label of await labels.all()) {
+    await label.hover({position: {x: 4, y: 4}});
+    assert.equal(await label.getAttribute("title"), await label.textContent(), "clipped text is available on hover");
+  }
+  // Resize while still hovered: the last label now fits, so help disappears.
+  await page.locator("#overflow-fixture").evaluate(element => {element.style.width = "1200px";});
+  await page.waitForFunction(() => !document.querySelector("#overflow-fixture > [data-overflow-title]").hasAttribute("title"));
+  for (const label of await labels.all()) {
+    await label.hover({position: {x: 4, y: 4}});
+    assert.equal(await label.getAttribute("title"), null);
+  }
+});
 
 test("Card Library timeline ticks fit full dollar amounts", { skip }, async t => {
   let suppliedLargeCosts = false;

@@ -779,8 +779,8 @@
     content.append(dot, name);
     updateLiveChildren(target, content);
     target.dataset.state = !status ? 'unavailable' : status.idle ? 'idle' : 'busy';
-    target.title = `${name.textContent}: ${state}`;
-    target.setAttribute('aria-label', `Library drive: ${target.title}`);
+    target.title = state;
+    target.setAttribute('aria-label', `Library drive: ${name.textContent}: ${state}`);
   }
 
   function placePanel() {
