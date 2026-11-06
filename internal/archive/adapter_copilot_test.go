@@ -503,8 +503,8 @@ const copilotNewerEvents = `{"type":"session.start","data":{"sessionId":"sess-n"
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":300,"outputTokens":20,"apiCallId":"api-5"}},"id":"n23","timestamp":"2026-11-04T10:00:11.000Z"}
 {"type":"assistant.message","data":{"messageId":"m6","apiCallId":"api-5","model":"gpt-6-sol","content":"Reset."},"id":"n24","timestamp":"2026-11-04T10:00:11.100Z"}
 {"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":20,"reasoningEffort":"low","apiCallId":"api-6"}},"id":"n25","timestamp":"2026-11-04T10:00:12.000Z"}
-{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":30,"reasoningEffort":"high","apiCallId":"api-6"}},"id":"n26","timestamp":"2026-11-04T10:00:12.500Z"}
-{"type":"assistant.message","data":{"messageId":"m7","apiCallId":"api-6","model":"gpt-6-sol","content":"Done."},"id":"n27","timestamp":"2026-11-04T10:00:13.000Z"}
+{"type":"assistant.message","data":{"messageId":"m7","apiCallId":"api-6","model":"gpt-6-sol","content":"Done.","toolRequests":[{"toolCallId":"c7","name":"bash","arguments":{"command":"make"}}]},"id":"n27","timestamp":"2026-11-04T10:00:12.200Z"}
+{"type":"session.usage_record","data":{"usage":{"model":"gpt-6-sol","inputTokens":400,"outputTokens":30,"reasoningEffort":"high","apiCallId":"api-6"}},"id":"n26","timestamp":"2026-11-04T10:00:13.000Z"}
 `
 
 func TestCopilotNewerEventShapes(t *testing.T) {
@@ -538,8 +538,9 @@ func TestCopilotNewerEventShapes(t *testing.T) {
 	if byID["m1"].Effort != "high" || byID["m6"].Effort != "" {
 		t.Fatalf("efforts: m1 %q m6 %q", byID["m1"].Effort, byID["m6"].Effort)
 	}
-	if receipt := byID["m7:usage"]; receipt.Effort != "high" {
-		t.Fatalf("corrected receipt = %+v", receipt)
+	// A receipt's corrected effort reaches the request's message and calls.
+	if receipt, call := byID["m7:usage"], byID["m7:block:0"]; receipt.Effort != "high" || byID["m7"].Effort != "high" || call.Effort != "high" {
+		t.Fatalf("corrected receipt = %+v, call %+v", receipt, call)
 	}
 	// The inner subagent belongs to the one that started it.
 	if inner, outer := conversations["inner"], conversations["outer"]; inner.ParentNativeID != "outer" || inner.AgentDepth != 2 || outer.ParentNativeID != "sess-n" || outer.AgentDepth != 1 {
@@ -552,7 +553,8 @@ func TestCopilotNewerEventShapes(t *testing.T) {
 	for _, call := range calls {
 		cost[call.CallID] = call.OutputTokens
 	}
-	if _, ran := cost["c5"]; cost["c1"] != 30 || cost["c2"] != 30 || !ran {
+	// The person's own run took no request's output.
+	if spent, ran := cost["c5"]; cost["c1"] != 30 || cost["c2"] != 30 || !ran || spent != 0 {
 		t.Fatalf("tool costs %v", cost)
 	}
 	if compaction := byID["n17"]; !isCompactionMarker(compaction) || !strings.Contains(compaction.Text, "Inspected q.sql.") {
