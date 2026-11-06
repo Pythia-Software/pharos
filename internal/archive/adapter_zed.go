@@ -463,6 +463,12 @@ func (a *zedAdapter) conversation(origin, id string, row, thread map[string]any)
 	}
 	// Zed keeps no time per message: each takes the thread's start.
 	base := MessageRecord{Model: conversation.Model, CreatedAt: started, Selected: true}
+	// Fast mode is the thread's setting now, which Zed sends as Anthropic's
+	// speed or OpenAI's priority tier; null, for a model without it, records
+	// nothing.
+	if config, _ := inferenceSetting(map[string]any{"speed": thread["speed"]}); config.Source == speedFromField {
+		base = withInference(base, config)
+	}
 	add := func(item MessageRecord) { conversation.Messages = append(conversation.Messages, item) }
 	locator := func(native string) string { return fmt.Sprintf("%s#%s:%s", origin, id, native) }
 	seen := map[string]bool{}

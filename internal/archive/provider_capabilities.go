@@ -21,6 +21,7 @@ var contentCapabilityList = []contentCapability{
 	{"git_branch", "Git branch", "The branch it worked on."},                                     // WorkspaceRecord.Metadata["branch"]
 	{"model", "Model", "The model that replied."},                                                // Model on conversations and messages
 	{"effort", "Effort", "The reasoning effort chosen."},                                         // Effort on conversations and messages
+	{"speed", "Speed", "Whether a request ran in fast mode. Without it, it counts as standard."}, // Speed and ServiceTier on messages
 	{"message_tokens", "Token usage", "The tokens each request used."},                           // usage records
 	{"tool_calls", "Tool calls", "The tools the agent called, with their input."},                // tool_call messages
 	{"tool_results", "Tool results", "What each tool returned."},                                 // tool_result messages
