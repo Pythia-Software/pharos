@@ -5743,11 +5743,11 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "bc9b5851734eaa21:0",
+      "key": "b98a2a85156a7d2c:0",
       "file": "web/src/fixes.tsx",
       "owner": "FixDetailView",
       "tag": "button",
-      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Closed. You can bring it back at any time.\")}",
+      "control": "onClick={() => void act(card.id, { action: \"dismiss\" }, \"Acknowledged and closed. You can bring it back at any time.\")}",
       "contract": "editing",
       "reason": "Mutates a fix's persistent basket membership or triage state, or opens the transient prompt review; does not alter the current view."
     },

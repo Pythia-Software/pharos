@@ -2,6 +2,12 @@ import { optimizeSelectionPlan, type OptimizeSelectionGroup } from "./optimize-m
 export const safetyRanks = ["danger", "recent", "calls", "evidence"] as const;
 export type SafetyRank = typeof safetyRanks[number];
 export const safetyRankLabels: Record<SafetyRank, string> = { danger: "Danger", recent: "Recent", calls: "Calls", evidence: "New evidence" };
+export const safetyRankExplanations: Record<SafetyRank, string> = {
+  danger: "Most dangerous checks first, then the most recent.",
+  recent: "The check with the latest notice first.",
+  calls: "The check with the most distinct calls first.",
+  evidence: "The check with the most notices that a later command gave stronger execution evidence first.",
+};
 
 // How likely a check's notices are to need the user, set per check by Pharos.
 // Only the two upper levels get a chip, so a chip always means something.

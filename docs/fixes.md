@@ -133,8 +133,10 @@ record no call times (TL1 Codex) have no measurable time lost. It is computed wh
 change to a bound applies at once.
 
 The bounds apply only to Open. Handed-off and closed items always stay listed. The
-dashboard says how many items the bounds hide, `fixes_hidden=1` shows them,
-marked, and a link opens the Table filtered to them. The settings page shows how
+dashboard's control row has a "Show N hidden" toggle (`fixes_hidden=1`) that shows
+them, marked; the note under the cards says why they are hidden and links to the
+Table filtered to them. What each Rank by option means is its tooltip and is
+listed in Settings. The settings page shows how
 many items each option would hide.
 
 ## Boundary with Risky actions

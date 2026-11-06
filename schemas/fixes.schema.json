@@ -19,35 +19,35 @@
   "defaultSelect": [
     {
       "field": "state",
-      "width": 110
-    },
-    {
-      "field": "shown",
-      "width": 150
-    },
-    {
-      "field": "title",
-      "width": 360
-    },
-    {
-      "field": "category",
-      "width": 170
-    },
-    {
-      "field": "target_label",
-      "width": 150
-    },
-    {
-      "field": "work_items",
-      "width": 100
-    },
-    {
-      "field": "priority",
       "width": 90
     },
     {
+      "field": "shown",
+      "width": 100
+    },
+    {
+      "field": "title",
+      "width": 440
+    },
+    {
+      "field": "category",
+      "width": 160
+    },
+    {
+      "field": "target_label",
+      "width": 140
+    },
+    {
+      "field": "work_items",
+      "width": 90
+    },
+    {
+      "field": "priority",
+      "width": 80
+    },
+    {
       "field": "last_seen",
-      "width": 110
+      "width": 100
     }
   ],
   "fields": [

@@ -3,7 +3,7 @@ import { CartPanel, ReviewDialog, type CartGroup, type Target } from "./findings
 import { useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
-import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyPromptLimit, safetyCartChecks, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
+import { safetyShortName, safetyDashboardPlaces, safetyDashboardChecks, safetyDangerLabels, safetyRankLabels, safetyRankExplanations, safetyPromptLimit, safetyCartChecks, type SafetyCheckSummary, type SafetyDanger, type SafetyRank } from "./safety-dashboard-model";
 import { OptimizeCard, OptimizeCart, OptimizeSelectionBar } from "./optimize-shared";
 import { type SafetyView, safetyURL, safetyCheckTableURL, safetyStateLabels, safetyTableFocus } from "./safety-route";
 import type { QueryState } from "@pythia-software/query-table-core";
@@ -108,7 +108,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
             {(Object.keys(stateLabel) as State[]).map(state => <button role="tab" key={state} aria-selected={list === state} data-view-field="safety_list" onClick={() => setList(state)}>{stateLabel[state]} <span className="findings-count">{overview.summary[state]}</span></button>)}
           </div>
           <OptimizePlaceFilter places={places} value={place} onChange={setPlace} label="Show risky actions for" viewField="safety_place" />
-          <OptimizeRank value={rank} onChange={setRank} options={safetyRankLabels} viewField="safety_rank" />
+          <OptimizeRank value={rank} onChange={setRank} options={safetyRankLabels} explanations={safetyRankExplanations} viewField="safety_rank" />
         </div>
         {list === "handed_off" ? <p className="findings-muted">You have handed these notices to an agent. Repeats accumulate here; a new target, broader operation, or stronger execution evidence can need fresh attention.</p> : null}
         <div className="findings-layout with-cart">
