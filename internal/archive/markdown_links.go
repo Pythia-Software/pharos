@@ -1,7 +1,9 @@
 package archive
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"mime"
@@ -9,11 +11,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 // Link checks run on this Mac: browsers cannot stat a file or reliably check
@@ -96,10 +102,86 @@ func (s *Server) markdownFile(raw, workspace string) (*os.File, error) {
 	return file, nil
 }
 
+// Files that macOS would run or install rather than show. Clicking a link an
+// agent wrote must never execute it, so these are revealed in Finder instead.
+var markdownLaunchableExtensions = map[string]bool{
+	".app": true, ".command": true, ".tool": true, ".sh": true, ".bash": true, ".zsh": true, ".csh": true,
+	".terminal": true, ".scpt": true, ".scptd": true, ".applescript": true, ".workflow": true, ".action": true,
+	".pkg": true, ".mpkg": true, ".dmg": true, ".jar": true, ".jnlp": true, ".fileloc": true, ".webloc": true,
+	".inetloc": true, ".url": true, ".prefpane": true, ".kext": true, ".mobileconfig": true, ".shortcut": true,
+}
+
+// markdownOpenFile hands a local file to Launch Services, which opens it in
+// the user's default app for its type. Tests replace it.
+var markdownOpenFile = func(path string, reveal bool) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("opening files needs macOS")
+	}
+	args := []string{path}
+	if reveal {
+		args = []string{"-R", path}
+	}
+	if output, err := exec.Command("/usr/bin/open", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("open: %v %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// markdownLaunchable resolves a file's symlinks, since macOS opens the file
+// they point at, and reports whether opening it would run something.
+func markdownLaunchable(name string) (string, bool, error) {
+	path, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, err
+	}
+	return path, info.Mode()&0o111 != 0 || markdownLaunchableExtensions[strings.ToLower(filepath.Ext(path))] || markdownFinderAlias(path), nil
+}
+
+// markdownFinderAlias reports a Finder alias, a regular file that macOS
+// follows on open like a symlink EvalSymlinks cannot see through. Its target
+// is unknown here, so it counts as launchable. Current aliases are bookmark
+// data; older ones are marked only by the alias flag in their Finder info.
+func markdownFinderAlias(path string) bool {
+	if file, err := os.Open(path); err == nil {
+		head := make([]byte, 16)
+		n, _ := io.ReadFull(file, head)
+		file.Close()
+		if bytes.Equal(head[:n], []byte("book\x00\x00\x00\x00mark\x00\x00\x00\x00")) {
+			return true
+		}
+	}
+	finderInfo := make([]byte, 32)
+	n, err := unix.Getxattr(path, "com.apple.FinderInfo", finderInfo)
+	return err == nil && n >= 10 && binary.BigEndian.Uint16(finderInfo[8:10])&0x8000 != 0
+}
+
 func (s *Server) markdownLink(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	raw, workspace := q.Get("href"), q.Get("workspace")
 	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodPost {
+		file, err := s.markdownFile(raw, workspace)
+		if err != nil {
+			writeError(w, err, http.StatusNotFound)
+			return
+		}
+		file.Close()
+		path, reveal, err := markdownLaunchable(file.Name())
+		if err != nil {
+			writeError(w, err, http.StatusNotFound)
+			return
+		}
+		if err := markdownOpenFile(path, reveal); err != nil {
+			writeError(w, err, http.StatusNotImplemented)
+			return
+		}
+		writeJSON(w, map[string]any{"opened": path, "revealed": reveal}, http.StatusOK)
+		return
+	}
 	if q.Get("open") == "1" {
 		file, err := s.markdownFile(raw, workspace)
 		if err != nil {
@@ -151,6 +233,10 @@ func (s *Server) markdownLink(w http.ResponseWriter, r *http.Request) {
 	} else if file, err := s.markdownFile(raw, workspace); err == nil {
 		file.Close()
 		result["status"], result["detail"] = "file", "File available on this Mac"
+		// The Mac app's context menu offers Open With and Show in Finder for this path.
+		if path, launchable, err := markdownLaunchable(file.Name()); err == nil {
+			result["path"], result["launchable"] = path, launchable
+		}
 		result["href"] = "/api/markdown-link?" + url.Values{"href": {raw}, "workspace": {workspace}, "open": {"1"}}.Encode()
 	}
 	writeJSON(w, result, http.StatusOK)

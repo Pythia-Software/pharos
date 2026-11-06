@@ -47,7 +47,7 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := journalRows(t, catalog)
-	if row := rows["index.captures"]; row.State != opRunning || row.Legacy != "run-1" || row.Process != "service" || row.Instance != reg.instance || row.EndedAt != "" {
+	if row := rows["index.captures"]; row.State != opRunning || row.Label != "Index captures" || row.Legacy != "run-1" || row.Process != "service" || row.Instance != reg.instance || row.EndedAt != "" {
 		t.Fatalf("start row: %+v", row)
 	}
 	if _, ok := rows["maintenance.search.text"]; ok {
@@ -60,6 +60,7 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 	for range 100 {
 		index.Advance(1)
 	}
+	index.progress("Index captured inputs", "", "conversation", 100, 100, true, "Saved 1,234 messages")
 	quick.Finish(nil)
 	clock = clock.Add(31 * time.Second)
 	index.Finish(nil)
@@ -70,6 +71,9 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 	row := rows["index.captures"]
 	if row.State != opSucceeded || row.EndedAt == "" || row.StepName != "Index captured inputs" || row.StepDone != 100 || row.StepTotal == nil || *row.StepTotal != 100 {
 		t.Fatalf("end row: %+v", row)
+	}
+	if step := operationStep(foreignView(leaseInfo{}, row)); step["detail"] != "Saved 1,234 messages" {
+		t.Fatalf("journal lost step detail: %+v", step)
 	}
 	if _, ok := rows["maintenance.search.text"]; ok {
 		t.Fatal("an if-longer-than operation that ended sooner was written")

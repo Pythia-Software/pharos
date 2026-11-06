@@ -367,6 +367,14 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	if _, err := c.DB.Exec(`UPDATE tool_calls SET ended_at=NULL,duration_ms=NULL WHERE id='t-child'`); err != nil {
 		t.Fatal(err)
 	}
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('tool-input','root','tool-input','assistant','tool_call','{"tool":"Bash","input":{"command":"npm test","workdir":"/repo"}}','tool-input');
+INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_message_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at) VALUES
+('short-a','delegation-work','root','root-session',NULL,10,'test','tool_call','Bash','shell','ok','2026-01-01T00:00:02Z','2026-01-01T00:00:02.020Z'),
+('short-b','delegation-work','root','root-session','tool-input',11,'test','tool_call','Bash','shell','ok','2026-01-01T00:00:02.001Z','2026-01-01T00:00:02.021Z');`)
+	command := "  " + strings.Repeat("echo 😎; ", 100)
+	if _, err := c.DB.Exec(`UPDATE tool_calls SET command=? WHERE id='short-a'`, command); err != nil {
+		t.Fatal(err)
+	}
 	s := testServer(t, config, c)
 	_, body := delegationGET(t, s, "/api/work/delegation-work/delegation")
 	snapshot := body["snapshot"].(string)
@@ -385,6 +393,28 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	}
 	if !strings.Contains(timeline["inference"].(string), "not measured") {
 		t.Fatal("evidence contract must accompany inference")
+	}
+	_, plain := delegationGET(t, s, "/api/work/delegation-work/parallel?sessions=root-session&width=100")
+	plainMarks := plain["lanes"].([]any)[0].(map[string]any)["marks"].([]any)
+	if len(plainMarks) != 2 {
+		t.Fatalf("ordinary parallel view should retain short-call grouping: %v", plainMarks)
+	}
+	_, native := delegationGET(t, s, "/api/work/delegation-work/parallel?sessions=root-session&width=100&labels=1")
+	nativeMarks := native["lanes"].([]any)[0].(map[string]any)["marks"].([]any)
+	if len(nativeMarks) != 3 {
+		t.Fatalf("native Timeline must keep overlapping calls distinct: %v", nativeMarks)
+	}
+	for _, value := range nativeMarks {
+		mark := value.(map[string]any)
+		if mark["count"] != float64(1) {
+			t.Fatalf("individual call lost: %v", mark)
+		}
+		if mark["tool_id"] == "short-a" && (mark["preview"] != string([]rune(command)[:640]) || mark["preview_truncated"] != true) {
+			t.Fatalf("bounded command preview: %v", mark)
+		}
+		if mark["tool_id"] == "short-b" && mark["preview"] != "npm test" {
+			t.Fatalf("primary command content: %v", mark)
+		}
 	}
 	code, _ := delegationGET(t, s, "/api/work/delegation-work/parallel?start=NaN")
 	if code != 400 {
@@ -406,6 +436,180 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	code, _ = delegationGET(t, s, "/api/work/delegation-work/parallel?sessions="+strings.Repeat("child-session,", 101))
 	if code != 400 {
 		t.Fatal("bounded timeline lanes")
+	}
+}
+
+// The Timeline tab asks the existing parallel endpoint for local labels. It
+// must keep embedded and aliased executions separate, and never run inference.
+func TestDelegationTimelineMessageLabels(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `UPDATE messages SET created_at='2026-01-01T00:00:03Z';
+ INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json) VALUES('user','root','delegation-work','2026-01-01T00:00:03Z','2026-01-01',12,'[{"start":0,"end":5,"category":"typed"},{"start":5,"end":9,"category":"pasted"},{"start":9,"end":12,"category":"typed"}]');
+ INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('root-session','user',0),('embedded','launch',1),('child-session','nested-launch',0),('nested-alias','nested-result',1)`)
+	server := testServer(t, config, c)
+	read := func(query string) map[string]any {
+		t.Helper()
+		status, body := delegationGET(t, server, "/api/work/delegation-work/parallel?"+query)
+		if status != 200 {
+			t.Fatalf("timeline: %d %v", status, body)
+		}
+		return body
+	}
+	body := read("sessions=root-session,embedded,child-session,nested-session&labels=1")
+	lanes := body["lanes"].([]any)
+	want := [][]string{{"user"}, {"launch"}, {"nested-launch"}, {"nested-result"}}
+	for i, lane := range lanes {
+		messages := lane.(map[string]any)["messages"].([]any)
+		if i == 2 { // unowned delegation results cannot also belong to the parent
+			if len(messages) != 1 {
+				t.Fatalf("child ownership: %v", messages)
+			}
+		}
+		if len(messages) != len(want[i]) {
+			t.Fatalf("lane %d ownership: %v", i, messages)
+		}
+		for j, message := range messages {
+			if message.(map[string]any)["id"] != want[i][j] {
+				t.Fatalf("lane %d: %v", i, messages)
+			}
+		}
+	}
+	aliasMessage := lanes[3].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if aliasMessage["conversation_id"] != "child" {
+		t.Fatal("canonical lane lost its message's source transcript")
+	}
+	// Unwrap display content before clipping, without rewriting the retained
+	// source excerpt that authorship positions and source navigation refer to.
+	ack := strings.Repeat("Async agent launched successfully.\n", 40)
+	envelope := jsonText(map[string]any{"content": []any{map[string]any{"text": ack}}, "tool": "Task", "details": map[string]any{"agentId": "exact-child"}})
+	if _, err := c.DB.Exec(`UPDATE messages SET text=? WHERE id='nested-result'`, envelope); err != nil {
+		t.Fatal(err)
+	}
+	result := read("sessions=nested-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if result["preview"] != string([]rune(ack)[:640]) || result["preview_truncated"] != true || !strings.HasPrefix(firstString(result["text"]), `{"content":`) {
+		t.Fatalf("readable result content or raw source lost: %v", result)
+	}
+	for _, tc := range []struct{ name, body, want string }{
+		{"untyped text blocks", `{"content":[{"text":"First\nline"},{"type":"text","text":"Second"}],"is_error":false,"details":{"agentId":"opaque"}}`, "First\nline\n\nSecond"},
+		{"nested message", `{"message":{"content":[{"type":"output_text","text":"Reply"}]},"usage":{"tokens":9}}`, "Reply"},
+		{"thinking", `{"content":[{"type":"thinking","thinking":"Check the premise"}]}`, "Check the premise"},
+		{"media placeholders", `{"content":[{"type":"image","source":{"data":"opaque"}},{"text":"Caption"}]}`, "[Image]\n\nCaption"},
+		{"plain text", "Keep \nline breaks", "Keep \nline breaks"},
+		{"domain JSON", `{"text":"Keep me","records":[1,2]}`, `{"text":"Keep me","records":[1,2]}`},
+		{"malformed prefix", `{"content":[{"text":"unfinished`, `{"content":[{"text":"unfinished`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			if err := c.reader().QueryRowContext(t.Context(), `WITH source(body) AS (VALUES(?)) SELECT `+timelineContentSQL("body")+` FROM source`, tc.body).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("primary content = %q; want %q", got, tc.want)
+			}
+		})
+	}
+
+	for _, tc := range []struct{ name, body, want string }{
+		{"encoded arguments", jsonText(map[string]any{"tool": "exec_command", "arguments": jsonText(map[string]any{"cmd": "npm test", "timeout_ms": 1000})}), "npm test"},
+		{"delegation prompt", `{"tool":"Task","input":{"description":"Check","prompt":"Read the source\nCheck tests","subagent_type":"Reviewer"}}`, "Read the source\nCheck tests"},
+		{"literal script", `{"tool":"exec","input":"\"literal\""}`, `"literal"`},
+		{"structured edit", `{"tool":"Edit","input":{"file_path":"a.go","old_string":"before","new_string":"after"}}`, `{"file_path":"a.go","old_string":"before","new_string":"after"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			if err := c.reader().QueryRowContext(t.Context(), `WITH source(body) AS (VALUES(?)) SELECT `+timelineInputSQL("source.body")+` FROM source`, tc.body).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("primary input = %q; want %q", got, tc.want)
+			}
+		})
+	}
+
+	input := lanes[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	parts := input["authorship"].([]any)
+	if len(parts) != 3 || parts[0].(map[string]any)["category"] != "typed" || parts[0].(map[string]any)["bytes"] != float64(5) || parts[1].(map[string]any)["category"] != "pasted" || parts[1].(map[string]any)["bytes"] != float64(4) || parts[2].(map[string]any)["category"] != "typed" || parts[2].(map[string]any)["bytes"] != float64(3) {
+		t.Fatalf("retained text origins: %v", parts)
+	}
+	for i, text := range []string{"Imple", "ment", " it"} {
+		if parts[i].(map[string]any)["text"] != text || parts[i].(map[string]any)["truncated"] != false {
+			t.Fatalf("span excerpt %d: %v", i, parts[i])
+		}
+	}
+	if _, exposed := input["authorship_spans"]; exposed {
+		t.Fatal("raw authorship offsets escaped compact projection")
+	}
+	if c.hasLabelsLedger() {
+		t.Fatal("reading created the labels ledger")
+	}
+	// Positions use original UTF-8 bytes, even beyond the clipped excerpt.
+	if _, err := c.DB.Exec(`UPDATE messages SET text=? WHERE id='user'`, strings.Repeat("é", 400)+"!"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE message_authorship SET spans_json='[{"start":4,"end":800,"category":"quoted"},{"start":0,"end":2,"category":"typed"},{"start":801,"end":900,"category":"pasted"}]' WHERE message_id='user'`)
+	positioned := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	positionParts := positioned["authorship"].([]any)
+	wantOrigins := []string{"typed", "unknown", "quoted", "unknown"}
+	wantBytes := []float64{2, 2, 796, 1}
+	wantText := []string{"é", "é", strings.Repeat("é", 240), "!"}
+	if len(positionParts) != len(wantOrigins) {
+		t.Fatalf("positioned text origins: %v", positionParts)
+	}
+	for i, part := range positionParts {
+		p := part.(map[string]any)
+		if p["category"] != wantOrigins[i] || p["bytes"] != wantBytes[i] {
+			t.Fatalf("span %d lost its position or full byte length: %v", i, p)
+		}
+		if p["text"] != wantText[i] || p["truncated"] != (i == 2) {
+			t.Fatalf("span %d must have its own bounded Unicode excerpt: %v", i, p)
+		}
+	}
+	// An excerpt byte cap must not expose a partial UTF-8 rune at its edge.
+	if _, err := c.DB.Exec(`UPDATE messages SET text=? WHERE id='user'`, "a"+strings.Repeat("😎", 300)+"tail"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE message_authorship SET spans_json='[{"start":0,"end":1201,"category":"typed"},{"start":1201,"end":1205,"category":"quoted"}]' WHERE message_id='user'`)
+	emoji := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)["authorship"].([]any)
+	if emoji[0].(map[string]any)["text"] != "a"+strings.Repeat("😎", 239) || emoji[1].(map[string]any)["text"] != "tail" {
+		t.Fatalf("Unicode excerpt boundary: %v", emoji)
+	}
+	if _, ok := read("sessions=root-session")["taxonomy"]; ok {
+		t.Fatal("parallel view loaded message labels without opting in")
+	}
+	// A small ledger names probabilities in its stored model order.
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('test','["P","P.request","P.request.work.implement"]');
+ INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('root','test',1,'2026-01-01');
+ DELETE FROM message_labels_dirty`)
+	if _, err := c.DB.Exec(`INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('user','root','H-typed',7,?,1,1,'test','test','test','2026-01-01')`, encodeLabelProbs([]float32{1, .98, .95})); err != nil {
+		t.Fatal(err)
+	}
+	labeled := read("sessions=root-session&labels=1")
+	message := labeled["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	if message["labels"].(map[string]any)["ids"].([]any)[2] != "P.request.work.implement" || len(labeled["taxonomy"].([]any)) != 3 {
+		t.Fatalf("labels/taxonomy: %v", labeled)
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('root','pending')`)
+	pending := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)
+	if pending["labels_pending"] != true {
+		t.Fatal("pending labels hidden")
+	}
+	if _, ok := pending["messages"].([]any)[0].(map[string]any)["labels"]; ok {
+		t.Fatal("stale labels presented as current")
+	}
+	override(t, &delegationMessageLimit, 1)
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('legacy','root','legacy','assistant','message','Legacy reply','legacy','2026-01-01T00:00:04Z')`)
+	bounded := read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)
+	if bounded["messages_truncated"] != true || len(bounded["messages"].([]any)) != 1 {
+		t.Fatalf("unbounded messages: %v", bounded)
+	}
+	start := *delegationTime("2026-01-01T00:00:04Z")
+	zoom := read(fmt.Sprintf("sessions=root-session&labels=1&start=%.0f&end=%.0f", start, start+500))["lanes"].([]any)[0].(map[string]any)
+	if zoom["messages"].([]any)[0].(map[string]any)["id"] != "legacy" {
+		t.Fatal("preceding context crowded the visible message out of the cap")
 	}
 }
 
@@ -494,7 +698,7 @@ func TestDelegationOwnershipCyclesDoNotBreakAnalysis(t *testing.T) {
 	}
 }
 
-func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
+func TestDelegationFilesDeduplicateSuccessfulPaths(t *testing.T) {
 	c, config := testCatalog(t)
 	seedDelegation(t, c)
 	add := func(id, conv, session, name, category, status, file, absolute, repoPath, repo string) {
@@ -515,6 +719,23 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 	add("edit-other-repo", "nested", "nested-session", "Edit", "edit", "ok", "/other/a.go", "/other/a.go", "a.go", "repo-two")
 	add("edit-missing-path", "root", "embedded", "Edit", "edit", "ok", "", "", "", "")
 	add("read-excluded", "root", "root-session", "Read", "read", "ok", "/checkout-a/read.go", "", "read.go", "repo-one")
+	add("read-repeat", "root", "root-session", "Read", "read", "ok", "/checkout-a/read.go", "", "read.go", "repo-one")
+	add("read-shared", "child", "child-session", "Read", "read", "ok", "/checkout-b/read.go", "", "read.go", "repo-one")
+	add("read-second", "child", "child-session", "Read", "read", "ok", "/checkout-b/other.go", "", "other.go", "repo-one")
+	add("read-other-repo", "nested", "nested-session", "Read", "read", "ok", "/other/read.go", "", "read.go", "repo-two")
+	add("read-failed", "root", "root-session", "Read", "read", "error", "failed.go", "", "failed.go", "repo-one")
+	add("read-unconfirmed", "child", "child-session", "Read", "read", "no_result", "pending.go", "", "pending.go", "repo-one")
+	add("read-no-path", "root", "embedded", "Read", "read", "ok", "", "", "", "")
+	add("search-excluded", "root", "root-session", "Grep", "search", "ok", "search.go", "", "search.go", "repo-one")
+	add("list-ls", "root", "root-session", "LS", "read", "ok", "/checkout-a/src", "", "src", "repo-one")
+	add("list-dir", "root", "root-session", "list_dir", "read", "ok", "/checkout-a/tests", "", "tests", "repo-one")
+	add("list-directory", "child", "child-session", "list_directory", "read", "ok", "/checkout-b/docs", "", "docs", "repo-one")
+	add("list-mixed-case", "nested", "nested-session", "List_Directory", "read", "ok", "/other/lib", "", "lib", "repo-two")
+	add("list-no-path", "nested", "nested-session", "list_dir", "read", "ok", "", "", "", "")
+	add("list-shell", "root", "root-session", "Bash", "read", "ok", "/checkout-a/bin", "", "bin", "repo-one")
+	if _, err := c.DB.Exec(`UPDATE tool_calls SET command_category='list' WHERE id='list-shell'`); err != nil {
+		t.Fatal(err)
+	}
 	s, err := c.delegationSnapshot(context.Background(), "delegation-work")
 	if err != nil {
 		t.Fatal(err)
@@ -529,6 +750,11 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 		{s.ByID["nested-session"].Self["files"], 2, "partial"},
 		{s.ByID["root-session"].All["files"], 4, "partial"},
 		{s.Totals["files"], 4, "partial"},
+		{s.ByID["root-session"].Self["filesRead"], 1, "partial"},
+		{s.ByID["child-session"].Self["filesRead"], 2, "partial"},
+		{s.ByID["nested-session"].Self["filesRead"], 1, "observed"},
+		{s.ByID["root-session"].All["filesRead"], 3, "partial"},
+		{s.Totals["filesRead"], 3, "partial"},
 	} {
 		if !near(check.metric.Value, check.value) || check.metric.Quality != check.quality {
 			t.Fatalf("files metric %+v; want %v %s", check.metric, check.value, check.quality)
@@ -537,15 +763,62 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 	if s.ByID["embedded"].Self["files"].Value != nil {
 		t.Fatal("missing edit paths must remain unknown")
 	}
+	if s.ByID["embedded"].Self["filesRead"].Value != nil {
+		t.Fatal("missing read paths must remain unknown")
+	}
 	if s.Maxima["self"]["files"] != 2 || s.Maxima["all"]["files"] != 4 {
 		t.Fatal("file metrics need per-column maxima")
+	}
+	if s.Maxima["self"]["filesRead"] != 2 || s.Maxima["all"]["filesRead"] != 3 {
+		t.Fatal("directory listings must not inflate read-count maxima")
 	}
 	_, ranked := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=files&scope=all&direction=desc")
 	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "root-session" {
 		t.Fatal("file counts must support inclusive metric sorting")
 	}
+	_, ranked = delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=filesRead&scope=self&direction=desc")
+	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "child-session" {
+		t.Fatal("read counts must support self metric sorting")
+	}
 	if delegationFileKey("a.go", "", "", "", "root") == delegationFileKey("a.go", "", "", "", "child") {
 		t.Fatal("unresolved paths in different conversations must not collide")
+	}
+}
+
+func TestDelegationAgentEventsFollowMessageOwnership(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES
+ ('embedded','user',0),('launch-alias','nested-launch',0),('child-session','nested-launch',0);
+ INSERT INTO agent_events(message_id,conversation_id,source,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model) VALUES
+ ('user','root','reply','assumption',0.9,0,3,'one','','','[]','[]','test'),
+ ('user','root','reply','confusion',0.5,4,7,'two','','','[]','[]','test'),
+ ('user','root','reply','surprise',0.49,8,11,'low','','','[]','[]','test'),
+ ('nested-launch','child','thinking','assumption',0.8,0,3,'alias','','','[]','[]','test'),
+ ('nested-result','child','reply','surprise',0.9,0,3,'legacy','','','[]','[]','test'),
+ ('launch','root','reply','assumption',0.9,0,3,'root','','','[]','[]','test')`)
+	s, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		metric delegationMetric
+		want   float64
+	}{
+		{s.ByID["embedded"].Self["events"], 2},
+		{s.ByID["child-session"].Self["events"], 2},
+		{s.ByID["root-session"].Self["events"], 1},
+		{s.ByID["nested-session"].Self["events"], 0},
+		{s.ByID["root-session"].All["events"], 5},
+		{s.Totals["events"], 5},
+	} {
+		if !near(check.metric.Value, check.want) {
+			t.Fatalf("event count %+v; want %v", check.metric, check.want)
+		}
+	}
+	_, ranked := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=events&scope=all&direction=desc")
+	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "root-session" {
+		t.Fatal("agent event totals must support sorting")
 	}
 }
 
@@ -612,5 +885,25 @@ func TestWorkPreviewSummarizesWorkspaceAndConversation(t *testing.T) {
 	}
 	if status, _ := delegationGET(t, server, "/api/work/missing/preview"); status != 404 {
 		t.Fatal("missing workspace")
+	}
+}
+
+// The timeline groups a shell call by what its primary command does.
+func TestDelegationCategoryReadsShellCommands(t *testing.T) {
+	for _, test := range []struct{ name, category, command, want string }{
+		{"Bash", "command", "read", "read"},
+		{"exec_command", "command", "search", "read"},
+		{"Bash", "command", "list", "read"},
+		{"Bash", "command", "vcs", "git"},
+		{"Bash", "command", "file-write", "write"},
+		{"Bash", "command", "network", "network"},
+		{"Bash", "command", "test", "run"},
+		{"Bash", "command", "", "run"},
+		{"write_stdin", "command", "", "poll"},
+		{"Read", "read", "", "read"},
+	} {
+		if got := delegationCategory(test.name, test.category, test.command); got != test.want {
+			t.Errorf("%s/%s/%s: %q, want %q", test.name, test.category, test.command, got, test.want)
+		}
 	}
 }

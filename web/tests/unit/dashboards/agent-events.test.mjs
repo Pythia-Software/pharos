@@ -7,6 +7,17 @@ import { agentEventGroups, agentEventKinds } from "../../../src/agent-events-ana
 import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
 import { eventReaderURL, interleaveByKind } from "../../../src/agent-event-examples";
+import { AGENT_EVENTS_KEY, agentEventsEnabled } from "../../../src/agent-events-flag";
+
+test("Agent Experience is listed by its Settings switch or by the library's configuration", t => {
+  const saved = globalThis.window;
+  t.after(() => { globalThis.window = saved; });
+  const page = (preference, configured) => ({ pharosPrefs: { get: (key, fallback) => key === AGENT_EVENTS_KEY && preference !== undefined ? preference : fallback }, pharosConfiguredFlags: configured });
+  for (const [preference, configured, listed] of [[undefined, {}, false], [true, {}, true], [undefined, { [AGENT_EVENTS_KEY]: true }, true], [false, undefined, false]]) {
+    globalThis.window = page(preference, configured);
+    assert.equal(agentEventsEnabled(), listed, `preference ${preference}, configured ${JSON.stringify(configured)}`);
+  }
+});
 
 test("event rates divide each period's events by the messages read in it", () => {
   const events = [

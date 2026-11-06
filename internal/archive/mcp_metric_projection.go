@@ -94,6 +94,8 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
+	completed := maintenanceBatch(ctx, tx, "Updating workspace metrics", "workspace", len(rows),
+		"SELECT ?+count(*) FROM mcp_metric_dirty", len(rows))
 	book, err := c.loadPriceBookFrom(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -109,7 +111,9 @@ func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, works
 			return 0, err
 		}
 	}
-	return len(rows), tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return len(rows), err
 }
 
 // metricProjections are metrics computed for reading but not stored, keyed by

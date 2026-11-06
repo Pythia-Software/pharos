@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./chart-tooltip.css";
+import { overflowTooltip, textIsClipped } from "./overflow-tooltip";
 
 type Tip = { text: string; colors: (string | null)[]; x: number; y: number };
 
@@ -35,12 +36,14 @@ export function ChartTooltip({ children }: { children: React.ReactNode }) {
   }, [Boolean(tip)]);
   const move = (event: React.PointerEvent) => {
     if (event.pointerType === "touch") return;
-    const target = (event.target as Element).closest("[data-chart-tooltip], .qt-metric-mark[aria-label], .qt-metric-bar-row");
+    const target = (event.target as Element).closest("[data-chart-tooltip-label], [data-chart-tooltip], .qt-metric-mark[aria-label], .qt-metric-bar-row");
     if (!target || !host.current?.contains(target)) { setTip(null); return; }
-    const text = target.getAttribute("data-chart-tooltip") ?? target.getAttribute("aria-label") ?? [
+    let text = target.getAttribute("data-chart-tooltip") ?? target.getAttribute("aria-label") ?? [
       target.querySelector(".qt-metric-bar-label")?.getAttribute("data-chart-title") ?? target.querySelector(".qt-metric-bar-label")?.textContent,
       target.querySelector(".qt-metric-bar-value")?.textContent,
     ].filter(Boolean).join("\n");
+    const label = target.querySelector<HTMLElement>("[data-chart-label]");
+    if (label) text = overflowTooltip(target.getAttribute("data-chart-tooltip-label") ?? "", text, textIsClipped(label)) ?? "";
     let colors: (string | null)[] = [];
     try { const raw = JSON.parse(target.getAttribute("data-chart-colors") ?? "[]"); if (Array.isArray(raw)) colors = raw.map(value => typeof value === "string" && /^(#[a-f0-9]{3,8}|rgba?\([\d.,% ]+\))$/i.test(value) ? value : null); } catch { /* Plain text tooltips remain valid. */ }
     setTip(text ? { text, colors, x: event.clientX, y: event.clientY } : null);

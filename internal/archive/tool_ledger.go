@@ -14,22 +14,27 @@ import (
 // each call's absolute path, so its repository can be resolved again when
 // the known checkouts change (see reresolveToolPaths). v7 derives skill_usages
 // and MCP resource-API attribution and structured MCP errors. v9 marks a call
-// backgrounded when a subshell launches it, as in "(server &)".
-const toolLedgerVersion = "tools-v9-subshell-background"
+// backgrounded when a subshell launches it, as in "(server &)". v10 reads the
+// script of `zsh -lc "..."`, and classifies file-writing cat, runners (npx,
+// "pnpm exec", "uv run") by what they run, formatters, and checks. v11
+// retains explicit request speed from accounting envelopes.
+const toolLedgerVersion = "tools-v12-inference-speed-policy"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
 // same agent stream, net of that request's own output; it is what tool
 // results (and any user turns) added to the context.
 type modelRequest struct {
-	Key, NativeID, Stream, Model, Effort, RequestedAt string
-	FirstIndex, Sequence                              int
-	Counts                                            tokenCounts
-	ContextGrowth                                     *int64
-	CompactedBefore                                   bool
-	ToolCalls                                         int
+	Key, NativeID, Stream, Model, Effort, Speed, RequestedAt string
+	FirstIndex, Sequence                                     int
+	Counts                                                   tokenCounts
+	ContextGrowth                                            *int64
+	CompactedBefore                                          bool
+	ToolCalls                                                int
 
-	aliases []string // keys of events merged into this request
+	aliases                  []string // keys of events merged into this request
+	ServiceTier, SpeedSource string
+	inference                inferenceSpeed // field presence for streamed updates and resets
 }
 
 type toolCommand struct {
@@ -345,6 +350,7 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 	first := map[string]int{}
 	final := map[string]int{}
 	nativeIDs := map[string]string{}
+	speeds := map[string]inferenceSpeed{}
 	identified := map[string]bool{}
 	for index := range messages {
 		key, nativeID := requestKeyAt(messages, index, streams)
@@ -352,9 +358,18 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 			continue
 		}
 		nativeIDs[key] = nativeID
+		if speed, recorded := messageInference(messages[index]); recorded {
+			speeds[key] = mergeInference(speeds[key], speed)
+		}
 		identified[streams[index]] = true
 		if _, ok := first[key]; !ok {
 			first[key] = index
+		}
+		// Token accounting has already folded anonymous content blocks into
+		// the last event. Retain the earlier events here until our merge below
+		// has combined their configuration evidence and request aliases too.
+		if nativeID == "" && reports[index].scope == "request" && reports[index].counts == nil {
+			reports[index].counts = normalizeTokenCounts(reports[index].usage)
 		}
 		if reports[index].counts != nil && reports[index].scope == "request" {
 			final[key] = index
@@ -367,7 +382,11 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 			return
 		}
 		model := strings.TrimSpace(messages[finalIndex].Model)
-		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
+		speed, known := speeds[key]
+		if !known {
+			speed, _ = messageInference(messages[finalIndex])
+		}
+		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, Speed: speed.Speed, ServiceTier: speed.ServiceTier, SpeedSource: speed.Source, inference: speed, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
 	}
 	for key, finalIndex := range final {
 		add(key, nativeIDs[key], first[key], finalIndex)
@@ -416,6 +435,8 @@ func mergeAnonymousRequests(messages []MessageRecord, streams []string, requests
 		if seen && request.NativeID == "" && merged[position].NativeID == "" && strings.Contains(request.Key, ":event:") &&
 			merged[position].Counts["input_tokens"] == request.Counts["input_tokens"] && !turnBetween(messages, streams, request.Stream, merged[position].FirstIndex, request.FirstIndex) {
 			target := &merged[position]
+			target.inference = mergeInference(target.inference, request.inference)
+			target.Speed, target.ServiceTier, target.SpeedSource = target.inference.Speed, target.inference.ServiceTier, target.inference.Source
 			if request.Counts["output_tokens"] > target.Counts["output_tokens"] {
 				target.Counts = request.Counts
 			}
@@ -721,6 +742,9 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 	texts := make([]string, len(lines))
 	primarySet := false
 	for position, line := range lines {
+		if script, ok := shellScript(line.text); ok {
+			line.text = script
+		}
 		texts[position] = line.text
 		parsed := parseShellCommand(line.text)
 		call.HasPipe = call.HasPipe || parsed.HasPipe
