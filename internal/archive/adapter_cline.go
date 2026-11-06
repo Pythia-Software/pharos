@@ -364,9 +364,12 @@ func (a *clineAdapter) record(session clineSession, manifest, transcript map[str
 	conversation := ConversationRecord{NativeID: sessionID, Provider: "cline", Account: a.config.Account, Origin: origin, Coverage: "complete", Harness: "cline",
 		HarnessVersionFirst: version, HarnessVersionLast: version, Model: model, StartedAt: started, EndedAt: ended, Messages: messages}
 	// Cline's CLI and its editor extensions share this folder; the client
-	// that ran a session is its channel.
+	// that ran a session is its channel. An imported history (mode import)
+	// names the importing app, and a scheduled run (mode automation) was not
+	// started from its client, so neither says who initiated the work.
 	context := map[string]any{}
-	if client := firstString(metadata["client_name"]); client != "" {
+	mode := firstString(mapValueDefault(meta["sessionHistoryOrigin"])["mode"], mapValueDefault(transcript["origin"])["mode"])
+	if client := firstString(metadata["client_name"]); client != "" && (mode == "" || mode == "user") {
 		context["source"] = client
 	}
 	if provider := firstString(manifest["provider"]); provider != "" {

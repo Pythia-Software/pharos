@@ -244,7 +244,7 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			t.Fatalf("error %v via %s", err, sqliteReadVia(path))
 		}
 		// The copy checks again, for a journal gone hot since.
-		if db, err := openSQLiteCopy(context.Background(), path, false); err == nil {
+		if db, _, err := openSQLiteCopy(context.Background(), path, false, nil); err == nil {
 			db.Close()
 			t.Fatal("a database with a hot journal was copied")
 		} else if !errors.Is(err, errSQLiteWriteInProgress) {
@@ -393,7 +393,7 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			}
 			changed++
 		})
-		if db, err := openSQLiteCopy(context.Background(), path, false); err == nil {
+		if db, _, err := openSQLiteCopy(context.Background(), path, false, nil); err == nil {
 			db.Close()
 			t.Fatal("a copy of a changing database was read")
 		} else if !errors.Is(err, errSQLiteWriteInProgress) || changed != sqliteCopyAttempts {
@@ -485,9 +485,22 @@ func TestLockedSourceIsIndexedAndCapturedFromACopy(t *testing.T) {
 	source := zedSource(root)
 	database := filepath.Join(root, filepath.FromSlash(zedDatabase))
 	_, release := sqliteHolder(t, database, `PRAGMA locking_mode=EXCLUSIVE`, `PRAGMA journal_mode=WAL`, `INSERT INTO credentials VALUES('held', 'by Zed')`)
+	// One pass, its discovery and every group it reads, copies the
+	// database once, and removes the copy when it ends.
+	copied := 0
+	override(t, &sqliteCopyHook, func(string) { copied++ })
+	if records := zedRecords(t, root); len(records) < 2 || copied != 1 {
+		t.Fatalf("a discovery pass over %d groups made %d copies", len(records), copied)
+	}
+	assertNoCopies(t, copies)
+	copied = 0
 	c, config := testCatalog(t)
 	config.Sources = []SourceConfig{source}
 	ingestSource(t, c, source)
+	if copied != 1 {
+		t.Fatalf("an index made %d copies", copied)
+	}
+	assertNoCopies(t, copies)
 	messages := func(c *Catalog) int {
 		return countRows(t, c, `SELECT COUNT(*) FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.provider='zed'`)
 	}

@@ -471,10 +471,10 @@ var (
 
 // vscodeRoundCall is what the model's rounds say of a tool call.
 type vscodeRoundCall struct {
-	name, at string
-	input    any
-	result   any
-	answered bool
+	name, round, at string
+	input           any
+	result          any
+	answered        bool
 }
 
 // vscodeToolCall is one tool call in a response: the first place it was
@@ -504,6 +504,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 	}
 	model, versionFirst, version := "", "", ""
 	requests, _ := value["requests"].([]any)
+	compactions := vscodeCompactions(requests)
 	for index, raw := range requests {
 		request := mapValue(raw)
 		if request == nil {
@@ -541,21 +542,50 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		}
 		// The request's ID stands in for each record's raw text, so JSON in
 		// a reply, a thought or a subagent's answer is never read as usage.
-		base := MessageRecord{Model: requestModel, CreatedAt: created, EvidenceLocator: fmt.Sprintf("%s#%s", locator, id), Selected: true,
+		items, _ := request["response"].([]any)
+		// An undone request stays in the session, disabled until the next is
+		// sent: whole, or after an undo stop in its response (isHidden in an
+		// older release). Its records are kept, not selected.
+		removed, cut := vscodeDisabled(request, items)
+		base := MessageRecord{Model: requestModel, CreatedAt: created, EvidenceLocator: fmt.Sprintf("%s#%s", locator, id), Selected: !removed,
 			RawText: jsonText(map[string]any{"type": "vscode_request", "id": id})}
+		// at is the base of what the response shows at a position.
+		at := func(position int) MessageRecord {
+			item := base
+			item.Selected = item.Selected && (cut < 0 || position < cut)
+			return item
+		}
+		// A compaction made for this request from an earlier one's rounds
+		// replaced what came before its prompt.
+		for _, compaction := range compactions[id] {
+			if compaction.before {
+				messages = append(messages, vscodeCompactionRecord(base, id, compaction))
+			}
+		}
 		prompt := mapValueDefault(request["message"])
 		if text := firstString(prompt["text"]); strings.TrimSpace(text) != "" {
 			// The prompt as sent is its raw text.
 			item := base
 			item.NativeID, item.Role, item.Kind, item.Text, item.RawText = id, "user", "message", text, jsonText(prompt)
+			// VS Code sends some requests itself, such as a background
+			// terminal's notice that its command completed.
+			if request["isSystemInitiated"] == true {
+				source := "vscode_system_initiated"
+				if firstString(request["terminalExecutionId"]) != "" {
+					source = "vscode_terminal_notification"
+				}
+				item = injectedContext(item, source, text)
+			}
 			messages = append(messages, item)
 		}
+		messages = append(messages, vscodeAttachments(base, id, request)...)
 		// The rounds name each call's input and hold what it returned.
 		rounds := map[string]*vscodeRoundCall{}
 		toolResults := mapValueDefault(meta["toolCallResults"])
 		roundList, _ := meta["toolCallRounds"].([]any)
 		for _, rawRound := range roundList {
 			round := mapValueDefault(rawRound)
+			roundID := firstString(round["id"])
 			calls, _ := round["toolCalls"].([]any)
 			for _, rawCall := range calls {
 				call := mapValueDefault(rawCall)
@@ -563,12 +593,11 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 				if full == "" {
 					continue
 				}
-				entry := &vscodeRoundCall{name: firstString(call["name"]), at: iso(round["timestamp"]), input: clineToolInput(call["arguments"])}
+				entry := &vscodeRoundCall{name: firstString(call["name"]), round: roundID, at: iso(round["timestamp"]), input: clineToolInput(call["arguments"])}
 				entry.result, entry.answered = toolResults[full]
 				rounds[vscodeCallSuffix.ReplaceAllString(full, "")] = entry
 			}
 		}
-		items, _ := request["response"].([]any)
 		tools := map[string]*vscodeToolCall{}
 		for position, rawItem := range items {
 			item := mapValue(rawItem)
@@ -589,6 +618,26 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 			}
 			tools[callID] = &vscodeToolCall{position: position, item: item}
 		}
+		// A compaction after one of this request's rounds follows the last of
+		// its calls shown; one after a round with none, the response.
+		boundaries := map[int][]vscodeCompaction{}
+		trailing := []vscodeCompaction{}
+		for _, compaction := range compactions[id] {
+			if compaction.before {
+				continue
+			}
+			last := -1
+			for callID, call := range tools {
+				if entry := rounds[callID]; entry != nil && entry.round == compaction.round && call.position > last {
+					last = call.position
+				}
+			}
+			if last < 0 {
+				trailing = append(trailing, compaction)
+			} else {
+				boundaries[last] = append(boundaries[last], compaction)
+			}
+		}
 		var prose strings.Builder
 		proseAt := -1
 		var thought strings.Builder
@@ -596,7 +645,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		flushProse := func() {
 			text := strings.TrimSpace(vscodeEmptyFence.ReplaceAllString(prose.String(), "\n"))
 			if text != "" {
-				item := base
+				item := at(proseAt)
 				item.NativeID, item.Role, item.Kind, item.Text = fmt.Sprintf("%s:block:%d", id, proseAt), "assistant", "message", text
 				messages = append(messages, item)
 			}
@@ -605,7 +654,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 		}
 		flushThought := func() {
 			if text := thought.String(); strings.TrimSpace(text) != "" {
-				item := base
+				item := at(thoughtAt)
 				item.NativeID = fmt.Sprintf("%s:block:%d", id, thoughtAt)
 				messages = append(messages, reasoningRecord(item, text, "text", ""))
 			}
@@ -613,12 +662,18 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 			thoughtAt, thoughtID = -1, ""
 		}
 		for position, rawItem := range items {
+			// What an undo stop disabled is a block of its own.
+			if position == cut {
+				flushProse()
+				flushThought()
+			}
 			item := mapValue(rawItem)
 			if item == nil {
 				continue
 			}
 			switch kind := firstString(item["kind"]); kind {
-			case "", "markdownContent":
+			// Markdown VS Code flagged as vulnerable is still the reply.
+			case "", "markdownContent", "markdownVuln":
 				text := vscodeText(firstNonNil(item["value"], mapValueDefault(item["content"])["value"]))
 				if text == "" {
 					continue
@@ -660,7 +715,7 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 				if call == nil || call.position != position {
 					continue
 				}
-				calls, started := vscodeToolMessages(base, id, position, call.item, rounds[callID], sessionID)
+				calls, started := vscodeToolMessages(at(position), id, position, call.item, rounds[callID], sessionID)
 				// A subagent's own calls are shown in its parent's response.
 				if parent := firstString(call.item["subAgentInvocationId"]); parent != "" {
 					child := subagent(parent)
@@ -673,12 +728,20 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 					child.conversation.AgentNickname, child.prompt, child.reply = started.conversation.AgentNickname, started.prompt, started.reply
 					child.conversation.Model, child.parent = started.conversation.Model, firstString(call.item["subAgentInvocationId"])
 				}
+				for _, compaction := range boundaries[position] {
+					messages = append(messages, vscodeCompactionRecord(at(position), id, compaction))
+				}
 			}
 		}
 		flushProse()
 		flushThought()
+		for _, compaction := range trailing {
+			messages = append(messages, vscodeCompactionRecord(at(len(items)), id, compaction))
+		}
+		// What a request used was spent, undone or not.
 		for index, usage := range vscodeTokenUsage(request, requestModel) {
 			item := base
+			item.Selected = true
 			item.NativeID, item.Role, item.Kind, item.Model, item.RawText = id+":usage", "system", "metadata", usage.model, ""
 			// The first record, of the model that served the request, pays for
 			// its calls; another model's is its own.
@@ -699,7 +762,14 @@ func (a *vscodeCopilotAdapter) record(session vscodeSession, value map[string]an
 	if len(messages) == 0 {
 		return nil
 	}
-	purpose, outcome := agentPurposeOutcome(messages)
+	// The session's purpose and outcome are what it still shows.
+	shown := []MessageRecord{}
+	for _, message := range messages {
+		if message.Selected {
+			shown = append(shown, message)
+		}
+	}
+	purpose, outcome := agentPurposeOutcome(shown)
 	title := firstString(value["customTitle"])
 	if !meaningfulWorkspaceTitle(title, sessionID) {
 		title = defaultString(purpose, "VS Code Copilot "+short(sessionID))
@@ -785,7 +855,7 @@ type vscodeSubagent struct {
 // starts the subagent: its prompt and what it returned.
 func vscodeToolMessages(base MessageRecord, requestID string, position int, item map[string]any, round *vscodeRoundCall, sessionID string) ([]MessageRecord, *vscodeSubagent) {
 	callID := firstString(item["toolCallId"])
-	name := defaultString(item["toolId"], "tool")
+	name := vscodeToolName(item)
 	data := mapValueDefault(item["toolSpecificData"])
 	var input any
 	if round != nil {
@@ -849,6 +919,16 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 			content = output
 		}
 	}
+	// VS Code saves every call as complete; one the person denied or skipped
+	// (or whose result they did not approve) did not succeed, whatever it
+	// was shown as.
+	declined := vscodeDeclined(item["isConfirmed"])
+	if declined != "" {
+		details["status"], details["confirmation"] = "declined", declined
+		if content == nil || content == "" {
+			content = "The user " + declined + " this tool call"
+		}
+	}
 	// A finished call whose output was not kept still finished; what VS Code
 	// showed for it is its result.
 	if (content == nil || content == "") && item["isComplete"] == true {
@@ -862,6 +942,8 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 		if subagent {
 			result.Kind = "delegation_result"
 		}
+		// A declined call is no tool's error: its status says what became
+		// of it.
 		payload := map[string]any{"tool": name, "content": content, "is_error": resultDetails["isError"] == true}
 		if len(details) > 0 {
 			payload["details"] = details
@@ -890,6 +972,206 @@ func vscodeToolMessages(base MessageRecord, requestID string, position int, item
 // subagent's modelName records ("Claude Haiku 4.5" is claude-haiku-4.5).
 func vscodeModelID(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(name), "-"))
+}
+
+// vscodeDeclined is how a call's saved confirmation turned it down
+// ("denied", "skipped"), or "" if it ran: false or ToolConfirmKind Denied (0)
+// or Skipped (5). A release before 1.104 saved a boolean; none means
+// confirmed.
+func vscodeDeclined(confirmed any) string {
+	if confirmed == false {
+		return "denied"
+	}
+	switch kind, ok := number64(mapValueDefault(confirmed)["type"]); {
+	case ok && kind == 0:
+		return "denied"
+	case ok && kind == 5:
+		return "skipped"
+	}
+	return ""
+}
+
+// vscodeMCPPrefixUnsafe is what VS Code replaces with _ in a server's name
+// to make the prefix of its tools' IDs.
+var vscodeMCPPrefixUnsafe = regexp.MustCompile(`[^a-z0-9_.-]+`)
+
+// vscodeToolName is a call's tool. VS Code names an MCP server's tool
+// mcp_<server>_<tool>, from the name the server announced or else its
+// label, and saves the server in the call's source; it is named as other
+// harnesses name MCP tools, mcp__<server>__<tool>.
+func vscodeToolName(item map[string]any) string {
+	id := defaultString(item["toolId"], "tool")
+	source := mapValueDefault(item["source"])
+	server := firstString(source["label"], source["serverLabel"])
+	rest, prefixed := strings.CutPrefix(id, "mcp_")
+	if firstString(source["type"]) != "mcp" || server == "" || !prefixed {
+		return id
+	}
+	tool := rest
+	prefix := vscodeMCPPrefixUnsafe.ReplaceAllString(strings.ToLower(firstString(source["serverLabel"], source["label"])), "_")
+	// The prefix is cut to at most 13 characters, shorter beside a second
+	// server of the same name's number.
+	for n := len(prefix); n > 0; n-- {
+		if after, ok := strings.CutPrefix(rest, prefix[:n]); ok {
+			if after, ok = strings.CutPrefix(strings.TrimLeft(after, "0123456789"), "_"); ok && after != "" {
+				tool = after
+				break
+			}
+		}
+	}
+	return "mcp__" + server + "__" + tool
+}
+
+// vscodeDisabled reports whether an undone request is disabled whole, and
+// otherwise the position in its response from which an undo stop disabled
+// it (-1 for none). VS Code cuts the response at the stop, or just before
+// the code fence opening the block the stop precedes.
+func vscodeDisabled(request map[string]any, items []any) (bool, int) {
+	disablement := mapValue(request["shouldBeRemovedOnSend"])
+	if request["isHidden"] == true {
+		return true, -1
+	}
+	if disablement == nil {
+		return false, -1
+	}
+	stop := firstString(disablement["afterUndoStop"])
+	if stop == "" {
+		return true, -1
+	}
+	kind := func(index int) string {
+		if index < 0 || index >= len(items) {
+			return "none"
+		}
+		return firstString(mapValueDefault(items[index])["kind"])
+	}
+	for index, raw := range items {
+		item := mapValueDefault(raw)
+		if firstString(item["kind"]) != "undoStop" || firstString(item["id"]) != stop {
+			continue
+		}
+		if kind(index+1) == "codeblockUri" && (kind(index-1) == "" || kind(index-1) == "markdownContent") {
+			index--
+		}
+		return false, index
+	}
+	return false, -1
+}
+
+// vscodeAttachments are what was attached to a request
+// (variableData.variables): pasted code, a file, a selection, a symbol, an
+// image, text a command or setting supplied. A reference to a tool attaches
+// nothing; an image's bytes are not kept.
+func vscodeAttachments(base MessageRecord, requestID string, request map[string]any) []MessageRecord {
+	variables, _ := mapValueDefault(request["variableData"])["variables"].([]any)
+	records := []MessageRecord{}
+	for index, raw := range variables {
+		variable := mapValue(raw)
+		kind := firstString(variable["kind"])
+		if variable == nil || kind == "tool" || kind == "toolset" || kind == "implicit" && variable["enabled"] == false {
+			continue
+		}
+		value := variable["value"]
+		text, place := "", ""
+		switch kind {
+		case "paste":
+			text = defaultString(variable["code"], asString(value))
+			place = vscodeURIText(mapValueDefault(mapValueDefault(variable["copiedFrom"])["uri"]))
+			if place == "" {
+				place = firstString(variable["fileName"])
+			}
+		case "image":
+		case "element":
+			text = firstString(variable["innerText"])
+		default:
+			if s, ok := value.(string); ok {
+				text = s
+			} else if uri := mapValue(value); uri != nil {
+				if location := mapValue(uri["uri"]); location != nil {
+					uri = location
+				}
+				place = vscodeURIText(uri)
+			}
+		}
+		if place == "" {
+			place = vscodeURIText(mapValueDefault(variable["uri"]))
+		}
+		attachment := map[string]any{"type": kind, "name": firstString(variable["name"])}
+		if text != "" {
+			attachment["text"] = text
+		}
+		if place != "" {
+			attachment["path"] = place
+		}
+		if location := mapValue(value); location != nil && mapValue(location["range"]) != nil {
+			attachment["range"] = location["range"]
+		} else if copied := mapValueDefault(variable["copiedFrom"]); copied["range"] != nil {
+			attachment["range"] = copied["range"]
+		}
+		item := base
+		item.NativeID, item.Role, item.Kind, item.Text = fmt.Sprintf("%s:attachment:%d", requestID, index), "user", "attachment", jsonText(attachment)
+		records = append(records, item)
+	}
+	return records
+}
+
+// vscodeCompaction is a summary Copilot replaced a session's history with,
+// up to and including one of the model's rounds. before marks one whose
+// round is an earlier request's: it replaced what came before the request.
+type vscodeCompaction struct {
+	round, summary string
+	before         bool
+}
+
+// vscodeCompactions are each request's compactions, by request ID. Copilot
+// keeps them in a request's result (metadata.summaries, or summary in an
+// older release), naming the round they follow, which may be an earlier
+// request's.
+func vscodeCompactions(requests []any) map[string][]vscodeCompaction {
+	owner := map[string]string{}
+	ids := make([]string, len(requests))
+	for index, raw := range requests {
+		request := mapValueDefault(raw)
+		ids[index] = defaultString(request["requestId"], fmt.Sprintf("request-%d", index))
+		rounds, _ := mapValueDefault(mapValueDefault(request["result"])["metadata"])["toolCallRounds"].([]any)
+		for _, round := range rounds {
+			if roundID := firstString(mapValueDefault(round)["id"]); roundID != "" && owner[roundID] == "" {
+				owner[roundID] = ids[index]
+			}
+		}
+	}
+	found := map[string][]vscodeCompaction{}
+	// A round's later summary supersedes its earlier.
+	add := func(requestID, roundID, summary string) {
+		if strings.TrimSpace(summary) == "" {
+			return
+		}
+		for index, existing := range found[requestID] {
+			if existing.round == roundID {
+				found[requestID][index].summary = summary
+				return
+			}
+		}
+		found[requestID] = append(found[requestID], vscodeCompaction{round: roundID, summary: summary, before: owner[roundID] != requestID})
+	}
+	for index, raw := range requests {
+		meta := mapValueDefault(mapValueDefault(mapValueDefault(raw)["result"])["metadata"])
+		summaries, _ := meta["summaries"].([]any)
+		if summaries == nil && meta["summary"] != nil {
+			summaries = []any{meta["summary"]}
+		}
+		for _, rawSummary := range summaries {
+			summary := mapValueDefault(rawSummary)
+			add(ids[index], firstString(summary["toolCallRoundId"]), firstString(summary["text"]))
+		}
+	}
+	return found
+}
+
+// vscodeCompactionRecord marks where a compaction replaced what came before.
+func vscodeCompactionRecord(base MessageRecord, requestID string, compaction vscodeCompaction) MessageRecord {
+	base.NativeID, base.Role, base.Kind = fmt.Sprintf("%s:compaction:%s", requestID, compaction.round), "system", "metadata"
+	base.Text = jsonText(map[string]any{"type": "compaction", "summary": compaction.summary, "round_id": compaction.round})
+	return base
 }
 
 // vscodeResultDetailsText is the text of a result's saved output parts:

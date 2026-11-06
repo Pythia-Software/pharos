@@ -184,7 +184,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 	}
 
-	results := map[string]int{}
+	// A call's result is its first. A later result marked as continuing
+	// it (each page a ChatGPT browser click quotes) is more of its output;
+	// any other repeats it.
+	results, later := map[string]int{}, map[string][]int{}
 	for index, message := range messages {
 		if message.Kind != "tool_result" && message.Kind != "delegation_result" {
 			continue
@@ -192,6 +195,8 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		key := defaultString(nilIfEmpty(message.CallID), message.NativeID)
 		if _, seen := results[key]; !seen {
 			results[key] = index
+		} else if message.CallID != "" {
+			later[key] = append(later[key], index)
 		}
 	}
 	calls := []toolCall{}
@@ -256,6 +261,15 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 				content, images = toolResultText(payload["content"])
 				isError = payload["is_error"] == true || ((call.MCPServer != "" || call.Category == "mcp") && mcpResultError(payload["content"]))
 				details = mapValue(payload["details"])
+			}
+			for _, index := range later[key] {
+				var payload map[string]any
+				if json.Unmarshal([]byte(messages[index].Text), &payload) != nil || payload["continues"] != true {
+					continue
+				}
+				text, count := toolResultText(payload["content"])
+				content, images, isError = content+"\n"+text, images+count, isError || payload["is_error"] == true
+				call.EndedAt = defaultString(nilIfEmpty(messages[index].CreatedAt), call.EndedAt)
 			}
 			call.ResultBytes = int64(len(content))
 			call.estimateTokens = int64(math.Ceil(float64(len(content))/4)) + int64(images)*1500

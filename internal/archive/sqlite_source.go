@@ -39,10 +39,20 @@ import (
 // or OFF), and in exclusive locking mode SQLite stops counting its commits.
 // A WAL database's holder writes only whole commits to the main file, by
 // checkpoint, so a WAL database is copied.
+// Within one pass over a source (withSQLiteCopyShare), a database copied
+// once is read again from that copy, without waiting for the lock again.
 // Pharos's own catalog and captures are opened with openReadOnlySQLite,
 // never copied.
 func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 	sweepSQLiteCopiesOnce.Do(sweepSQLiteCopies)
+	share := sqliteCopyShareOf(ctx)
+	if shared, ok := share.lookup(path); ok {
+		if db, err := openCopiedSQLite(ctx, shared.file, share); err == nil {
+			noteSQLiteRead(path, shared.read)
+			return db, nil
+		}
+		share.drop(path)
+	}
 	db, err := openPinnedSQLite(ctx, sqliteURI(path)+fmt.Sprintf("?mode=ro&_pragma=busy_timeout(%d)&_pragma=query_only(1)", sourceBusyTimeoutMS))
 	if err == nil {
 		noteSQLiteRead(path, sqliteRead{Via: sqliteReadLive})
@@ -77,7 +87,7 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 			return db, nil
 		}
 	}
-	db, copyErr := openSQLiteCopy(ctx, resolved, locked)
+	db, copied, copyErr := openSQLiteCopy(ctx, resolved, locked, share)
 	if copyErr != nil {
 		via := sqliteReadFailed
 		if errors.Is(copyErr, errSQLiteWriteInProgress) {
@@ -86,8 +96,115 @@ func openSourceSQLite(ctx context.Context, path string) (*sql.DB, error) {
 		noteSQLiteRead(path, sqliteRead{Via: via, Cause: cause, Reason: copyErr.Error()})
 		return nil, errors.Join(err, copyErr)
 	}
-	noteSQLiteRead(path, sqliteRead{Via: sqliteReadCopy, Cause: cause, Reason: err.Error()})
+	read := sqliteRead{Via: sqliteReadCopy, Cause: cause, Reason: err.Error()}
+	share.keep(path, sqliteSharedCopy{file: copied, read: read})
+	noteSQLiteRead(path, read)
 	return db, nil
+}
+
+// sqliteCopyShare is one pass over a source: its discovery and every group
+// it reads. The copies made in a pass stay until it ends, and each later
+// open of the same database in the pass reads its copy, rather than waiting
+// out the lock and copying the whole database and WAL again for each group.
+// A copy is made after the pass's discovery began, so a group read from it
+// is never older than what discovery planned for it; a write since leaves a
+// change the next pass reads.
+type sqliteCopyShare struct {
+	mu     sync.Mutex
+	copies map[string]sqliteSharedCopy // by the path opened
+	ended  bool
+}
+
+type sqliteSharedCopy struct {
+	file string     // the copied database
+	read sqliteRead // how it came to be copied, for Settings
+}
+
+type sqliteCopyShareKey struct{}
+
+// withSQLiteCopyShare begins a pass whose opens of a source's databases
+// share their copies, unless ctx is in one already; end removes the pass's
+// copies, and must run when the pass ends, however it ends.
+func withSQLiteCopyShare(ctx context.Context) (shared context.Context, end func()) {
+	if share := sqliteCopyShareOf(ctx); share != nil {
+		return ctx, func() {}
+	}
+	share := &sqliteCopyShare{copies: map[string]sqliteSharedCopy{}}
+	return context.WithValue(ctx, sqliteCopyShareKey{}, share), share.end
+}
+
+// sqliteCopyShareOf is ctx's pass, or nil once it has ended.
+func sqliteCopyShareOf(ctx context.Context) *sqliteCopyShare {
+	share, _ := ctx.Value(sqliteCopyShareKey{}).(*sqliteCopyShare)
+	if share == nil {
+		return nil
+	}
+	share.mu.Lock()
+	defer share.mu.Unlock()
+	if share.ended {
+		return nil
+	}
+	return share
+}
+
+func (s *sqliteCopyShare) lookup(path string) (sqliteSharedCopy, bool) {
+	if s == nil {
+		return sqliteSharedCopy{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	shared, ok := s.copies[path]
+	return shared, ok
+}
+
+// keep has the pass own a copy, which then outlives its database. A copy
+// the pass does not keep, because it has ended or holds one already, stays
+// its database's, removed when that closes.
+func (s *sqliteCopyShare) keep(path string, shared sqliteSharedCopy) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.copies[path]; !ok && !s.ended {
+		s.copies[path] = shared
+	}
+}
+
+// holds says whether the pass owns the copy in dir.
+func (s *sqliteCopyShare) holds(dir string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, shared := range s.copies {
+		if filepath.Dir(shared.file) == dir {
+			return true
+		}
+	}
+	return false
+}
+
+// drop removes a copy that can no longer be opened.
+func (s *sqliteCopyShare) drop(path string) {
+	s.mu.Lock()
+	shared, ok := s.copies[path]
+	delete(s.copies, path)
+	s.mu.Unlock()
+	if ok {
+		os.RemoveAll(filepath.Dir(shared.file))
+	}
+}
+
+func (s *sqliteCopyShare) end() {
+	s.mu.Lock()
+	copies := s.copies
+	s.copies, s.ended = nil, true
+	s.mu.Unlock()
+	for _, shared := range copies {
+		os.RemoveAll(filepath.Dir(shared.file))
+	}
 }
 
 // errSQLiteWriteInProgress says "busy" so that the readers' retry loops,
@@ -101,8 +218,8 @@ var sourceBusyTimeoutMS = 5000
 // sqliteCopyRoot holds the copies, in a private folder that must be on the
 // source's own disk (copySQLiteSource): a copy holds everything the harness
 // keeps, credentials included, so it never goes to a library drive. A copy
-// is removed when its database closes, and one whose process ended on the
-// next open in another process.
+// is removed when its database closes, or its pass ends (sqliteCopyShare),
+// and one whose process ended on the next open in another process.
 var sqliteCopyRoot = filepath.Join(os.TempDir(), "pharos-sqlite-copies")
 
 // sqliteCopyAttempts bounds the copies of a source that changes while it is
@@ -196,8 +313,9 @@ func sqlitePendingState(path string) (sqlitePending, error) {
 // openSQLiteCopy reads path from a copy of it and its WAL, made while
 // neither changed. The copy is opened read-write (query_only) so SQLite can
 // fold the WAL into it, which a read-only open of a copy without its
-// shared-memory file could not. Closing the database removes the copy.
-func openSQLiteCopy(ctx context.Context, path string, locked bool) (*sql.DB, error) {
+// shared-memory file could not. Closing the database removes the copy,
+// unless share keeps it; copied is the copy's database.
+func openSQLiteCopy(ctx context.Context, path string, locked bool, share *sqliteCopyShare) (*sql.DB, string, error) {
 	sweepSQLiteCopies()
 	for attempt := 0; attempt < sqliteCopyAttempts; attempt++ {
 		dir, err := copySQLiteSource(ctx, path, locked)
@@ -205,18 +323,26 @@ func openSQLiteCopy(ctx context.Context, path string, locked bool) (*sql.DB, err
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		dsn := sqliteURI(filepath.Join(dir, filepath.Base(path))) + fmt.Sprintf("?mode=rw&_pragma=busy_timeout(%d)&_pragma=query_only(1)", sourceBusyTimeoutMS)
-		db := sql.OpenDB(sqliteCopyConnector{dsn: dsn, dir: dir})
-		db.SetMaxOpenConns(1)
-		if err := pinSQLite(ctx, db); err != nil {
-			db.Close()
-			return nil, err
-		}
-		return db, nil
+		copied := filepath.Join(dir, filepath.Base(path))
+		db, err := openCopiedSQLite(ctx, copied, share)
+		return db, copied, err
 	}
-	return nil, fmt.Errorf("%s: %w", path, errSQLiteWriteInProgress)
+	return nil, "", fmt.Errorf("%s: %w", path, errSQLiteWriteInProgress)
+}
+
+// openCopiedSQLite opens a copy openSQLiteCopy made; closing it removes the
+// copy unless share holds it.
+func openCopiedSQLite(ctx context.Context, file string, share *sqliteCopyShare) (*sql.DB, error) {
+	dsn := sqliteURI(file) + fmt.Sprintf("?mode=rw&_pragma=busy_timeout(%d)&_pragma=query_only(1)", sourceBusyTimeoutMS)
+	db := sql.OpenDB(sqliteCopyConnector{dsn: dsn, dir: filepath.Dir(file), share: share})
+	db.SetMaxOpenConns(1)
+	if err := pinSQLite(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 var errSQLiteSourceMoved = errors.New("the database changed while it was copied")
@@ -328,14 +454,23 @@ func sweepSQLiteCopies() {
 }
 
 // sqliteCopyConnector opens a copy's connections; database/sql closes it
-// after them, when the database closes, and so removes the copy.
-type sqliteCopyConnector struct{ dsn, dir string }
+// after them, when the database closes, and so removes the copy, unless a
+// pass holds it.
+type sqliteCopyConnector struct {
+	dsn, dir string
+	share    *sqliteCopyShare
+}
 
 func (c sqliteCopyConnector) Connect(context.Context) (driver.Conn, error) {
 	return sqliteDriver().Open(c.dsn)
 }
 func (c sqliteCopyConnector) Driver() driver.Driver { return sqliteDriver() }
-func (c sqliteCopyConnector) Close() error          { return os.RemoveAll(c.dir) }
+func (c sqliteCopyConnector) Close() error {
+	if c.share.holds(c.dir) {
+		return nil
+	}
+	return os.RemoveAll(c.dir)
+}
 
 // How a source database was last read, for Settings. Only reads that
 // stepped down the ladder are kept; a live read clears its path. Cause is

@@ -164,6 +164,7 @@ func (a *cursorAdapter) Discover(emit func(WorkspaceRecord) error) error {
 }
 
 func (a *cursorAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil {
 		return err
@@ -495,6 +496,7 @@ func (a *cursorAdapter) olderReader(file string, view *captureView, selected map
 // readGroup reads, as indexing does, the group whose parts begin as parts
 // do; nothing when that composer is gone.
 func (a *cursorAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil || len(parts) == 0 {
 		return nil, nil, err
