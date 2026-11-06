@@ -21485,6 +21485,16 @@
           "field": "repository_name",
           "op": "is_not_null",
           "value": ""
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "none"
         }
       ],
       "measures": [
@@ -21523,7 +21533,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
-      "note": "Each repository's rate divides by its own messages read, so a busy repository does not rank high for volume alone. Open a bar for the sentences behind it; Fixes groups the recurring ones into changes to docs, checks, environment or tools. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
+      "note": "Each repository's rate divides by its own messages read, so a busy repository does not rank high for volume alone. Open a bar for the sentences behind it; Fixes groups the recurring ones into changes to docs, checks, environment or tools. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
@@ -21564,6 +21574,16 @@
           "field": "repository_name",
           "op": "is_not_null",
           "value": ""
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "none"
         }
       ],
       "measures": [
@@ -21601,7 +21621,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
-      "note": "Open a bar to read each sentence in its conversation. Fixes collects the docs named more than once into an update you can hand to an agent. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
+      "note": "Open a bar to read each sentence in its conversation. Fixes collects the docs named more than once into an update you can hand to an agent. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
@@ -21642,6 +21662,16 @@
           "field": "repository_name",
           "op": "is_not_null",
           "value": ""
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "none"
         }
       ],
       "measures": [
@@ -21679,7 +21709,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
-      "note": "A failure every agent steps around costs each of them the time to rule it out. Open a bar for the sentences; Fixes lists the checks that keep failing. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
+      "note": "A failure every agent steps around costs each of them the time to rule it out. Open a bar for the sentences; Fixes lists the checks that keep failing. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
         "chart": {
@@ -21720,6 +21750,16 @@
           "field": "repository_name",
           "op": "is_not_null",
           "value": ""
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "prompted_by",
+          "op": "!=",
+          "value": "none"
         }
       ],
       "measures": [
@@ -21758,7 +21798,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
-      "note": "These are decisions an agent noted while working that a summary may leave out. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages. Opening the dashboard does not run the pass.",
+      "note": "These are decisions an agent noted while working that a summary may leave out. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
         "chart": {

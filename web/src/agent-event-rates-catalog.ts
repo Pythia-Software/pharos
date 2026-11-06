@@ -63,7 +63,14 @@ export function agentEventFixLinks(where: WhereTerm[]): { href: string; label: s
 }
 export const agentEventLengthOrder = Object.keys(lengthLabels);
 const person: WhereTerm[] = [{ field: "prompted_by", op: "=", value: "person" }];
-const inGroup = (group: string): WhereTerm[] => [{ field: "family_group", op: "=", value: group }];
+// Turns a person or a delegating agent started: scripted runs (an automation,
+// or no prompt at all, such as a corpus generator) leave out, by the same
+// who-prompted field the Who prompted breakdown shows. They were a third of
+// the messages read in a week, with rates of their own (a review script that
+// reads every doc finds more of them stale).
+export const agentEventWorkTurns: WhereTerm[] = [{ field: "prompted_by", op: "!=", value: "automated" }, { field: "prompted_by", op: "!=", value: "none" }];
+const scripted = "Leaves out scripted runs: turns an automation started or with no prompt recorded (Who prompted shows them).";
+const inGroup = (group: string): WhereTerm[] => [{ field: "family_group", op: "=", value: group }, ...agentEventWorkTurns];
 const kindsOf = (group: string) => agentEventKinds.filter(kind => kind.group === group).map(kind => kind.key);
 // What the events pass sees differs by text, not only by what happened:
 // thinking narrates far more than a reply, and nearly all thinking text read
@@ -75,11 +82,11 @@ export const agentEventRatesCatalog: AnalysisCatalog = {
   dataset: "agent_event_rates", views: ["trend", "compare"], time: { first: "occurred_at", last: "occurred_at" }, measures,
   breakdowns: {
     friction: { label: "Friction kind", fields: ["family"], order: kindsOf("Friction"), where: inGroup("Friction"),
-      note: "Friction is what got in an agent's way: obstacles, environment problems, out-of-date docs, failures that were already there, missing tools, unclear instructions, getting stuck and giving up. Each rate is over every message read." },
+      note: `Friction is what got in an agent's way: obstacles, environment problems, out-of-date docs, failures that were already there, missing tools, unclear instructions, getting stuck and giving up. Each rate is over every message read. ${scripted}` },
     friction_repository: { label: "Repository + friction kind", fields: ["repository_name", "family"], where: inGroup("Friction"),
-      note: "Each repository's rates divide by its own messages read, so a busy repository does not rank high for volume alone." },
+      note: `Each repository's rates divide by its own messages read, so a busy repository does not rank high for volume alone. ${scripted}` },
     choices_repository: { label: "Repository + unseen choice", fields: ["repository_name", "family"], where: inGroup("Choices you may not see"),
-      note: "Choices you may not see: workarounds, claims left unchecked, assumptions, deferred work, technical debt and risks the agent noted while working. Each rate divides by the repository's messages read." },
+      note: `Choices you may not see: workarounds, claims left unchecked, assumptions, deferred work, technical debt and risks the agent noted while working. Each rate divides by the repository's messages read. ${scripted}` },
     family_group: { label: "Kind group", fields: ["family_group"], order: [...agentEventGroups] },
     family: { label: "Kind", fields: ["family"], order: agentEventKinds.map(kind => kind.key) },
     source: { label: "Reply or thinking", fields: ["source"], order: ["reply", "thinking"], note: narrates },
