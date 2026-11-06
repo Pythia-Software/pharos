@@ -56,7 +56,9 @@ func cursorComposerRows() []cursorRow {
 		return data
 	}
 	rows := []cursorRow{
+		// A chat in fast mode, as its selected model's parameter.
 		{"composerData:" + cursorOld, map[string]any{"_v": 3, "composerId": cursorOld, "name": "Fix the build", "unifiedMode": "agent", "createdAt": ms(0), "lastUpdatedAt": ms(20),
+			"modelConfig": map[string]any{"modelName": "grok-4.6", "selectedModels": []any{map[string]any{"modelId": "grok-4.6", "parameters": []any{map[string]any{"id": "fast", "value": "true"}}}}},
 			"fullConversationHeadersOnly": []any{map[string]any{"bubbleId": "o1", "type": 1}, map[string]any{"bubbleId": "o2", "type": 2}, map[string]any{"bubbleId": "o3", "type": 2},
 				map[string]any{"bubbleId": "o4", "type": 2}, map[string]any{"bubbleId": "o5", "type": 2}}}},
 		// The prompt quotes usage JSON, which is not usage.
@@ -319,6 +321,10 @@ func TestCursorUsageCountsEachRequestOnce(t *testing.T) {
 	// or reply quotes, and nothing for Cursor 3, which keeps none.
 	if total := countRows(t, c, `SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage`); total != 4300 {
 		t.Fatalf("usage %d tokens", total)
+	}
+	// and was served in the fast mode its chat is set to.
+	if fast := countRows(t, c, `SELECT COUNT(*) FROM model_requests WHERE speed='fast' AND speed_source='speed'`); fast != 1 {
+		t.Fatalf("%d fast requests", fast)
 	}
 	rows, err := c.DB.Query(`SELECT call_id, tool_category, COALESCE(program,''), COALESCE(exit_code,-1) FROM tool_calls WHERE provider='cursor' ORDER BY call_id`)
 	if err != nil {

@@ -304,6 +304,16 @@ func TestZedThreadKeepsItsTurnsToolsAndSubagents(t *testing.T) {
 			t.Fatalf("a raw ID like a given one: calls = %v", counted)
 		}
 	}
+	// A thread in fast mode is fast in every request; one that names no
+	// speed is left to the standard default.
+	for speed, want := range map[any]string{"fast": "fast/speed", "standard": "standard/speed", nil: "/"} {
+		thread := (&zedAdapter{}).conversation("zed", "speed", map[string]any{}, map[string]any{"version": "0.2.0", "speed": speed, "messages": []any{read(0, "a.go", "package a")}})
+		for _, message := range thread.Messages {
+			if got := message.Speed + "/" + message.SpeedSource; got != want {
+				t.Fatalf("speed %v: %s is %s", speed, message.NativeID, got)
+			}
+		}
+	}
 	// A command's result that isn't text says nothing of how it ended.
 	var unread MessageRecord
 	(&zedAdapter{}).tool(MessageRecord{NativeID: "call5"}, "call5", "terminal", nil, map[string]any{"content": map[string]any{"Image": map[string]any{}}}, func(message MessageRecord) { unread = message }, map[string]bool{})
