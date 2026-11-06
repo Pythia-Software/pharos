@@ -138,17 +138,11 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if !build.full {
 		cubeQuery = strings.Replace(cubeQuery, " GROUP BY ", " AND t.workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build) GROUP BY ", 1)
 	}
-	aggregateCount := len(workspaces)
-	if !build.full {
-		if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_dirty_build").Scan(&aggregateCount); err != nil {
-			return build, err
-		}
-	}
-	reportWork(ctx, "aggregating tool calls", "workspace", 0, aggregateCount)
+	// SQLite exposes no partial progress for this aggregation.
+	reportWork(ctx, "aggregating tool calls", "", 0, -1, "Unitary step")
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+cubeQuery); err != nil {
 		return build, err
 	}
-	reportWork(ctx, "aggregating tool calls", "workspace", aggregateCount, aggregateCount)
 	if build.full {
 		if _, err := snapshot.ExecContext(ctx, "CREATE TEMP VIEW tool_cube_merge AS SELECT * FROM temp.tool_cube_build"); err != nil {
 			return build, err
@@ -233,7 +227,7 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	statements := []string{"DELETE FROM tool_mirror_workspaces", "INSERT INTO tool_mirror_workspaces SELECT * FROM temp.tool_mirror_build"}
 	if build.full {
 		statements = append(statements, "DROP TABLE IF EXISTS main.tool_call_cube", "CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build",
-			"CREATE INDEX tool_call_cube_workspace_idx ON tool_call_cube(workspace_id)", "CREATE INDEX tool_call_cube_day_idx ON tool_call_cube(day)", "CREATE INDEX tool_call_cube_count_idx ON tool_call_cube(call_count)", machineTimeIndexSQL, "DELETE FROM tool_usage_daily")
+			"CREATE INDEX tool_call_cube_workspace_idx ON tool_call_cube(workspace_id)", "CREATE INDEX tool_call_cube_day_idx ON tool_call_cube(day)", "CREATE INDEX tool_call_cube_count_idx ON tool_call_cube(call_count)", "DELETE FROM tool_usage_daily")
 	} else {
 		statements = append(statements, "DELETE FROM tool_call_cube WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)",
 			"INSERT INTO tool_call_cube SELECT * FROM temp.tool_cube_build", `DELETE FROM tool_usage_daily WHERE day IN (SELECT day FROM temp.tool_day_build)

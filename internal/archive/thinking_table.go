@@ -9,12 +9,12 @@ import (
 
 // requestTimingVersion names the derivation stored in model_request_timings.
 // Changing it marks every conversation for recomputation.
-const requestTimingVersion = "timings-v1"
+const requestTimingVersion = "timings-v3-inference-speed-policy"
 
 // requestTimingColumns are model_request_timings' columns, in the order
 // thinkingSource returns them.
 const requestTimingColumns = `id,conversation_id,agent_session_id,workspace_id,native_id,previous_request_id,sequence,requested_at,observed_millis,
- model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
+ model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
  source_kind,repository_name,machine,preceding_tool,timing_quality,gap_seconds,tool_result_at`
 
 // requestTimingSQL derives each request's timing evidence within the
@@ -30,7 +30,7 @@ const requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch
  COUNT(DISTINCT COALESCE(agent_session_id,'')) streams,MIN(COALESCE(agent_session_id,'')) stream,
  CASE WHEN COUNT(DISTINCT tool_category)=1 THEN MIN(tool_category) ELSE 'mixed' END preceding_tool
  FROM tool_calls WHERE next_request_id IN (SELECT id FROM model_requests WHERE conversation_id IN ({conversations})) GROUP BY next_request_id),
- ordered AS (SELECT mr.id,mr.conversation_id,mr.agent_session_id,mr.native_id,mr.sequence,mr.requested_at,mr.model,mr.effort,
+ ordered AS (SELECT mr.id,mr.conversation_id,mr.agent_session_id,mr.native_id,mr.sequence,mr.requested_at,mr.model,mr.effort,mr.speed,mr.service_tier,mr.speed_source,
  mr.input_tokens,mr.cache_read_input_tokens,mr.output_tokens,mr.reasoning_output_tokens,mr.compacted_before,
  LAG(mr.id) OVER stream previous_request_id,LAG(unixepoch(requested_at,'subsec')) OVER stream previous_at
  FROM model_requests mr WHERE mr.conversation_id IN ({conversations})
@@ -53,7 +53,7 @@ const requestTimingSQL = `WITH incoming AS (SELECT next_request_id,MAX(unixepoch
  WHEN observed_gap>600 THEN 'Above 600 seconds'
  ELSE 'Usable timing' END timing_quality FROM durations)
  SELECT id,conversation_id,agent_session_id,workspace_id,native_id,previous_request_id,sequence,requested_at,CAST(ROUND(observed_at*1000) AS INTEGER) observed_millis,
- COALESCE(NULLIF(model,''),'Unreported') model,COALESCE(NULLIF(effort,''),'Unreported') effort,
+ COALESCE(NULLIF(model,''),'Unreported') model,COALESCE(NULLIF(effort,''),'Unreported') effort,CASE WHEN LOWER(speed)='fast' THEN 'fast' ELSE 'standard' END speed,service_tier,COALESCE(NULLIF(speed_source,''),'assumed_standard') speed_source,
  input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,provider,harness,agent_depth,
  source_kind,repository_name,machine,preceding_tool,timing_quality,
  CASE WHEN timing_quality='Usable timing' THEN observed_gap END gap_seconds,
@@ -94,10 +94,12 @@ var thinkingSource = `SELECT * FROM (SELECT ` + requestTimingColumns + ` FROM mo
 
 var thinkingRequestDataset = func() sqlDataset {
 	columns := map[string]string{}
-	for _, name := range []string{"id", "conversation_id", "agent_session_id", "workspace_id", "native_id", "sequence", "requested_at", "model", "effort", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "provider", "harness", "agent_depth", "source_kind", "repository_name", "machine", "preceding_tool", "timing_quality", "gap_seconds", "tool_result_at"} {
+	for _, name := range []string{"id", "conversation_id", "agent_session_id", "workspace_id", "native_id", "sequence", "requested_at", "model", "effort", "speed", "service_tier", "speed_source", "input_tokens", "cache_read_input_tokens", "output_tokens", "reasoning_output_tokens", "compacted_before", "provider", "harness", "agent_depth", "source_kind", "repository_name", "machine", "preceding_tool", "timing_quality", "gap_seconds", "tool_result_at"} {
 		columns[name] = "d." + name
 	}
 	columns["model_effort"] = "model_effort(d.model,d.effort)"
+	columns["model_speed"] = "d.model || ' · ' || CASE WHEN d.speed='fast' THEN 'Fast' ELSE 'Standard' END"
+	columns["model_effort_speed"] = "d.model || ' · ' || d.effort || ' · ' || CASE WHEN d.speed='fast' THEN 'Fast' ELSE 'Standard' END"
 	columns["day"] = "date(d.requested_at,'localtime')"
 	columns["week"] = "date(d.requested_at,'localtime','-6 days','weekday 1')"
 	columns["month"] = "strftime('%Y-%m',d.requested_at,'localtime')"
@@ -114,11 +116,29 @@ func (c *Catalog) ensureRequestTimings() error {
 	// than visiting rows stored a conversation at a time.
 	if _, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS model_request_timings(id TEXT NOT NULL, conversation_id TEXT NOT NULL,
  agent_session_id TEXT, workspace_id TEXT, native_id TEXT, previous_request_id TEXT, sequence INTEGER, requested_at TEXT, observed_millis INTEGER,
- model TEXT NOT NULL, effort TEXT NOT NULL, input_tokens INTEGER, cache_read_input_tokens INTEGER, output_tokens INTEGER, reasoning_output_tokens INTEGER,
+ model TEXT NOT NULL, effort TEXT NOT NULL, speed TEXT, service_tier TEXT, speed_source TEXT, input_tokens INTEGER, cache_read_input_tokens INTEGER, output_tokens INTEGER, reasoning_output_tokens INTEGER,
  compacted_before INTEGER, provider TEXT, harness TEXT, agent_depth INTEGER, source_kind TEXT, repository_name TEXT, machine TEXT,
  preceding_tool TEXT NOT NULL, timing_quality TEXT NOT NULL, gap_seconds REAL, tool_result_at TEXT,
- PRIMARY KEY(conversation_id,id)) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS model_request_timings_requested_idx ON model_request_timings(requested_at,` + requestTimingColumns + `);
+ PRIMARY KEY(conversation_id,id)) WITHOUT ROWID;`); err != nil {
+		return err
+	}
+	if has, err := c.hasColumn("model_request_timings", "speed"); err != nil {
+		return err
+	} else if !has {
+		if _, err := c.DB.Exec("ALTER TABLE model_request_timings ADD COLUMN speed TEXT; DROP INDEX IF EXISTS model_request_timings_requested_idx"); err != nil {
+			return err
+		}
+	}
+	for _, column := range []string{"service_tier", "speed_source"} {
+		if has, err := c.hasColumn("model_request_timings", column); err != nil {
+			return err
+		} else if !has {
+			if _, err := c.DB.Exec("ALTER TABLE model_request_timings ADD COLUMN " + column + " TEXT; DROP INDEX IF EXISTS model_request_timings_requested_idx"); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS model_request_timings_requested_idx ON model_request_timings(requested_at,` + requestTimingColumns + `);
 CREATE TABLE IF NOT EXISTS model_request_timing_dirty(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS model_request_exclusions(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;`); err != nil {
 		return err

@@ -84,10 +84,10 @@ func TestCarbonLinkedQueryAssumptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := testServer(t, config, c)
-	request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"co2e_g"}, Limit: 100}}
+	request := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"co2e_g"}, Limit: 100}}
 	read := func(settings string) float64 {
 		t.Helper()
-		result, err := s.executeQueryV2(t.Context(), "usage", url.Values{"carbon_settings": {settings}}, PharosUsageSchema(), &request, nil)
+		result, err := s.executeQueryFixture(t.Context(), "usage", url.Values{"carbon_settings": {settings}}, PharosUsageSchema(), &request, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,9 +108,9 @@ func TestCarbonLinkedQueryAssumptions(t *testing.T) {
 	if err != nil || math.Abs(grouped.Rows[0]["co2"].(float64)-linked) > 1e-8 {
 		t.Fatalf("grouped estimate=%+v err=%v", grouped, err)
 	}
-	itemRequest := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "co2e_g"}, Limit: 1}}
+	itemRequest := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "co2e_g"}, Limit: 1}}
 	assumptions := `{"scenario":"high","grid":"custom","customGrid":100}`
-	itemRows, itemErr := s.executeQueryV2(t.Context(), "usage", url.Values{"carbon_settings": {assumptions}}, PharosUsageSchema(), &itemRequest, nil)
+	itemRows, itemErr := s.executeQueryFixture(t.Context(), "usage", url.Values{"carbon_settings": {assumptions}}, PharosUsageSchema(), &itemRequest, nil)
 	if itemErr != nil || len(itemRows.Rows.Rows) != 1 {
 		t.Fatal(itemErr)
 	}

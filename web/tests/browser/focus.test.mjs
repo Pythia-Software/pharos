@@ -9,19 +9,54 @@ import { defaultApi, workID, eventStream, busyStatus } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('Settings switches keep keyboard focus and their saved state across Settings and Analyze', {skip}, async t => {
-  const {page, settled, shot} = await open(t, {url:'/settings/sync',ready:'#labelsEnabled'});
-  const labels = page.getByRole('switch', {name:'Enable message labels',exact:true});
-  await labels.focus();
+  let background = structuredClone(defaultApi['GET /api/background']);
+  const {page, settled, shot} = await open(t, {url:'/settings/sync',viewport:{width:1920,height:1050},ready:'#backgroundSchedule .bg-col', api: {
+    'GET /api/background': () => background,
+    'POST /api/labels/settings': ({body}) => {
+      if ('enabled' in body) {
+        background.labels.enabled = body.enabled;
+        const step = background.view.items.find(item => item.id === 'labels');
+        Object.assign(step, {state: body.enabled ? 'queued' : 'disabled', state_label: body.enabled ? 'Up next' : 'Off', cadence: body.enabled ? 'hourly' : 'manual'});
+        background.view.unscheduled = background.view.items.filter(item => item.cadence === 'manual').map(item => item.id);
+        background.view.cadences.find(row => row.id === 'hourly').items = background.view.items.filter(item => item.cadence === 'hourly').map(item => item.id);
+      }
+      if ('agent_events_threads' in body) background.agent_events.threads = body.agent_events_threads;
+      return background;
+    },
+  }});
+  const refreshFocused = async control => {
+    await control.focus();
+    await page.evaluate(() => window.pharosBackground.refresh(true));
+    await settled();
+    assert.ok(await control.evaluate(element => document.activeElement === element), 'refreshing an idle model switch keeps keyboard focus');
+  };
+  await page.locator('[data-view-key="background:labels"]').click();
+  const labels = page.getByRole('switch', {name:'Message labels',exact:true});
+  await refreshFocused(labels);
   for (const enabled of [true, false]) {
     const saved = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
     await page.keyboard.press('Space');
     await saved;
     await page.waitForFunction(enabled => {
-      const box = document.getElementById('labelsEnabled');
-      return box?.checked === enabled && !box.disabled && document.activeElement === box;
+      const toggle = document.getElementById('labelsEnabled');
+      return toggle?.getAttribute('aria-checked') === String(enabled) && !toggle.disabled && document.activeElement === toggle;
     }, enabled);
+    assert.equal(await labels.evaluate(element => element.closest('[data-cadence]').dataset.cadence), enabled ? 'hourly' : 'manual');
+    await refreshFocused(labels);
     if (enabled) await shot('enabled');
   }
+  await page.locator('[data-view-key="background:agent_events"]').click();
+  await refreshFocused(page.getByRole('switch', {name:'Agent events (preview)',exact:true}));
+  const threads = page.getByRole('combobox', {name:'Agent events (preview) CPU threads', exact:true});
+  await threads.focus();
+  const savedThreads = page.waitForResponse(response => response.url().endsWith('/api/labels/settings') && response.request().method() === 'POST');
+  await threads.selectOption('2');
+  await savedThreads;
+  await page.waitForFunction(() => {
+    const select = document.querySelector('[data-focus-key="agentEvents:threads"]');
+    return select?.value === '2' && document.activeElement === select;
+  });
+  await shot('labeling');
   await page.evaluate(() => window.pharosNavigate('/settings/mcp'));
   await page.locator('#mcpSettingsPage .mcp-setup-grid').waitFor();
   const mcp = page.getByRole('switch', { name: 'Enable MCP', exact: true });
@@ -178,9 +213,10 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
-// Tokens stand for every dashboard topic: all share usage-chart.tsx.
-for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} inspection focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: 'tokens', analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+// Habits surrounds the shared chart with its own panels; exercise that page
+// at both widths so panel styles cannot break chart hit targets or gestures.
+for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['habits', 'interval', 1440], ['habits', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
   const chart = page.locator('.usage-dashboard .usage-chart').first();
   const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
   await bar.focus();
@@ -194,6 +230,7 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
   assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
   await bar.click();
   await details.waitFor();
+  assert.equal(await bar.getAttribute('aria-pressed'), 'true', 'pointer inspection selects the period under the pointer');
   await page.locator('.usage-chart-headline > h2').click();
   await details.waitFor({ state: 'hidden' });
   await settled();
@@ -201,6 +238,7 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
 
   // Pointer capture snaps to columns and treats a drag back to its anchor as inspection.
   const bars = chart.locator('.usage-chart-bars > button');
+  await bars.nth(1).scrollIntoViewIfNeeded();
   const before = page.url();
   const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
   await page.mouse.move(start.x + start.width / 2, start.y + 30);
@@ -214,11 +252,13 @@ for (const display of ['interval', 'cumulative']) test(`Dashboard ${display} ins
   assert.equal(new URL(page.url()).searchParams.get('analyze_filters'),new URL(before).searchParams.get('analyze_filters'),'one-period inspection leaves date filters alone');
   assert.ok(Object.keys(JSON.parse(new URL(page.url()).searchParams.get('chart_pins'))).length,'a deliberate pinned bucket is represented in the URL');
   await page.locator('.usage-chart-headline > h2').click();
-  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await bars.nth(1).scrollIntoViewIfNeeded();
+  const dragStart = await bars.nth(4).boundingBox(), dragEnd = await bars.nth(1).boundingBox();
+  await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + 30);
   await page.mouse.down();
-  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.move(dragEnd.x + dragEnd.width / 2, dragEnd.y + 30);
   await page.mouse.up();
-  await page.waitForFunction(previous => location.href !== previous, before);
+  await page.waitForFunction(previous => new URLSearchParams(location.search).get('analyze_filters') !== previous, new URL(before).searchParams.get('analyze_filters'));
   await settled();
 });
 
@@ -306,9 +346,11 @@ async function holdsFocus(page, surface, opener) {
 // across a pushed snapshot. Stop and Eject decisions are unit tested in
 // web/tests/unit/page/status-panel.test.mjs.
 test("Unified activity panel holds focus and its disclosure across refreshes", { skip }, async t => {
+  const snapshot = {...busyStatus, operations: busyStatus.operations.map(operation => operation.id === 'op-index'
+    ? {...operation, children: [], children_count: 0} : operation)};
   const app = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", api: {
-    "GET /api/status/stream": eventStream(busyStatus),
-    "GET /api/status": busyStatus,
+    "GET /api/status/stream": eventStream(snapshot),
+    "GET /api/status": snapshot,
   } });
   const { page, push } = app;
   const chip = page.locator("#pharosDrive");
@@ -326,10 +368,35 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   await daily.locator("summary").click();
   const stop = panel.getByRole("button", { name: "Stop", exact: true });
   await stop.focus();
-  push("/api/status/stream", { ...busyStatus, revision: 3, operations: busyStatus.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
+  push("/api/status/stream", { ...snapshot, revision: 3, operations: snapshot.operations.map(operation => operation.id === "op-index" ? { ...operation, step: { ...operation.step, done: 900e6, fraction: 0.45 } } : operation) });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 3);
   assert.ok(await stop.evaluate(element => document.activeElement === element), "a refresh moved focus");
   assert.ok(await daily.evaluate(element => element.open), "a refresh closed the cadence row the user opened");
+  const progress = panel.getByRole('progressbar', { name: 'Index changes progress', exact: true });
+  assert.notEqual(await progress.getAttribute('aria-valuenow'), null);
+  push('/api/status/stream', {...snapshot, revision: 4, operations: snapshot.operations.map(operation => operation.id === 'op-index'
+    ? {...operation, step: {...operation.step, total: null, fraction: null}} : operation)});
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 4);
+  assert.equal(await progress.getAttribute('aria-valuenow'), null, 'a new unknown-total phase must remove the old percentage');
+  assert.ok(await stop.evaluate(element => document.activeElement === element), 'changing progress mode moved focus');
+  push('/api/status/stream', {...snapshot, revision: 5});
+  await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 5);
+  assert.notEqual(await progress.getAttribute('aria-valuenow'), null, 'measured progress returns when inventory is known');
+  const detail = 'Waiting for the catalog writer';
+  const child = {id: 'git', kind: 'analysis.git', label: 'Check repositories', state: 'running', state_label: 'Checking repositories',
+    step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}, children: []};
+  const waiting = {state: 'blocked', state_label: 'Waiting', detail};
+  for (const [index, ancestor] of [
+    {...snapshot.operations[0], ...waiting, children: [child]},
+    {...snapshot.operations[0], children: [{id: 'chain', kind: 'analysis.chain', label: 'Update analyses', ...waiting, children: [child]}]},
+  ].entries()) {
+    const revision = 6 + index;
+    push('/api/status/stream', {...snapshot, revision, operations: snapshot.operations.map(operation => operation.id === 'op-index' ? ancestor : operation)});
+    await page.waitForFunction(revision => window.pharosStatusStore.current()?.view?.library?.revision === revision, revision);
+    await panel.getByText(detail).waitFor();
+    await panel.getByRole('progressbar', {name: `${child.label} progress`, exact: true}).waitFor();
+    assert.ok(await stop.evaluate(element => document.activeElement === element), 'an ancestor wait moved focus');
+  }
   await app.shot("refreshed");
 });
 
@@ -494,6 +561,7 @@ test("quick search takes focus from the header button and from the keyboard shor
     }), 'sidebar control is covered by page content');
     await press(expand);
     await sidebar.waitFor();
+    await press(sidebar.locator('summary').filter({ hasText: /^People$/ }));
     await press(sidebar.getByRole('link', { name: /^Human words$/i }));
     await page.locator('.usage-human-dashboard .usage-chart').waitFor();
     await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
@@ -505,7 +573,7 @@ test('navigation and header focus stay reachable when resizing between layouts',
   const { page, settled } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart' });
   // The section sidebar hands focus to the phone switcher and back.
   const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
-  await sidebar.getByRole('link', { name: /^Human words$/i }).focus();
+  await sidebar.getByRole('link', { name: 'Tokens and Cost', exact: true }).focus();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForFunction(() => document.activeElement === document.getElementById('appNavigationToggle'));
   await press(page.locator('#appNavigationToggle'));
@@ -589,10 +657,34 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
 {
   const viewport = { width: 390, height: 844 };
   test(`app navigation takes and returns focus, and reaches other app sections at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
+    const { page, shot } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
     const opener = page.locator('#appNavigationToggle'), dialog = page.getByRole('dialog', { name: 'Navigate Pharos' });
     await press(opener);
     await holdsFocus(page, dialog, opener);
+    await press(opener);
+    const outcomes = dialog.locator('summary').filter({ hasText: /^Outcomes$/ });
+    await press(outcomes);
+    assert.equal(await dialog.getByRole('link', { name: 'Tokens and Cost', exact: true }).isVisible(), false);
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+    await press(opener);
+    await page.waitForFunction(element => document.activeElement === element, await outcomes.elementHandle());
+    await press(outcomes);
+    const people = dialog.locator('summary').filter({ hasText: /^People$/ });
+    await press(people);
+    await page.waitForFunction(element => {
+      const rect = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    }, await people.elementHandle());
+    await shot('nested-dashboards');
+    await dialog.getByRole('link', { name: 'TL1 attempts', exact: true }).scrollIntoViewIfNeeded();
+    assert.equal(await onScreen(dialog.getByRole('button', { name: 'All pages', exact: true })), true, 'scrolling keeps the way back reachable');
+    assert.equal(await onScreen(dialog.getByRole('button', { name: 'Close navigation', exact: true })), true, 'scrolling keeps the close control reachable');
+    await shot('scrolled-navigation');
+    await press(dialog.getByRole('link', { name: 'Human Words', exact: true }));
+    await page.locator('.usage-human-dashboard .usage-chart').waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     await press(opener);
     await press(dialog.getByRole('button', { name: 'All pages', exact: true }));
     await press(dialog.getByRole('button', { name: 'Settings', exact: true }));
@@ -751,13 +843,6 @@ test("All Cards moves focus to its content and browser history returns Home", { 
   assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "returning Home leaves the welcome text unfocusable");
 });
 
-test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
-  const { page } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
-  const edit = page.locator(".card-library-entry button[aria-label^='Edit card']").first();
-  await press(edit);
-  await holdsFocus(page, page.locator("dialog.card-template-editor"), edit);
-});
-
 test("the findings prompt review takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
   const review = page.locator(".findings-cart button.primary").first();
@@ -793,6 +878,28 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   const sheet = page.locator('[role="dialog"][aria-label="Workspace sessions"]');
   await sheet.waitFor();
   await holdsFocus(page, sheet, show);
+  await press(show);
+  await press(sheet.getByRole('button', { name: 'Hide workspace sessions', exact: true }));
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+});
+
+test("the workspace sidebar returns focus when collapsed and preserves the reader when reopened", { skip }, async t => {
+  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn" });
+  const reader = page.getByRole('region', { name: 'Conversation viewer', exact: true });
+  const hide = page.getByRole('button', { name: 'Hide workspace sessions', exact: true });
+  const show = page.getByRole('button', { name: 'Show workspace sessions', exact: true });
+  await page.locator('.turn').nth(6).evaluate(turn => turn.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await settled();
+  const scroll = await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop);
+  await press(hide);
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show workspace sessions');
+  assert.equal(await reader.isVisible(), true);
+  assert.equal(await hide.evaluate(el => { el.focus(); return el === document.activeElement; }), false, 'collapsed sessions cannot receive keyboard focus');
+  await press(show);
+  await page.waitForFunction(() => document.activeElement?.closest('.workspace-overview'));
+  assert.equal(await page.getByRole('region', { name: 'Workspace overview', exact: true }).isVisible(), true);
+  assert.equal(await page.locator('.workspace-reader-content').evaluate(el => el.scrollTop), scroll);
+  assert.equal(new URL(page.url()).searchParams.get('conversation'), 'conv-root');
 });
 
 test("conversation navigation focuses the requested reader unless focus moved while it loaded", { skip }, async t => {
@@ -818,7 +925,7 @@ test("conversation navigation focuses the requested reader unless focus moved wh
     const target = moveFocus ? control : page.locator(".conversation-panel");
     await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
   }
-  await press(page.locator(".workspace-reader-workspace"));
+  await press(page.getByRole('button', { name: 'Open workspace overview', exact: true }));
   await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });
@@ -1019,7 +1126,6 @@ test('Capture & index keeps run details focus, table scrolling and query edits t
   }
 
   // The query editor keeps focus and its edit across refreshes.
-  await history.getByRole('button', { name: 'Expand query builder', exact: true }).click();
   const limit = history.getByRole('spinbutton');
   await limit.fill('2');
   await page.evaluate(() => window.pharosSync.refresh());
@@ -1540,8 +1646,26 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   }});
   await page.emulateMedia({reducedMotion:motion});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const hintVisible=()=>editor.evaluate(element=>{
+    const hint=getComputedStyle(element,'::after');
+    return !['none','normal','""'].includes(hint.content)&&hint.display!=='none'&&hint.visibility==='visible';
+  });
+  assert.ok(await hintVisible(),'the empty, unfocused composer offers an invitation');
+  await shot('empty-invitation');
+  await editor.focus();
+  assert.equal(await hintVisible(),false,'focus hides the invitation before any typing');
+  await shot('focused-empty');
+  await editor.fill('An unsent draft');
+  await page.locator('.pharos-model-trigger').focus();
+  assert.equal(await hintVisible(),false,'a blurred draft must not regain a placeholder');
+  await editor.fill('');
+  assert.equal(await hintVisible(),false,'deleting the draft while focused keeps the invitation hidden');
+  await page.locator('.pharos-model-trigger').focus();
+  assert.ok(await hintVisible(),'leaving an empty composer restores the invitation');
   await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true}),editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  assert.equal(await hintVisible(),false,'opening the modal focuses a clear editor');
   const finishMotion=()=>modal.evaluate(async element=>{
     for(;;){
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -1609,11 +1733,12 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   assert.ok(await page.getByRole('button',{name:'Close Ask Pharos',exact:true}).evaluate(fits),'Close stays reachable after shrinking the window');
 });
 
-// Opens Analyze with Ask enabled; the send stub waits for `finish`.
+// Opens Analyze with Ask enabled; the send stub resolves `received`, then waits for `finish`.
 async function openAskOverlay(t, width) {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const state={sent:null};
   const response=new Promise(resolve=>{state.finish=resolve;});
+  state.received=new Promise(resolve=>{state.receive=resolve;});
   t.after(()=>state.finish());
   const app=await open(t,{url:'/analyze?analyze_topic=tokens',viewport:{width,height:650},ready:'body>header',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -1621,7 +1746,7 @@ async function openAskOverlay(t, width) {
     'GET /api/ask/sessions':{sessions:[]},
     'POST /api/ask/session':({body})=>body,
     'POST /api/ask/send':async({body})=>{
-      state.sent=body;await response;
+      state.sent=body;state.receive();await response;
       return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'single',message:'',elapsedMs:1000,reply:'Ready to explore.',cards:[{id:'library',title:'Search',kind:'Page',description:'Your past work',href:'/library'}]}]};
     },
   }});
@@ -1665,6 +1790,103 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   await modal.waitFor({state:'hidden'});
   const brand=page.locator('body>header .brand');await brand.focus();
   assert.ok(await brand.evaluate(element=>element===document.activeElement),'ordinary search results must allow background interaction');
+});
+
+test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {
+  const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await modal.waitFor({state:'hidden'});
+  assert.ok(await editor.evaluate(element=>!!element.closest('#askPage')&&element===document.activeElement),'full screen keeps the composer focused on its page');
+  // Suggestions sit inside the composer until the user types.
+  const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
+  await suggestions.waitFor();
+  assert.ok(await suggestions.evaluate(element=>!!element.closest('.pharos-ai')));
+  await shot('ask-full-screen-empty');
+  await editor.pressSequentially('Which tools fail most?');
+  await suggestions.waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  await state.received;
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),state.sent?.id,'the page names the chat it is showing');
+  assert.ok(state.sent.currentURI.startsWith('/analyze?'),'the question keeps the page it was asked about');
+  // The transcript fills the page, keeping the composer at the bottom.
+  await page.waitForFunction(()=>{const box=document.querySelector('.pharos-send').getBoundingClientRect();return box.bottom<=innerHeight&&box.bottom>innerHeight-120;});
+  await shot('ask-full-screen');
+  await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/analyze');
+  await modal.waitFor();
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'leaving full screen reopens the dialog it came from');
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await page.goBack();
+  await page.waitForURL(url=>url.pathname==='/analyze');
+  const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
+  await panel.waitFor();
+  assert.ok(await modal.isHidden(),'Back leaves full screen, floating a pending question');
+  // Header tabs switch views without a route event; they still leave full screen.
+  await panel.locator('.pharos-floating-open').click();await modal.waitFor();
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await activateHeaderTool(page,'settingsToggle');
+  await page.waitForURL(url=>url.pathname==='/settings');
+  await panel.waitFor();
+  await activateHeaderTool(page,'askPharosToggle');
+  await modal.waitFor();
+  assert.ok(await editor.evaluate(element=>element===document.activeElement),'Ask reopens after a header tab leaves full screen');
+  // Picture in picture from full screen opened on Home floats there instead of returning inline.
+  await page.keyboard.press('Escape');await panel.waitFor();
+  await page.locator('body>header .brand').click();
+  await page.waitForURL(url=>url.pathname==='/');
+  await page.locator('#homeAskSearch').getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/');
+  await panel.waitFor();
+  assert.equal(await page.locator('#homeAskSearch .pharos-ai').count(),0,'the chat floats rather than returning inline');
+  assert.ok(await panel.locator('.pharos-floating-open').evaluate(element=>element===document.activeElement),'focus moves to the floating panel');
+});
+
+test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const chat=(id,prompt)=>({id,createdAt:1,updatedAt:id==='slow'?2:1,selection,draft:'',conversation:[{id:id+'-turn',prompt,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Done.',cards:[]}]});
+  const chats={slow:chat('slow','Slow question'),other:chat('other','Other question')};
+  const gates={};const release=id=>gates[id]?.();
+  const held=id=>new Promise(resolve=>{gates[id]=resolve;});
+  let waiting={};
+  t.after(()=>Object.values(gates).forEach(open=>open()));
+  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':()=>({sessions:Object.values(chats)}),
+    'GET /api/ask/session':async({query})=>{const id=query.get('id');await waiting[id];return chats[id];},
+    'POST /api/ask/session':({body})=>({...chats[body.id],...body}),
+  }});
+  const prompts=()=>page.locator('.pharos-user-question').allTextContents();
+  // Entering full screen while a chat from History loads opens that chat.
+  waiting={slow:held('slow')};
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.getByRole('link',{name:'Open chat: Slow question',exact:true}).click();
+  await page.locator('#homeAskSearch').getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask'&&url.searchParams.get('ask_chat')==='slow');
+  release('slow');waiting={};
+  await page.locator('#askPage .pharos-user-question').filter({hasText:'Slow question'}).waitFor();
+  // Leaving full screen for the dialog while another chat loads keeps that chat.
+  await activateHeaderTool(page,'settingsToggle');await page.waitForURL(url=>url.pathname==='/settings');
+  await activateHeaderTool(page,'askPharosToggle');
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await page.locator('.pharos-ai').getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  waiting={other:held('other')};
+  await page.getByRole('link',{name:'Open chat: Other question',exact:true}).click();
+  await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/settings');
+  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});await modal.waitFor();
+  release('other');waiting={};
+  await modal.locator('.pharos-user-question').filter({hasText:'Other question'}).waitFor();
+  await settled();
+  assert.deepEqual(await prompts(),['Other question']);
 });
 
 // Placement of dragged and resized progress is unit tested in ask-pharos.test.mjs.
@@ -1843,8 +2065,14 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   assert.ok(await dialog.getByRole('textbox',{name:'Title',exact:true}).evaluate(el=>el===document.activeElement));
   await holdsFocus(page,dialog,create);
   await create.click();
+  for(const [width,height] of [[1440,900],[320,568]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.scrollWidth<=el.clientWidth;}),'default card copy fits the viewport');
+  }
   await dialog.getByRole('textbox',{name:'Title',exact:true}).fill('My provider tokens');
   await dialog.getByRole('textbox',{name:'Description',exact:true}).fill('A moving view of my token usage.');
+  await dialog.getByRole('combobox',{name:'Category',exact:true}).selectOption('cost');
+  await dialog.getByRole('textbox',{name:'Call to action',exact:true}).fill('See where my tokens go');
   for(const [width,height] of [[1440,900],[320,568]]) {
     await page.setViewportSize({width,height});
     assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight && el.scrollWidth<=el.clientWidth;}),'dialog fits the viewport');
@@ -1858,6 +2086,14 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   const card = page.locator('.home-collection .query-card').filter({hasText:'My provider tokens'});
   await card.locator('.query-cover[aria-busy]').waitFor({state:'detached'});
   await shot('created-dashboard-card-home');
+  // Home's editor changes the same labels.
+  await card.getByRole('button',{name:'Edit My provider tokens',exact:true}).click();
+  const editor = page.getByRole('dialog',{name:'Make this view yours'});
+  await editor.getByRole('combobox',{name:'Category',exact:true}).selectOption('usage');
+  await editor.getByRole('textbox',{name:'Call to action',exact:true}).fill('Open my tokens');
+  await shot('edit-dashboard-card-home');
+  await editor.getByRole('button',{name:'Save changes',exact:true}).click();
+  await editor.waitFor({state:'hidden'});
   await card.getByRole('link').click();
   await page.locator('.usage-dashboard .usage-chart').waitFor();
 });
