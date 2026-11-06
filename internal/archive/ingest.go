@@ -76,6 +76,10 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 	if err := c.queries.wait(ctx); err != nil {
 		return IngestResult{Source: adapter.Config().Name, Error: err.Error()}
 	}
+	// Planning and every group read share a copy of a database that stays
+	// locked, removed when the ingest returns.
+	ctx, endCopyShare := withSQLiteCopyShare(ctx)
+	defer endCopyShare()
 	// Plans retain the acquired reader, never readers over a live inventory.
 	if plan := modeOf(ctx).plan; plan != nil && plan.reader != nil {
 		adapter = plan.reader

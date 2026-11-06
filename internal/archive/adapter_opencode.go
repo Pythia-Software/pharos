@@ -92,6 +92,7 @@ func (a *opencodeAdapter) Discover(emit func(WorkspaceRecord) error) error {
 }
 
 func (a *opencodeAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil {
 		return err
@@ -288,6 +289,7 @@ func (a *opencodeAdapter) olderReader(file string, view *captureView, selected m
 // readGroup reads, as indexing does, the group whose parts begin as parts
 // do; nothing when that session is gone.
 func (a *opencodeAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil || len(parts) == 0 {
 		return nil, nil, err

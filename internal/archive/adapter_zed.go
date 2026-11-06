@@ -87,6 +87,7 @@ func (a *zedAdapter) Discover(emit func(WorkspaceRecord) error) error {
 }
 
 func (a *zedAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil {
 		return err
@@ -311,6 +312,7 @@ func (a *zedAdapter) olderReader(file string, view *captureView, selected map[st
 // readGroup reads, as indexing does, the group whose parts begin as parts
 // do; nothing when that thread is gone.
 func (a *zedAdapter) readGroup(parts []sourcePart) (*WorkspaceRecord, []sourcePart, error) {
+	defer a.shareSQLiteCopies()()
 	plan, err := a.planParts()
 	if err != nil || len(parts) == 0 {
 		return nil, nil, err
