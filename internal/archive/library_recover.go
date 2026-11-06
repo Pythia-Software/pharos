@@ -296,7 +296,7 @@ func syncDirectory(path string) error {
 		return err
 	}
 	defer f.Close()
-	return f.Sync()
+	return syncToDrive(f)
 }
 
 // Every manifest reference is part of the recovery contract, including old

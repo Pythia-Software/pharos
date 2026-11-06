@@ -130,6 +130,7 @@ func TestCLIFrictionDetector(t *testing.T) {
 }
 
 func TestHeavyOutputAndOutlierDetectors(t *testing.T) {
+	override(t, &runawayRequests, int64(30))
 	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 	fixture := newFindingFixture(t, now)
 	fixture.monthOf(now, func(day time.Time, index int) {
@@ -139,7 +140,7 @@ func TestHeavyOutputAndOutlierDetectors(t *testing.T) {
 		}
 		requests, compactions := 20, 0
 		if index%4 == 0 {
-			requests, compactions = 1200, 12
+			requests, compactions = int(runawayRequests)+1, 12
 		}
 		fixture.addConversation(day, "codex", calls, requests, compactions, 1000)
 	})

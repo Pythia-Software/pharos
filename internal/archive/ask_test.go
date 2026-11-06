@@ -536,11 +536,13 @@ func TestAskSavesAnswerPastABusyCatalog(t *testing.T) {
 			session, err := s.askSession(t.Context(), "chat-1")
 			if err == nil && session.Conversation[0].Status == status {
 				s.ask.mu.Lock()
-				defer s.ask.mu.Unlock()
-				if len(s.ask.active) != 0 || len(s.ask.saving) != 0 {
-					t.Fatalf("a saved chat is still held: %v %v", s.ask.active, s.ask.saving)
+				settled := len(s.ask.active) == 0 && len(s.ask.saving) == 0
+				s.ask.mu.Unlock()
+				// The commit is visible before the saving goroutine releases
+				// its in-memory hold. Wait for both completion conditions.
+				if settled {
+					return session
 				}
-				return session
 			}
 			if time.Now().After(deadline) {
 				t.Fatalf("the chat was never saved as %s: %+v %v", status, session, err)
