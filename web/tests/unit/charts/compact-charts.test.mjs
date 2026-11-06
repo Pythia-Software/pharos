@@ -8,6 +8,16 @@ import assert from "node:assert/strict";
 import * as core from "@pythia-software/query-table-core";
 import { boxBytes, boxDetails, boxDuration, boxOutliers, boxWhiskerExtent, sharedBoxScale } from "../../../src/compact-box-model";
 import { compactPieSlices, pieWedgePath } from "../../../src/compact-pie-model";
+import { overflowTooltip } from "../../../src/overflow-tooltip";
+
+test("legend hover adds hidden label text and keeps distinct detail", () => {
+  const label = "repository/branches/long-shared-prefix/feature-one";
+  assert.equal(overflowTooltip(label, undefined, false), undefined);
+  assert.equal(overflowTooltip(label, label, false), undefined);
+  assert.equal(overflowTooltip(label, undefined, true), label);
+  assert.equal(overflowTooltip(label, `${label}\n42 calls`, false), "42 calls");
+  assert.equal(overflowTooltip(label, `${label}\n42 calls`, true), `${label}\n42 calls`);
+});
 
 test("pie geometry divides a shared circle evenly and conserves a folded Other", () => {
   const result={id:"pie",coverage:"exact",groupCount:4,buckets:Array.from({length:4},(_,i)=>({keys:[String(i)],value:1,count:1}))};

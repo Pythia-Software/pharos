@@ -274,7 +274,7 @@ export const authoredRenderers = {
     return Array.isArray(value) ? <span className="authored-pills">{value.map(category => <CategoryPill key={category} category={category} />)}</span> : "";
   },
   authorship_rules({ value }: CellContext<Row>) {
-    return Array.isArray(value) ? <span title={value.join("\n")}>{value.join(", ")}</span> : "";
+    return Array.isArray(value) ? <span>{value.join(", ")}</span> : "";
   },
 };
 

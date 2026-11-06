@@ -397,7 +397,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     <div className="usage-chart-head">{titleSlot ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{titleText}</h2>{action}</div>, titleSlot) : <div className="usage-chart-title"><h3>{titleText}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
     {series.length > 1 || legend || reference ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? legendGroup(legendGroups(series)) : null}
-      {reference ? <span className="usage-legend-item usage-legend-reference" title={reference.label}><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
+      {reference ? <span className="usage-legend-item usage-legend-reference"><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
