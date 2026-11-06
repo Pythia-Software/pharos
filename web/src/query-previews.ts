@@ -20,7 +20,7 @@ import type { DashboardCardTarget } from "./dashboard-card-model";
 import type { HabitsCover } from "./habits-card";
 import { gridCoverHeight, type GridCover } from "./grid-cover";
 import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
-import { orderedValues } from "./session-shape-bands";
+import { binnedFields } from "./session-shape-bands";
 import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
@@ -323,12 +323,21 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
     if (!ready && eligible && periods && rollingAverageBuckets(chart, periods, { period: "day" }).some(bucket => !bucket.history && Object.values(bucket.values).some(value => value > 0))) preview.state = "ready";
-    // A heatmap cover shades each day's share of the groups, rows in their
-    // scope's order (session-shape-bands.ts), as the dashboard's heatmap.
-    if (preview.timeline?.display === "heatmap") {
-      const ordered = orderedValues[recipe?.scope ?? clause.groupBy.at(-1) ?? ""], order = ordered ? ordered.order.map(value => ordered.labels[value] ?? value) : [];
-      const days = periods ? rollingAverageBuckets(chart, periods, { period: "day" }).filter(bucket => !bucket.history) : chart;
-      preview.grid = heatmapGrid(trendHeatmap(days, preview.series.filter(item => !item.hiddenCount), order), { period: "day", noun: recipe?.unit ?? countUnit, rollingPeriods: periods ?? 0 });
+    // A heatmap cover draws the day's sessions by their value's fine bin, as
+    // the dashboard's heatmap does: every bin, none folded into Other.
+    const bins = preview.timeline?.display === "heatmap" ? binnedFields[clause.groupBy.at(-1) ?? ""] : undefined;
+    if (bins) {
+      const days = chart.map(bucket => ({ ...bucket, values: {} as Record<string, number> })), byDay = new Map(days.map(bucket => [bucket.key, bucket])), edges = new Set<number>();
+      for (const bucket of chartValues) {
+        const day = byDay.get(String(bucket.keys[0])), edge = Number(bucket.keys[1]);
+        if (!day || bucket.keys[1] === null || !Number.isFinite(edge)) continue;
+        day.values[`b:${edge}`] = (day.values[`b:${edge}`] ?? 0) + Number(bucket.value);
+        edges.add(edge);
+      }
+      const drawn = periods ? rollingAverageBuckets(days, periods, { period: "day" }).filter(bucket => !bucket.history) : days;
+      const value = (amount: number) => formatMetricOutput(amount, bins.format).text;
+      preview.grid = heatmapGrid(trendHeatmap(drawn, [...edges].map(edge => ({ key: `b:${edge}`, label: String(edge), value: String(edge), color: "" })), bins.scheme),
+        { period: "day", noun: recipe?.unit ?? countUnit, label: bins.label, format: value, rollingPeriods: periods ?? 0 });
       preview.coverHeight = gridCoverHeight(preview.grid);
     }
   }

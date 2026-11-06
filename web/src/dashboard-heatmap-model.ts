@@ -1,50 +1,117 @@
 import type { ChartPeriod } from "./chart-period";
 import type { ChartBucket, ChartSeries } from "./chart-series";
 import { gridTicks, type GridCover } from "./grid-cover";
+import { binsSpanning, nextEdge, type BinScheme } from "./value-bins";
 
-// The trend's heatmap display: one column per period, one row per group of
-// an ordered breakdown (a band). A share heatmap's cell is the period's share
-// of the measure in that group; a value heatmap's is the group's own value,
-// such as a pooled rate (heatmapKind). It reads the trend's prepared
-// buckets, so filters, smoothing and Refresh apply as they do to the columns
+// The trend's heatmap: a value on a continuous axis over time. Each column
+// is a period, each row one fine bin of the value (value-bins.ts), and each
+// cell is shaded by the records, or the additive measure, in that bin that
+// period. Rows sit at their true place on the value's axis, a log axis for a
+// log or count scheme, so the picture is the distribution, not a few
+// predefined groups. It reads the trend's prepared buckets, so filters,
+// smoothing and Refresh apply as they do to the columns
 // (docs/dashboard-analysis.md).
 
-export type HeatmapRow = { key: string; label: string };
-// A cell is the group's share of its period, or its value; null when the
-// period has no records (or the group no value): an empty period is no
-// evidence, not a zero.
-export type HeatmapColumn = { key: string; date: Date; total: number; windowSize?: number; cells: Array<number | null> };
-export type Heatmap = { kind: "share" | "value"; rows: HeatmapRow[]; columns: HeatmapColumn[]; max: number };
+// A row is one bin, [low, high). y0 and y1 place it on the axis, 0 at the
+// bottom and 1 at the top. A log axis has no place for zero, so the bin of
+// zero (and less) sits apart below the rest.
+export type HeatmapRow = { low: number; high: number; zero: boolean; y0: number; y1: number };
+// A column's cells are the amounts in each row, 0 where none. An empty
+// period has a total of 0: no evidence, which the chart hatches.
+export type HeatmapColumn = { key: string; date: Date; total: number; windowSize?: number; cells: number[]; median: number | null; p90: number | null };
+export type HeatmapTick = { value: number; y: number };
+export type Heatmap = { scheme: BinScheme; rows: HeatmapRow[]; columns: HeatmapColumn[]; max: number; ticks: HeatmapTick[]; place: (value: number) => number | null };
 
-// Rows follow the breakdown's order. Groups outside it (Other, an unknown
-// value) come after, and a group without a value last.
-export function trendHeatmap(buckets: ChartBucket[], series: ChartSeries[], order: readonly string[], kind: Heatmap["kind"] = "share"): Heatmap {
-  const rank = (item: ChartSeries) => {
-    if (item.value === undefined) return order.length + 1;
-    if (item.value === "" || item.value === "null") return order.length + 2;
-    const index = order.indexOf(item.value);
-    return index < 0 ? order.length : index;
-  };
-  const rows = series.map((item, index) => ({ item, index })).sort((a, b) => rank(a.item) - rank(b.item) || a.index - b.index).map(({ item }) => item);
+const logScale = (scheme: BinScheme) => scheme.scale !== "linear";
+
+// Bins from the series' values (each a bin's lower edge), every bin between
+// the lowest and highest included, laid out on the value's axis.
+export function trendHeatmap(buckets: ChartBucket[], series: ChartSeries[], scheme: BinScheme): Heatmap {
+  const keyed = new Map<number, string>();
+  for (const item of series) {
+    const value = item.value === undefined || item.value === "" ? NaN : Number(item.value);
+    if (Number.isFinite(value)) keyed.set(value, item.key);
+  }
+  const bins = binsSpanning([...keyed.keys()], scheme);
+  const log = logScale(scheme), apart = (low: number) => log && low <= 0;
+  const position = (value: number) => log ? Math.log10(value) : value;
+  const placed = bins.filter(low => !apart(low));
+  const bottom = placed.length ? position(placed[0]) : 0, top = placed.length ? position(nextEdge(placed.at(-1)!, scheme)) : 1;
+  const span = Math.max(top - bottom, Number.EPSILON);
+  // The zero bin is as tall as an average bin, with a gap of half that.
+  const zero = bins.some(apart), height = placed.length ? span / placed.length : 1, below = zero ? height * 1.5 : 0;
+  const total = span + below, at = (value: number) => (below + position(value) - bottom) / total;
+  const rows: HeatmapRow[] = bins.map(low => apart(low)
+    ? { low, high: scheme.scale === "count" ? 1 : 0, zero: true, y0: 0, y1: height / total }
+    : { low, high: nextEdge(low, scheme), zero: false, y0: at(low), y1: at(nextEdge(low, scheme)) });
   let max = 0;
   const columns = buckets.map(bucket => {
-    if (kind === "value") {
-      const cells = rows.map(item => { const value = bucket.values[item.key]; return value === undefined || !Number.isFinite(value) ? null : Math.max(0, value); });
-      for (const cell of cells) if (cell !== null) max = Math.max(max, cell);
-      return { key: bucket.key, date: bucket.date, total: 0, ...bucket.windowSize ? { windowSize: bucket.windowSize } : {}, cells };
-    }
-    const values = rows.map(item => Math.max(0, bucket.values[item.key] ?? 0));
-    const total = values.reduce((sum, value) => sum + value, 0);
-    const cells = values.map(value => total > 0 ? value / total : null);
-    for (const cell of cells) if (cell !== null) max = Math.max(max, cell);
-    return { key: bucket.key, date: bucket.date, total, ...bucket.windowSize ? { windowSize: bucket.windowSize } : {}, cells };
+    const cells = bins.map(low => Math.max(0, bucket.values[keyed.get(low) ?? ""] ?? 0));
+    for (const cell of cells) max = Math.max(max, cell);
+    const sum = cells.reduce((all, cell) => all + cell, 0);
+    return { key: bucket.key, date: bucket.date, total: sum, ...bucket.windowSize ? { windowSize: bucket.windowSize } : {}, cells, median: quantile(rows, cells, sum, 0.5), p90: quantile(rows, cells, sum, 0.9) };
   });
-  return { kind, rows: rows.map(item => ({ key: item.key, label: item.label })), columns, max };
+  const place = (value: number) => {
+    if (!rows.length) return null;
+    if (log && value <= 0) return zero ? height / total / 2 : null;
+    const y = at(value);
+    return y < (zero ? below / total : 0) - 1e-9 || y > 1 + 1e-9 ? null : y;
+  };
+  return { scheme, rows, columns, max, ticks: axisTicks(bins, scheme, place), place };
 }
 
-// A cell's shade, 0 to 1, relative to the largest share or value drawn, so a
-// grid of small shares still reads. Empty cells have none.
-export const heatmapShade = (share: number | null, max: number) => share === null || max <= 0 ? null : share / max;
+// A quantile's place on the axis, interpolated within its bin: the bins
+// hold amounts, not the values, so it is as precise as a bin is narrow.
+function quantile(rows: HeatmapRow[], cells: number[], total: number, q: number): number | null {
+  if (total <= 0) return null;
+  let below = 0;
+  for (let index = 0; index < rows.length; index++) {
+    const cell = cells[index];
+    if (cell > 0 && below + cell >= q * total) {
+      const row = rows[index], within = (q * total - below) / cell;
+      return row.y0 + within * (row.y1 - row.y0);
+    }
+    below += cell;
+  }
+  return rows.at(-1)!.y1;
+}
+
+// Labels on the value axis: 1, 2 and 5 times powers of ten on a log axis
+// (only powers of ten when those crowd), round steps on a linear one, and 0
+// beside the zero bin.
+function axisTicks(bins: number[], scheme: BinScheme, place: (value: number) => number | null): HeatmapTick[] {
+  if (!bins.length) return [];
+  const low = bins[0], high = nextEdge(bins.at(-1)!, scheme), values: number[] = [];
+  if (logScale(scheme)) {
+    if (low <= 0) values.push(0);
+    const first = bins.find(bin => bin > 0);
+    if (first !== undefined) {
+      const from = Math.floor(Math.log10(first)), to = Math.ceil(Math.log10(high));
+      const steps = to - from <= 3 ? [1, 2, 5] : [1];
+      for (let decade = from; decade <= to; decade++) for (const step of steps) {
+        const value = Number(`${step}e${decade}`);
+        if (value >= first && value <= high) values.push(value);
+      }
+    }
+  } else {
+    const range = high - low, rough = range / 5, power = 10 ** Math.floor(Math.log10(rough || 1));
+    const step = [1, 2, 2.5, 5, 10].map(factor => factor * power).find(candidate => candidate >= rough) ?? power * 10;
+    for (let value = Math.ceil(low / step) * step; value <= high + step / 1e6; value += step) values.push(Number(value.toPrecision(12)));
+  }
+  return values.flatMap(value => { const y = place(value); return y === null ? [] : [{ value, y }]; });
+}
+
+// A cell's shade, 0 to 1: the square root of its share of the largest cell,
+// so sparse bins stay visible beside a dense one. Empty cells have none.
+export const heatmapShade = (amount: number, max: number) => amount <= 0 || max <= 0 ? null : Math.sqrt(amount / max);
+
+// A bin in words: "3", "10–11" or "1.2–1.5" (from the low edge, up to the
+// high one), as the value's format writes them.
+export function heatmapBinLabel(row: Pick<HeatmapRow, "low" | "high" | "zero">, scheme: BinScheme, format: (value: number) => string = String): string {
+  if (row.zero) return scheme.scale === "count" ? format(0) : `${format(0)} or less`;
+  if (scheme.scale === "count") return row.high - row.low === 1 ? format(row.low) : `${format(row.low)}–${format(row.high - 1)}`;
+  return `${format(row.low)}–${format(row.high)}`;
+}
 
 // A column's name, as the trend names its periods.
 export function heatmapPeriodLabel(date: Date, period: ChartPeriod): string {
@@ -53,34 +120,29 @@ export function heatmapPeriodLabel(date: Date, period: ChartPeriod): string {
   return `${period === "week" ? "Week of " : ""}${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
-// A cell's tooltip: the period, the group, its share and the records behind
-// it. A smoothed column's counts are averages over its window.
-// A value cell says its value as the dashboard formats it.
-export function heatmapCellText(heatmap: Heatmap, row: number, column: number, { period, noun, rollingPeriods = 0, format = String }: { period: ChartPeriod; noun: string; rollingPeriods?: number; format?: (value: number) => string }): string {
-  const item = heatmap.columns[column], share = item.cells[row], name = heatmap.rows[row].label, when = heatmapPeriodLabel(item.date, period);
-  if (heatmap.kind === "value") return share === null ? `${when}\n${name}\nNo ${noun} in this period` : `${when}\n${name}: ${format(share)}${rollingPeriods > 1 ? `\nPooled over ${rollingPeriods} periods` : ""}`;
-  const count = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: rollingPeriods > 1 ? 1 : 0 });
+type CellOptions = { period: ChartPeriod; noun: string; label: string; format?: (value: number) => string; amount?: (value: number) => string; rollingPeriods?: number };
+const counted = (value: number, rollingPeriods: number) => value.toLocaleString(undefined, { maximumFractionDigits: rollingPeriods > 1 ? 1 : 0 });
+
+// A cell's tooltip: the period, the bin, the amount in it and its share of
+// the period. A smoothed column's amounts are averages over its window.
+export function heatmapCellText(heatmap: Heatmap, row: number, column: number, { period, noun, label, format = String, amount, rollingPeriods = 0 }: CellOptions): string {
+  const item = heatmap.columns[column], value = item.cells[row], when = heatmapPeriodLabel(item.date, period);
+  const bin = `${label} ${heatmapBinLabel(heatmap.rows[row], heatmap.scheme, format)}`;
+  if (item.total <= 0) return `${when}\n${bin}\nNo ${noun} in this period`;
   const smoothed = rollingPeriods > 1 ? `, a ${rollingPeriods}-period average` : "";
-  if (share === null) return `${when}\n${name}\nNo ${noun} in this period`;
-  const amount = share * item.total;
-  return `${when}\n${name}: ${(100 * share).toLocaleString(undefined, { maximumFractionDigits: 1 })}%\n${count(amount)} of ${count(item.total)} ${noun}${smoothed}`;
+  const share = (100 * value / item.total).toLocaleString(undefined, { maximumFractionDigits: 1 });
+  return `${when}\n${bin}\n${amount ? amount(value) : counted(value, rollingPeriods)} ${noun} (${share}% of ${amount ? amount(item.total) : counted(item.total, rollingPeriods)})${smoothed}`;
 }
 
-// The heatmap as a card's grid cover (grid-cover.ts): the same rows, highest
-// band at the top, and columns, with the cells' text as their tooltips.
-export function heatmapGrid(heatmap: Heatmap, { period, noun, rollingPeriods = 0, format = String, caption }: { period: ChartPeriod; noun: string; rollingPeriods?: number; format?: (value: number) => string; caption?: string }): GridCover {
-  const order = heatmap.rows.map((_, index) => index).reverse();
-  const top = heatmap.kind === "share" ? `${(100 * heatmap.max).toLocaleString(undefined, { maximumFractionDigits: 0 })}%` : format(heatmap.max);
+// The heatmap as a card's grid cover (grid-cover.ts): the highest bin at the
+// top, each cell's text as its tooltip.
+export function heatmapGrid(heatmap: Heatmap, { caption, ...options }: CellOptions & { caption?: string }): GridCover {
+  const order = heatmap.rows.map((_, index) => index).reverse(), rollingPeriods = options.rollingPeriods ?? 0;
   return {
-    rows: order.map(index => heatmap.rows[index].label), columns: heatmap.columns.map(column => heatmapPeriodLabel(column.date, period)),
+    rows: order.map(index => heatmapBinLabel(heatmap.rows[index], heatmap.scheme, options.format)), columns: heatmap.columns.map(column => heatmapPeriodLabel(column.date, options.period)),
     cells: order.map(index => heatmap.columns.map(column => heatmapShade(column.cells[index], heatmap.max))),
-    // The tooltip names the row and column itself, so a value is the rest.
-    values: order.map(index => heatmap.columns.map((column, at) => {
-      if (column.cells[index] === null) return null;
-      const [, first, ...rest] = heatmapCellText(heatmap, index, at, { period, noun, rollingPeriods, format }).split("\n");
-      return [first.slice(heatmap.rows[index].label.length + 2), ...rest].join(" · ");
-    })),
-    tone: "sequential", legend: [heatmap.kind === "share" ? "0%" : format(0), top], rowTicks: gridTicks(heatmap.rows.length, 6), columnTicks: gridTicks(heatmap.columns.length, 3),
+    values: order.map(index => heatmap.columns.map((column, at) => column.cells[index] > 0 ? heatmapCellText(heatmap, index, at, options).split("\n").slice(2).join(" · ") : null)),
+    tone: "sequential", legend: ["0", options.amount ? options.amount(heatmap.max) : counted(heatmap.max, rollingPeriods)], rowTicks: gridTicks(heatmap.rows.length, 5), columnTicks: gridTicks(heatmap.columns.length, 3),
     ...caption ? { caption } : {},
   };
 }

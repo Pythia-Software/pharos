@@ -1200,6 +1200,24 @@ func sessionShapeRow(shape sessionShapeFacts) map[string]any {
 			row["autonomy"], row["autonomy_prompts"], row["autonomy_band"] = ratio, prompts, autonomyBand(ratio)
 		}
 	}
+	// Each per-session value's fine bin, for the heatmaps' continuous axis
+	// (value_bins.go); empty where the value is.
+	for field, bin := range map[string]struct {
+		value  string
+		scheme binScheme
+	}{
+		"messages_bin": {"messages", binCount}, "typed_messages_bin": {"typed_human_messages", binCount}, "tool_calls_bin": {"tool_calls", binCount},
+		"active_seconds_bin": {"active_seconds", binLog}, "autonomy_bin": {"autonomy", binLog}, "turn_cycle_bin": {"turn_cycle_p50_seconds", binLog},
+		"context_peak_bin": {"context_peak_ratio", binLinear(40)},
+	} {
+		row[field] = nil
+		switch value := row[bin.value].(type) {
+		case int64:
+			row[field] = valueBin(float64(value), bin.scheme)
+		case float64:
+			row[field] = valueBin(value, bin.scheme)
+		}
+	}
 	if shape.EditHandbacks != nil {
 		row["unverified_handbacks"] = *shape.EditHandbacks - *shape.VerifiedHandbacks
 	}

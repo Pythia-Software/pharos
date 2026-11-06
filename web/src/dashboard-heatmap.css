@@ -1,12 +1,19 @@
-/* The trend's heatmap display (dashboard-heatmap.tsx). */
-.dashboard-heatmap-grid{display:grid;gap:2px;align-items:stretch;margin-top:12px;min-width:0}
-.dashboard-heatmap-label{font-size:var(--fs-xs);color:var(--muted);padding-right:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;align-self:center;max-width:12rem}
-/* A chip's menu must escape the label, so the chip, not the label, clips. */
-.dashboard-heatmap-label:has(.usage-legend-chip){overflow:visible}
-.dashboard-heatmap-label .usage-legend-chip{max-width:100%}
-.dashboard-heatmap-label .usage-legend-item{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
-.dashboard-heatmap-cell{min-height:28px;border-radius:2px;outline:1px solid color-mix(in srgb,var(--line) 60%,transparent);outline-offset:-1px}
-.dashboard-heatmap-cell.is-empty{background:repeating-linear-gradient(135deg,transparent 0 4px,color-mix(in srgb,var(--line) 70%,transparent) 4px 5px)}
-.dashboard-heatmap-axis{grid-column:2/-1}
+/* The trend's heatmap (dashboard-heatmap.tsx): a value axis, the plot, the
+   time axis beneath, and band labels at the plot's right edge. */
+.dashboard-heatmap-plot{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto minmax(220px,clamp(220px,40vh,360px)) auto;column-gap:8px;margin-top:12px;min-width:0}
+.dashboard-heatmap-name{grid-column:1/-1;font-size:var(--fs-xs);color:var(--muted);margin-bottom:4px}
+.dashboard-heatmap-yaxis{position:relative;min-width:3rem;font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.dashboard-heatmap-yaxis span{position:absolute;right:0;transform:translateY(50%);white-space:nowrap;line-height:1}
+.dashboard-heatmap-area{position:relative;min-width:0;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.dashboard-heatmap-area svg{position:absolute;inset:0;width:100%;height:100%;display:block;shape-rendering:crispEdges}
+.dashboard-heatmap-cell{fill:var(--heat-1)}
+.dashboard-heatmap-gridline{stroke:color-mix(in srgb,var(--line) 55%,transparent);stroke-width:1}
+.dashboard-heatmap-guide{stroke:var(--muted);stroke-width:1;stroke-dasharray:1 3;opacity:.8}
+.dashboard-heatmap-guide-label{position:absolute;right:4px;transform:translateY(-2px);font-size:var(--fs-xs);color:var(--muted);background:color-mix(in srgb,var(--panel,var(--bg)) 80%,transparent);padding:0 3px;border-radius:2px;pointer-events:none;white-space:nowrap}
+.dashboard-heatmap-trace{fill:none;stroke:var(--ink);stroke-width:1.5;shape-rendering:geometricPrecision;pointer-events:none}
+.dashboard-heatmap-trace.is-p90{stroke-dasharray:4 3;opacity:.7}
+.dashboard-heatmap-hatch{stroke:color-mix(in srgb,var(--line) 70%,transparent);stroke-width:1}
+.dashboard-heatmap-axis{grid-column:2}
 .dashboard-heatmap-key{display:flex;align-items:center;gap:8px}
-.dashboard-heatmap-ramp{flex:none;width:64px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in srgb,var(--heat-1) 6%,transparent),var(--heat-1))}
+.dashboard-heatmap-ramp{flex:none;width:64px;height:10px;border-radius:2px;background:linear-gradient(90deg,color-mix(in srgb,var(--heat-1) 10%,transparent),var(--heat-1))}
+@media (max-width:640px){.dashboard-heatmap-guide-label{display:none}}

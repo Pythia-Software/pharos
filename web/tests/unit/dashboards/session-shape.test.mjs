@@ -4,8 +4,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import document from "../../../../schemas/session_shape.schema.json";
 import { core, schemas, queryRecipes, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
-import { analysisQuery, catalogProblems, heatmapKind, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, catalogProblems, heatmapAxis, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "../../../src/dashboard-analysis-model";
 import { heatmapGrid, trendHeatmap } from "../../../src/dashboard-heatmap-model";
+import { binOf } from "../../../src/value-bins";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { cardDashboardWhere } from "../../../src/card-exploration";
 import { filterBoxSamples } from "../../../src/compact-box-model";
@@ -71,18 +72,21 @@ test("rates pool their parts over the sessions with the evidence they need, neve
   const query = analysisQuery(catalog, { view: "compare", metric: "steering_load", split: "none" }, [], { now });
   const [result] = core.evaluateMetrics(rows, query.query, schemas.session_shape, { now }).metrics;
   assert.equal(result.buckets[0].value, 2 / 12);
-  // The trend's sessions by band are a heatmap of each period's shares.
-  const trend = trendQuery(catalog, normalizeAnalysis(catalog, dashboardDefaults.session_shape), [], { now });
-  assert.ok(trend.query.aggregations.some(clause => clause.groupBy.includes("length_band")));
+  // The trend's sessions by length are a heatmap of their messages' bins.
+  const source = heatmapSource(catalog, normalizeAnalysis(catalog, dashboardDefaults.session_shape));
+  const trend = trendQuery(source.catalog, source.state, [], { now });
+  assert.ok(trend.query.aggregations.some(clause => clause.groupBy.includes("messages_bin")));
 });
 
 // Each chart is drawn one way, whatever the link asked for: the state's
 // display, shares, scale and norm are the catalog's choice.
-test("Session Shape chooses each chart: heatmaps by band, distributions of banded measures, lines for single series, stacks for totals", () => {
+test("Session Shape chooses each chart: heatmaps of a band's value, distributions of banded measures, lines for rates and single series, stacks for totals", () => {
   const drawn = change => { const state = normalizeAnalysis(catalog, { view: "trend", display: "cumulative", share: true, scale: "logarithmic", ...change }); return [state.display, state.share, trendDrawing(catalog, state)]; };
   assert.deepEqual(drawn({ metric: "sessions", split: "length_band" }), ["heatmap", false, "trend"]);
-  assert.deepEqual(drawn({ metric: "failure_rate", split: "archetype" }), ["heatmap", false, "trend"]);
-  assert.equal(heatmapKind(catalog, { metric: "failure_rate", split: "archetype" }), "value");
+  assert.deepEqual(drawn({ metric: "active_hours", split: "archetype" }), ["heatmap", false, "trend"]);
+  // A rate by band has no total to spread over the band's value: a line per band.
+  assert.deepEqual(drawn({ metric: "failure_rate", split: "archetype" }), ["interval", false, "trend_line"]);
+  assert.equal(heatmapAxis(catalog, { metric: "failure_rate", split: "archetype" }), undefined);
   for (const metric of ["autonomy", "active_time", "turn_cycle", "context_peak"]) assert.deepEqual(drawn({ metric, split: "none" }), ["heatmap", false, "trend"], metric);
   assert.deepEqual(drawn({ metric: "failure_rate", split: "none" }), ["interval", false, "trend_line"]);
   assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "none" }).norm, true);
@@ -159,10 +163,13 @@ const localDay = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pa
 const cardNow = Date.parse("2026-10-16T18:00:00Z");
 // Sessions every few hours over 40 days. Some lack tool data, authorship or
 // a known context window, so each rate's population is a part of them.
-// Rows carry the bands the service derives from their values.
+// Rows carry the bands and fine bins the service derives from their values.
 const edges = { autonomy_band: [0.5, 1, 2, 5, 10], turn_cycle_band: [10, 30, 60, 180, 600], context_band: [0.1, 0.25, 0.5, 0.75, 0.9] };
 const banded = (id, value) => value === null ? null : bandBreakdowns[id].order[edges[id].filter(edge => value >= edge).length];
-const withBands = row => ({ ...row, autonomy_band: banded("autonomy_band", row.autonomy), turn_cycle_band: banded("turn_cycle_band", row.turn_cycle_p50_seconds), context_band: banded("context_band", row.context_peak_ratio) });
+const binned = (value, scheme) => value === null ? null : binOf(value, scheme);
+const withBands = row => ({ ...row, autonomy_band: banded("autonomy_band", row.autonomy), turn_cycle_band: banded("turn_cycle_band", row.turn_cycle_p50_seconds), context_band: banded("context_band", row.context_peak_ratio),
+  ...Object.fromEntries(Object.entries({ messages: "messages_bin", typed_human_messages: "typed_messages_bin", tool_calls: "tool_calls_bin", active_seconds: "active_seconds_bin", autonomy: "autonomy_bin", turn_cycle_p50_seconds: "turn_cycle_bin", context_peak_ratio: "context_peak_bin" })
+    .map(([value, field]) => [field, binned(row[value], Object.values(catalog.breakdowns).find(breakdown => breakdown.bins?.field === field).bins.scheme)])) });
 const ledger = Array.from({ length: 360 }, (_, index) => {
   const at = new Date(cardNow - (index % 40 + 1) * 86400000); at.setHours(index * 5 % 24, index % 60, 0, 0);
   const monday = new Date(at); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
@@ -249,9 +256,9 @@ test("Session Shape count and distribution cards draw the dashboard's bars and b
   }
 });
 
-// Every heatmap card's grid is the dashboard's heatmap: the same days, rows
-// and cells, whether its rows are a breakdown's bands or a measure's own.
-test("Session Shape heatmap cards: the card's grid of trailing seven-day shares is the dashboard's heatmap, day by day", async t => {
+// Every heatmap card's grid is the dashboard's heatmap: the same days, bins
+// and cells, whether its value is a breakdown's band or a measure's own.
+test("Session Shape heatmap cards: the card's grid of trailing seven-day sessions by bin is the dashboard's heatmap, day by day", async t => {
   const prior = { fetch: global.fetch, location: global.location };
   global.location = { origin: "http://parity.test" };
   t.mock.timers.enable({ apis: ["Date"], now: cardNow });
@@ -271,12 +278,11 @@ test("Session Shape heatmap cards: the card's grid of trailing seven-day shares 
     const source = heatmapSource(catalog, state), query = trendQuery(source.catalog, source.state, where, { now: cardNow });
     const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
     assert.equal(built.error, undefined, id);
-    const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, source.catalog.breakdowns[source.state.split].order), { period: "day", noun: "sessions", rollingPeriods: 7 });
+    const axis = heatmapAxis(catalog, state);
+    const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: "day", noun: "sessions", label: axis.bins.label, rollingPeriods: 7 });
     assert.deepEqual(grid.columns, preview.grid.columns, `${id}: the same days`);
-    // Rows match by label; a session without a band is "Unspecified" on the
-    // card and the breakdown's empty label on the dashboard.
-    const rows = cover => Object.fromEntries(cover.rows.map((row, index) => [row === "Unspecified" ? source.catalog.breakdowns[source.state.split].empty : row, cover.values[index]]));
-    assert.deepEqual(rows(grid), rows(preview.grid), id);
+    assert.equal(grid.rows.length, preview.grid.rows.length, `${id}: the same bins`);
+    assert.deepEqual(grid.values, preview.grid.values, id);
     assert.ok(grid.cells.flat().some(cell => cell !== null && cell > 0), `${id}: cells`);
   }
 });

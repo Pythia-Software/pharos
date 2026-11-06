@@ -4,6 +4,7 @@ import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period
 import { chartDisplays, validRollingPeriods } from "./chart-series";
 import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
 import { timeBounds, withEnd } from "./chart-range";
+import type { BinScheme } from "./value-bins";
 import { cycleBoxes, cycleFrame, cycleGroups, cycleRangeError, cycleSamples, hoursOfDay, idleIsZero, maxCycleSlots, weekdays, type CalendarCycle, type CycleKey } from "./weekday-cover";
 
 // A dashboard analysis is a view over one catalog: which records count as
@@ -29,9 +30,9 @@ export type AnalysisMeasure = {
   populationShare?: boolean;
   // A population the measure implies, such as fully priced usage.
   where?: WhereTerm[];
-  // The ordered breakdown that bins each record's value, such as a band of
-  // per-session ratios. Over time can then draw the measure's distribution:
-  // each period's records in each band, as a heatmap (heatmapSource).
+  // The ordered breakdown that bands each record's value, such as a band of
+  // per-session ratios. Where that band has fine bins, Over time can draw
+  // the measure's distribution as a heatmap (heatmapAxis).
   band?: string;
   note: string;
 };
@@ -55,7 +56,12 @@ export const partField = (part: RatioPart) => ratioPart(part).field;
 // trend draws its groups as series: in a fixed order where one is given,
 // with labels for known values and for a missing one.
 // A breakdown with an implied where names that population in its note.
-export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string };
+export type AnalysisBreakdown = { label: string; fields: string[]; where?: WhereTerm[]; note?: string; order?: string[]; values?: Record<string, string>; empty?: string; bins?: AxisBins };
+// A band of a continuous value may also bin that value finely (value-bins.ts):
+// field holds each record's bin, as its lower edge. The heatmap then draws
+// the value on a continuous axis rather than the band's few groups, with
+// each band's lower edge (edges, in the band's order) as a guide.
+export type AxisBins = { field: string; scheme: BinScheme; label: string; format: MetricValueFormat; edges?: number[] };
 // A component breakdown splits a measure into its additive parts, such as
 // tokens into uncached input, cache reads and writes, and output. Its series
 // are fields, not groups of records, so only the trend draws it, and only for
@@ -396,27 +402,35 @@ const multiplePeriods = (state: Pick<AnalysisState, "period" | "hours" | "days">
 // How Over time draws a state: its own view, or the one its catalog chose.
 export const trendDrawing = (catalog: AnalysisCatalog, state: ResolvedAnalysis): AnalysisView => presentation(catalog, state).view ?? state.view;
 
-// How a heatmap shades this measure and breakdown, if it can. Each period is
-// a column and each group of an ordered breakdown a row: an additive
-// measure's cells are the period's shares, a pooled rate's are its values,
-// and a measure with a band of its own and no breakdown is drawn as the
-// share of the period's records in each band (its distribution).
-export type HeatmapKind = "share" | "value" | "distribution";
-export function heatmapKind(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "split">): HeatmapKind | undefined {
+// The heatmap draws a value on a continuous axis: one column per period, a
+// row per fine bin of the value, each cell shaded by the records (or an
+// additive measure) in it. Without a breakdown, a measure with a binned band
+// of its own draws its records' distribution; by a binned band, an additive
+// measure draws its total over the band's value.
+export type HeatmapAxis = { breakdown: string; bins: AxisBins; counted: boolean };
+export function heatmapAxis(catalog: AnalysisCatalog, state: Pick<AnalysisState, "metric" | "split">): HeatmapAxis | undefined {
   const measure = catalog.measures[state.metric];
   if (!measure) return;
-  if (state.split === noSplit) return measure.band && catalog.breakdowns[measure.band]?.order && catalog.records.count ? "distribution" : undefined;
-  if (!catalog.breakdowns[state.split]?.order) return;
-  return measure.additive ? "share" : measure.ratio ? "value" : undefined;
+  if (state.split === noSplit) {
+    const bins = measure.band ? catalog.breakdowns[measure.band]?.bins : undefined;
+    return bins && catalog.records.count ? { breakdown: measure.band!, bins, counted: true } : undefined;
+  }
+  const bins = catalog.breakdowns[state.split]?.bins;
+  return bins && measure.additive ? { breakdown: state.split, bins, counted: false } : undefined;
 }
-// What a heatmap queries: the state itself, or for a distribution the
-// records counted by the measure's band, within the measure's population
-// and with a band value.
+// The heatmap's own breakdown: the fine bins, every one of them a series.
+export const heatmapBins = "heatmap:bins";
+// What a heatmap queries: the counted records, or the measure, grouped by
+// the value's fine bins, within the measure's population and with a value.
 export function heatmapSource<T extends AnalysisState>(catalog: AnalysisCatalog, state: T): { catalog: AnalysisCatalog; state: T } {
-  if (state.display !== "heatmap" || heatmapKind(catalog, state) !== "distribution") return { catalog, state };
-  const measure = catalog.measures[state.metric], band = measure.band!, count = catalog.records.count!;
-  const counted: AnalysisMeasure = { ...catalog.measures[count], where: [...measure.where ?? [], { field: catalog.breakdowns[band].fields[0], op: "is_not_null", value: "" }] };
-  return { catalog: { ...catalog, present: undefined, measures: { ...catalog.measures, [state.metric]: counted } }, state: { ...state, split: band, selection: undefined } };
+  const axis = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
+  if (!axis) return { catalog, state };
+  const measure = catalog.measures[state.metric], valued = { field: axis.bins.field, op: "is_not_null" as const, value: "" };
+  const weight: AnalysisMeasure = axis.counted ? { ...catalog.measures[catalog.records.count!], where: [...measure.where ?? [], valued] } : { ...measure, where: [...measure.where ?? [], valued] };
+  return {
+    catalog: { ...catalog, present: undefined, trend: { ...catalog.trend, allSeries: true }, measures: { ...catalog.measures, [state.metric]: weight }, breakdowns: { ...catalog.breakdowns, [heatmapBins]: { label: axis.bins.label, fields: [axis.bins.field] } } },
+    state: { ...state, split: heatmapBins, selection: undefined, norm: false },
+  };
 }
 
 // Why each trend option is unavailable for this measure, breakdown and
@@ -434,9 +448,9 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
     period: (period: ChartPeriod) => catalog.periods[periodField(period)] || catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
-    heatmap: heatmapKind(catalog, state) ? undefined : state.split === noSplit ? `A heatmap needs an ordered breakdown, such as a band${measure.band ? "" : `; ${name} has no band of its own`}`
-      : !catalog.breakdowns[state.split]?.order ? "A heatmap needs an ordered breakdown, such as a band" : `${measure.label} is neither a total nor a pooled rate, so a heatmap cannot shade it`,
-    norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.display === "heatmap" ? "A heatmap shades shares, which have no norm" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
+    heatmap: heatmapAxis(catalog, state) ? undefined : state.split === noSplit ? `${measure.label} has no per-record value to draw as a heatmap`
+      : !catalog.breakdowns[state.split]?.bins ? "A heatmap needs a breakdown over a continuous value, such as a band" : `${measure.label} does not add up across records, so a heatmap cannot total it`,
+    norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.display === "heatmap" ? "A heatmap draws a distribution, which has no norm" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
     component, name,
   };
 }
@@ -461,7 +475,7 @@ function normalizeTrend<T extends AnalysisState>(catalog: AnalysisCatalog, next:
   if (next.share && limits.share) next.share = false;
   if (next.display === "cumulative" && limits.cumulative) next.display = "interval";
   if (next.display === "heatmap" && limits.heatmap) next.display = "interval";
-  // A heatmap shades each period's share itself, from the period's values.
+  // A heatmap shades amounts, never shares of a total.
   if (next.display === "heatmap") next.share = false;
   if (next.rollingOp === "sum" && limits.rollingSum) next.rollingOp = "mean";
   if (multiplePeriods(next) && limits.multiple) next.period = baseUnit(next.period);

@@ -3,7 +3,7 @@ import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabe
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
-import { isTrendView, heatmapKind, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { isTrendView, heatmapAxis, trendDrawing, aggregate, completeStart, partClause, predicateCount, selectionWhere, periodField, measureExpression, normalizeAnalysis, trendKind, unique, type AnalysisCatalog, type AnalysisState, type DerivedTotals, type ResolvedAnalysis } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -218,7 +218,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
         if (part) part[1] += value; else parts.push([seriesLabel(text), value]);
       }
     };
-    assign(weights.filter(([key]) => !drawnKeys.has(key)), weighted);
+    // foldSeries has assigned the rows it ranked: with every series, history
+    // rows too, which must not count twice in a smoothing window.
+    if (!catalog.trend.allSeries) assign(weights.filter(([key]) => !drawnKeys.has(key)), weighted);
     if (kind === "ratio") assign(rows("trend"), amounts);
     // A group outside the chosen series that only history holds still adds
     // to drawn windows, shares and the norm, so Other lists it.
@@ -280,10 +282,10 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
 export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): string {
   const state = normalizeAnalysis(catalog, { ...input, view: isTrendView(input.view) ? input.view : "trend" }), measure = catalog.measures[state.metric];
   const split = catalog.breakdowns[state.split]?.label ?? catalog.components?.[state.split]?.label;
-  // A share heatmap shades shares; a value heatmap the measure itself; a
-  // distribution heatmap the records in each of the measure's bands.
-  const heatmap = state.display === "heatmap" ? heatmapKind(catalog, state) : undefined;
-  if (heatmap === "distribution") return `${measure.label}: ${catalog.records.plural.toLowerCase()} per ${periodLabel(state.period, trendPeriodCount(state))} by band`;
-  const cumulative = state.display === "cumulative", name = state.share || heatmap === "share" ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
+  // A heatmap counts the records, or totals the measure, by the value its
+  // bins hold: "Sessions per day by messages per session".
+  const heatmap = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
+  if (heatmap) return `${heatmap.counted ? catalog.records.plural : measure.label} per ${periodLabel(state.period, trendPeriodCount(state))} by ${heatmap.bins.label.toLowerCase()}`;
+  const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
   return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
 }

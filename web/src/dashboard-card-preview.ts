@@ -2,7 +2,7 @@ import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pyt
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
-import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, heatmapKind, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "./dashboard-analysis-model";
+import { isTrendView, analysisEmptyLabel, analysisNote, analysisQuery, cycleResult, heatmapAxis, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "./dashboard-analysis-model";
 import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
 import { trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
@@ -109,13 +109,13 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     const drawn = normalizeAnalysis(catalog, state), drawing = trendDrawing(catalog, drawn);
     // A heatmap is drawn as the dashboard draws it, as a grid of cells.
     if (drawn.display === "heatmap") {
-      const kind = heatmapKind(catalog, drawn), source = heatmapSource(catalog, drawn), measure = catalog.measures[drawn.metric];
+      const axis = heatmapAxis(catalog, drawn)!, source = heatmapSource(catalog, drawn), weight = source.catalog.measures[source.state.metric];
       const trend = trendQuery(source.catalog, source.state, where, { now, zone });
       const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, trend, await run(trend.query), { now, label });
       if (built.error) throw new Error(built.error);
-      const heatmap = trendHeatmap(built.buckets, built.series, source.catalog.breakdowns[source.state.split]?.order ?? [], kind === "value" ? "value" : "share");
-      const grid = heatmapGrid(heatmap, { period: drawn.period, noun: kind === "value" ? catalog.records.plural.toLowerCase() : source.catalog.measures[source.state.metric].unit,
-        rollingPeriods: drawn.rollingPeriods, format: value => formatMetricOutput(value, measure.format).text });
+      const value = (amount: number) => formatMetricOutput(amount, axis.bins.format).text;
+      const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: drawn.period, noun: axis.counted ? catalog.records.plural.toLowerCase() : weight.unit, label: axis.bins.label,
+        rollingPeriods: drawn.rollingPeriods, format: value, amount: weight.op === "count" ? undefined : amount => formatMetricOutput(amount, weight.format).text });
       const ready = grid.cells.some(row => row.some(cell => cell !== null));
       return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION, note: analysisNote(catalog, drawn),
         ...ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
