@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -212,20 +211,50 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 		return
 	}
 	source.DeliveryTargetInstance = b.Instance
-	target, targetErr := b.load()
-	if m.suspended[targetID] {
-		targetErr = fmt.Errorf("archive is released; pending history stays local until its drive returns")
+	m.mu.Unlock()
+	plan, err := planPendingDelivery(m.ctx, source)
+	if err != nil {
+		m.reportJob("paused", err.Error())
+		return
 	}
-	deliver := m.operations.begin(OperationSpec{Kind: "library.deliver", Trigger: triggerSchedule}, sourceID, targetID)
+	if !plan.Capture && !plan.Transfer {
+		return
+	}
+	m.mu.Lock()
+	if m.released || m.suspended[sourceID] || m.ctx.Err() != nil {
+		m.mu.Unlock()
+		return
+	}
+	// Preflight allows disconnects while it reads source fingerprints. Refresh
+	// the archive under the same lock that makes the operation busy, after
+	// which disconnect refuses to interrupt capture or transfer.
+	var target Config
+	var targetErr error
+	b = m.registry.library(targetID)
+	switch {
+	case b == nil || b.Instance != source.DeliveryTargetInstance:
+		targetErr = fmt.Errorf("archive registration changed; pending history stays local")
+	case m.suspended[targetID]:
+		targetErr = fmt.Errorf("archive is released; pending history stays local until its drive returns")
+	default:
+		target, targetErr = b.load()
+	}
+	// An unavailable archive cannot advance an existing transfer or cleanup.
+	// New source activity is still preserved locally, once per changed input.
+	if !plan.Capture && targetErr != nil {
+		m.mu.Unlock()
+		m.reportJob("paused", targetErr.Error())
+		return
+	}
+	deliver := m.operations.begin(OperationSpec{Kind: "library.deliver", Trigger: triggerSchedule}, sourceID)
 	defer func() { deliver.Finish(err) }()
 	m.busy = true
 	m.generation++
 	m.stopChildLocked(sourceID)
-	m.stopChildLocked(targetID)
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
 	progress := func(s string) { m.reportJob("running", s); deliver.Step(s, "", -1) }
-	if _, e := os.Stat(pendingDeliveryPath(source)); os.IsNotExist(e) {
+	if plan.Capture && !plan.Resume {
 		progress("Capturing approved sources into the pending library")
 		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Libraries: []string{sourceID}, Trigger: triggerChained})
 		// Delivery is background: with the flag on, its IO runs at the
@@ -234,9 +263,23 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 		capture.Finish(err)
 	}
 	if err == nil {
+		// Capture can finish without producing transferable history. Decide
+		// before touching the destination, including on disconnected retries.
+		if !plan.Resume {
+			plan.Transfer, _, err = pendingHistory(m.ctx, source)
+		}
+		if err == nil && !plan.Transfer {
+			m.reportJob("complete", "Pending capture is current; no history to deliver")
+			return
+		}
+	}
+	if err == nil {
 		err = targetErr
 		if err == nil {
 			_, move := deliver.Child(OperationSpec{Kind: "library.transfer", Variant: "move", Libraries: []string{sourceID, targetID}, Trigger: triggerChained})
+			m.mu.Lock()
+			m.stopChildLocked(targetID)
+			m.mu.Unlock()
 			deliver.RunIO(func() {
 				_, err = TransferLibrary(m.ctx, source, target, true, func(s string) { progress(s); move.Step(s, "", -1) })
 			})
@@ -278,6 +321,10 @@ func capturePendingLibrary(ctx context.Context, config Config) error {
 	}
 	if !summary.OK {
 		return fmt.Errorf("pending capture is incomplete; all data was retained")
+	}
+	inputs, err := pendingCaptureReceipt(config, summary.Sources)
+	if err != nil {
+		return err
 	}
 	catalog, err := OpenCatalog(config.CatalogPath)
 	if err != nil {
@@ -322,8 +369,11 @@ func capturePendingLibrary(ctx context.Context, config Config) error {
 		if result.Error != nil {
 			return fmt.Errorf("index pending history: %s", result.Error)
 		}
+		if result.Pending || result.Deferred {
+			return fmt.Errorf("index pending history is unfinished; retained inputs will be retried")
+		}
 	}
-	return nil
+	return recordPendingCapture(ctx, catalog, inputs)
 }
 
 // The capture cadence is intentionally bounded even when a destination is
