@@ -38,7 +38,7 @@ func adapterGroupedRequest() qt.QueryRequestV3 {
 	return qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).UnixMilli(), Rows: true,
 		Source:   qt.WireQuery{Limit: 1, Offset: 2},
 		Grouping: &qt.GroupingDefinition{Keys: []string{"k"}, Summaries: []qt.SummaryColumn{{ID: "num", Op: "count"}, {ID: "total", Op: "sum", Field: "n"}, {ID: "average", Op: "avg", Field: "n"}, {ID: "median", Op: "formula", Expression: "MEDIAN([n])"}, {ID: "example", Op: "row", Field: "label"}, {ID: "example_id", Op: "row", Field: "id"}}, Representative: &qt.RepresentativeRow{OrderBy: []qt.OrderBy{{Field: "n", Dir: "desc", Nulls: "last"}}}},
-		Result:   qt.WireQuery{Select: []string{"k", "num", "total", "average", "median", "example", "example_id"}, OrderBy: qt.OrderBys{{Field: "total", Dir: "desc"}}, Limit: 10},
+		Result:   qt.WireQuery{Select: []string{"k", "num", "total", "average", "median", "example", "example_id"}, OrderBy: []qt.OrderBy{{Field: "total", Dir: "desc"}}, Limit: 10},
 	}
 }
 
@@ -51,7 +51,7 @@ func TestQueryV3FormulaGroupErrorIdentities(t *testing.T) {
 	}
 	q := adapterGroupedRequest()
 	q.ExpectedRevisions = map[string]string{"inv": "1"}
-	q.Grouping = &qt.GroupingDefinition{Keys: []string{"@computed/inv"}, Summaries: []qt.SummaryColumn{{ID: "num", Op: "count"}, {ID: "total", Op: "sum", Field: "n"}, {ID: "example", Op: "row", Field: "label"}}, Representative: &qt.RepresentativeRow{OrderBy: qt.OrderBys{{Field: "id", Dir: "asc"}}}}
+	q.Grouping = &qt.GroupingDefinition{Keys: []string{"@computed/inv"}, Summaries: []qt.SummaryColumn{{ID: "num", Op: "count"}, {ID: "total", Op: "sum", Field: "n"}, {ID: "example", Op: "row", Field: "label"}}, Representative: &qt.RepresentativeRow{OrderBy: []qt.OrderBy{{Field: "id", Dir: "asc"}}}}
 	q.Result = qt.WireQuery{Select: []string{"@computed/inv", "num", "total", "example"}, Limit: 10}
 	d.ComputedGroupable = map[string]bool{"inv": true}
 	options := qt.PlanOptions{Resolver: qt.DefinitionResolverFunc(func(_ context.Context, id string) (qt.ComputedColumn, error) {
@@ -94,12 +94,12 @@ func TestQueryV3FormulaGroupErrorIdentities(t *testing.T) {
 }
 
 // Hidden and default sorts, a field sorted by another, and enum kinds survive
-// the patched source plan and its representative rows.
+// the projected source plan and its representative rows.
 func TestQueryV3HiddenAndDefaultSort(t *testing.T) {
 	db, d := adapterQueryV3Fixture(t)
 	q := adapterGroupedRequest()
 	q.Grouping = nil
-	q.Result = qt.WireQuery{Select: []string{"id"}, Limit: 2, OrderBy: qt.OrderBys{{Field: "n", Dir: "desc"}}}
+	q.Result = qt.WireQuery{Select: []string{"id"}, Limit: 2, OrderBy: []qt.OrderBy{{Field: "n", Dir: "desc"}}}
 	plan, err := d.SourcePlan(context.Background(), q, qt.PlanOptions{})
 	if err != nil || !reflect.DeepEqual(plan.Fields, []string{"id", "n"}) {
 		t.Fatal(plan.Fields, err)
@@ -117,7 +117,7 @@ func TestQueryV3HiddenAndDefaultSort(t *testing.T) {
 	label := d.Schema.Fields["label"]
 	label.SQLiteSortField, label.SortExpr = "n", "r.n"
 	d.Schema.Fields["label"] = label
-	q.Result.OrderBy = qt.OrderBys{{Field: "label", Dir: "desc"}}
+	q.Result.OrderBy = []qt.OrderBy{{Field: "label", Dir: "desc"}}
 	out, err = d.Execute(context.Background(), db, q, qt.PlanOptions{})
 	if err != nil || out.Rows[0]["id"] != "4" {
 		t.Fatal(out, err)
@@ -160,13 +160,13 @@ func TestQueryTableGroupBudgetOverrides(t *testing.T) {
 				return
 			}
 			var diagnostic *qt.PlanDiagnostic
-			if !errors.As(err, &diagnostic) || diagnostic.Code != "resource_limit" {
+			if !errors.As(err, &diagnostic) || diagnostic.Code != qt.ErrorCodeDataset {
 				t.Fatalf("invalid host group budget: %v", err)
 			}
 		}
-		t.Run(fmt.Sprint("V2/", groups), func(t *testing.T) {
-			v2 := qt.SQLiteV2Dataset{Schema: d.Schema, SourceSQL: d.SourceSQL, Scope: d.Scope, Dataset: d.Dataset, MaxGroups: groups}
-			_, err := v2.ExecuteV2(ctx, db, nil, &metric, qt.PlanOptions{})
+		t.Run(fmt.Sprint("metrics/", groups), func(t *testing.T) {
+			v2 := queryFixtureDataset{Schema: d.Schema, SourceSQL: d.SourceSQL, Scope: d.Scope, Dataset: d.Dataset, MaxGroups: groups}
+			_, err := v2.executeFixture(ctx, db, nil, &metric, qt.PlanOptions{})
 			check(t, err)
 		})
 		t.Run(fmt.Sprint("V3/", groups), func(t *testing.T) {

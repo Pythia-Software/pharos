@@ -1,0 +1,590 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_message_labels",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 40,
+  "defaultSort": [
+    {
+      "field": "occurred_at",
+      "dir": "desc",
+      "nulls": "last"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "fingerprint",
+      "width": 150
+    },
+    {
+      "field": "occurred_at",
+      "width": 140
+    },
+    {
+      "field": "title",
+      "width": 220
+    },
+    {
+      "field": "label",
+      "width": 150
+    },
+    {
+      "field": "source",
+      "width": 100
+    },
+    {
+      "field": "repository_name",
+      "width": 130
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Observation ID",
+      "type": "text",
+      "group": "Identity",
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "message_id",
+      "label": "Message ID",
+      "type": "text",
+      "group": "Identity",
+      "bindings": {
+        "postgres": {
+          "expr": "message_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "Conversation ID",
+      "type": "text",
+      "group": "Identity",
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "workspace_id",
+      "label": "Workspace ID",
+      "type": "text",
+      "group": "Identity",
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_id\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "fingerprint",
+      "label": "Fingerprint",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "fingerprint",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"fingerprint\""
+        }
+      },
+      "render": "label_fingerprint",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "title",
+      "label": "Conversation",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      },
+      "render": "conversation_title",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "model",
+      "label": "Generation model",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "occurred_at",
+      "label": "Message time",
+      "type": "datetime",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "occurred_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"occurred_at\""
+        }
+      },
+      "render": "datetime",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "label",
+      "label": "Specific Label",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "label",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"label\""
+        }
+      },
+      "render": "message_label",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "family",
+      "label": "General Label",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "family",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"family\""
+        }
+      },
+      "render": "message_label",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "function_role",
+      "label": "Sender / Receiver",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "function_role",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"function_role\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "label_status",
+      "label": "Coverage",
+      "type": "enum",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "label_status",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"label_status\""
+        }
+      },
+      "values": [
+        {
+          "value": "matched",
+          "label": "Matched a label"
+        },
+        {
+          "value": "unlabeled",
+          "label": "Not labeled"
+        },
+        {
+          "value": "no_match",
+          "label": "No accepted match"
+        }
+      ],
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "source",
+      "label": "Text source",
+      "type": "enum",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "source",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source\""
+        }
+      },
+      "values": [
+        {
+          "value": "human",
+          "label": "Human input"
+        },
+        {
+          "value": "output",
+          "label": "Agent output"
+        },
+        {
+          "value": "thinking",
+          "label": "Agent thinking"
+        },
+        {
+          "value": "supplied",
+          "label": "Supplied input"
+        },
+        {
+          "value": "tool",
+          "label": "Tool"
+        },
+        {
+          "value": "unknown",
+          "label": "Unknown"
+        }
+      ],
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "kind",
+      "label": "Message kind",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "kind",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"kind\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "role",
+      "label": "Recorded role",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "role",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"role\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "subagent",
+      "label": "Subagent",
+      "type": "bool",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "subagent",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"subagent\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "segment",
+      "label": "Authorship segment",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "segment",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"segment\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "label_model",
+      "label": "Labeling encoder",
+      "type": "text",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "label_model",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"label_model\""
+        }
+      },
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "labeled_at",
+      "label": "Labeled at",
+      "type": "datetime",
+      "group": "Context",
+      "bindings": {
+        "postgres": {
+          "expr": "labeled_at",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"labeled_at\""
+        }
+      },
+      "render": "datetime",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      }
+    },
+    {
+      "name": "text",
+      "label": "Message excerpt",
+      "type": "text",
+      "group": "Content",
+      "bindings": {
+        "postgres": {
+          "expr": "text",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"text\""
+        }
+      },
+      "aggregate": {
+        "groupable": false,
+        "measure": true
+      }
+    },
+    {
+      "name": "label_depth",
+      "label": "Label depth",
+      "type": "number",
+      "render": "number",
+      "group": "Classification",
+      "aggregate": {
+        "groupable": true,
+        "measure": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "label_depth",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"label_depth\"",
+          "expressionNumeric": true
+        }
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
+        }
+      },
+      "aliases": [
+        "date"
+      ]
+    },
+    {
+      "name": "week",
+      "label": "Week (Mon)",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
+        }
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
+        }
+      }
+    }
+  ]
+}

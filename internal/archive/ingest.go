@@ -540,8 +540,16 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 // commits constantly during a sync) fails its first write at once instead of
 // waiting out busy_timeout.
 func (c *Catalog) beginWrite(ctx context.Context) (*sql.Tx, error) {
+	return beginCatalogWrite(ctx, c.DB)
+}
+
+type catalogTransactionStarter interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func beginCatalogWrite(ctx context.Context, db catalogTransactionStarter) (*sql.Tx, error) {
 	cliWriteCheck("write")
-	tx, err := c.DB.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -758,6 +766,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 	record = normalizeRecordReasoning(record)
 	record = canonicalRecordTimes(record)
 	prepareRecordAccounting(&record)
+	record = normalizeRecordInference(record)
 	workspaceInput := workspaceDeliveryDigest(record)
 	filtered, removed, err := suppressDeliveredConversations(tx, record)
 	if err != nil {
@@ -1493,6 +1502,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 }
 
 func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (string, bool, error) {
+	value = normalizeMessageInference(value)
 	value.accounting = nil
 	id := stableID("message", conversationID, value.NativeID)
 	selected := 1
@@ -1506,9 +1516,9 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	var storedSelected int
 	lookupErr := tx.QueryRow(`SELECT id,content_hash,role,kind,COALESCE(model,''),COALESCE(effort,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
 		COALESCE(created_at,''),COALESCE(parent_native_id,''),COALESCE(previous_native_id,''),COALESCE(call_id,''),
-		COALESCE(evidence_locator,''),selected,COALESCE(sender,''),COALESCE(reasoning_format,'') FROM messages WHERE conversation_id=? AND native_id=?`, conversationID, value.NativeID).
+		COALESCE(evidence_locator,''),selected,COALESCE(sender,''),COALESCE(reasoning_format,''),COALESCE(speed,'standard'),COALESCE(service_tier,''),COALESCE(speed_source,'assumed_standard') FROM messages WHERE conversation_id=? AND native_id=?`, conversationID, value.NativeID).
 		Scan(&existingID, &existingHash, &stored.Role, &stored.Kind, &stored.Model, &stored.Effort, &stored.Text, &stored.RawText, &stored.SourceOrder,
-			&stored.CreatedAt, &stored.ParentNativeID, &stored.PreviousNativeID, &stored.CallID, &stored.EvidenceLocator, &storedSelected, &stored.Sender, &stored.ReasoningFormat)
+			&stored.CreatedAt, &stored.ParentNativeID, &stored.PreviousNativeID, &stored.CallID, &stored.EvidenceLocator, &storedSelected, &stored.Sender, &stored.ReasoningFormat, &stored.Speed, &stored.ServiceTier, &stored.SpeedSource)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return "", false, lookupErr
 	}
@@ -1523,14 +1533,10 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	if lookupErr == nil {
 		id = existingID
 	}
-	_, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender,reasoning_format)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
-		role=excluded.role,kind=excluded.kind,model=excluded.model,effort=excluded.effort,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
-		created_at=excluded.created_at,parent_native_id=excluded.parent_native_id,previous_native_id=excluded.previous_native_id,call_id=excluded.call_id,
-		evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender,reasoning_format=excluded.reasoning_format`,
+	_, err := tx.Exec(messageWriteSQL,
 		id, conversationID, value.NativeID, defaultString(value.Role, "unknown"), defaultString(value.Kind, "message"), nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Text,
 		nilIfEmpty(value.RawText), value.SourceOrder, nilIfEmpty(value.CreatedAt), nilIfEmpty(value.ParentNativeID), nilIfEmpty(value.PreviousNativeID),
-		nilIfEmpty(value.CallID), nilIfEmpty(value.EvidenceLocator), contentHash, selected, nilIfEmpty(value.Sender), nilIfEmpty(value.ReasoningFormat))
+		nilIfEmpty(value.CallID), nilIfEmpty(value.EvidenceLocator), contentHash, selected, nilIfEmpty(value.Sender), nilIfEmpty(value.ReasoningFormat), value.Speed, nilIfEmpty(value.ServiceTier), value.SpeedSource)
 	if err != nil {
 		return "", false, err
 	}

@@ -507,6 +507,61 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 	if refused := serveTestBody(server, http.MethodPost, "/api/operations/stop", `{"id":"nope"}`); refused.Code != http.StatusNotFound {
 		t.Fatalf("stopping an unknown operation: %d", refused.Code)
 	}
+	// Work with its own stopper (a labels backlog): refused until the work
+	// has registered it, then it cancels the work's context.
+	workCtx, stopWork := context.WithCancel(context.Background())
+	defer stopWork()
+	_, backlog := server.begin(workCtx, OperationSpec{Kind: "analysis.labels", Variant: "backlog", Trigger: triggerChained, Priority: priorityBackground})
+	stop := func() int {
+		return serveTestBody(server, http.MethodPost, "/api/operations/stop", fmt.Sprintf(`{"id":%q}`, backlog.ID())).Code
+	}
+	if code := stop(); code != http.StatusConflict || backlog.State() != opRunning {
+		t.Fatalf("a stop before the work can stop: %d, state %q", code, backlog.State())
+	}
+	backlog.setStopper(stopWork)
+	if code := stop(); code != http.StatusOK || workCtx.Err() == nil || backlog.State() != opStopping {
+		t.Fatalf("the work's stopper did not run: %d, ctx %v, state %q", code, workCtx.Err(), backlog.State())
+	}
+	backlog.Finish(workCtx.Err())
+	if backlog.State() != opCancelled {
+		t.Fatalf("a stopped backlog ended %q", backlog.State())
+	}
+	// A pass can be several levels into its analysis chain. Keep the
+	// current rebuild and its measured progress in the public snapshot.
+	_, pass := server.begin(context.Background(), OperationSpec{Kind: "background.update", Trigger: triggerUser})
+	defer pass.Finish(nil)
+	_, upgrade := pass.Child(OperationSpec{Kind: "library.upgrade", Trigger: triggerChained})
+	upgrade.Finish(nil)
+	_, chain := pass.Child(OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
+	defer chain.Finish(nil)
+	_, authorship := chain.Child(OperationSpec{Kind: "analysis.authorship", Trigger: triggerChained})
+	defer authorship.Finish(nil)
+	_, rebuild := authorship.Child(OperationSpec{Kind: "analysis.authorship", Trigger: triggerChained})
+	defer rebuild.Finish(nil)
+	rebuild.Step("classifying authorship", "message", 100)
+	rebuild.SetDone(42)
+	if err := json.Unmarshal(serveTest(server, http.MethodGet, "/api/operations").Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	var nested map[string]any
+	for _, entry := range document.Operations {
+		if entry["id"] == string(pass.ID()) {
+			nested = entry
+		}
+	}
+	for _, id := range []OpID{chain.ID(), authorship.ID(), rebuild.ID()} {
+		children, _ := nested["children"].([]any)
+		if len(children) != 1 {
+			t.Fatalf("live child %s missing from snapshot: %#v", id, nested)
+		}
+		nested = children[0].(map[string]any)
+		if nested["id"] != string(id) || nested["stoppable"] != false {
+			t.Fatalf("nested stage: %#v", nested)
+		}
+	}
+	if step := nested["step"].(map[string]any); step["done"] != 42.0 || step["total"] != 100.0 {
+		t.Fatalf("nested rebuild progress: %#v", step)
+	}
 }
 
 // A polled snapshot takes no lock: it knows of another process's capture

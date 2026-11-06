@@ -287,9 +287,11 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 		}
 		id, role, contentType := defaultString(message["id"], nodeID), defaultString(author["role"], "unknown"), firstString(content["content_type"])
 		kinds[nodeID] = contentType
+		// A message's own metadata says how fast it was served.
+		inference, _ := inferenceSetting(message)
 		base := func(suffix string) MessageRecord {
-			return MessageRecord{NativeID: id + suffix, Role: role, Model: firstString(metadata["model_slug"]), Effort: recordedEffort(metadata), CreatedAt: iso(message["create_time"]),
-				PreviousNativeID: read[node.Parent], EvidenceLocator: fmt.Sprintf("%s:mapping:%s%s", origin, nodeID, suffix), Selected: selected[nodeID]}
+			return withInference(MessageRecord{NativeID: id + suffix, Role: role, Model: firstString(metadata["model_slug"]), Effort: recordedEffort(metadata), CreatedAt: iso(message["create_time"]),
+				PreviousNativeID: read[node.Parent], EvidenceLocator: fmt.Sprintf("%s:mapping:%s%s", origin, nodeID, suffix), Selected: selected[nodeID]}, inference)
 		}
 		own := false
 		add := func(item MessageRecord) {

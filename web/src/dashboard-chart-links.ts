@@ -1,3 +1,4 @@
+import {messageLabelConversationQuery} from "./message-label-results-model";
 import { EMPTY_QUERY, type WhereTerm } from "@pythia-software/query-table-core";
 import type { ChartInspectionRange } from "./chart-inspection";
 import type { ChartSeries } from "./chart-series";
@@ -28,5 +29,5 @@ export function dashboardChartURL({ dataset, where, time, range, series, split, 
   if (split) filters = withSlice(filters, split, { values: (series.foldedValues ?? [series.value!]).map(value => value || null), excluded: false });
   const positive = fields.map(field => ({ field, op: ">" as const, value: "0" }));
   if (positive.length) filters.push(positive.length === 1 ? positive[0] : { any: positive });
-  return usageWorkspaceURL({ mode: "query", dataset, ...(!current.has("analyze_topic") ? { topic: usageDatasetTopics[dataset] } : {}), query: orderedUsageQuery(dataset, { ...EMPTY_QUERY, where: translate(filters) }) }, current);
+  return usageWorkspaceURL({ mode: "query", dataset, ...(!current.has("analyze_topic") ? { topic: usageDatasetTopics[dataset] } : {}), query: dataset==="message_labels"?messageLabelConversationQuery({...EMPTY_QUERY,where:translate(filters)}):orderedUsageQuery(dataset, { ...EMPTY_QUERY, where: translate(filters) }) }, current);
 }
