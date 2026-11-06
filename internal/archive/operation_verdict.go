@@ -310,8 +310,8 @@ func verdictSummary(v ejectVerdict) string {
 }
 
 // verdictHeadline is the verdict in one short clause (server text, §7.1):
-// "Safe to eject in ~2 s: stops back up first". The details, including the
-// release's 7 s limit, are in the summary.
+// "Safe to eject in ~2 s". What ejecting stops, and the release's 7 s
+// limit, are in the summary.
 func verdictHeadline(v ejectVerdict) string {
 	labels := func(verdict string) string { return lowerFirst(blockerLabels(v.Blockers, verdict)) }
 	switch v.Verdict {
@@ -321,22 +321,9 @@ func verdictHeadline(v ejectVerdict) string {
 		return "Eject waits for " + labels(verdictBusy)
 	case verdictSafeIn:
 		if v.ETASeconds != nil {
-			return fmt.Sprintf("Safe to eject in ~%s: stops %s first", secondsLabel(*v.ETASeconds), labels(verdictSafeIn))
+			return fmt.Sprintf("Safe to eject in ~%s", secondsLabel(*v.ETASeconds))
 		}
-		unit := "step"
-		for _, blocker := range v.Blockers {
-			if blocker.Verdict == verdictSafeIn && blocker.ETASeconds == nil && blocker.unit != "" && blocker.unit != "byte" {
-				unit = blocker.unit
-				break
-			}
-		}
-		return fmt.Sprintf("Safe to eject after the current %s: stops %s", unit, labels(verdictSafeIn))
-	}
-	if readers := labels(verdictSafe); readers != "" {
-		return "Safe to eject: stops " + readers
-	}
-	if v.Checked != "fresh" {
-		return "Safe to eject; checked again on eject"
+		return "Safe to eject in a moment"
 	}
 	return "Safe to eject"
 }
