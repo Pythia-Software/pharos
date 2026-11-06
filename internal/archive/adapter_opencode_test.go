@@ -183,7 +183,7 @@ INSERT INTO session_message VALUES('k2','ses_more_sub','assistant',9,17937220035
 INSERT INTO session_v2 VALUES('ses_fork','p1',NULL,NULL,'ses_parts','fork','/work/app','Parts fork','2.2.5',0.0,'{}',
   50,5,0,0,0,'build','{"id":"big-pickle","providerID":"opencode"}',1793723000000,1793723001000);
 INSERT INTO session_message VALUES('evt_ab_1','ses_fork','user',1,1793721000000,1793721000000,'{"text":"Say hello"}');
-INSERT INTO session_message VALUES('evt_ab_2','ses_fork','assistant',2,1793721000500,1793721001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Hello, world"}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
+INSERT INTO session_message VALUES('evt_ab_2','ses_fork','assistant',2,1793721000500,1793721001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Hello, world"},{"type":"tool","id":"call_f","name":"shell","state":{"status":"completed","input":{"command":"ls"},"content":[{"type":"text","text":"a.txt"}],"metadata":{"exit":0}},"time":{"created":1793721000600,"completed":1793721000700}}],"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
 INSERT INTO session_message VALUES('msg_f3','ses_fork','user',3,1793723000000,1793723000000,'{"text":"Now in French"}');
 INSERT INTO session_message VALUES('msg_f4','ses_fork','assistant',4,1793723000500,1793723001000,'{"model":{"id":"big-pickle"},"content":[{"type":"text","text":"Bonjour"}],"tokens":{"input":50,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}');
 -- A fork whose source was deleted, with a copied command.
@@ -297,16 +297,58 @@ func TestOpenCodeForkKeepsWhatItsSourceLost(t *testing.T) {
 	// An undo deletes the source's reply.
 	change(`DELETE FROM session_part WHERE message_id='q2'; DELETE FROM session_message WHERE id='q2'`)
 	ingestSource(t, c, source)
-	if got := copies(); got != "evt_ab_2:block:0" {
+	if got := copies(); got != "evt_ab_2:block:0 evt_ab_2:block:1" {
 		t.Fatalf("after the undo, copies %q", got)
+	}
+	// The copied call took none of the fork's own request's output.
+	if got := countRows(t, c, `SELECT COUNT(*) FROM tool_calls t JOIN conversations v ON v.id=t.conversation_id WHERE v.native_id='ses_fork' AND t.output_tokens=0`); got != 1 {
+		t.Fatalf("%d copied calls without output", got)
 	}
 	change(`DELETE FROM session_message WHERE session_id='ses_parts'; DELETE FROM session_v2 WHERE id='ses_parts'`)
 	ingestSource(t, c, source)
-	if got := copies(); got != "evt_ab_1 evt_ab_2:block:0" {
+	if got := copies(); got != "evt_ab_1 evt_ab_2:block:0 evt_ab_2:block:1" {
 		t.Fatalf("with the source deleted, copies %q", got)
 	}
 	if got := countRows(t, c, `SELECT COALESCE(SUM(u.total_tokens),0) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN conversations v ON v.id=a.conversation_id WHERE v.native_id='ses_fork'`); got != 55 {
 		t.Fatalf("fork usage %d, want its own request's 55", got)
+	}
+}
+
+// A fork deleted in OpenCode, indexed from an older capture, keeps its
+// copies when a newer capture holds its source: the older one can't say
+// what the source still holds.
+func TestOpenCodeDeletedForkFromAnOlderCaptureKeepsItsCopies(t *testing.T) {
+	useHost(t, "host-a")
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode.db")
+	opencodeDatabase(t, path, opencodeRows+opencodeMoreRows)
+	source := SourceConfig{Name: "opencode", Kind: "opencode", Path: root, Account: "local", Enabled: true}
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	db, err := sql.Open("sqlite", path)
+	if err == nil {
+		// An undo deletes the source's reply, then the fork is deleted.
+		_, err = db.Exec(`DELETE FROM session_part WHERE message_id='q2'; DELETE FROM session_message WHERE id='q2';
+			DELETE FROM session_message WHERE session_id='ses_fork'; DELETE FROM session_v2 WHERE id='ses_fork'`)
+		db.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCapture(t, config)
+	useHost(t, "host-b")
+	c, _ := testCatalog(t)
+	indexCaptures(t, c, config.CaptureRoot, "host-a")
+	rows, err := queryMaps(c.DB, `SELECT m.native_id FROM messages m JOIN conversations v ON v.id=m.conversation_id WHERE v.native_id='ses_fork' ORDER BY m.native_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, row := range rows {
+		ids = append(ids, firstString(row["native_id"]))
+	}
+	if got, want := strings.Join(ids, " "), "evt_ab_1 evt_ab_2:block:0 evt_ab_2:block:1 msg_f3 msg_f4:block:0 msg_f4:usage result:call_f"; got != want {
+		t.Fatalf("the fork's messages\n got %s\nwant %s", got, want)
 	}
 }
 
