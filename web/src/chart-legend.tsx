@@ -1,4 +1,5 @@
 import React from "react";
+import { overflowTooltip } from "./overflow-tooltip";
 
 export type LegendItem = { key: string; label: string; color: string; detail?: string };
 
@@ -9,8 +10,8 @@ export type LegendItem = { key: string; label: string; color: string; detail?: s
 export function ChartLegend({ items, columns }: { items: LegendItem[]; columns?: 1 | 2 | 3 }) {
   const longest = Math.max(1, ...items.map(item => item.label.length));
   return <span className={`query-timeline-legend query-chart-legend${columns === 1 ? " is-single-column" : columns === 3 ? " is-three-column" : " is-auto-columns"}`} style={columns === 1 || columns === 3 ? undefined : { "--legend-label": `${longest}ch` } as React.CSSProperties}>
-    {items.map(item => <span key={item.key} data-chart-tooltip={item.detail?.split("\n").filter(line => line !== item.label).join("\n") || undefined} data-chart-colors={JSON.stringify([item.color])}>
-      <i style={{ background: item.color }} /><span>{item.label}</span>
+    {items.map(item => <span key={item.key} data-chart-tooltip-label={item.label} data-chart-tooltip={overflowTooltip(item.label, item.detail, false)} data-chart-colors={JSON.stringify([item.color])}>
+      <i style={{ background: item.color }} /><span data-chart-label="">{item.label}</span>
     </span>)}
   </span>;
 }

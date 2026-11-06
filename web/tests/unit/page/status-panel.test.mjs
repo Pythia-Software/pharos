@@ -170,20 +170,25 @@ test("the load row shows CPU, RAM and disk for the library or the app process tr
   assert.equal(model(view({ resources: {} })).load, null);
 });
 
-test("the broker load remains visible during a service timeout, and partial rates use plain values", () => {
+test("the broker load remains visible during a service timeout, and partial rates disclose undercounting", () => {
   const unavailable = model({library: null, service: {name: "Euclid", error: "timeout", resources: {memory_bytes: 1e9}},
     resources: {cpu_percent: 12, cpu_partial: true, memory_bytes: 2e9, disk_bytes_per_second: 4e6, disk_partial: true, label: "Pharos is using resources"},
     lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
   assert.equal(unavailable.available, false);
-  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["12%", "2.0 GB", "4.0 MB/s", "last 48 GB"]);
+  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB"]);
+  for (const id of ["cpu", "io"]) assert.match(unavailable.load.metrics.find(metric => metric.id === id).warning, /waiting for another sample.*may undercount/);
+  assert.equal(unavailable.load.metrics.find(metric => metric.id === "memory").warning, undefined);
 });
 
 test("GPU load is scoped to Pharos processes, including idle and unavailable states", () => {
   const load = gpu => model(view({ resources: { cpu_percent: 12, gpu } })).load;
-  for (const [percent, value] of [[62.4, "62%"], [0, "0%"], [null, "—"]]) {
-    const result = load({ utilization_percent: percent });
-    assert.equal(result.metrics.find(metric => metric.id === "gpu").value, value);
+  for (const [percent, value] of [[62.4, "62%"], [0, "0%"], [null, "—"]]) for (const partial of [false, true]) {
+    const result = load({ utilization_percent: percent, partial });
+    const warming = partial && percent !== null;
+    assert.equal(result.metrics.find(metric => metric.id === "gpu").value, warming ? "≥" + value : value);
     assert.equal(result.metrics.find(metric => metric.id === "gpu").label, "GPU");
+    if (warming) assert.match(result.metrics.find(metric => metric.id === "gpu").warning, /may undercount/);
+    else assert.equal(result.metrics.find(metric => metric.id === "gpu").warning, undefined);
   }
   assert.ok(!load(undefined).metrics.some(metric => metric.id === "gpu"));
   const app = model(view({ resources: { cpu_percent: 12, gpu: { utilization_percent: 10 } } },

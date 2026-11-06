@@ -380,6 +380,13 @@
     if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
     if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
+    for (const metric of metrics) {
+      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial : metric.id === 'io' ? resources.disk_partial : false;
+      if (partial && metric.value !== '—') {
+        metric.value = '≥' + metric.value;
+        metric.warning = 'Some processes or clients are still waiting for another sample; this reading may undercount usage.';
+      }
+    }
     return {metrics};
   }
 
@@ -733,6 +740,7 @@
     for (const metric of load.metrics) {
       const cell = node('span');
       cell.dataset.key = `load:${metric.id}`;
+      if (metric.warning) cell.title = metric.warning;
       const label = node('span');
       label.append(svgIcon(metric.icon || metric.id), metric.label);
       cell.append(label, node('b', '', metric.value));

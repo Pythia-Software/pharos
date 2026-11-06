@@ -1794,7 +1794,7 @@ export function ParallelActivity({
                   )}
                 </button>
                 <button
-                  className="delegation-name"
+                  className="delegation-name" data-overflow-title=""
                   onClick={() => openNode(n)}
                 >
                   <strong>

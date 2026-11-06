@@ -1,4 +1,5 @@
 import { formatUSD } from "./currency";
+import { installOverflowTitles } from "./overflow-tooltip";
 import { fitQueryToScreen } from "./query-fit";
 import { queryRow } from "./query-transport";
 import {messageLabelLegacyURL} from "./message-label-legacy";
@@ -290,7 +291,7 @@ const renderers: RenderRegistry<Row> = {
     const keys = query?.grouping ? groupKeyFields(query.grouping.keys) : null;
     const work = row.workspace_id ?? (!keys || keys.includes("id") ? row.id : undefined);
     if (work == null || work === "") return String(value ?? "Untitled work");
-    return <button className="qt-work-link" onClick={(event) => {
+    return <button className="qt-work-link" data-overflow-title="" onClick={(event) => {
       event.stopPropagation();
       window.pharosOpenDetail?.(String(work));
     }}>{String(value ?? "Untitled work")}</button>;
@@ -308,7 +309,7 @@ const renderers: RenderRegistry<Row> = {
   conversation_link(context: CellContext<Row>) {
     const id = String(context.value ?? "");
     if (!id) return defaultRenderers.text(context);
-    return <a className="qt-conversation-link" href={`/conversation/${encodeURIComponent(id)}`} onClick={event => {
+    return <a className="qt-conversation-link" data-overflow-title="" href={`/conversation/${encodeURIComponent(id)}`} onClick={event => {
       event.stopPropagation();
       if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
@@ -1525,6 +1526,7 @@ function ToolLedgerBanner() {
   </div>;
 }
 
+installOverflowTitles(document);
 installAppNavigation();
 
 const dataGuideHost = document.createElement("div");

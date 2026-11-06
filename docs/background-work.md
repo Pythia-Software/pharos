@@ -1619,7 +1619,10 @@ CPU | GPU | RAM | I/O | Storage, with a WAL cell only when the known size
 exceeds 1,000,000,000 bytes (one decimal GB). GPU is a percentage from
 0–100; an unavailable reading is a dash. Services without a GPU field omit that
 cell. All metrics remain on one line, including when WAL is shown. The row has
-no hover tooltip; resource labels and values are already visible. Per-process
+no summary tooltip; resource labels and values are already visible. Partial
+CPU, GPU and I/O rates carry a visible `≥` qualifier and a per-metric warning
+that processes or clients awaiting another sample may cause undercounting. An
+unmeasured rate remains a dash. Per-process
 `text` remains available in the status API.
 I/O is `disk_bytes_per_second`, and
 Storage is the library's `storage_bytes` in the status snapshot (what it

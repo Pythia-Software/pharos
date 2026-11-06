@@ -77,7 +77,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
       entries[next]?.focus();
     }}>
-      <div className="usage-legend-menu-heading">{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
+      <div className="usage-legend-menu-heading" data-overflow-title="">{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>Replace the current selection</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>

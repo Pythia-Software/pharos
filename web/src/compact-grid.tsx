@@ -26,7 +26,7 @@ export function CompactGrid({ cover }: { cover: GridCover }) {
     </span>
     <span className="compact-grid-key">
       <span className="compact-grid-legend"><span>{cover.legend[0]}</span><i className={`compact-grid-ramp compact-grid-${cover.tone}`} /><span>{cover.legend[1]}</span></span>
-      {cover.caption ? <span className="compact-grid-caption">{cover.caption}</span> : null}
+      {cover.caption ? <span className="compact-grid-caption" data-overflow-title="">{cover.caption}</span> : null}
     </span>
   </span>;
 }

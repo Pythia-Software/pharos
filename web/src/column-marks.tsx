@@ -60,7 +60,7 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
       </span>
     </span>
     <span className="query-timeline-dates">{dates.map(index => <span key={index}>{dateLabel(buckets[index].date)}</span>)}</span>
-    <span className="query-chart-axis-labels"><span>↑ {yLabel}</span><span>→ {xLabel}</span></span>
+    <span className="query-chart-axis-labels"><span data-overflow-title="">↑ {yLabel}</span><span data-overflow-title="">→ {xLabel}</span></span>
     {showLegend ? <ChartLegend items={series} columns={legendColumns} /> : null}
   </span>;
 }
