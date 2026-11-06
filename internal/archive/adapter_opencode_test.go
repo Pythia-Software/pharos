@@ -45,7 +45,7 @@ INSERT INTO session_message VALUES('m2','ses_root','assistant',5,1793720001000,1
 INSERT INTO session_message VALUES('m3','ses_root','assistant',14,1793720004000,1793720010000,'{"time":{"created":1793720004000},"agent":"build","model":{"id":"big-pickle","providerID":"opencode"},"content":[
   {"type":"tool","id":"call_3","name":"subagent","state":{"status":"completed","input":{"agent":"explore","prompt":"Review wordstats.py"},"content":[{"type":"text","text":"<subagent sessionID=\"ses_child\" state=\"completed\">Looks fine.</subagent>"}],"metadata":{"sessionID":"ses_child","truncated":false}},"time":{"created":1793720004100,"completed":1793720009000}}],
   "finish":"tool-calls","cost":0,"tokens":{"input":1000,"output":30,"reasoning":0,"cache":{"read":2000,"write":0}}}');
-INSERT INTO session_message VALUES('m4','ses_root','assistant',27,1793720011000,1793720012000,'{"time":{"created":1793720011000},"agent":"build","model":{"id":"big-pickle","providerID":"opencode"},"content":[{"type":"text","text":"There are 74 words."}],"finish":"stop","cost":0,"tokens":{"input":500,"output":20,"reasoning":0,"cache":{"read":2000,"write":0}}}');
+INSERT INTO session_message VALUES('m4','ses_root','assistant',27,1793720011000,1793720012000,'{"time":{"created":1793720011000},"agent":"build","model":{"id":"big-pickle","providerID":"opencode"},"content":[{"type":"text","text":"There are 74 words."}],"finish":"stop","cost":0,"tokens":{"input":500,"output":20,"reasoning":0,"cache":{"read":2000,"write":0}},"native":{"responseId":"resp_4","serviceTier":"priority"}}');
 INSERT INTO session_message VALUES('m5','ses_root','idle',30,1793720012000,1793720012000,'{"time":{"created":1793720012000},"outcome":"succeeded"}');
 -- The subagent's session; its totals equal its message.
 INSERT INTO session_v2 VALUES('ses_child','p1',NULL,'ses_root',NULL,'review','/work/app','Review wordstats.py','2.2.5',0.0,'{}',
@@ -402,6 +402,10 @@ func TestOpenCodeUsageCountsEachRequestOnce(t *testing.T) {
 	}
 	if got := session("ses_child"); got != 700+300+50+5 {
 		t.Fatalf("subagent usage %d", got)
+	}
+	// The request OpenAI served at priority is fast, by its tier.
+	if got := countRows(t, c, `SELECT COUNT(*) FROM model_requests WHERE native_id='m4' AND speed='fast' AND service_tier='priority' AND speed_source='service_tier'`); got != 1 {
+		t.Fatalf("%d priority requests", got)
 	}
 	if got := session("ses_parts"); got != 110 {
 		t.Fatalf("parts session usage %d", got)
