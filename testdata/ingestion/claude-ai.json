@@ -138,7 +138,7 @@
               "PreviousNativeID": "m1",
               "CallID": "tu1",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-1:message:m2:block:2",
-              "RawText": "{\"content\":[{\"text\":\"Results\",\"type\":\"text\"}],\"is_error\":false,\"tool_use_id\":\"tu1\",\"type\":\"tool_result\"}",
+              "RawText": "{\"content\":[{\"text\":\"Results\",\"type\":\"text\"}],\"id\":\"tr1\",\"is_error\":false,\"tool_use_id\":\"tu1\",\"type\":\"tool_result\"}",
               "SourceOrder": 0,
               "Selected": true
             },
