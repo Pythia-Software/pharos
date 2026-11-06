@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // delegation.tsx builds its date formatters when it loads, so the zone is set
 // first. Each test file runs in its own process.
 process.env.TZ = "America/Denver";
-const { addSessionColumns, sessionTimelineState, cellTitle, clampRange, formatted, hierarchyFrames, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
+const { addSessionColumns, sessionTimelineState, cellTitle, clampRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
 const { readDelegationRoute, delegationRouteValues } = await import("../../../src/delegation-route");
 const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
 
@@ -12,7 +12,7 @@ const start = Date.parse("2026-09-24T12:00:00Z"), winter = Date.parse("2026-01-2
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const spec = (id, unit) => ({ id, label: id, unit, definition: `Definition for ${id}` });
 const session = (id, outline, child_count = 0) => ({ id, outline, depth: outline.split(".").length - 1, child_count });
-const frames = (rows, continues = false) => Object.fromEntries([...hierarchyFrames(rows, continues)].map(([id, frame]) => [id, { start: frame.start, active: frame.active.map(row => row.id), ends: frame.ends }]));
+
 
 test("new session columns join related metrics while preserving custom choices", () => {
   const saved = ['cost', 'calls', 'tokens', 'files'];
@@ -117,23 +117,7 @@ test("timeline date headings follow local day changes and distinguish repeated D
   assert.ok(midnight.every(tick=>tick.time&&Number.isFinite(tick.at)));
 });
 
-test("hierarchy frames open at parents and close after their last visible descendant", () => {
-  const rows = [session("root", "1", 1), session("child", "1.1", 1), session("nested", "1.1.1")];
-  assert.deepEqual(frames(rows), {
-    root: { start: 0, active: ["root"], ends: [] },
-    child: { start: 1, active: ["root", "child"], ends: [] },
-    nested: { start: undefined, active: ["root", "child"], ends: [1, 0] },
-  });
-  assert.deepEqual(frames(rows, true).nested.ends, [], "a page that continues leaves its branches open");
-  assert.deepEqual(frames([rows[0]]).root, { start: 0, active: ["root"], ends: [0] }, "a collapsed parent closes its own frame");
-  const siblings = frames([session("root", "1", 3), session("a", "1.1", 1), session("b", "1.10"), session("c", "1.2")]);
-  assert.deepEqual(siblings.a.ends, [1], "1.10 is not inside 1.1");
-  assert.deepEqual(siblings.b, { start: undefined, active: ["root"], ends: [] });
-  assert.deepEqual(siblings.c.ends, [0]);
-  assert.deepEqual(frames([session("x", "1"), session("y", "2")]), { x: { start: undefined, active: [], ends: [] }, y: { start: undefined, active: [], ends: [] } });
-});
-
-test("timeline tree branches connect visible parents and continue only toward remaining siblings", () => {
+test("session tree branches connect visible parents and continue only toward remaining siblings", () => {
   const rows = [session("root", "1", 2), session("a", "1.1", 1), session("aa", "1.1.1"), session("b", "1.10", 1), session("ba", "1.10.1"), session("other", "2")];
   const branches = timelineSessionBranches(rows);
   assert.equal(branches.get("root").children, true);

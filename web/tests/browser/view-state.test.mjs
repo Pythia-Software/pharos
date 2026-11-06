@@ -128,7 +128,7 @@ for(const width of [1440,390])test(`hierarchy metric scope and session timeline 
  await page.locator('[data-pharos-target="section:delegation-labels:s-child:session"][open]').waitFor();await app.settled();
  await page.getByRole('tab',{name:'Hierarchy & usage',exact:true}).click();await page.locator('.delegation-table tbody tr').first().waitFor();await app.settled();
  const row=page.locator('.delegation-table [data-session-id="s-child"]');
- await row.locator('.delegation-name').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ await row.getByRole('button',{name:/^Open session /}).click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(await page.locator('.workspace-reader').isVisible(),true);
  if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();
  await page.getByRole('button',{name:`View timeline for ${child.label}`,exact:true}).click();
@@ -157,7 +157,10 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
  await show();await session('s-child').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');assert.equal(await page.locator('.workspace-reader').isVisible(),true);assert.deepEqual(await settings(),before);
  await show();
- const eventBox=await page.locator('[data-session-id="s-child"] .lt-session-row-label').boundingBox();await page.mouse.click(eventBox.x+eventBox.width/2,eventBox.y+eventBox.height/2);
+ const current=page.locator('[data-session-id="s-child"] [aria-current="true"]');
+ await current.click();await app.settled();assert.equal(new URL(page.url()).searchParams.get('conversation'),'conv-child','the current identity leaves the reader and timeline overview in place');
+ await app.shot('timeline-sidebar');
+ const clockBox=await page.locator('[data-session-id="s-child"] .lt-session-ribbon').boundingBox();await page.mouse.click(clockBox.x+clockBox.width/2,clockBox.y+clockBox.height/2);
  await page.waitForFunction(()=>!document.querySelector('.workspace-inbox').classList.contains('viewing'));await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),null);assert.equal(await page.getByRole('tab',{name:'Timeline',exact:true}).getAttribute('aria-selected'),'true');assert.deepEqual(await settings(),before);
  const compactWidth=(await page.locator('.lt-column-heading').nth(1).boundingBox()).width,root=page.locator('[data-pharos-target="section:delegation-labels:s-root:session"] > summary');
@@ -167,6 +170,24 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
  await show();await session('s-root').press('Enter');await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');
  await page.goBack();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');
+});
+
+for(const width of [1280,390])test(`session hierarchy sidebar retains navigation and fits usage columns at ${width}px`,{skip},async t=>{
+ const params=new URLSearchParams({conversation:rootConversation,delegation_mode:'rank',delegation_sort:'cost',delegation_direction:'asc',delegation_scope:'all'});
+ const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.delegation-inbox-row'}),{page}=app;
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ await show();await app.settled();
+ assert.equal(app.calls.filter(call=>call.path.endsWith('/delegation')).at(-1).query.get('mode'),'hierarchy','the compact table loads the hierarchy even for a saved ranking');
+ const table=page.getByRole('table',{name:'Session hierarchy and usage'});
+ assert.equal(await table.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'session names leave space for both usage columns');
+ const current=table.locator('[aria-current="true"]');await current.click();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
+ await table.getByRole('button',{name:/Open session 1\.1 ·/}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
+ await show();await app.shot('hierarchy-sidebar');
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
+ assert.equal(new URL(page.url()).searchParams.get('delegation_mode'),'rank','the fixed sidebar presentation preserves the full-width ranking');
+ await app.shot('hierarchy-full-width');
 });
 
 test('workspace Timeline message links preserve source transcripts across canonical session aliases',{skip},async t=>{
@@ -320,6 +341,41 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
   const content=page.getByRole('tooltip').locator('pre');await content.waitFor();
   assert.equal(await content.textContent(),preview);
  }
+});
+
+test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
+ const app=await open(t,{url:`/work/${workID}?explorer=timeline`,ready:'.lt-timeline-legend .usage-legend-item'}),{page}=app;
+ await app.settled();
+ const key=page.locator('.lt-timeline-legend'),button=name=>key.getByRole('button',{name,exact:true});
+ const choices=button('Choices');
+ await choices.focus();await choices.press('ArrowDown');
+ const menu=page.getByRole('menu',{name:'Filter Choices',exact:true});
+ assert.equal(await menu.getByRole('menuitem',{name:/Show only this value/}).evaluate(el=>el===document.activeElement),true);
+ await menu.getByRole('menuitem',{name:/Show all except this value/}).click();await app.settled();
+ assert.equal(await choices.getAttribute('aria-pressed'),'false');
+ assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-agent-event="e-s-root-open"]').count());
+ await button('Read / search').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ await page.locator('.lt-session-root [data-tool-id="tool-error"]').waitFor({state:'detached'});
+ assert.ok(await page.locator('.lt-session-root [data-tool-id="tool-read"]').count());
+ await button('Human typed').click();await page.getByRole('menuitem',{name:/Show only this value/}).click();await app.settled();
+ await button('Sender category').click();await page.getByRole('menuitem',{name:/Show only this category/}).click();await app.settled();
+ const saved=path(page),fresh=await open(t,{url:saved,ready:'.lt-timeline-legend .usage-legend-item'});
+ await fresh.settled();
+ const restored=fresh.page.locator('.lt-timeline-legend');
+ for(const [name,pressed] of [['Choices','false'],['Friction','true'],['Read / search','true'],['Error','false'],['Human typed','true'],['Likely pasted','false'],['Sender category','true'],['Receiver category','false']]){
+  assert.equal(await restored.getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),pressed,name);
+ }
+ assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('timeline_visibility')),JSON.parse(new URL(page.url()).searchParams.get('timeline_visibility')));
+ await page.setViewportSize({width:390,height:900});await choices.click();
+ const bounds=await menu.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390&&bounds.y>=0&&bounds.y+bounds.height<=900);
+ await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
+ await choices.click();await page.getByRole('menuitem',{name:'Show all values',exact:true}).click();await app.settled();
+ await page.locator('.lt-session-root [data-agent-event="e-s-root"]').first().waitFor();
+ assert.equal(await button('Choices').getAttribute('aria-pressed'),'false','an unfiltered key has no explicit selection, matching dashboard keys');
+ assert.equal(await button('Read / search').getAttribute('aria-pressed'),'true','resetting events preserves the tool selection');
+ await app.shot('timeline-key-visibility');
 });
 
 test('Timeline segments pin exact content before revealing their conversation source',{skip},async t=>{
@@ -959,7 +1015,7 @@ test('Thinking shares filters, brushing and disclosures across pages and indepen
  const fresh=await open(t,{url:path(page),ready});
  assert.deepEqual(JSON.parse(new URL(fresh.page.url()).searchParams.get('thinking')),selected);
  const detailTopic=topic();
- await page.locator('.thinking-links').getByRole('link',{name:'Waiting and Compaction →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
+ await page.locator('.thinking-links').getByRole('link',{name:'Waiting →',exact:true}).click();await page.locator(ready).waitFor();await app.settled();
  const overviewTopic=topic();assert.notEqual(overviewTopic,detailTopic);
  assert.equal(state().from,selected.from);
  await page.getByText('Methodology, exclusions and production limits',{exact:true}).click();await app.settled();
@@ -1171,4 +1227,23 @@ test('Risky actions table edits are Back/Forward steps that restore the table',{
  await page.waitForFunction(()=>/\/srv\/c/.test(document.querySelector('.safety-table .qt-row')?.textContent??''));
  assert.deepEqual(read().orderBy,[{field:'subject',dir:'desc'}]);
 
+});
+
+
+test('Compaction chart controls and source query restore in a fresh browser', {skip}, async t => {
+ const ready = '.usage-compaction-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations';
+ const app = await open(t, {url:'/analyze?analyze_topic=compaction&analyze_data=compactions', ready}), {page} = app;
+ const control = name => page.locator('.usage-compaction-dashboard').getByRole('combobox', {name, exact:true});
+ await control('Breakdown').selectOption('trigger_provider'); await app.settled();
+ await control('Range').selectOption('30d'); await app.settled();
+ await control('View').selectOption('compare');
+ await page.locator('.usage-analysis-dashboard[aria-busy="false"]').waitFor(); await app.settled();
+ const saved = path(page);
+ const fresh = await open(t, {url:saved, ready:'.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations'});
+ assert.equal(await fresh.page.getByRole('combobox', {name:'Breakdown', exact:true}).inputValue(), 'trigger_provider');
+ assert.equal(await fresh.page.getByRole('combobox', {name:'View', exact:true}).inputValue(), 'compare');
+ const source = fresh.page.locator('.usage-query-destination').first();
+ await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
+ assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
+ await app.shot('compaction-compare');
 });

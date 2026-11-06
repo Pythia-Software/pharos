@@ -2,7 +2,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "reac
 import type { ChartSeries } from "./chart-series";
 import type { LegendAction } from "./chart-selection";
 
-export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean }) {
+export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSelection, onAction, groupSize, mixed = false, swatch }: { item: ChartSeries; active: boolean; dimmed: boolean; selectionActive: boolean; soleSelection: boolean; onAction: (action: LegendAction) => void; groupSize?: number; mixed?: boolean; swatch?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const firstFocus = useRef(0);
@@ -57,6 +57,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
   }
   const remove = selectionActive && active;
   const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
+  const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
   return <span className={`usage-legend-chip${category ? " is-category" : ""}`}>
     <button ref={trigger} type="button" className={`usage-legend-item${category ? " usage-legend-category" : ""}${dimmed ? " dimmed" : ""}`} aria-label={name} aria-pressed={mixed ? "mixed" : active} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
       title={`Filter ${item.label}`} onClick={() => { firstFocus.current = 0; setOpen(current => !current); }} onKeyDown={event => {
@@ -65,7 +66,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
         firstFocus.current = event.key === "ArrowUp" ? -1 : 0;
         setOpen(true);
       }}>
-      {!category ? <span className="usage-swatch" style={{ background: item.color }} /> : null}{item.label}<span className="usage-legend-caret" aria-hidden="true">▾</span>
+      {marker}{item.label}<span className="usage-legend-caret" aria-hidden="true">▾</span>
     </button>
     {open ? <div ref={menu} id={menuId} className="usage-legend-menu" role="menu" aria-label={`Filter ${name}`} onKeyDown={event => {
       const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
@@ -76,7 +77,7 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, soleSel
       const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
       entries[next]?.focus();
     }}>
-      <div className="usage-legend-menu-heading" title={item.label}>{!category ? <span className="usage-swatch" style={{ background: item.color }} /> : null}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
+      <div className="usage-legend-menu-heading" title={item.label}>{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</div>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("only")}><span>{category ? "Show only this category" : "Show only this value"}</span><small>Replace the current selection</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("toggle")}><span>{category ? remove ? "Remove all from selection" : "Add all to selection" : remove ? "Remove from selection" : "Add to selection"}</span><small>{soleSelection ? "Show all values again" : selectionActive ? "Keep the rest of your selection" : "Start a multi-value selection"}</small></button>
       <button type="button" role="menuitem" tabIndex={-1} onClick={() => choose("exclude")}><span>{category ? "Show all except this category" : "Show all except this value"}</span><small>{category ? "Include every label outside this category" : "Include every other value, even in Other"}</small></button>

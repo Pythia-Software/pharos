@@ -9,6 +9,7 @@ const source = (dependencies: string[]): DrilldownColumn => ({ kind: "source", l
 const conversation = ["workspace_id", "conversation_id"];
 export const usageDrilldownColumns: Record<UsageDataset, DrilldownColumn[]> = {
   message_labels:[source([...conversation,"message_id"])],
+  compactions: [source([...conversation, "message_id"])],
   model_requests: [source([...conversation, "requested_at"])],
   tl1_attempts: [source(["workspace_id"])],
   usage: [source([...conversation, "first_usage_at"]), { kind: "calls", label: "Calls", dependencies: ["conversation_id"] }, { kind: "root", label: "Root", dependencies: ["conversation_id", "root_conversation_id"] }],

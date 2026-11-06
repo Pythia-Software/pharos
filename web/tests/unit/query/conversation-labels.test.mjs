@@ -68,6 +68,7 @@ import {timelinePreviewText} from '../../../src/timeline-preview.ts';
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
 import {timelineModeGroups,timelineLegendWindow} from '../../../src/timeline-legend.tsx';
+import {timelineValueVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
@@ -121,6 +122,64 @@ test('timeline legend keeps specific labels with their parent modes without dupl
  assert.equal(new Set(groups.flatMap(group=>group.labels)).size,4);
  assert.equal(groups.length,4,'absent families do not enter the legend');
  assert.equal(byID('P.request').direct,true);assert.equal(byID('C.report').direct,false);
+});
+
+test('timeline key selections support categories, mixed additions, exclusions and section resets',()=>{
+ const group=['C.report.finding','C.report.progress'];
+ let state=updateTimelineVisibility({},'modes',group,'only');
+ assert.equal(timelineValueVisible(state,'modes',group[0]),true);
+ assert.equal(timelineValueVisible(state,'modes','?'),false);
+ assert.equal(timelineValueVisible(state,'tools','read'),true,'sections remain independent');
+ state=updateTimelineVisibility(state,'modes',[group[0]],'toggle');
+ assert.deepEqual(state.modes.values,[group[1]]);
+ state=updateTimelineVisibility(state,'modes',group,'toggle');
+ assert.deepEqual(new Set(state.modes.values),new Set(group),'adding a mixed category fills it');
+ state=updateTimelineVisibility(state,'tools',['error'],'exclude');
+ assert.equal(timelineValueVisible(state,'tools','error'),false);
+ assert.equal(timelineValueVisible(state,'tools','future-tool'),true,'exclusions include future values');
+ state=updateTimelineVisibility(state,'modes',group,'exclude');
+ assert.equal(timelineValueVisible(state,'modes','C.report.finding'),false);
+ assert.equal(timelineValueVisible(state,'modes','P.request'),true);
+ state=updateTimelineVisibility(state,'modes',group,'toggle');
+ assert.equal(timelineValueVisible(state,'modes','C.report.finding'),true);
+ state=updateTimelineVisibility(state,'tools',[],'clear');
+ assert.deepEqual(state,{});
+});
+
+test('timeline visibility filters every ribbon level and event type without reallocating time',()=>{
+ const at=n=>new Date(n).toISOString(),messages=[message('a','C.report.finding',{at:at(100)}),message('b','C.report.progress',{at:at(500)}),message('unlabeled',null,{at:at(900)})];
+ const marks=[{start:300,end:450,end_known:true,category:'read',tool_id:'ok',name:'Read',error:false},{start:600,end:700,end_known:true,category:'read',tool_id:'failed',name:'Read',error:true}];
+ const events=[{id:'choice',message_id:'a',group:'Choices you may not see',label:'Assumption',source:'reply',target:{message_id:'b',method:'quote'}},{id:'friction',message_id:'a',group:'Friction',label:'Obstacle',source:'reply',target:null}];
+ const tree=sessionRibbonTree(messages,marks,[],[],[0,1000],true,false,messages,marks,events);
+ assert.equal(visibleTimelineTree(tree,{}),tree);
+ const state={modes:{values:['C.report.finding'],excluded:true},tools:{values:['error'],excluded:true},events:{values:['friction'],excluded:true}};
+ const shown=visibleTimelineTree(tree,state),walk=node=>[node,...node.children.flatMap(walk)];
+ for(const node of walk(shown))for(const item of node.items){
+  assert.notEqual(item.label,'C.report.finding');assert.notEqual(item.mark?.tool_id,'failed');assert.notEqual(item.event?.id,'friction');
+  const original=tree.items.find(before=>before.id===item.id);assert.equal(item.start,original.start);assert.equal(item.end,original.end);
+ }
+ assert.ok(shown.items.some(item=>item.label==='?'));
+ assert.ok(shown.items.some(item=>item.mark?.tool_id==='ok'),'error visibility does not hide successful calls of the same category');
+ assert.ok(shown.items.some(item=>item.event?.id==='choice'),'events remain independent of hidden message modes');
+ assert.ok(!walk(shown).some(node=>node!==shown&&!node.items.length));
+ assert.ok(tree.items.some(item=>item.event?.id==='friction'),'source data remains intact');
+ const none=visibleTimelineTree(tree,{modes:{values:['missing'],excluded:false},events:{values:['missing'],excluded:false},tools:{values:['missing'],excluded:false}});
+ assert.equal(none.items.length,0);assert.equal(none.children.length,0);
+});
+
+test('caller visibility cuts original text runs and intersects mode selections at every level',()=>{
+ const caller=message('caller','P.request',{at:new Date(0).toISOString(),authorship:[{category:'typed',bytes:5,text:'typed'},{category:'pasted',bytes:3,text:'123'},{category:'harness',bytes:2,text:'ab'}]});
+ const boundary={start:1000,end:1000,end_known:false,category:'other',name:'Boundary',error:false};
+ const tree=sessionRibbonTree([caller],[],[],[],[0,1000],true,true,[caller],[boundary]);
+ const state={origins:{values:['pasted'],excluded:false}},shown=visibleTimelineTree(tree,state,true),walk=node=>[node,...node.children.flatMap(walk)];
+ for(const node of walk(shown)){
+  assert.equal(new Set(node.items.map(item=>item.id)).size,node.items.length,'caller tracks are not duplicated');
+  for(const item of node.items){assert.equal(item.authorship,'pasted');assert.equal(item.start,500);assert.equal(item.end,800);assert.equal(item.excerpt.text,'123');}
+ }
+ assert.ok(shown.items.length>0);
+ assert.equal(visibleTimelineTree(tree,{...state,modes:{values:['P.request'],excluded:true}},true).items.length,0);
+ const agent=sessionRibbonTree([caller],[],[],[],[0,1000],true,false,[caller],[boundary]);
+ assert.deepEqual(visibleTimelineTree(agent,state).items,agent.items,'caller source selections leave agent text unchanged');
 });
 
 test('recorded descendants stay beside their parent while independent and unresolved branches survive',()=>{
@@ -380,11 +439,29 @@ test('session ribbons decompose agent events by group and kind beside tool actio
  assert.equal(node.title,'Agent events');
  const ordered=sessionRibbonTree([reply,later],[{start:12,end:13,end_known:true,name:'Read',category:'read',count:1,error:false}],[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events).children.map(child=>child.title);
  assert.deepEqual(ordered,['Message modes','Agent events','Tool actions'],'Agent events come before Tool actions');
- assert.deepEqual(node.children.map(child=>[child.title,ribbonEventCount(child.items)]),[['Friction',2],['Learning',1]]);
+ assert.deepEqual(node.children.map(child=>[child.title,ribbonEventCount(child.items,'events')]),[['Friction',2],['Learning',1]]);
  assert.deepEqual(node.children[0].children.map(child=>[child.title,child.children.length]),[['Obstacle',2]]);
  // The whole session still counts its two messages, not the events said in them.
  assert.equal(ribbonEventCount(tree.items),2);
  assert.equal(ribbonCounts(node.items).events,3);
+ assert.equal(ribbonEventCount(node.items),2,'event-only session summaries still count distinct source messages');
+ assert.equal(ribbonEventCount(node.items,'events'),3,'classification rows retain individual event counts');
+ const marks=[{start:12,end:13,end_known:true,name:'Read',category:'read',count:1,error:false,tool_id:'read',message_id:'tool'},
+  ...['one','two'].map(tool_id=>({start:14,end:15,end_known:true,name:'Run',category:'run',count:1,error:false,tool_id,message_id:'reply'}))];
+ const withTools=sessionRibbonTree([reply,later],marks,[],discoveryTaxonomy,[0,40],true,false,undefined,undefined,events);
+ const hiddenModes={modes:{values:['missing'],excluded:false}};
+ const mixed=visibleTimelineTree(withTools,hiddenModes);
+ assert.equal(ribbonEventCount(withTools.items),3);
+ assert.equal(ribbonEventCount(mixed.items),3,'surviving events count when their message modes are hidden; tools on the same message deduplicate');
+ const withoutRead=visibleTimelineTree(withTools,{...hiddenModes,tools:{values:['read'],excluded:true}});
+ assert.equal(ribbonEventCount(withoutRead.items),2,'hiding an independent tool decreases the summary');
+ const onlyEvents=visibleTimelineTree(withTools,{...hiddenModes,tools:{values:['missing'],excluded:false}});
+ assert.equal(ribbonEventCount(onlyEvents.items),2,'removing the last tool does not change how events are counted');
+ assert.equal(ribbonEventCount(onlyEvents.children.find(child=>child.id==='events').items,'events'),3);
+ const onlyLearning=visibleTimelineTree(withTools,{...hiddenModes,tools:{values:['missing'],excluded:false},events:{values:['learning'],excluded:false}});
+ assert.equal(ribbonEventCount(onlyLearning.items),1,'hiding events also removes their unrepresented source messages');
+ const aggregated={id:'aggregate',start:12,end:13,title:'Read',color:'',thinking:false,mark:{...marks[0],count:3}};
+ assert.equal(ribbonEventCount([...node.items,aggregated]),5,'aggregated tool counts retain their additional observations');
  // Outside the window an event is not shown.
  assert.equal(sessionRibbonTree([reply,later],[],[],discoveryTaxonomy,[20,40],true,false,undefined,undefined,events).children.find(child=>child.id==='events').items.length,1);
 });

@@ -532,9 +532,9 @@ full signed installation test.
 
 ## Upgrading an existing library
 
-This build upgrades catalogs to schema 22 and writes capture manifest version 5,
+This build upgrades catalogs to schema 23 and writes capture manifest version 5,
 combining durable preservation, managed-library delivery safeguards and separate
-provisional/refined writing state. Earlier
+provisional/refined writing state, explicit suppression outcomes, and timestamped writing queues. Earlier
 builds refuse these versions. Take and verify a backup of
 both the catalog and captures before upgrading: rollback requires restoring
 the pre-upgrade catalog and capture tree together, not just replacing the app.

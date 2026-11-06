@@ -599,7 +599,7 @@ const thinkingDaysOption: Option = { name: "days", param: "thinking", key: "rang
 // dashboard cannot become a page that takes only filters.
 type DashboardLinks = { catalog: true } | { options: Option[]; days: Option };
 const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
-  labels:{catalog:true},
+  compaction: { catalog: true }, labels:{catalog:true},
   activity: { catalog: true }, human: { catalog: true }, tokens: { catalog: true }, skills: { catalog: true }, calls: { catalog: true },
   tools: { catalog: true }, time: { catalog: true }, parallelism: { catalog: true }, habits: { catalog: true }, mcp: { catalog: true }, carbon: { catalog: true },
   agent_experience: { catalog: true },

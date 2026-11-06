@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
+import compactions from "../../../../schemas/compactions.schema.json";
 import modelRequests from "../../../../schemas/model_requests.schema.json";
 import tl1Attempts from "../../../../schemas/tl1_attempts.schema.json";
 import usage from "../../../../schemas/usage.schema.json";
@@ -21,7 +22,7 @@ import agentEventMessages from "../../../../schemas/agent_event_messages.schema.
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
 import { toolSummaryCallFilters } from "../../../src/tools-dashboard-model.ts";
-import { readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
+import { authorshipStatusText, readDashboardLink, readDashboardQuery, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { trendQuery } from "../../../src/dashboard-trend-model.ts";
 import { analysisQuery } from "../../../src/dashboard-analysis-model.ts";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
@@ -186,7 +187,7 @@ test("dashboard previews distinguish source and group filters and retain custom 
 });
 
 test("all eight dashboards offer four distinct native queries that retain source scope", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, rhythm, mcp_calls: mcpCalls };
   const configs = [
     ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
     ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
@@ -242,7 +243,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -272,7 +273,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const schemas = {compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -526,7 +527,7 @@ import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
 
 test("Analyze defaults and Details cover every dataset without changing explicit saved projections", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), details = usageDetailsSchema(schema, dataset);
     assert.ok(details);
@@ -544,7 +545,7 @@ test("Analyze defaults and Details cover every dataset without changing explicit
 });
 
 test("Analyze keeps every drilldown after the selected data and before native Detail", () => {
-  const documents = {message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
   for (const [dataset, document] of Object.entries(documents)) {
     const original = loadSchema(document), schema = usageQuerySchema(original, dataset);
     const saved = { ...EMPTY_QUERY, select: [{ field: ITEM_DETAILS_COLUMN }, { field: "id", width: 175 }] };
@@ -764,4 +765,21 @@ test("dashboard Today uses its pinned timezone and reports an invalid zone", () 
   assert.equal(returned.get("analyze_timezone"), "Asia/Tokyo");
   params.set("analyze_timezone", "Invalid/Timezone");
   assert.match(read().error, /timezone/);
+});
+
+
+test("writing freshness distinguishes a partial turn from caught up", () => {
+  const status = {built_at: "2026-11-05T17:00:00Z", complete_at: "2026-11-05T10:00:00Z", running: false, stale: true, error: null,
+    pending_messages: 12, pending_recent_messages: 2, pending_historical_messages: 10,
+    oldest_pending_sent_at: "2026-07-01T12:00:00Z", oldest_pending_queued_at: "2026-11-05T13:00:00Z"};
+  const text = authorshipStatusText(status);
+  assert.match(text, /catching up/);
+  assert.match(text, /2 recent; 10 historical/);
+  assert.match(text, /Oldest pending work queued/);
+  assert.match(text, /Oldest pending message sent/);
+  assert.doesNotMatch(text, /current as of/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false}), /current as of/);
+  assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, complete_at: null}), /current as of/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /await overnight refinement/);
+  assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /current as of/);
 });

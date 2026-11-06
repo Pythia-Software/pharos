@@ -511,13 +511,13 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   assert.deepEqual([kept.dashboard, kept.dashboardTarget, kept.templateId, kept.url], [true, 'habits-punchcard', away.instanceId, away.url]);
 });
 
-test('Waiting and Compaction and Thinking charts are dashboard cards over their page population', async t => {
+test('Waiting and Thinking charts are dashboard cards over their page population', async t => {
   const { requests } = fixture(t);
   const page = (topic, thinking) => '/analyze?' + new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: topic, analyze_data: 'model_requests', thinking: JSON.stringify(thinking),
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'harness', op: '=', value: 'codex' }] }), highlight: 'section:x', card_id: 'thinking-compactions' });
   const overview = pageCardURL(page('thinking-overview', { range: '30d', model: 'gpt-5' })), params = new URL(overview, location.origin).searchParams;
   assert.deepEqual([params.has('highlight'), params.has('card_id'), params.get('analyze_topic')], [false, false, 'thinking-overview']);
-  assert.deepEqual(dashboardCardTargets(overview).map(target => [target.id, target.title]), [['thinking-waits', 'Model wait distribution: gpt-5 · harness is codex'], ['thinking-compactions', 'Context compactions: gpt-5 · harness is codex']]);
+  assert.deepEqual(dashboardCardTargets(overview).map(target => [target.id, target.title]), [['thinking-waits', 'Model wait distribution: gpt-5 · harness is codex']]);
   assert.equal(dashboardCardWindow(overview, 'thinking-waits'), 'Past 30 days');
   assert.equal(dashboardCardPresentation(overview, 'thinking-compactions').category, 'thinking');
   // Home reads the page's query filters and controls as the card's records.
@@ -525,8 +525,7 @@ test('Waiting and Compaction and Thinking charts are dashboard cards over their 
   assert.equal(source.dataset, 'model_requests');
   assert.deepEqual(source.where.slice(0, 3), [{ field: 'harness', op: '=', value: 'codex' }, { field: 'model', op: '=', value: 'gpt-5' }, { field: 'requested_at', op: '>=', value: '-30d' }]);
   assert.throws(() => collectDashboardCard(overview, 'Thinking', '', 'thinking-distributions'), /cannot/);
-  assert.equal(collectDashboardCard(overview, 'Compactions', '', 'thinking-compactions').dashboardTarget, 'thinking-compactions');
-  assert.equal(dashboardCardCollected(overview, 'thinking-compactions'), true);
+  assert.throws(() => collectDashboardCard(overview, 'Compactions', '', 'thinking-compactions'), /cannot/);
   const waits = await loadDashboardCardPreview(overview, schemas.model_requests, undefined, undefined, now, 'thinking-waits');
   assert.equal(waits.action, DASHBOARD_CARD_ACTION);
   assert.deepEqual([waits.metrics[0].clause.distribution.kind, waits.metrics[0].clause.groupBy, waits.metrics[0].clause.display.xScale.mode], ['box', ['model'], 'log']);
@@ -626,4 +625,18 @@ test('percentage-valued dashboard trends retain their selected scale independent
     assert.match(dashboardCardDescription(makeURL(active, [])), /Logarithmic scale/, `${view} still reports an active logarithmic axis`);
   }
   assert.doesNotMatch(dashboardCardDescription(makeURL({ ...selected, view: 'compare', split: 'none' }, [])), /Logarithmic scale/, 'a scalar comparison has no axis');
+});
+
+
+test('compaction card defaults follow trigger/service controls and filters', t => {
+  fixture(t);
+  const catalog = analysisCatalogs.compaction;
+  const address = (state, where = []) => dashboardCardURL('/analyze?analyze_topic=compaction', catalog, { ...dashboardDefaults.compaction, ...state }, where);
+  const triggers = dashboardCardMetadata(address({}), 'chart', schemas.compactions);
+  assert.match(triggers.title, /Compactions per day by trigger/);
+  assert.equal(dashboardCardPresentation(address({})).category, 'thinking');
+  const services = dashboardCardMetadata(address({ view: 'compare', split: 'provider' }, [{ field: 'trigger', op: '=', value: 'human' }]), 'chart', schemas.compactions);
+  assert.match(services.title, /Compactions by service/);
+  assert.match(services.description, /human/);
+  assert.notEqual(services.title, triggers.title);
 });
