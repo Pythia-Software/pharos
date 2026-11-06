@@ -154,7 +154,7 @@ func (c *sourceCapture) restorePlainSnapshot(s *capturedSnapshot) error {
 	}
 	out, err := os.Open(temporary)
 	if err == nil {
-		err = out.Sync() // F_FULLFSYNC before the original encoding is replaced
+		err = syncToDrive(out) // F_FULLFSYNC before the original encoding is replaced
 		out.Close()
 	}
 	if err == nil {
