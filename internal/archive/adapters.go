@@ -188,6 +188,8 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 		return &chatGPTAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "claude-ai":
 		return &claudeAIAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
+	case "copilot":
+		return &copilotAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "conductor":
 		return &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "tl1":

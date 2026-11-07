@@ -94,7 +94,7 @@ export function textScopeNote(draft: TextSearchDraft): "scan" | "tool-output" | 
 }
 export function scopeChoice(scope: TextScope) { return scopes.find(s => s.surface === scope.surface && scope.kinds.length === 0 && scope.roles.join(",") === ("role" in s ? s.role : "")); }
 export function chooseScope(scope: TextScope, id: string): TextScope { const choice = scopes.find(s => s.id === id); return choice ? { ...scope, surface: choice.surface, roles: "role" in choice ? [choice.role] : [], kinds: [] } : scope; }
-export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", "claude-ai": "Claude.ai", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
+export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", "claude-ai": "Claude.ai", copilot: "Copilot CLI", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
 const hasWord = (text: string) => /[\p{L}\p{N}]/u.test(text);
 const combine = (op: "and" | "or", nodes: TextQuery[]): TextQuery => nodes.length === 1 ? nodes[0] : { op, children: nodes };
 export function compileRules(root: TextGroup): { where?: TextQuery; issues: SearchIssue[] } {
