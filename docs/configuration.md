@@ -419,7 +419,7 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `~/.config/claude/projects`, and any `~/.claude*/projects` (for example `~/.claude-work`) that holds transcripts |
 | Codex | `$CODEX_HOME` and `~/.codex`, when they have `sessions/` or `archived_sessions/` |
-| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations; each is its own source of kind `antigravity` |
+| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations except `~/.gemini/antigravity-backup`, a copy of an app's conversations; each is its own source of kind `antigravity` |
 | Conductor | `~/Library/Application Support/com.conductor.app`, when a database at its top level has session and message tables (only table names are read) |
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
 | ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
