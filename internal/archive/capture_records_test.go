@@ -630,6 +630,29 @@ func TestSQLiteRecordsLogicalAcquisitionUsesRetainedParserInput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A reader whose liveness cannot be tested keeps its pins and lease;
+		// one reported contended is live.
+		readers, err := filepath.Glob(filepath.Join(sourceDir, ".reader-pin-*"+captureTempSuffix))
+		if err != nil || len(readers) == 0 {
+			t.Fatalf("no preservation reader leases: %v", err)
+		}
+		for _, failure := range captureLockFailures() {
+			override(t, &probeReaderLease, failingCaptureLock(t, filelock.Exclusive, failure.err, nil))
+			pins, loadErr := loadPreservationPins(sourceDir)
+			cleanupErr := cleanupPreservationReaders(sourceDir)
+			if failure.contended && (loadErr != nil || cleanupErr != nil || len(pins.pendingReaders) != 0) || !failure.contended && (!errors.Is(loadErr, failure.err) || !errors.Is(cleanupErr, failure.err)) {
+				t.Fatalf("reader liveness %s: pending %v, %v, %v", failure.name, pins.pendingReaders, loadErr, cleanupErr)
+			}
+			for _, reader := range readers {
+				if _, err := os.Stat(reader); err != nil {
+					t.Fatalf("reader liveness %s removed a lease: %v", failure.name, err)
+				}
+			}
+		}
+		override(t, &probeReaderLease, filelock.Lock)
+		if pins, err = loadPreservationPins(sourceDir); err != nil || len(pins.pendingReaders) != 1 {
+			t.Fatalf("a reader whose liveness was unknown lost its deferred cleanup: %+v, %v", pins, err)
+		}
 		err = cleanupPreservationReaders(sourceDir)
 		lock.Close()
 		if err != nil {
