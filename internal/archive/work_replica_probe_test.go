@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -41,11 +42,9 @@ const replicaStalledRounds = 3
 // kinds in, mapped to the classic domain methods below.
 var replicaKinds = []string{"maintenance.parallelism", "analysis.authorship", "analysis.labels", "maintenance.labels.query"}
 
-// replicaScopedKinds are the kinds whose classic pass takes a population.
-// Every other classic pass drains its whole queue, so a workload must demand
-// those kinds from a phase without a window: otherwise the classic arm would
-// do more work than the scheduled arm was asked for.
-var replicaScopedKinds = []string{"analysis.labels"}
+// The classic methods drain their production queues. Restricted labels runs
+// force rebuilds and omit dependent invalidation, so they are not comparable.
+var replicaScopedKinds = []string{}
 
 type replicaPhase struct {
 	Name   string   `json:"name"`
@@ -95,11 +94,12 @@ func TestWorkReplica(t *testing.T) {
 		t.Fatal("not a version-3 experiment arm; older artifacts are diagnostic only")
 	}
 	var descriptor struct {
-		Name    string         `json:"name"`
-		Clock   string         `json:"clock"`
-		Stages  []string       `json:"stages"`
-		Phases  []replicaPhase `json:"phases"`
-		Product struct {
+		CPUSlots int            `json:"cpu_slots"`
+		Name     string         `json:"name"`
+		Clock    string         `json:"clock"`
+		Stages   []string       `json:"stages"`
+		Phases   []replicaPhase `json:"phases"`
+		Product  struct {
 			Route       string          `json:"route"`
 			Query       json.RawMessage `json:"query"`
 			LatencyMS   float64         `json:"latency_ms"`
@@ -319,6 +319,7 @@ func TestWorkReplica(t *testing.T) {
 	labels := config.Labels
 	report := map[string]any{"version": 3, "name": descriptor.Name, "clock": descriptor.Clock, "engine_actual": engine,
 		"startup": startup, "settled": false, "resource_basis": replicaResourceBasis, "population": population,
+		"cpu_policy":      replicaCPUPolicy(workState, descriptor.CPUSlots),
 		"expected_sha256": descriptor.Product.Expected, "min_expected_rows": *descriptor.Product.MinRows,
 		"durability": "production catalog durability, labeling ledger synchronous=" + replicaLedgerSync + " and drive flushes restored",
 		"labels": map[string]any{"enabled": labels.Enabled, "variant": labels.Variant, "backend": labels.Backend,
@@ -546,10 +547,8 @@ func replicaKindPopulations(phases []replicaPhase, windows [][2]time.Time, phase
 	return populations, nil
 }
 
-// replicaClassicKind runs one kind through the classic domain methods until
-// its own queue is empty. Only labels take a population (replicaScopedKinds):
-// the other classic passes drain their whole queues, as the classic service
-// does, and the descriptor demands them over the whole corpus.
+// replicaClassicKind runs the production classic methods until their whole
+// queues are empty; the descriptor must demand each kind over that scope.
 func replicaClassicKind(ctx context.Context, c *Catalog, config Config, clock time.Time, kind string, population replicaKindPopulation) error {
 	switch kind {
 	case "maintenance.parallelism":
@@ -557,19 +556,7 @@ func replicaClassicKind(ctx context.Context, c *Catalog, config Config, clock ti
 	case "analysis.authorship":
 		return replicaStage(ctx, c, config, clock, "authorship-estimates")
 	case "analysis.labels":
-		if population.whole {
-			return replicaStage(ctx, c, config, clock, "labels")
-		}
-		// An empty restriction would label every conversation.
-		if len(population.ids) == 0 {
-			return nil
-		}
-		// A restricted run never reports Complete; its pending checks decide.
-		stats, err := c.RunLabels(ctx, config.Labels, LabelsRunOptions{Conversations: population.ids})
-		if err == nil && (stats.Cut || stats.MessagesFailed > 0 || stats.ConversationsFailed > 0) {
-			err = fmt.Errorf("labels left %d messages and %d conversations failed", stats.MessagesFailed, stats.ConversationsFailed)
-		}
-		return err
+		return replicaStage(ctx, c, config, clock, "labels")
 	case "maintenance.labels.query":
 		return replicaStage(ctx, c, config, clock, "label-facts")
 	}
@@ -810,14 +797,14 @@ func checkPending(ctx context.Context, db *sql.DB, query string) (bool, error) {
 func TestWorkReplicaKindPopulations(t *testing.T) {
 	recent := [2]time.Time{time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
 	phases := []replicaPhase{{Name: "recent", Action: "recent", Kinds: []string{"analysis.labels", "maintenance.parallelism"}},
-		{Name: "history", Action: "backfill", Kinds: []string{"maintenance.parallelism"}}}
+		{Name: "history", Action: "backfill", Kinds: []string{"maintenance.parallelism", "analysis.labels"}}}
 	windows := [][2]time.Time{recent, {}}
 	got, err := replicaKindPopulations(phases, windows, [][]string{{"b", "a"}, {"a", "b", "c"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if labels := got["analysis.labels"]; labels.whole || !slices.Equal(labels.ids, []string{"a", "b"}) {
-		t.Fatalf("labels ran over %+v, not only the recent window", labels)
+	if labels := got["analysis.labels"]; !labels.whole || !slices.Equal(labels.ids, []string{"a", "b", "c"}) {
+		t.Fatalf("labels must include the whole production queue: %+v", labels)
 	}
 	if !got["maintenance.parallelism"].whole {
 		t.Fatal("a kind demanded by an unwindowed phase runs over the whole corpus")
@@ -831,10 +818,39 @@ func TestWorkReplicaKindPopulations(t *testing.T) {
 	if _, err := replicaKindPopulations(phases, windows, nil); err == nil || !strings.Contains(err.Error(), "analysis.authorship") {
 		t.Fatalf("an unscoped classic kind in a window only must be refused: %v", err)
 	}
-	// An empty window is an empty population, never the whole corpus.
-	got, err = replicaKindPopulations([]replicaPhase{{Name: "recent", Action: "recent", Kinds: []string{"analysis.labels"}}}, windows[:1], [][]string{{}})
-	if err != nil || got["analysis.labels"].whole || len(got["analysis.labels"].ids) != 0 {
-		t.Fatalf("empty window: %+v %v", got, err)
+	// Even an empty labels window is unsafe: RunLabels{Conversations} has
+	// different invalidation and reuse behavior from the production path.
+	_, err = replicaKindPopulations([]replicaPhase{{Name: "recent", Action: "recent", Kinds: []string{"analysis.labels"}}}, windows[:1], [][]string{{}})
+	if err == nil || !strings.Contains(err.Error(), "analysis.labels") {
+		t.Fatalf("window-only labels must be refused: %v", err)
+	}
+}
+
+// A retained build without admission reports unsupported instead of claiming
+// that an environment variable controlled its work. Defaults remain comparable
+// as defaults; a pinned allowance requires equal supported grants in both arms.
+func replicaCPUPolicy(workState map[string]any, requested int) map[string]any {
+	policy := map[string]any{"requested_slots": requested, "supported": false,
+		"effective_slots": nil, "gomaxprocs": runtime.GOMAXPROCS(0), "logical_cpus": runtime.NumCPU()}
+	if workState["engine"] == "scheduled" {
+		state, _ := workState["state"].(map[string]any)
+		authority, _ := state["authority"].(map[string]any)
+		cap, _ := authority["cpu_cap"].(json.Number)
+		if slots, err := cap.Int64(); err == nil && slots > 0 {
+			policy["supported"], policy["effective_slots"] = true, slots
+		}
+	}
+	return policy
+}
+
+func TestWorkReplicaCPUPolicy(t *testing.T) {
+	classic := replicaCPUPolicy(nil, 2)
+	if classic["supported"] != false || classic["effective_slots"] != nil {
+		t.Fatalf("classic cannot enforce a global allowance: %v", classic)
+	}
+	state := map[string]any{"engine": "scheduled", "state": map[string]any{"authority": map[string]any{"cpu_cap": json.Number("2")}}}
+	if policy := replicaCPUPolicy(state, 2); policy["supported"] != true || policy["effective_slots"] != int64(2) {
+		t.Fatalf("report the actual authority cap: %v", policy)
 	}
 }
 

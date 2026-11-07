@@ -144,10 +144,35 @@ class WorkExperimentTests(Fixture):
         (self.root / "support/labeler/model").mkdir(parents=True)
         (self.root / "support/labeler/model/weights").write_text("w")
         work.freeze(master, "model", self.root / "support/labeler/model")
+        # Nonstandard data paths are protected even outside the library folder.
+        external = self.root / "external-data"
+        external.mkdir()
+        (library / "archive.toml").write_text(f'catalog_path = {json.dumps(str(external / "catalog.sqlite3"))} # comment\ncapture_root = {json.dumps(str(external / "captures"))}\n')
+        with self.assertRaisesRegex(ValueError, "library Pharos uses"):
+            work.prepare(backup, external / "experiment")
+        # Remounted drives are covered by registry-relative metadata alone.
+        mounts = self.root / "Volumes"
+        remounted = mounts / "euclid 1/Pharos"
+        remounted.mkdir(parents=True)
+        registry.write_text(json.dumps({"libraries": [{"config": "/Volumes/euclid/Pharos/archive.toml", "relative": "Pharos/archive.toml"}]}))
+        original_path = work.Path
+        with mock.patch.object(work, "Path", side_effect=lambda value: mounts if value == "/Volumes" else original_path(value)):
+            with self.assertRaisesRegex(ValueError, "library Pharos uses"):
+                work.prepare(backup, remounted / "experiment")
         # An unreadable registry refuses rather than guessing.
         registry.write_text("{")
         with self.assertRaisesRegex(ValueError, "registry"):
             work.prepare(backup, self.root / "m3")
+
+    def test_backup_catalog_symlink_is_refused_before_copy(self):
+        backup, _ = self.backup()
+        external = self.root / "escaped"
+        (backup / "catalog").rename(external)
+        (backup / "catalog").symlink_to(external, target_is_directory=True)
+        with mock.patch.object(work, "clone") as clone:
+            with self.assertRaises(ValueError):
+                work.prepare(backup, self.root / "master")
+            clone.assert_not_called()
 
     def test_inputs_are_frozen_once_and_never_reread(self):
         backup, _ = self.backup()
@@ -227,6 +252,17 @@ class WorkExperimentTests(Fixture):
             work.compare(baseline, candidate, "aa", retained_sha)
         with self.assertRaises(ValueError):
             work.compare(candidate, baseline, "ab", retained_sha)
+
+    def test_startup_orphans_refuse_the_arm(self):
+        backup, _ = self.backup()
+        master = self.root / "master"
+        work.prepare(backup, master)
+        retained, retained_sha = self.binary("retained")
+        with mock.patch.object(work, "supervised", return_value={"exit_code": 0, "orphaned_descendants": True}):
+            with self.assertRaisesRegex(RuntimeError, "descendants"):
+                work.run(retained, master, self.root / "orphan", descriptor(), "baseline", retained_sha)
+        report = json.loads((self.root / "orphan/report.json").read_text())
+        self.assertFalse(report["settled"])
 
     def report(self, role="candidate", binary="new", **extra):
         step = lambda seconds: {"command": "labels", "exit_code": 0, "seconds": seconds, "cpu_seconds": seconds}
@@ -326,7 +362,9 @@ class ProbeArmTests(Fixture):
                  "startup": {"wall_seconds": 1.0, "cpu_seconds": 0.5, "cpu_complete": True},
                  "work": {"wall_seconds": 100.0, "cpu_seconds": 100.0, "cpu_complete": True},
                  "windows": {"startup": [999.0, 1000.0], "work": [1000.0, 1100.0], "readiness": [1000.0, 1012.0]},
-                 "engine_actual": {"value": engine, "basis": "probe"}}
+                 "engine_actual": {"value": engine, "basis": "probe"},
+                 "cpu_policy": {"requested_slots": 0, "supported": False, "effective_slots": None,
+                                "gomaxprocs": 8, "logical_cpus": 8}}
         value.update(extra)
         return value
 
@@ -388,7 +426,8 @@ class ProbeArmTests(Fixture):
         work.validate_probe_descriptor(probe_descriptor())
         window = {"name": "history", "action": "backfill", "kinds": ["analysis.labels"],
                   "from": "2026-10-28T22:00:00Z", "until": "2026-10-30T22:00:00Z"}
-        work.validate_probe_descriptor(probe_descriptor(phases=[window]))
+        with self.assertRaisesRegex(ValueError, "whole"):
+            work.validate_probe_descriptor(probe_descriptor(phases=[window]))
         for broken in ({"phases": [{**window, "until": "2026-10-01T00:00:00Z"}]},
                        {"phases": [{**window, "action": "recent"}]},
                        {"phases": [{**window, "kinds": ["maintenance.backup"]}]},
@@ -498,6 +537,36 @@ class ProbeArmTests(Fixture):
             work.compare_probe(unpinned, self.probe_report(), "ab", old)
         quiet = compare(self.probe_report("baseline", old), "aa")
         self.assertEqual((quiet["release_gate"], quiet["noise"]), ("not-applicable", "within-gate"))
+
+    def test_probe_cpu_allowances_are_reported_and_mismatches_refused(self):
+        old = "b" * 64
+        baseline = self.probe_report("baseline", old)
+        candidate = self.probe_report()
+        candidate["probe"]["cpu_policy"].update(requested_slots=2, supported=True, effective_slots=2)
+        self.assertEqual(work.compare_probe(baseline, candidate, "ab", old)["release_gate"], "refused")
+        baseline["probe"]["cpu_policy"]["requested_slots"] = 2
+        self.assertEqual(work.compare_probe(baseline, candidate, "ab", old)["release_gate"], "refused")
+        baseline["probe"]["cpu_policy"].update(supported=True, effective_slots=2)
+        self.assertFalse(work.compare_probe(baseline, candidate, "ab", old)["blockers"])
+        del candidate["probe"]["cpu_policy"]
+        self.assertEqual(work.compare_probe(baseline, candidate, "ab", old)["release_gate"], "refused")
+        master = self.master()
+        binary, sha = self.fake_probe("unsupported", self.inner())
+        with self.assertRaisesRegex(RuntimeError, "CPU allowance"):
+            work.probe_run(binary, sha, master, self.root / "pin", probe_descriptor(cpu_slots=1), "baseline", "classic", sha)
+
+    def test_probe_destination_is_canonical_before_child_chdir(self):
+        master = self.master()
+        binary, sha = self.fake_probe("relative", self.inner())
+        old_cwd = Path.cwd()
+        os.chdir(self.root)
+        try:
+            work.probe_run(binary, sha, Path("master"), Path("relative-arm"), probe_descriptor(), "baseline", "classic", sha)
+            # Also exercise a symlinked parent, like macOS /tmp -> /private/tmp.
+            (self.root / "scratch").symlink_to(self.root, target_is_directory=True)
+            work.probe_run(binary, sha, master, self.root / "scratch/link-arm", probe_descriptor(), "baseline", "classic", sha)
+        finally:
+            os.chdir(old_cwd)
 
     def test_probe_floors_apply_to_either_arm(self):
         old = "b" * 64

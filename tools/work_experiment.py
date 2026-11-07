@@ -74,6 +74,8 @@ def live_roots():
     support = support_dir()
     roots = {LIVE, support / "Libraries", *(support / name for name in (
         "catalog.sqlite3", "catalog.sqlite3-wal", "captures", "preserved", "staging"))}
+    configs = set()
+    roots.update(config_data_roots(support / "archive.toml"))
     for registry in sorted(support.glob("applications/*/registry.json")):
         try:
             libraries = json.loads(registry.read_text()).get("libraries") or []
@@ -82,8 +84,59 @@ def live_roots():
         for library in libraries:
             config = library.get("config") if isinstance(library, dict) else None
             if isinstance(config, str) and config:
-                roots.add(Path(config).expanduser().parent)
+                configs.add(Path(config).expanduser())
+            relative = library.get("relative") if isinstance(library, dict) else None
+            if isinstance(relative, str) and relative:
+                relative = Path(relative)
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("a registered library has an unsafe relative config path")
+                # Conservatively cover every mount with that relative path.
+                # No diskutil/UUID probe or catalog open is needed to cover
+                # remounts such as /Volumes/euclid 1.
+                mounts = Path("/Volumes")
+                if mounts.is_dir():
+                    configs.update(mount / relative for mount in mounts.iterdir() if mount.is_dir())
+    for config in configs:
+        roots.add(config.parent)
+        roots.update(config_data_roots(config))
     return {root.resolve() for root in roots}
+
+
+def config_data_roots(config):
+    """Read only root-level path scalars; never initialize a library.
+
+    Match Pharos's small config format without requiring Python 3.11 tomllib.
+    Unrecognized path syntax refuses instead of guessing a live data location.
+    """
+    if not config.exists():
+        return set()
+    try:
+        text = config.read_text()
+        values = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                break  # paths belong to the root table
+            key, sep, raw = line.partition("=")
+            if not sep or key.strip() not in ("data_dir", "catalog_path", "capture_root"):
+                continue
+            raw = raw.strip()
+            if raw.startswith('"'):
+                value, end = json.JSONDecoder().raw_decode(raw)
+            elif raw.startswith("'") and "'" in raw[1:]:
+                end = raw.index("'", 1) + 1
+                value = raw[1:end-1]
+            else:
+                raise ValueError("a library path must be a quoted string")
+            if not isinstance(value, str) or (raw[end:].strip() and not raw[end:].strip().startswith("#")):
+                raise ValueError("unsupported library path syntax")
+            values[key.strip()] = (config.parent / value).resolve()
+        roots = set(values.values())
+        if "catalog_path" in values:
+            roots.add(values["catalog_path"].parent)
+        return roots
+    except (OSError, ValueError) as error:
+        raise ValueError(f"cannot resolve library paths from {config} ({error}); refusing to guess") from error
 
 
 def not_live(*paths):
@@ -224,6 +277,9 @@ def backup_evidence(backup, attestation):
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise ValueError("the backup manifest's catalog path is not inside the backup")
         snapshot = backup / relative
+        if not contains(backup, snapshot.resolve()):
+            raise ValueError("the backup manifest's catalog path is outside the backup")
+        no_links(snapshot.parent)
         s = snapshot.stat()
         if s.st_size != catalog.get("size") or s.st_mtime_ns != catalog.get("mtime_ns"):
             raise ValueError("the catalog differs from the snapshot the completed backup recorded")
@@ -793,8 +849,8 @@ def run(binary, master, destination, descriptor, role, retained_sha256=None):
         # Startup migration/initialization is timed apart from the work it precedes.
         report["startup"] = execute("startup", descriptor["startup_command"])
         report["startup"]["schema_version"] = schema_version(database)
-        if report["startup"].get("timed_out") or report["startup"]["exit_code"]:
-            raise RuntimeError("startup command failed or timed out")
+        if report["startup"].get("timed_out") or report["startup"]["exit_code"] or report["startup"].get("orphaned_descendants"):
+            raise RuntimeError("startup command failed, timed out or left descendants")
         if report["startup"]["schema_version"] != descriptor["expected_schema_version"]:
             raise RuntimeError("startup did not bring the catalog to the pinned schema; work timings would include migration")
         for index, command in enumerate(descriptor["commands"]):
@@ -1070,7 +1126,10 @@ def normalize(master, destination, binary, retained_sha256, startup_command, exp
 # The probe's scheduled kinds and the classic methods it maps each one to.
 SCHEDULED_KINDS = {"analysis.authorship", "analysis.labels", "maintenance.labels.query", "maintenance.parallelism"}
 # Kinds whose classic pass takes a population; the others drain whole queues.
-SCOPED_KINDS = {"analysis.labels"}
+# Restricted RunLabels forces rebuilds and omits durable dependent marking.
+# Every production classic pass must therefore be demanded over the whole
+# corpus. A recent phase alongside whole-history demand still measures priority.
+SCOPED_KINDS = set()
 # Classic-only diagnostic stages; a scheduled arm refuses them.
 LEGACY_STAGES = {"timing", "tools", "identities", "authorship-estimates", "authorship-exact", "labels",
                  "agent-events", "label-facts", "findings"}
@@ -1178,6 +1237,7 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
     probe observed executing. A baseline is the probe compiled from the
     retained source, identified by its hash."""
     validate_probe_descriptor(descriptor)
+    master, destination = master.resolve(), destination.resolve()
     if role not in ("baseline", "candidate") or engine not in ("classic", "scheduled"):
         raise ValueError("role is baseline or candidate; engine is classic or scheduled")
     if not SHA256.match(baseline_probe_sha256 or "") or not SHA256.match(probe_sha256 or ""):
@@ -1220,6 +1280,11 @@ def probe_run(probe, probe_sha256, master, destination, descriptor, role, engine
         if inner is None or inner.get("version") != VERSION:
             raise RuntimeError("the probe wrote no version-3 report")
         report["engine_actual"] = inner.get("engine_actual") or report["engine_actual"]
+        report["cpu_policy"] = inner.get("cpu_policy")
+        if descriptor.get("cpu_slots"):
+            policy = report["cpu_policy"] or {}
+            if not policy.get("supported") or policy.get("effective_slots") != descriptor["cpu_slots"]:
+                raise RuntimeError("the probe cannot enforce the descriptor's pinned CPU allowance")
         if entry.get("timed_out") or entry["exit_code"] or entry.get("orphaned_descendants") or not inner.get("settled"):
             raise RuntimeError(f"the probe failed: {inner.get('failure') or 'see its private log'}")
         if engine == "scheduled":
@@ -1361,6 +1426,16 @@ def compare_probe(baseline, candidate, mode, baseline_probe_sha256):
     if not expected:
         raise ValueError("unpinned product oracle: a reference run is not a measured pair")
     blockers = []
+    policies = [report["probe"].get("cpu_policy") or {} for report in (baseline, candidate)]
+    if any(not policy for policy in policies):
+        blockers.append("effective CPU policies were not reported by both probes")
+    elif policies[0].get("requested_slots") != policies[1].get("requested_slots"):
+        blockers.append("arms requested different CPU allowances")
+    elif policies[0].get("requested_slots") and (any(not p.get("supported") for p in policies)
+            or policies[0].get("effective_slots") != policies[1].get("effective_slots")):
+        blockers.append("arms cannot enforce the same pinned CPU allowance")
+    if policies[0].get("gomaxprocs") != policies[1].get("gomaxprocs") or policies[0].get("logical_cpus") != policies[1].get("logical_cpus"):
+        blockers.append("arms have different process CPU availability")
     if mode == "aa":
         if candidate.get("probe_sha256") != baseline["probe_sha256"] or candidate.get("role") != "baseline":
             raise ValueError("A/A runs the retained-source probe in both arms")

@@ -188,7 +188,7 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; the suggestions already chosen stay until the next run.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "ask.models", Class: workClassMaintenance, Label: "Check Ask Pharos models", Verb: "Checking Ask Pharos models", Holds: "—", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
-	{Kind: "maintenance.capture-compress", Class: workClassMaintenance, Label: "Compress cold captures", Verb: "Compressing cold captures", Holds: "D:w C(this):w", Affects: "—",
+	{Kind: "maintenance.capture-compress", Class: workClassSpecialized, Label: "Compress cold captures", Verb: "Compressing cold captures", Holds: "D:w C(this):w", Affects: "—",
 		OnEject: "Stops; the file in progress stays uncompressed and a later pass compresses it.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "drive.measure", Class: workClassMaintenance, Label: "Check the drive", Verb: "Checking the drive", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},

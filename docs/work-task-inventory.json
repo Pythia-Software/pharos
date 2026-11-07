@@ -1,5 +1,5 @@
 {
-  "baseline_commit": "289ad3aa1c1f40dfc0c215dcf77c61eff0241beb",
+  "baseline_commit": "108c0367bab0b94466fb0f1c8114029e8d4d4a3d",
   "catalog_compatibility_floor": 24,
   "comparison_window": "open",
   "interactive_reads": "Outside background admission; existing query admission remains authoritative. Structural writes initiated by reads use the classified domain owner.",

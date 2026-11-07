@@ -22,16 +22,17 @@ is due no later than the next normal release after acceptance.
 
 ## Baseline artifacts
 
-The retained baseline for the updated stack is main commit
-`289ad3aa1c1f40dfc0c215dcf77c61eff0241beb` (schema 24, without the
-executor), recorded in the [task inventory](work-task-inventory.json). Its
-service binary has been built with Go 1.27.1; its SHA-256 is
+The rebased stack pins main commit
+`108c0367bab0b94466fb0f1c8114029e8d4d4a3d` (schema 24, without the
+executor), recorded in the [task inventory](work-task-inventory.json).
+Main now uses the native fingerprint renderer and shared file locks. A retained
+service and both probes must be rebuilt from this baseline and the same common
+probe bytes, with hashes recorded privately, before paired measurements count
+as evidence. Prior binary proofs and throughput observations are historical.
+
+The preceding main baseline was `289ad3aa1c1f40dfc0c215dcf77c61eff0241beb`;
+its retained service SHA-256 was
 `aad36b01c062df31f10611b60def6b6145557238a1c8187baaa2cb3cf7b73f5e`.
-The probe compiled against that source must also be built from the same
-probe bytes as the candidate, with both hashes recorded privately, before
-paired measurements count as evidence.
-The binary's hash is the CLI baseline's engine proof: it predates engine
-selection and always runs classic. The probe baseline's hash is its identity.
 
 Historical, not acceptance for this baseline: the earlier retained binary was
 built from `cb2ee633ff2c2afd789dd0cd981c8033731bea77` (schema 23).
@@ -213,12 +214,10 @@ probe:
   whole corpus;
 - freezes each phase's activity population (conversations with a message in
   the window) and records its count and digest. Each kind runs over the union
-  of the phases that demand it, recorded per kind, in both arms. Only labels
-  take a population in the classic path; the other classic passes drain their
-  whole queues, so a workload must demand them from a phase without a window
-  (the harness and the probe refuse it otherwise). A restricted labels run is
-  judged by its failure counts and pending checks, and an empty population
-  runs nothing;
+  of the phases that demand it, recorded per kind, in both arms. Classic
+  drains each kind's production whole queue, so a phase without a window
+  must demand it. Both harness and probe refuse window-only kinds, including
+  labels: restricted labels runs change reuse and invalidation behavior;
 - runs the classic kinds in dependency order: timing, writing estimates,
   labels, label query facts. A classic loop ends when its queue is empty; a
   read error, or a writing-estimate queue that does not shrink for three
@@ -306,10 +305,12 @@ against the same gates, startup included. It makes no release claim.
 
 ## Workloads
 
-- Representative: labels over the recent 48 hours plus one coarse-history
-  window (the preceding 48 hours), with the other kinds demanded whole by an
-  unwindowed phase, on the settled-except-labels master (where their queues
-  are already empty); the oracle is the recent message-label page.
+- Representative: recent 48-hour demand alongside whole-history demand for
+  every measured kind, on the settled-except-labels master. Classic uses its
+  production whole queue, while scheduled can prioritize the recent population;
+  the product poll measures recent readiness in both. Window-only labels are
+  refused: the restricted classic method forces rebuilds and omits durable
+  dependent marking, so the earlier two-window workload is diagnostic only.
 - Full settlement: the recent 48 hours plus all history, every kind. Because
   the corpus has never been labeled, this labels every conversation and takes
   hours. It is the release gate for derived settlement and stays explicitly
@@ -340,10 +341,11 @@ Every registered kind names its execution class in its `operationKinds` row
 boundary, inputs and accepted-quality contract. A kind without a known class,
 or a class without a complete contract, fails a test. The inventory also
 records the retained baseline (`baseline_commit`,
-`catalog_compatibility_floor`); the harness reads both from it. While
-`comparison_window` is `open`, a floor that differs from the catalog schema
-fails the test, because the retained binary must open the catalog. The plan
-closes the window when it removes the comparison path. Domain code owns
+`catalog_compatibility_floor`); the harness reads both and checks corpus
+compatibility when admitting an experiment. The floor is retained-artifact
+metadata, so an unrelated catalog migration does not fail the default suite.
+The plan closes `comparison_window` when it removes the comparison path.
+Domain code owns
 invalidation/publication. Exact authorship, global identities/grouping/ranking
 retain their relational boundary. Labels accept usable stored writing spans;
 they do not universally require exact authorship. Query facts can improve
@@ -370,3 +372,13 @@ normalization of the corpus to schema 24 with that binary, representative
 and full-settlement pairs,
 full-corpus recapture/reindex, and actual recent arrival during coarse
 history (no source replay). The classic executor stays the default.
+
+## Review cycle 3 comparison policy
+
+Each probe records the process CPU availability and whether it can enforce the
+requested global allowance, with its effective cap taken from the work API.
+Classic explicitly reports unsupported. Default-versus-default measurements
+compare the intended product policies; an explicitly pinned `cpu_slots` pair
+requires both arms to support and enforce the same allowance and is refused
+otherwise. Old reports lacking this evidence are refused. Startup arms with
+orphaned descendants fail, just like work arms.
