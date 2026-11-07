@@ -303,9 +303,35 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 	return len(rows), err
 }
 
-// RefineAuthorship is the explicitly scheduled complete historical pass.
+// RefineAuthorship explicitly forces the complete historical classifier.
 // It uses the same lease as estimates and preserves queued edits on failure.
 func (c *Catalog) RefineAuthorship(ctx context.Context) (err error) {
+	return c.refineAuthorship(ctx, true)
+}
+
+// The refinement receipt describes relevant source revisions, the complete
+// classifier and its calendar. Quick estimates cannot acknowledge this receipt.
+func authorshipRefinementKey(revision string) string {
+	zone, offset := time.Now().In(time.Local).Zone()
+	return hashBytes([]byte(jsonText([]any{revision, authorshipStateVersion, time.Local.String(), zone, offset})))
+}
+
+func (c *Catalog) authorshipRefinementPending(ctx context.Context) (bool, error) {
+	var revision, built, version string
+	var pending bool
+	err := c.reader().QueryRowContext(ctx, `SELECT revision,
+ COALESCE((SELECT value FROM meta WHERE key='authorship_refinement_inputs'),''),
+ COALESCE((SELECT value FROM meta WHERE key='authorship_state_version'),''),
+ EXISTS(SELECT 1 FROM authorship_pending) OR EXISTS(SELECT 1 FROM authorship_message_state WHERE provisional=1)
+ OR EXISTS(SELECT 1 FROM authorship_message_state WHERE disposition='deferred')
+ FROM authorship_dirty WHERE id=1`).Scan(&revision, &built, &version, &pending)
+	return pending || built != authorshipRefinementKey(revision) || version != authorshipStateVersion, err
+}
+
+// Scheduled calls check again under the classifier lease: another caller may
+// have completed the work since the background plan was read. Explicit repair
+// callers retain the ability to force the full historical classifier.
+func (c *Catalog) refineAuthorship(ctx context.Context, force bool) (err error) {
 	c.authorship.mu.Lock()
 	if c.authorship.running {
 		c.authorship.mu.Unlock()
@@ -322,11 +348,22 @@ func (c *Catalog) RefineAuthorship(ctx context.Context) (err error) {
 		}
 		c.authorship.mu.Unlock()
 	}()
-	generation, _, err := c.authorshipGenerations()
-	if err != nil {
-		return err
-	}
-	return c.withAuthorshipLease(func() error { return c.rebuildAuthorship(ctx, generation, true) })
+	return c.withAuthorshipLease(func() error {
+		if !force {
+			pending, err := c.authorshipRefinementPending(ctx)
+			if err != nil || !pending {
+				if err == nil {
+					opFrom(ctx).Skip("nothing-to-do")
+				}
+				return err
+			}
+		}
+		generation, _, err := c.authorshipGenerationsContext(ctx)
+		if err != nil {
+			return err
+		}
+		return c.rebuildAuthorship(ctx, generation, true)
+	})
 }
 
 func (c *Catalog) authorshipPending(ctx context.Context) (bool, error) {
