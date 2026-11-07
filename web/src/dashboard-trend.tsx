@@ -2,7 +2,7 @@ import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { isTrendView, changeState, noSplit, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { isTrendView, changeState, noSplit, heatmapAxis, heatmapSource, percentileLabel, trendDrawing, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendPeriodCount, trendQuery, trendSeries } from "./dashboard-trend-model";
 import { analysisCardCopy } from "./dashboard-card-copy";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
@@ -18,6 +18,8 @@ import { optionLabels } from "./option-labels";
 import { CreateDashboardCard } from "./create-dashboard-card";
 import { PopulationControl, usePopulation } from "./dashboard-population-control";
 import { withPopulationGroup, type PopulationAction } from "./dashboard-population";
+import { TrendHeatmap } from "./dashboard-heatmap";
+import { trendHeatmap } from "./dashboard-heatmap-model";
 
 export type AmountFormat = (value: number, measure: AnalysisMeasure) => string;
 const percent = (value: number) => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
@@ -38,14 +40,20 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const headline = useDashboardHeadline();
   const requested = { ...state, view: isTrendView(state.view) ? state.view : "trend" as const };
   const view = normalizeAnalysis(catalog, requested);
-  const measure = catalog.measures[view.metric], breakdown = catalog.breakdowns[view.split], count = trendPeriodCount(view);
+  const measure = catalog.measures[view.metric], count = trendPeriodCount(view);
+  // A distribution heatmap counts the records in the measure's band
+  // (heatmapSource); the query and series read that catalog and state, and
+  // the controls the state asked for.
+  const source = heatmapSource(catalog, view), queried = source.state;
+  const breakdown = source.catalog.breakdowns[queried.split];
   // Relative bounds resolve to period boundaries, so the query is stable
   // between renders within one period.
-  const trend = trendQuery(catalog, view, where);
+  const trend = trendQuery(source.catalog, queried, where);
   const result = useAnalysisResult(dataset, schema, trend.query, catalog.request?.params);
   const labels = useMemo(() => optionLabels(schema.fields), [schema]);
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(String(value)) ?? String(value);
-  const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { label }),
+  // A heatmap keeps every period, so an empty one is drawn as empty.
+  const built = useMemo(() => trendSeries(source.catalog, view.display === "heatmap" ? { ...queried, nonzero: false } : queried, trend, result.results, { label }),
     [catalog, result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
   useUsageChartPalette(trend.slice ?? null, built.series);
   // Save what was asked for; only drawing and querying normalize, so a
@@ -88,8 +96,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   };
   const adjustments = trendAdjustments(catalog, requested);
   if (view.norm && !result.loading && built.normPoints !== undefined && built.normPoints < view.normPeriods) adjustments.push(built.normPoints
-    ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
-    : "No earlier point has a value, so there is no norm yet.");
+    ? `The reference levels read ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
+    : "No earlier point has a value, so there is no reference level yet.");
   const bounds = timeBounds(where, catalog.time);
   const population = usePopulation(catalog, schema, where);
   const outputEmpty=!result.loading&&!result.error&&result.results.every(entry=>!entry.buckets.length);
@@ -105,11 +113,28 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     // A selection on the same breakdown would hide what the population keeps.
     if (view.selection?.values.length) set({ selection: { values: [], excluded: false } });
   } : undefined;
+  const action = <><DataReadinessIndicator id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty} updatedAt={result.updatedAt} />{onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : null}</>;
+  // A heatmap draws the value its bins hold on that value's own axis, with
+  // the band's edges as guides (heatmapAxis).
+  const axis = view.display === "heatmap" ? heatmapAxis(catalog, view) : undefined;
+  if (axis) {
+    const band = catalog.breakdowns[axis.breakdown], weight = source.catalog.measures[queried.metric];
+    const value = (amount: number) => axis.bins.format.kind === "percent" ? percent(100 * amount) : format(amount, { ...measure, format: axis.bins.format });
+    const guides = (axis.bins.edges ?? []).flatMap((edge, index) => index === 0 || !band.order?.[index] ? [] : [{ value: edge, label: band.values?.[band.order[index]] ?? band.order[index] }]);
+    return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
+      <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme, view.percentiles)}
+        period={view.period} noun={axis.counted ? catalog.records.plural.toLowerCase() : weight.unit} label={axis.bins.label} format={value} amount={weight.op === "count" ? undefined : amount => format(amount, weight)}
+        rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} /></DataReadinessEmpty>
+      {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
+      {children}
+      {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
+    </section>;
+  }
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-    <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><StackedColumns title={title} controls={controls} action={<><DataReadinessIndicator id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty} updatedAt={result.updatedAt} />{onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : null}</>} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
-      period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
-      rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={view.view === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
-      reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
+    <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><StackedColumns title={title} controls={controls} action={action} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
+      period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display === "heatmap" ? "interval" : view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
+      rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={trendDrawing(catalog, view) === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
+      references={built.references?.map(item => ({ value: item.value, level: item.level, label: `${percentileLabel(item.level)}, prior ${view.normPeriods}` }))}
       format={amount} tickFormat={tickAmount} noun={share || ratio || measure.unit === "USD" ? "" : view.display !== "cumulative" && view.rollingOp === "sum" && view.rollingPeriods > 1 ? rollingSumUnit(measure, view.period) : measure.unit}
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
       selected={built.selected} excluded={built.excluded} onSelect={select} onSelectGroup={selectGroup} onPopulation={populate} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}

@@ -682,6 +682,8 @@ func (site *siteMap) valueLabels(dashboard *siteDashboard, option string) map[st
 		}
 	case "reduce":
 		labels = site.Analyze.Labels.Reduce
+	case "percentiles":
+		labels = site.Analyze.Labels.Percentiles
 	case "view":
 		labels = site.Analyze.Labels.View
 	}
@@ -785,6 +787,10 @@ func (site *siteMap) chartOptionSummary(node *siteNode, dashboard *siteDashboard
 		values = append(values, item)
 	}
 	summary["kind"] = "choice"
+	if view.listRule(key) != nil {
+		summary["kind"] = "list"
+		summary["description"] = "A list of any of these reference levels, e.g. [\"p50\", \"p90\"]; [] draws none. A line chart draws each as a line at that level of the normPeriods periods before the latest; a heatmap traces each period's own percentile (no mean). Levels the chart cannot draw are dropped."
+	}
 	summary["values"] = values
 	for _, rule := range view.Rules {
 		if rule.Option != key {

@@ -198,7 +198,7 @@ function trailingCard(id, scale = 1, window = 7) {
   const opened = new URL(cardDestination(recipe, instantiateRecipe(recipe, window, new Date(at)).query, { days: window, field: recipe.field, mode: "relative" }), "http://localhost");
   const state = { ...JSON.parse(opened.searchParams.get("analyze_chart")), view: "trend" };
   assert.deepEqual(state, { ...windowedChart(id, recipe.destination.chart, window), view: "trend" });
-  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.norm, state.split], [lookback, Boolean(trend.completeDays), true, "none"], id);
+  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.percentiles, state.split], [lookback, Boolean(trend.completeDays), ["mean"], "none"], id);
   const query = trendQuery(catalog, state, where, { now: at, zone });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(dashboardRows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
   assert.equal(built.error, undefined);
@@ -212,7 +212,7 @@ function trailingCard(id, scale = 1, window = 7) {
   });
   assert.ok(card.points.some(point => point > 0), `${id}: the fixture has values`);
   assert.equal(built.normPoints, card.points.slice(0, -1).filter(point => point !== null).length);
-  assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.norm * scale} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.references?.[0]?.value * scale} != baseline ${card.baseline}`);
 }
 test("human-messages-per-day and human-conversations-per-day: 7-day means over complete days, with their norms", () => {
   trailingCard("human-messages-per-day");

@@ -4,12 +4,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import document from "../../../../schemas/session_shape.schema.json";
 import { core, schemas, queryRecipes, recipeById, instantiateRecipe, cardCoverQuery } from "../helpers/recipes.mjs";
-import { analysisQuery, catalogProblems, nativeCycleResult, normalizeAnalysis, selectGroups } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, catalogProblems, heatmapAxis, heatmapSource, nativeCycleResult, normalizeAnalysis, selectGroups, trendDrawing } from "../../../src/dashboard-analysis-model";
+import { heatmapGrid, trendHeatmap } from "../../../src/dashboard-heatmap-model";
+import { binOf } from "../../../src/value-bins";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { cardDashboardWhere } from "../../../src/card-exploration";
 import { filterBoxSamples } from "../../../src/compact-box-model";
 import { loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
-import { compactTimelineBuckets } from "../../../src/column-marks";
 import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/card-trend";
 import { withTimeRange } from "../../../src/chart-range";
 import { weekdayMetric, weekdays } from "../../../src/weekday-cover";
@@ -24,10 +25,11 @@ const field = name => document.fields.find(item => item.name === name);
 const now = Date.parse("2026-11-03T12:00:00Z");
 const session = (id, values) => ({ id, conversation_id: id, root_conversation_id: id, started_at: "2026-11-02T10:00:00.000Z", day: "2026-11-02", week: "2026-11-02", month: "2026-11", ...values });
 
-test("the catalog passes catalogProblems, opens on sessions by length as weekly shares, and is the session_shape topic's", () => {
+test("the catalog passes catalogProblems, opens on sessions by length as a daily heatmap over trailing weeks, and is the session_shape topic's", () => {
   assert.deepEqual(catalogProblems(catalog), []);
   assert.equal(analysisCatalogs.session_shape, catalog);
-  assert.deepEqual(normalizeAnalysis(catalog, dashboardDefaults.session_shape), normalizeAnalysis(catalog, { metric: "sessions", split: "length_band", period: "week", share: true }));
+  const opened = normalizeAnalysis(catalog, dashboardDefaults.session_shape);
+  assert.deepEqual([opened.metric, opened.split, opened.display, opened.period, opened.rollingPeriods], ["sessions", "length_band", "heatmap", "day", 7]);
   // Root conversations hold sessions that differ in every breakdown.
   assert.deepEqual(catalog.units.conversation.breakdowns, {});
   assert.deepEqual(Object.keys(catalog.units.session.breakdowns), Object.keys(catalog.breakdowns));
@@ -70,9 +72,30 @@ test("rates pool their parts over the sessions with the evidence they need, neve
   const query = analysisQuery(catalog, { view: "compare", metric: "steering_load", split: "none" }, [], { now });
   const [result] = core.evaluateMetrics(rows, query.query, schemas.session_shape, { now }).metrics;
   assert.equal(result.buckets[0].value, 2 / 12);
-  // The trend's sessions by band are weekly shares.
-  const trend = trendQuery(catalog, normalizeAnalysis(catalog, dashboardDefaults.session_shape), [], { now });
-  assert.ok(trend.query.aggregations.some(clause => clause.groupBy.includes("length_band")));
+  // The trend's sessions by length are a heatmap of their messages' bins.
+  const source = heatmapSource(catalog, normalizeAnalysis(catalog, dashboardDefaults.session_shape));
+  const trend = trendQuery(source.catalog, source.state, [], { now });
+  assert.ok(trend.query.aggregations.some(clause => clause.groupBy.includes("messages_bin")));
+});
+
+// Each chart is drawn one way, whatever the link asked for: the state's
+// display, shares, scale and norm are the catalog's choice.
+test("Session Shape chooses each chart: heatmaps of a band's value, distributions of banded measures, lines for rates and single series, stacks for totals", () => {
+  const drawn = change => { const state = normalizeAnalysis(catalog, { view: "trend", display: "cumulative", share: true, scale: "logarithmic", ...change }); return [state.display, state.share, trendDrawing(catalog, state)]; };
+  assert.deepEqual(drawn({ metric: "sessions", split: "length_band" }), ["heatmap", false, "trend"]);
+  assert.deepEqual(drawn({ metric: "active_hours", split: "archetype" }), ["heatmap", false, "trend"]);
+  // A rate by band has no total to spread over the band's value: a line per band.
+  assert.deepEqual(drawn({ metric: "failure_rate", split: "archetype" }), ["interval", false, "trend_line"]);
+  assert.equal(heatmapAxis(catalog, { metric: "failure_rate", split: "archetype" }), undefined);
+  for (const metric of ["autonomy", "active_time", "turn_cycle", "context_peak"]) assert.deepEqual(drawn({ metric, split: "none" }), ["heatmap", false, "trend"], metric);
+  assert.deepEqual(drawn({ metric: "failure_rate", split: "none" }), ["interval", false, "trend_line"]);
+  assert.equal(normalizeAnalysis(catalog, { view: "trend", metric: "sessions", split: "none" }).norm, true);
+  assert.deepEqual(drawn({ metric: "active_hours", split: "repository_name" }), ["interval", false, "trend"]);
+  assert.deepEqual(drawn({ metric: "failure_rate", split: "model_family" }), ["interval", false, "trend_line"]);
+  // Outside Over time, long-tailed times and counts are on a log axis.
+  const scale = (view, metric) => normalizeAnalysis(catalog, { view, metric, split: "provider", scale: "linear" }).scale;
+  assert.deepEqual([scale("distribution", "turn_cycle"), scale("distribution", "context_peak"), scale("compare", "sessions")], ["logarithmic", "linear", "linear"]);
+  assert.equal(normalizeAnalysis(catalog, { view: "compare", metric: "sessions", split: "harness", compareAs: "share" }).compareAs, "bars");
 });
 
 test("durations read as people say them", () => {
@@ -140,12 +163,19 @@ const localDay = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pa
 const cardNow = Date.parse("2026-10-16T18:00:00Z");
 // Sessions every few hours over 40 days. Some lack tool data, authorship or
 // a known context window, so each rate's population is a part of them.
+// Rows carry the bands and fine bins the service derives from their values.
+const edges = { autonomy_band: [0.5, 1, 2, 5, 10], turn_cycle_band: [10, 30, 60, 180, 600], context_band: [0.1, 0.25, 0.5, 0.75, 0.9] };
+const banded = (id, value) => value === null ? null : bandBreakdowns[id].order[edges[id].filter(edge => value >= edge).length];
+const binned = (value, scheme) => value === null ? null : binOf(value, scheme);
+const withBands = row => ({ ...row, autonomy_band: banded("autonomy_band", row.autonomy), turn_cycle_band: banded("turn_cycle_band", row.turn_cycle_p50_seconds), context_band: banded("context_band", row.context_peak_ratio),
+  ...Object.fromEntries(Object.entries({ messages: "messages_bin", typed_human_messages: "typed_messages_bin", tool_calls: "tool_calls_bin", active_seconds: "active_seconds_bin", autonomy: "autonomy_bin", turn_cycle_p50_seconds: "turn_cycle_bin", context_peak_ratio: "context_peak_bin" })
+    .map(([value, field]) => [field, binned(row[value], Object.values(catalog.breakdowns).find(breakdown => breakdown.bins?.field === field).bins.scheme)])) });
 const ledger = Array.from({ length: 360 }, (_, index) => {
   const at = new Date(cardNow - (index % 40 + 1) * 86400000); at.setHours(index * 5 % 24, index % 60, 0, 0);
   const monday = new Date(at); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
   const tools = index % 9 !== 0, authored = index % 7 !== 0, window = index % 4 !== 0, typed = authored ? index % 5 * 3 : null;
   const calls = tools ? index % 11 * 4 + 1 : null, edits = tools && authored ? index % 6 : null, handbacks = tools && authored ? index % 4 : null;
-  return {
+  return withBands({
     id: `session-${index}`, conversation_id: `session-${index}`, root_conversation_id: `session-${index % 300}`, started_at: at.toISOString(), last_message_at: new Date(at.getTime() + index % 9 * 7_200_000).toISOString(), day: localDay(at), week: localDay(monday), month: localDay(at).slice(0, 7),
     provider: ["claude", "codex", "antigravity"][index % 3], harness: ["claude-code", "codex/codex_exec", "antigravity-cli", "conductor"][index % 4], model_family: ["opus", "gpt-6", "gemini", "sonnet"][index % 4 === 3 ? 3 : index % 3],
     repository_name: ["pharos", "query-table", null][index % 3 === 2 && index % 2 ? 2 : index % 2], length_band: ["1-5", "6-15", "16-30", "31-60", "61-120", "121+"][index % 6],
@@ -155,7 +185,7 @@ const ledger = Array.from({ length: 360 }, (_, index) => {
     typed_human_messages: typed, autonomy_prompts: authored ? Math.max(1, typed) : null, autonomy: tools && authored ? calls / Math.max(1, typed) : null,
     tool_calls: calls, failed_calls: tools ? index % 5 : null, corrections: authored ? index % 3 : null, edit_turns: edits, one_shot_edit_turns: edits === null ? null : Math.max(0, edits - index % 2),
     edit_handbacks: handbacks, verified_handbacks: handbacks === null ? null : Math.max(0, handbacks - index % 3), context_peak_ratio: window ? index % 10 / 10 + 0.05 : null,
-  };
+  });
 });
 const shapeRound = value => typeof value === "number" ? Number(value.toPrecision(12)) : value;
 const shapeKeys = (buckets, value = bucket => bucket.value) => Object.fromEntries(buckets.map(bucket => [JSON.stringify(bucket.keys), shapeRound(value(bucket))]));
@@ -226,7 +256,9 @@ test("Session Shape count and distribution cards draw the dashboard's bars and b
   }
 });
 
-test("Session Shape daily cards: the card's counts and 7-day shares are the dashboard's trend, day by day", async t => {
+// Every heatmap card's grid is the dashboard's heatmap: the same days, bins
+// and cells, whether its value is a breakdown's band or a measure's own.
+test("Session Shape heatmap cards: the card's grid of trailing seven-day sessions by bin is the dashboard's heatmap, day by day", async t => {
   const prior = { fetch: global.fetch, location: global.location };
   global.location = { origin: "http://parity.test" };
   t.mock.timers.enable({ apis: ["Date"], now: cardNow });
@@ -236,23 +268,22 @@ test("Session Shape daily cards: the card's counts and 7-day shares are the dash
     return Response.json(answerQuery(path.split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, ledger, schemas.session_shape, { now: cardNow }));
   };
   t.after(() => { Object.assign(global, prior); clearPreviewCache(); });
-  for (const id of ["session-length-mix", "session-archetype-mix"]) {
+  for (const id of ["session-length-mix", "session-archetype-mix", "session-autonomy-trend", "session-turn-cycle-trend", "session-context-trend", "session-active-time-trend", "session-length-hours", "session-length-tool-calls"]) {
     const { item } = cardItem(id);
     clearPreviewCache();
     const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
-    const card = compactTimelineBuckets(preview.buckets, preview.timeline ?? {}), where = dashboardWhere(item);
-    const state = normalizeAnalysis(catalog, { ...dashboardDefaults.session_shape, ...item.destination.chart }), query = trendQuery(catalog, state, where, { now: cardNow });
-    assert.deepEqual([state.view, state.period, state.rollingPeriods > 1, state.share], ["trend", "day", Boolean(item.cover.timeline?.percent), Boolean(item.cover.timeline?.percent)], id);
-    const built = trendSeries(catalog, state, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
+    assert.ok(preview.grid, `${id}: a grid`);
+    const where = dashboardWhere(item), state = normalizeAnalysis(catalog, { ...dashboardDefaults.session_shape, ...item.destination.chart });
+    assert.deepEqual([state.view, state.display, state.period, state.rollingPeriods], ["trend", "heatmap", "day", 7], id);
+    const source = heatmapSource(catalog, state), query = trendQuery(source.catalog, source.state, where, { now: cardNow });
+    const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
     assert.equal(built.error, undefined, id);
-    assert.deepEqual(built.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
-    // Series match by their group's label: the card names a band as the
-    // schema does, the dashboard as its catalog does (the same words); a
-    // session without one is "Unspecified" on the card.
-    const labels = catalog.breakdowns[state.split].values, label = item => labels[item.value] ?? (item.value || "Unspecified");
-    const named = (values, series, name) => Object.fromEntries(series.filter(item => values[item.key]).map(item => [name(item), shapeRound(values[item.key])]));
-    card.forEach((bucket, index) => assert.deepEqual(named(built.buckets[index].values, built.series, label), named(bucket.values, preview.series, item => item.value ?? item.key), `${id} ${bucket.key}`));
-    if (item.cover.timeline?.percent) assert.ok(card.some(bucket => Object.values(bucket.values).some(share => share > 0 && share < 1)), `${id}: shares`);
+    const axis = heatmapAxis(catalog, state);
+    const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: "day", noun: item.unit ?? "sessions", label: axis.bins.label, rollingPeriods: 7 });
+    assert.deepEqual(grid.columns, preview.grid.columns, `${id}: the same days`);
+    assert.equal(grid.rows.length, preview.grid.rows.length, `${id}: the same bins`);
+    assert.deepEqual(grid.values, preview.grid.values, id);
+    assert.ok(grid.cells.flat().some(cell => cell !== null && cell > 0), `${id}: cells`);
   }
 });
 
@@ -260,7 +291,7 @@ test("Session Shape daily cards: the card's counts and 7-day shares are the dash
 // are the dashboard's trailing seven complete days, and over 30 days its
 // norm. Over 90 days the dashboard draws more days; the card's are its last.
 test("Session Shape trend cards: each pools its measure over 7 complete days, as the dashboard's trend, with its norm", () => {
-  const cards = { "session-failure-trend": "failure_rate", "session-count-trend": "sessions", "session-hours-trend": "active_hours", "session-autonomy-trend": "autonomy", "session-turn-cycle-trend": "turn_cycle", "session-context-trend": "context_peak" };
+  const cards = { "session-failure-trend": "failure_rate", "session-count-trend": "sessions", "session-hours-trend": "active_hours" };
   const afternoon = new Date(cardNow); afternoon.setHours(14, 0, 0, 0);
   const at = afternoon.getTime() < cardNow ? afternoon.getTime() + 86400000 : afternoon.getTime();
   for (const [id, metric] of Object.entries(cards)) {
@@ -281,7 +312,7 @@ test("Session Shape trend cards: each pools its measure over 7 complete days, as
         const point = card.points[ends.indexOf(end)];
         assert.ok(point === null ? drawn.get(end) === null : Math.abs(drawn.get(end) - point) < 1e-9, `${id} ${window}d ${end}: ${drawn.get(end)} != ${point}`);
       }
-      if (window === 30) assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `${id}: norm ${built.norm} != baseline ${card.baseline}`);
+      if (window === 30) assert.ok(Math.abs(built.references?.[0]?.value - card.baseline) < 1e-9, `${id}: norm ${built.references?.[0]?.value} != baseline ${card.baseline}`);
     }
   }
 });
