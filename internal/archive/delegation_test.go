@@ -667,6 +667,7 @@ func TestDelegationLinksAcrossWorkspacesAndProviderBoundaries(t *testing.T) {
 	run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id) VALUES('outside-conversation','outside','antigravity','local','outside-native','child')`)
 	run(`UPDATE conversations SET parent_id='outside-conversation' WHERE id='root'`)
 	run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,child_conversation_id,kind,provider,usage_status) VALUES('outside-link','delegation-work','child','outside-handle','child-session','outside-conversation','subagent','codex','in-child-conversation')`)
+	run(`INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens) VALUES('outside-link','nested-result','last-request',900)`)
 	snapshot, err := c.delegationSnapshot(context.Background(), "delegation-work")
 	if err != nil {
 		t.Fatal(err)
@@ -681,6 +682,9 @@ func TestDelegationLinksAcrossWorkspacesAndProviderBoundaries(t *testing.T) {
 	}
 	if link.Self["tokens"].Value != nil {
 		t.Fatal("an outside child's unqueried usage must not appear as zero")
+	}
+	if *snapshot.Totals["tokens"].Value != 600 {
+		t.Fatal("external child observation entered this workspace's total")
 	}
 }
 func TestDelegationOwnershipCyclesDoNotBreakAnalysis(t *testing.T) {
@@ -906,4 +910,134 @@ func TestDelegationCategoryReadsShellCommands(t *testing.T) {
 			t.Errorf("%s/%s/%s: %q, want %q", test.name, test.category, test.command, got, test.want)
 		}
 	}
+}
+
+func TestDelegationScopedTokenTotals(t *testing.T) {
+	makeNode := func(id, parent string, direct, pool, observed float64) *delegationNode {
+		m := delegationNumber(max(direct, observed), "reported", 1, 1)
+		if observed > direct {
+			m.Quality = "reported-minimum"
+		}
+		return &delegationNode{ID: id, ParentID: parent, Self: map[string]delegationMetric{"tokens": m}, TokenAttribution: &sessionTokenAttribution{Accounted: direct + pool, Direct: direct, Unallocated: pool, Observed: observed}}
+	}
+	for _, check := range []struct {
+		name  string
+		nodes []*delegationNode
+		want  float64
+	}{
+		{"parent pool covers child minimum", []*delegationNode{makeNode("root", "", 10, 200, 0), makeNode("child", "root", 0, 0, 150)}, 210},
+		{"child exceeds available pool", []*delegationNode{makeNode("root", "", 10, 100, 0), makeNode("child", "root", 0, 0, 150)}, 160},
+		{"requests overlap last request", []*delegationNode{makeNode("root", "", 10, 100, 0), makeNode("child", "root", 200, 0, 150)}, 310},
+		{"nested pool covers only its branch", []*delegationNode{makeNode("root", "", 10, 0, 0), makeNode("a", "root", 20, 100, 0), makeNode("a1", "a", 0, 0, 80), makeNode("b", "root", 0, 0, 70)}, 200},
+		{"unrelated root cannot cover minimum", []*delegationNode{makeNode("root", "", 10, 200, 0), makeNode("other", "", 0, 0, 150)}, 360},
+		{"sibling minima combine once", []*delegationNode{makeNode("root", "", 10, 100, 0), makeNode("a", "root", 0, 0, 80), makeNode("b", "root", 0, 0, 70)}, 160},
+		{"aggregate and own observation overlap", []*delegationNode{makeNode("root", "", 10, 100, 80)}, 110},
+		{"filtered child cannot borrow missing ancestor", []*delegationNode{makeNode("child", "missing", 0, 0, 150)}, 150},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			got := delegationTokenTotal(check.nodes)
+			if got.Value == nil || *got.Value != check.want {
+				t.Fatalf("total=%+v want %v", got, check.want)
+			}
+		})
+	}
+
+	pooled := makeNode("pooled", "", 10, 100, 0)
+	pooled.Self["tokens"] = delegationNumber(10, "partial", 1, 1)
+	pooled.accountedTokens = map[string]delegationMetric{"tokens": delegationNumber(110, "reported", 1, 1)}
+	if got := delegationTokenTotal([]*delegationNode{pooled}); got.Quality != "reported" {
+		t.Fatalf("unallocated location made the accounted total partial: %+v", got)
+	}
+
+	t.Run("legacy ledger provenance", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		seedDelegation(t, c)
+		if err := c.seedSessionUsage(); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `UPDATE agent_session_usage SET attribution='request'`)
+		execSQL(t, c.DB, `INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens) VALUES('child-session','nested-result','last-request',250)`)
+		for _, version := range []string{"", "4", "5", "6", usageAttributionVersion} {
+			execSQL(t, c.DB, `DELETE FROM usage_attribution_state`)
+			if version != "" {
+				if _, err := c.DB.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES('delegation-work',?)`, version); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := c.delegationSnapshot(context.Background(), "delegation-work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a := s.ByID["child-session"].TokenAttribution; a == nil || a.Observed != 250 {
+				t.Fatalf("version %q lost reported minimum: %+v", version, a)
+			}
+			want := float64(50)
+			if version == "6" || version == usageAttributionVersion {
+				want = 0
+			}
+			if got := s.ByID["child-session"].Self["remainder"]; got.Value == nil || *got.Value != want {
+				t.Fatalf("version %q: remainder=%+v want %v", version, got, want)
+			}
+		}
+	})
+	t.Run("leaf aggregate retains self usage", func(t *testing.T) {
+		c := statisticsFixture(t)
+		execSQL(t, c.DB, `UPDATE agent_sessions SET parent_id=(SELECT a.id FROM agent_sessions a WHERE a.conversation_id=agent_sessions.conversation_id AND a.native_id='main') WHERE native_id<>'main'`)
+		execSQL(t, c.DB, `UPDATE agent_session_usage SET attribution='run-remainder' WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE native_id='main')`)
+		s, err := c.delegationSnapshot(context.Background(), "w")
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := s.ByID[stableID("agent-session", "c2", "main")]
+		if got := n.Self["tokens"]; got.Value == nil || *got.Value != 200000 {
+			t.Fatalf("leaf self tokens=%+v", got)
+		}
+		if got := n.Self["cost"]; got.Value == nil || *got.Value <= 0 {
+			t.Fatalf("leaf self cost=%+v", got)
+		}
+		if a := n.TokenAttribution; a == nil || a.Unallocated != 0 || a.Direct != 200000 {
+			t.Fatalf("leaf attribution=%+v", a)
+		}
+		branch := s.ByID[stableID("agent-session", "c1", "main")]
+		if branch.Self["tokens"].Value != nil || branch.Self["cost"].Value != nil {
+			t.Fatalf("branch aggregate became own usage: tokens=%+v cost=%+v", branch.Self["tokens"], branch.Self["cost"])
+		}
+	})
+
+	c, _ := testCatalog(t)
+	seedDelegation(t, c)
+	// Warm the snapshot before evidence-only writes. No message/session edit
+	// may be needed for a footer backfill, and every cache must observe it.
+	before, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil || before.Totals["tokens"].Value == nil || *before.Totals["tokens"].Value != 600 {
+		t.Fatalf("initial snapshot=%+v: %v", before, err)
+	}
+	// A launch alias's evidence follows its canonical child. Repeated copies
+	// remain inspectable but are one observation, not two charges.
+	if _, err := c.DB.Exec(`INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens) VALUES
+		('nested-alias','nested-result','last-request',400),('nested-alias','nested-launch','last-request',400)`); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.delegationSnapshot(context.Background(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := s.ByID[s.Aliases["nested-alias"]]
+	if n == nil || n.TokenAttribution == nil || n.TokenAttribution.Observed != 400 || len(n.TokenAttribution.Evidence) != 2 {
+		t.Fatalf("alias evidence=%+v", n)
+	}
+	if *n.Self["tokens"].Value != 400 || *s.Totals["tokens"].Value != 700 {
+		t.Fatalf("aliased evidence counted twice: %+v", s.Totals["tokens"])
+	}
+	execSQL(t, c.DB, `UPDATE agent_session_token_evidence SET total_tokens=500`)
+	updated, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil || updated.Totals["tokens"].Value == nil || *updated.Totals["tokens"].Value != 800 {
+		t.Fatalf("updated evidence snapshot=%+v: %v", updated, err)
+	}
+	execSQL(t, c.DB, `DELETE FROM agent_session_token_evidence`)
+	deleted, err := c.delegationSnapshot(t.Context(), "delegation-work")
+	if err != nil || deleted.Totals["tokens"].Value == nil || *deleted.Totals["tokens"].Value != 600 {
+		t.Fatalf("deleted evidence snapshot=%+v: %v", deleted, err)
+	}
+
 }

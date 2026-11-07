@@ -136,6 +136,31 @@ test("nested subagent checkpoints count once and remain nested sessions", () => 
   assert.deepEqual(plain(graph.turns[0].events.map(message => message.native_id)), ["outer-call", "result"]);
   assert.deepEqual(plain(graph.childrenByParent.get("outer").map(message => message.native_id)), ["outer-request", "inner-call", "outer-total"]);
   assert.deepEqual(plain(graph.childrenByParent.get("inner").map(message => message.native_id)), ["inner-request", "inner-total"]);
+
+  const launch=event("launch", "delegation", {tool:"Agent",input:{model:"sonnet"}}, 1, {call_id:"child"});
+  const details={status:"completed",totalToolUseCount:0,totalTokens:110,usage:{input_tokens:5,cache_read_input_tokens:90,cache_creation_input_tokens:5,output_tokens:10}};
+  const handback=changed=>event("handback", "delegation_result", {content:"Finished",details:{...details,...changed}}, 3, {call_id:"child"});
+  const request=event("request", "metadata", {type:"assistant",message:{id:"request",usage:{input_tokens:200,output_tokens:20}}}, 2, {parent_native_id:"child"});
+  for(const [name,messages,want] of [
+    ["result only",[launch,handback()],110],
+    ["result owned by retained child",[launch,{...handback(),usage_in_child_conversation:true}],0],
+    ["child ownership preserves parent launch request",[event("parent","metadata",{type:"assistant",message:{id:"parent",usage:{input_tokens:100,output_tokens:10}}}),launch,{...handback(),usage_in_child_conversation:true}],110],
+    ["duplicate result",[launch,handback(),handback()],110],
+    ["request already retained",[launch,request,handback()],220],
+    ["SDK aggregate includes child",[launch,handback(),event("sdk","result",{type:"result",usage:{total_tokens:150}},4)],150],
+    ["multi-step result is only a last request",[launch,handback({totalToolUseCount:12})],0],
+    ["incomplete result",[launch,handback({status:"async_launched"})],0],
+    ["inconsistent counters",[launch,handback({totalTokens:999})],0],
+    ["unproved child identity",[handback()],0],
+    ["ordinary tool output",[launch,{...handback(),kind:"tool_result"}],0],
+    ["quoted usage",[launch,event("quote","delegation_result",{content:JSON.stringify({details})},3,{call_id:"child"})],0],
+  ]){
+    const reports=conversationTokenReports(messages);
+    assert.equal(reports.reduce((sum,report)=>sum+(report?.total||0),0),want,name);
+  }
+  const reports=conversationTokenReports([launch,handback()]);
+  assert.equal(reports[1].stream,"child");
+  assert.equal(reports[1].breakdown.cacheRead,90);
 });
 
 test("only protocol metadata marks a continuation", () => {
@@ -146,4 +171,29 @@ test("only protocol metadata marks a continuation", () => {
     const reports = conversationTokenReports([{ kind, role: "user", text: marker }, count(1100, 100), count(1300, 200)]);
     assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), 1300, kind);
   }
+});
+
+
+test("harness footer stays separate from consumption and context", () => {
+  const footer="agentId: agent-one (use SendMessage with to: 'agent-one', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: 116837\ntool_uses: 83\nduration_ms: 835048</usage>";
+  const launch=event("launch","delegation",{tool:"Agent",input:{}},1,{call_id:"child"});
+  const result=event("result","delegation_result",{content:[{type:"text",text:"Report"},{type:"text",text:footer}],is_error:false},2,{call_id:"child"});
+  const evidence=reader.conversationTokenEvidence;
+  for(const [name,call,body,want] of [
+    ["harness footer",launch,result,1],
+    ["ordinary output",launch,{...result,kind:"tool_result"},0],
+    ["not delegated",{...launch,call_id:"other"},result,0],
+    ["ordinary tool",{...launch,text:JSON.stringify({tool:"Read"})},result,0],
+    ["wrong resume",{...launch,text:JSON.stringify({tool:"Agent",input:{resume:"other"}})},result,0],
+    ["prose prefix",launch,{...result,text:JSON.stringify({content:[{type:"text",text:"Example: "+footer}]})},0],
+    ["duplicate trailer",launch,{...result,text:JSON.stringify({content:[{type:"text",text:footer},{type:"text",text:footer}]})},0],
+    ["identity mismatch",launch,{...result,text:JSON.stringify({content:[{type:"text",text:footer}],details:{agentId:"other"}})},0],
+    ["overflow",launch,{...result,text:result.text.replace('116837','999999999999999999999')},0],
+  ]) assert.equal(evidence([call,body]).length,want,name);
+  const reports=contextTokenReports([launch,result],conversationTokenReports([launch,result]));
+  assert.equal(reports[1].observedMinimum,116837);
+  assert.equal(reports.reduce((n,r)=>n+(r?.total||0),0),0,"observation never enters the spending ledger");
+  assert.ok(!reports.some(r=>r?.contextSample),"observation is not input context");
+  const aggregate=event("sdk","result",{type:"result",usage:{total_tokens:200000}},3);
+  assert.equal(conversationTokenReports([launch,result,aggregate]).reduce((n,r)=>n+(r?.total||0),0),200000);
 });

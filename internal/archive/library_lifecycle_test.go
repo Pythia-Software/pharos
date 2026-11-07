@@ -1277,11 +1277,11 @@ func remapLifecycleIdentities(t *testing.T, config Config, prefix string) {
 	for _, item := range []struct{ table, column string }{
 		{"messages", "id"}, {"workspace_names", "authored_message_id"},
 		{"conversation_documents", "initiation_message_id"}, {"conversation_documents", "outcome_message_id"},
-		{"agent_sessions", "delegation_message_id"}, {"agent_session_messages", "message_id"},
+		{"agent_sessions", "delegation_message_id"}, {"agent_session_messages", "message_id"}, {"agent_session_token_evidence", "message_id"},
 		{"tool_calls", "call_message_id"}, {"tool_calls", "result_message_id"},
 		{"skill_usages", "evidence_message_id"}, {"skill_usages", "body_message_id"},
 		{"agent_sessions", "id"}, {"agent_sessions", "parent_id"},
-		{"agent_session_messages", "agent_session_id"}, {"agent_session_usage", "agent_session_id"},
+		{"agent_session_messages", "agent_session_id"}, {"agent_session_usage", "agent_session_id"}, {"agent_session_token_evidence", "agent_session_id"},
 		{"model_requests", "agent_session_id"}, {"tool_calls", "agent_session_id"}, {"skill_usages", "agent_session_id"},
 	} {
 		if _, err = tx.Exec("UPDATE "+item.table+" SET "+item.column+"=?||"+item.column+" WHERE "+item.column+" IS NOT NULL", prefix); err != nil {
@@ -1296,14 +1296,26 @@ func remapLifecycleIdentities(t *testing.T, config Config, prefix string) {
 func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) {
 	t.Run("accepted session facts replace prior revision", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
+		c := reopenCatalog(t, a.CatalogPath)
+		_, err := c.DB.Exec(`INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens)
+ SELECT a.id,m.id,'last-request',12 FROM agent_sessions a JOIN messages m ON m.conversation_id=a.conversation_id WHERE a.native_id='main' LIMIT 1`)
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
 			t.Fatal(err)
 		}
-		c := reopenCatalog(t, b.CatalogPath)
-		_, err := c.DB.Exec(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider)
+		if catalogCount(t, b, "agent_session_token_evidence") != 1 {
+			t.Fatal("scoped evidence was not transferred")
+		}
+		c = reopenCatalog(t, b.CatalogPath)
+		_, err = c.DB.Exec(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider)
  SELECT 'obsolete',workspace_id,id,'obsolete','subagent',provider FROM conversations;
  INSERT INTO agent_session_usage(agent_session_id,usage_hour,attribution,total_tokens)
- SELECT id,'2026-01-01T00:00:00Z','request',999 FROM agent_sessions WHERE native_id='main';`)
+ SELECT id,'2026-01-01T00:00:00Z','request',999 FROM agent_sessions WHERE native_id='main';
+ INSERT OR REPLACE INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens)
+ SELECT a.id,m.id,'last-request',999 FROM agent_sessions a JOIN messages m ON m.conversation_id=a.conversation_id WHERE a.native_id='main' LIMIT 1;`)
 		c.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -1317,7 +1329,7 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 		if _, err = TransferLibrary(t.Context(), a, b, false, nil); err != nil {
 			t.Fatal(err)
 		}
-		if catalogCount(t, b, "agent_sessions") != catalogCount(t, a, "agent_sessions") || catalogCount(t, b, "agent_session_usage") != catalogCount(t, a, "agent_session_usage") {
+		if catalogCount(t, b, "agent_sessions") != catalogCount(t, a, "agent_sessions") || catalogCount(t, b, "agent_session_usage") != catalogCount(t, a, "agent_session_usage") || catalogCount(t, b, "agent_session_token_evidence") != catalogCount(t, a, "agent_session_token_evidence") {
 			t.Fatal("accepted session facts retained an obsolete revision")
 		}
 	})

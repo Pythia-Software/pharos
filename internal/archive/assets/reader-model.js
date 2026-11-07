@@ -66,6 +66,25 @@ function tokenEnvelope(message){
 function continuesHistory(meta){
   return Boolean(meta?.forked_from_id||(meta?.history_base&&typeof meta.history_base==='object')||meta?.subagent_history_start_ordinal>0);
 }
+// Harness counters have no categories and may cover only the last request.
+// Keep them as evidence; they never enter priced/spent totals or context size.
+function conversationTokenEvidence(messages){
+  const launches=new Map(messages.filter(m=>m.kind==='delegation'&&m.call_id&&['agent','task'].includes(String(messageJSON(m)?.tool||messageJSON(m)?.name||'').toLowerCase())).map(m=>[String(m.call_id),m]));
+  const evidence=[];
+  messages.forEach((message,index)=>{
+    const launch=launches.get(String(message.call_id||''));if(message.kind!=='delegation_result'||!launch)return;
+    const result=messageJSON(message),blocks=result?.content;if(result?.is_error||!Array.isArray(blocks)||!blocks.length)return;
+    const last=blocks.at(-1);if(last?.type!=='text'||typeof last.text!=='string')return;
+    const match=/^agentId: ([A-Za-z0-9_-]+) (.+)\n<usage>subagent_tokens: ([0-9]+)\ntool_uses: ([0-9]+)\nduration_ms: ([0-9]+)<\/usage>$/.exec(last.text);
+    if(!match||match[0]!==last.text)return;
+    const agent=match[1],total=Number(match[3]);
+    if(match[2]!==`(use SendMessage with to: '${agent}', summary: '<5-10 word recap>' to continue this agent)`||!Number.isSafeInteger(total)||total<=0)return;
+    const resume=messageJSON(launch)?.input?.resume,id=result.details?.agentId;
+    if(resume&&resume!==agent||id&&id!==agent)return;
+    if(blocks.reduce((n,b)=>n+(typeof b?.text==='string'?b.text.split('<usage>subagent_tokens:').length-1:0),0)!==1)return;
+    evidence.push({index,stream:String(message.call_id),total,scope:'last-request'});
+  });return evidence;
+}
 function conversationTokenReports(messages){
   const envelopes=messages.map(tokenEnvelope),reports=messages.map(()=>null),seen=new Map(),active=new Map(),cumulative=new Map(),runStarts=new Map(),modelCounters=new Map(),resultIDs=new Set();
   const streamAliases=new Map([['main','main']]);
@@ -133,6 +152,19 @@ function conversationTokenReports(messages){
   });
   const requestTotals=new Map();
   for(const report of reports){if(report?.scope!=='request'||report.total===null||report.superseded)continue;const prior=requestTotals.get(report.stream)??inherited.get(report.stream)??0;if(report.checkpoint!==null&&report.checkpoint!==undefined){const gap=Math.max(0,report.checkpoint-prior-report.total);report.total+=gap;if(gap)report.label+=' + '+gap.toLocaleString()+' earlier unattributed tokens'}requestTotals.set(report.stream,prior+report.total)}
+  // Agent results report the final request. Recover only completed runs with
+  // no tool calls, consistent counters, and no retained child accounting.
+  const accounted=new Set(),markAccounted=stream=>{while(stream&&!accounted.has(stream)){accounted.add(stream);stream=streamParents.get(stream)}};
+  for(const report of reports)if(report?.total>0)markAccounted(report.stream);
+  for(let index=messages.length-1;index>=0;index--){
+    const message=messages[index],stream=streamAliases.get(String(message.call_id||''));
+    if(message.kind!=='delegation_result'||!stream||accounted.has(stream)||message.usage_in_child_conversation)continue;
+    const details=messageJSON(message)?.details,usage=details?.usage,breakdown=tokenBreakdown(usage);
+    if(details?.status!=='completed'||details.totalToolUseCount!==0||!breakdown||breakdown.total<=0||details.totalTokens!==breakdown.total)continue;
+    const categorized=tokenBreakdown({...usage,total_tokens:undefined,totalTokens:undefined})?.total;
+    if(categorized!==breakdown.total)continue;
+    reports[index]={total:breakdown.total,label:'Subagent result usage',scope:'task',stream,usage,breakdown};markAccounted(stream);
+  }
   // Reconcile subagent summaries with their retained request records. Keep
   // unallocated excess visible instead of assigning it to an arbitrary tool.
   const tasks=reports.filter(report=>report?.scope==='task'&&report.total!==null).sort((a,b)=>depth(b.stream)-depth(a.stream));
@@ -142,6 +174,10 @@ function conversationTokenReports(messages){
     if(!report)return;
     if(['run','session'].includes(report.scope)&&report.reportedTotal!==null){const attributed=reports.slice(report.start,index).reduce((n,r)=>n+(r&&(report.stream==='main'||r.stream===report.stream)?r.total||0:0),0);report.total=Math.max(0,report.reportedTotal-attributed);report.attributed=attributed;report.conflict=report.reportedTotal<attributed}
   });
+  for(const evidence of conversationTokenEvidence(messages)){
+    reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Subagent token evidence'};
+    reports[evidence.index].observedMinimum=evidence.total;
+  }
   return reports;
 }
 // Claude records compactMetadata.trigger; the Codex adapter infers

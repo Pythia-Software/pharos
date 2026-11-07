@@ -820,6 +820,8 @@ function attachTokenBadge(target,messages,column=false){
   if(column)target=tokenColumn(target);
   const reports=messages.map(message=>message?.tokenReport).filter(Boolean),known=reports.filter(report=>report.total!==null);
   if(known.length){const ledger=node('span','token-ledger');ledger.hidden=true;ledger.dataset.tokens=String(known.reduce((sum,r)=>sum+r.total,0));target.append(ledger)}
+  const observed=reports.filter(r=>r.observedMinimum>0);
+  if(observed.length){const badge=node('span','spend-badge','≥'+tokenCount(Math.max(...observed.map(r=>r.observedMinimum)))+' reported');badge.title='Harness-reported child usage minimum. May cover only the last request; full session usage and input/cache/output breakdown were not recorded. It may overlap aggregate usage and is not added to accounting or API cost.';target.append(badge)}
   const samples=reports.map(r=>r.contextSample).filter(Boolean);
   if(samples.length){const holder=node('span','context-evidence');holder.contextSamples=samples;target.append(holder);
     const values=samples.filter(s=>s.size!==null),latest=values.at(-1);
@@ -1446,7 +1448,7 @@ function setupTokenOverview(panel,conversation={}){
   const total=conversation.token_usage?.total_tokens??(turnEntries.some(e=>e.total!==null)?turnEntries.reduce((n,e)=>n+(e.total||0),0):null);
   panel.classList.toggle('has-token-usage',total!==null||entries.length>0);
   const legend=node('div','token-legend');
-  legend.append(node('span','',total===null?'Token usage unavailable':tokenText(total)+' spent'));
+  legend.append(node('span','',total===null?'Conversation token usage unavailable':'Conversation total: '+tokenText(total)));
   legend.title='Reported token usage and context changes across the conversation.';
   const jump=entry=>{const filter=panel.querySelector('input[type=search]');if(filter.value){filter.value='';filter.oninput()}panel.reveal(message=>message===entry.message);refreshTargets();exemptFromTranscriptFilter(panel,entry.target);for(let e=entry.target;e&&e!==panel;e=e.parentElement)if(e.tagName==='DETAILS')e.open=true;entry.target.scrollIntoView({behavior:'smooth',block:'center'});entry.target.classList.remove('token-highlight');requestAnimationFrame(()=>entry.target.classList.add('token-highlight'))};
   panel.querySelector('.conversation-head .chips').append(legend);

@@ -16,6 +16,7 @@ import (
 )
 
 type MessageRecord struct {
+	usageInChild                                                                                                    bool // Derived from proved child ownership; never source data.
 	accounting                                                                                                      *messageAccounting
 	NativeID, Role, Kind, Text, Model, Effort, CreatedAt, ParentNativeID, PreviousNativeID, CallID, EvidenceLocator string
 	Speed                                                                                                           string `json:"Speed,omitempty"`
