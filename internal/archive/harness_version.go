@@ -94,6 +94,8 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 				value.harness = "cursor"
 			case "cursor-cli":
 				value.harness = "cursor-cli"
+			case "zed":
+				value.harness = "zed"
 			case "tl1", "tl1-export":
 				value.harness = "tl1"
 			case "canonical":

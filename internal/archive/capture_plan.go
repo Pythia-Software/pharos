@@ -223,6 +223,21 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			}
 			plan.databases = append(plan.databases, captureItem{database, rel})
 		}
+	case "zed":
+		// The threads database, without tables a later release adds
+		// (captureTables): not the rest of Zed's data folder, which holds
+		// its settings, extensions and other databases.
+		database, err := (&zedAdapter{baseAdapter: baseAdapter{config: source}}).database()
+		if err != nil {
+			return plan, fmt.Errorf("Zed threads are unavailable: %w", err)
+		}
+		if database != "" {
+			rel := zedDatabase
+			if !info.IsDir() {
+				rel = filepath.Base(source.Path)
+			}
+			plan.databases = append(plan.databases, captureItem{database, rel})
+		}
 	case "antigravity":
 		adapter := antigravityAdapter{baseAdapter: baseAdapter{config: source}}
 		files, err := adapter.captureFiles()

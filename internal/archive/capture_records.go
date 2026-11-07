@@ -751,6 +751,10 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	}
 	var schema bytes.Buffer
 	var tables []string
+	// A kind that keeps only some tables (captureTables) records only those,
+	// whether read live or from the copy a capture holds, and without the
+	// pages the copy places them on, so the two read the same.
+	keep := captureTables(s.c.source.Kind)
 	for schemaRows.Next() {
 		var kind, name, table string
 		var page int64
@@ -758,6 +762,12 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 		if e = schemaRows.Scan(&kind, &name, &table, &page, &ddl); e != nil {
 			schemaRows.Close()
 			return recordObject{}, e
+		}
+		if keep != nil {
+			if _, kept := keep[table]; !kept {
+				continue
+			}
+			page = 0
 		}
 		values := []sqliteValue{}
 		for _, v := range []any{kind, name, table, page, ddl} {
@@ -829,14 +839,9 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 	// A kind that keeps only some of a table's rows (Cursor) is exported only
 	// from its snapshot (exportSnapshot), which holds no others, never from
 	// the source.
-	keep := captureTables(s.c.source.Kind)
 	for _, name := range tables {
 		where, order := "", ""
 		var args []any
-		if _, kept := keep[name]; keep != nil && !kept {
-			v.Tables = append(v.Tables, recordTable{Name: name, Coverage: "excluded", Order: "not captured: the source keeps credentials and settings beside its sessions"})
-			continue
-		}
 		if selected != "" {
 			cols, e := recordColumns(ctx, tx, name)
 			if e != nil {
@@ -1279,6 +1284,7 @@ func knownRecordTable(kind, name string) bool {
 		"tl1":         {"tasks", "task_attempts", "transcript_summaries", "resource_usage", "tool_usage", "handoffs", "candidates", "task_flavors", "task_events", "review_findings", "human_responses", "human_comments"},
 		"codex":       {"threads"},
 		"opencode":    {"session_v2", "session_message", "session_part", "project"},
+		"zed":         {"threads"},
 	}
 	return slices.Contains(known[strings.ToLower(kind)], name)
 }

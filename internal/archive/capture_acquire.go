@@ -23,7 +23,7 @@ type retainedInput struct {
 
 func productionAdapter(adapter Adapter) bool {
 	switch adapter.(type) {
-	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *clineAdapter, *vscodeCopilotAdapter, *cursorAdapter, *cursorCLIAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
+	case *jsonlAdapter, *canonicalAdapter, *chatGPTAdapter, *claudeAIAdapter, *copilotAdapter, *clineAdapter, *vscodeCopilotAdapter, *cursorAdapter, *cursorCLIAdapter, *zedAdapter, *opencodeAdapter, *conductorAdapter, *tl1Adapter, *antigravityAdapter:
 		return true
 	}
 	// Synthetic record adapters are package/test inputs, never MakeAdapter results.
@@ -38,7 +38,7 @@ func retainedAcquisitionEnabled(source SourceConfig) bool {
 }
 
 func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, progress ProgressFunc) (input retainedInput, failure error) {
-	acquired := captureViewOf(adapter) == nil && productionAdapter(adapter) && retainedAcquisitionEnabled(adapter.Config()) && !isConductorSource(adapter.Config().Kind) && !strings.EqualFold(adapter.Config().Kind, "cursor") && (!strings.EqualFold(adapter.Config().Kind, "tl1") && !strings.EqualFold(adapter.Config().Kind, "antigravity") && !strings.EqualFold(adapter.Config().Kind, "opencode") || adapter.Config().Options["sqlite_record_capture"] == true)
+	acquired := captureViewOf(adapter) == nil && productionAdapter(adapter) && retainedAcquisitionEnabled(adapter.Config()) && !isConductorSource(adapter.Config().Kind) && !strings.EqualFold(adapter.Config().Kind, "cursor") && (!strings.EqualFold(adapter.Config().Kind, "tl1") && !strings.EqualFold(adapter.Config().Kind, "antigravity") && !strings.EqualFold(adapter.Config().Kind, "opencode") && !strings.EqualFold(adapter.Config().Kind, "zed") || adapter.Config().Options["sqlite_record_capture"] == true)
 	defer func() {
 		if !acquired {
 			return
@@ -75,7 +75,7 @@ func (c *Catalog) acquireRetainedInput(ctx context.Context, adapter Adapter, pro
 		// (captureTables): no rows are copied before indexing.
 		return result, nil
 	}
-	if strings.EqualFold(source.Kind, "tl1") || strings.EqualFold(source.Kind, "antigravity") || strings.EqualFold(source.Kind, "opencode") {
+	if strings.EqualFold(source.Kind, "tl1") || strings.EqualFold(source.Kind, "antigravity") || strings.EqualFold(source.Kind, "opencode") || strings.EqualFold(source.Kind, "zed") {
 		if source.Options["sqlite_record_capture"] != true {
 			return result, nil
 		} // staged SQLite rollout, exposed in status
