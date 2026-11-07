@@ -66,6 +66,25 @@ function tokenEnvelope(message){
 function continuesHistory(meta){
   return Boolean(meta?.forked_from_id||(meta?.history_base&&typeof meta.history_base==='object')||meta?.subagent_history_start_ordinal>0);
 }
+// Harness counters have no categories and may cover only the last request.
+// Keep them as evidence; they never enter priced/spent totals or context size.
+function conversationTokenEvidence(messages){
+  const launches=new Map(messages.filter(m=>m.kind==='delegation'&&m.call_id&&['agent','task'].includes(String(messageJSON(m)?.tool||messageJSON(m)?.name||'').toLowerCase())).map(m=>[String(m.call_id),m]));
+  const evidence=[];
+  messages.forEach((message,index)=>{
+    const launch=launches.get(String(message.call_id||''));if(message.kind!=='delegation_result'||!launch)return;
+    const result=messageJSON(message),blocks=result?.content;if(result?.is_error||!Array.isArray(blocks)||!blocks.length)return;
+    const last=blocks.at(-1);if(last?.type!=='text'||typeof last.text!=='string')return;
+    const match=/^agentId: ([A-Za-z0-9_-]+) (.+)\n<usage>subagent_tokens: ([0-9]+)\ntool_uses: ([0-9]+)\nduration_ms: ([0-9]+)<\/usage>$/.exec(last.text);
+    if(!match||match[0]!==last.text)return;
+    const agent=match[1],total=Number(match[3]);
+    if(match[2]!==`(use SendMessage with to: '${agent}', summary: '<5-10 word recap>' to continue this agent)`||!Number.isSafeInteger(total)||total<=0)return;
+    const resume=messageJSON(launch)?.input?.resume,id=result.details?.agentId;
+    if(resume&&resume!==agent||id&&id!==agent)return;
+    if(blocks.reduce((n,b)=>n+(typeof b?.text==='string'?b.text.split('<usage>subagent_tokens:').length-1:0),0)!==1)return;
+    evidence.push({index,stream:String(message.call_id),total,scope:'last-request'});
+  });return evidence;
+}
 function conversationTokenReports(messages){
   const envelopes=messages.map(tokenEnvelope),reports=messages.map(()=>null),seen=new Map(),active=new Map(),cumulative=new Map(),runStarts=new Map(),modelCounters=new Map(),resultIDs=new Set();
   const streamAliases=new Map([['main','main']]);
@@ -109,7 +128,7 @@ function conversationTokenReports(messages){
       const prior=seen.get('task:'+key);if(prior)prior.total=null;
       if(key)seen.set('task:'+key,report);reports[index]=report;return;
     }else if(type==='result'||type==='turn.completed'||type==='cost-state'){
-      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Session accounting checkpoint':'Run accounting checkpoint';
+      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Agent usage checkpoint':'Run accounting checkpoint';
       const reported=tokenTotal(usage),aggregate=modelTotal===null?reported:Math.max(reported??0,modelTotal);
       const start=runStarts.get(stream)||0,attributed=sum(start,stream==='main'?null:stream);
       total=aggregate===null?null:Math.max(0,aggregate-attributed);
@@ -133,6 +152,19 @@ function conversationTokenReports(messages){
   });
   const requestTotals=new Map();
   for(const report of reports){if(report?.scope!=='request'||report.total===null||report.superseded)continue;const prior=requestTotals.get(report.stream)??inherited.get(report.stream)??0;if(report.checkpoint!==null&&report.checkpoint!==undefined){const gap=Math.max(0,report.checkpoint-prior-report.total);report.total+=gap;if(gap)report.label+=' + '+gap.toLocaleString()+' earlier unattributed tokens'}requestTotals.set(report.stream,prior+report.total)}
+  // Agent results report the final request. Recover only completed runs with
+  // no tool calls, consistent counters, and no retained child accounting.
+  const accounted=new Set(),markAccounted=stream=>{while(stream&&!accounted.has(stream)){accounted.add(stream);stream=streamParents.get(stream)}};
+  for(const report of reports)if(report?.total>0)markAccounted(report.stream);
+  for(let index=messages.length-1;index>=0;index--){
+    const message=messages[index],stream=streamAliases.get(String(message.call_id||''));
+    if(message.kind!=='delegation_result'||!stream||accounted.has(stream)||message.usage_in_child_conversation)continue;
+    const details=messageJSON(message)?.details,usage=details?.usage,breakdown=tokenBreakdown(usage);
+    if(details?.status!=='completed'||details.totalToolUseCount!==0||!breakdown||breakdown.total<=0||details.totalTokens!==breakdown.total)continue;
+    const categorized=tokenBreakdown({...usage,total_tokens:undefined,totalTokens:undefined})?.total;
+    if(categorized!==breakdown.total)continue;
+    reports[index]={total:breakdown.total,label:'Subagent result usage',scope:'task',stream,usage,breakdown};markAccounted(stream);
+  }
   // Reconcile subagent summaries with their retained request records. Keep
   // unallocated excess visible instead of assigning it to an arbitrary tool.
   const tasks=reports.filter(report=>report?.scope==='task'&&report.total!==null).sort((a,b)=>depth(b.stream)-depth(a.stream));
@@ -142,6 +174,10 @@ function conversationTokenReports(messages){
     if(!report)return;
     if(['run','session'].includes(report.scope)&&report.reportedTotal!==null){const attributed=reports.slice(report.start,index).reduce((n,r)=>n+(r&&(report.stream==='main'||r.stream===report.stream)?r.total||0:0),0);report.total=Math.max(0,report.reportedTotal-attributed);report.attributed=attributed;report.conflict=report.reportedTotal<attributed}
   });
+  for(const evidence of conversationTokenEvidence(messages)){
+    reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Subagent token evidence'};
+    reports[evidence.index].observedMinimum=evidence.total;
+  }
   return reports;
 }
 // Claude records compactMetadata.trigger; the Codex adapter infers
@@ -263,8 +299,8 @@ function conversationOutline(conversation){
       response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),messages:ownedMessages([message],graph),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
   });
   let turnNumber=0;
-  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
-    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
+  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Agent setup',
+    prompt:messageSummary(turn.human)||'Agent setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of
@@ -797,4 +833,56 @@ function transcriptAnchor(messages,{message='',at='',call=''}={}){
   let best=null,distance=Infinity,bestTime=Infinity;
   for(const item of messages){const when=Date.parse(item.created_at),delta=Math.abs(when-time);if(!item.id||!Number.isFinite(when))continue;if(delta<distance||delta===distance&&when<bestTime){best=item.id;distance=delta;bestTime=when}}
   return best;
+}
+
+// Session signals (session_shape.go SessionSignals): the forensic signals
+// that fired in a session, for the reader's strip. Labels are the Session
+// Shape dashboard's (web/src/session-shape-model.ts sessionSignalLabels).
+// A chip steps through the messages that triggered its signal: it reveals
+// one and highlights the others, and each click moves to the next.
+const SESSION_SIGNALS=[
+  ['failed_calls','Failed calls','Calls that failed, other than rejections, interrupts and hook blocks.'],
+  ['failure_streak_max','Longest failure streak','The longest run of consecutive failed calls.'],
+  ['rejections','Rejections','Calls you rejected.'],
+  ['interrupts','Interrupts','Calls interrupted before they finished.'],
+  ['hook_blocks','Hook blocks','Calls a hook blocked.'],
+  ['identical_retries','Identical retries','Three or more consecutive calls with the same tool and byte-identical input.'],
+  ['thrash_retries','Edit–verify–edit retries','Within one turn, an edit to a file, a test or build command, then another edit to that file.'],
+  ['churned_files','Churned files','A file edited three or more times within fewer than 10 messages.'],
+  ['mid_task_compactions','Mid-task compactions','A compaction with the same tools in use just before and just after it.'],
+  ['context_pressure','Context pressure',"A request whose input exceeded 90% of the model's context window."],
+  ['corrections','Corrections','A message you typed with a correction cue in the typed text.'],
+  ['unverified_handbacks','Unverified handbacks','A handback after an edit with no test or build command after the last edit.'],
+  ['long_unprompted_runs','Long unprompted runs','More than 150 tool calls with no message you typed between them.'],
+  ['ended_on_failure','Ended on a failed call','Experimental: the last tool call failed and nothing you typed follows. It does not say the work was abandoned.']];
+// At most this many of a signal's messages are highlighted at once, so a
+// link stays short; stepping still reaches every one.
+const SESSION_SIGNAL_HIGHLIGHTS=40;
+// The chips, in SESSION_SIGNALS order, and a note naming the signals the
+// session lacks the evidence for: those are not counted, not zero.
+function sessionSignalStrip(payload){
+  const fired=new Map((payload?.signals||[]).filter(item=>Array.isArray(item?.message_ids)&&item.message_ids.length).map(item=>[item.signal,item]));
+  const chips=SESSION_SIGNALS.filter(([id])=>fired.has(id)).map(([signal,label,note])=>{const item=fired.get(signal),messageIds=item.message_ids.map(String);
+    return{signal,label,note,count:typeof item.count==='number'?item.count:messageIds.length,messageIds}});
+  const coverage=payload?.coverage||{},missing=[];
+  if(coverage.has_tool_data===false)missing.push('tool call signals (no tool ledger)');
+  if(coverage.has_authorship===false)missing.push('corrections and turn signals (prompts not all classified yet)');
+  if(coverage.has_context_window===false)missing.push("context pressure (the model's window is unknown)");
+  return{chips,note:missing.length?`Not enough evidence for ${missing.join('; ')}.`:''};
+}
+// Which of a chip's messages the URL reveals, or -1.
+function sessionSignalActive(search,chip){
+  const reveal=new URLSearchParams(search).get('reveal')||'';
+  return reveal.startsWith('message:')?chip.messageIds.indexOf(reveal.slice(8)):-1;
+}
+// The URL parameters for a chip's click: the next of its messages revealed
+// (the first, unless one is revealed already), the others highlighted, and
+// any other attention cleared. The reader's own landing anchors (message, at
+// and call) go too, or a reload would scroll to the earlier target instead.
+function sessionSignalAttention(search,chip){
+  const params=new URLSearchParams(search),ids=chip.messageIds,index=(sessionSignalActive(search,chip)+1)%ids.length;
+  for(const name of ['highlight','reveal','message','at','call'])params.delete(name);
+  for(const id of ids.slice(0,SESSION_SIGNAL_HIGHLIGHTS))if(id!==ids[index])params.append('highlight','message:'+id);
+  params.set('reveal','message:'+ids[index]);
+  return params;
 }

@@ -20,13 +20,16 @@ type ProbeSelection struct {
 	All       bool              `json:"all"`
 	Kinds     *[]string         `json:"kinds,omitempty"`
 	Locations []ProbeLocation   `json:"locations,omitempty"`
+	// OnlyLocations checks just Locations: not the tools' usual places, nor
+	// the variables that move them.
+	OnlyLocations bool `json:"only_locations,omitempty"`
 }
 
 // Keep omitted selections backward compatible with the CLI and older clients.
 // The guided UI always sends kinds, including [] when deferring setup.
 func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (ProbeReport, error) {
 	if selection.Kinds == nil {
-		if len(selection.Locations) != 0 {
+		if len(selection.Locations) != 0 || selection.OnlyLocations {
 			return ProbeReport{}, probeRequestError{fmt.Errorf("choose tools before adding folders")}
 		}
 		return ProbeSources(config, catalog), nil
@@ -47,7 +50,7 @@ func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (P
 		}
 	}
 	home, _ := os.UserHomeDir()
-	return probeSelectedSources(home, config, catalog, kinds, selection.Locations), nil
+	return probeSelectedSources(home, config, catalog, kinds, selection.Locations, selection.OnlyLocations), nil
 }
 
 func (s *Server) probeSelected(w http.ResponseWriter, body map[string]any) {

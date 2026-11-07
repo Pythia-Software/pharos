@@ -34,7 +34,7 @@ export function optimizePages(): NestedPage[] {
 const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   activity: "People", human: "People", habits: "People",
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
-  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents",
+  parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
   tokens: "Outcomes", carbon: "Outcomes",
 };

@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { originDimensions, originLabel, isOriginDimension, useOriginMetadata } from "./origin-dimensions";
 import React, { useEffect, useLayoutEffect, useState } from "react";
 import {  type WhereTerm } from "@pythia-software/query-table-core";
@@ -27,7 +28,7 @@ declare global {
   }
 }
 
-const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical", tl1: "TL1" };
+const providers: Record<string, string> = { claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", antigravity: "Antigravity", canonical: "Canonical export", tl1: "TL1" };
 
 function CarbonFilter({ field, choices, where, onFilter }: { field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
   const selected = readSlice(where, field), values = [...new Set([...choices, ...selected.values.map(value => value ?? "")])].sort();
@@ -105,7 +106,7 @@ export function CarbonImpact({ where, onFilter, children }: { where: WhereTerm[]
     {data && !data.windows.some(window => Object.values(window.tokens).some(counts => Object.values(counts).some(value => value > 0))) ? <p className="muted" role="status">No reported token usage matches these filters.</p> : null}
     {error ? <button type="button" onClick={() => setRefresh(value => value + 1)}>Retry carbon usage</button> : null}
     {children}
-    <div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" />
+    <div className="data-readiness-region"><DataReadinessIndicator id="carbon:estimate" title="Filtered carbon estimate" dataset="usage" query={{where}} /><div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" /></div>
     {data?.undated_tokens ? <p className="muted">{data.undated_tokens.toLocaleString()} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
     </section>
     <div id="carbonAssumptions" className="carbon-card carbon-assumptions-card" />

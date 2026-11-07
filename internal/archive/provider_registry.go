@@ -54,6 +54,18 @@ type providerSpec struct {
 	// Setup is the provider's place in the setup wizard's list of tools,
 	// from 1, or 0 when the wizard does not offer it.
 	Setup int
+	// SetupWith names the tool setup shows this provider under, when it is
+	// another face of one (Cursor CLI under Cursor).
+	SetupWith string
+	// OfferWhenFound keeps a niche tool out of setup's list unless it is
+	// found on this Mac; it can still be searched for.
+	OfferWhenFound bool
+	// Summary says in a line what setup reads from the tool, and FolderHint
+	// which folder to choose when it is somewhere unusual.
+	Summary, FolderHint string
+	// Export, for a provider whose history is a downloaded export rather
+	// than a folder on this Mac, says how to download it.
+	Export string
 	// MirrorRank orders the sources holding one conversation: Library shows
 	// the copy of the lowest, then the most recently active.
 	MirrorRank int
@@ -144,7 +156,7 @@ var providerRegistry []providerSpec
 func init() {
 	providerRegistry = []providerSpec{
 		{
-			Kind: "claude", DisplayName: "Claude Code", Instructions: "~/.claude/CLAUDE.md", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
+			Kind: "claude", DisplayName: "Claude Code", Summary: "Conversations from the Claude Code app and CLI.", FolderHint: "The Claude configuration folder holding projects (usually ~/.claude), or its projects folder.", Instructions: "~/.claude/CLAUDE.md", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results reasoning timestamps subagents harness_version", Varies: "effort speed title",
 				Notes: map[string]string{"effort": "When the transcript records it.", "speed": "When the transcript records the request's speed or service tier.", "title": "When Claude Code named the session."}},
 			New:          func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "claude"} },
@@ -168,16 +180,11 @@ func init() {
 				},
 				Folder: func(r *probeRun, path, foundBy string) { r.claude(path, foundBy, false) },
 				// A chosen projects folder is read as its configuration folder's.
-				Chosen: func(path string) string {
-					if filepath.Base(path) == "projects" {
-						return filepath.Dir(path)
-					}
-					return path
-				},
+				Chosen: chosenParentOf("projects"),
 			},
 		},
 		{
-			Kind: "codex", DisplayName: "Codex", Instructions: "~/.codex/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 2, MirrorRank: 1,
+			Kind: "codex", DisplayName: "Codex", Summary: "Sessions from the Codex app and CLI.", FolderHint: "The Codex home folder holding sessions (usually ~/.codex).", Instructions: "~/.codex/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 2, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results timestamps harness_version", Varies: "effort speed reasoning subagents title",
 				Notes: map[string]string{"effort": "From releases that record it.", "speed": "From releases that record the turn's service tier.", "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.", "subagents": "From releases that record which session started another.", "title": "When Codex named the session."}},
 			Resolve: resolveRolloutSource,
@@ -196,7 +203,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "copilot", DisplayName: "Copilot CLI", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 6, MirrorRank: 1,
+			Kind: "copilot", DisplayName: "Copilot CLI", Summary: "Sessions from GitHub Copilot in the terminal.", FolderHint: "The Copilot CLI folder holding session-state (usually ~/.copilot).", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 6, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results timestamps subagents", Varies: "git_branch effort message_tokens reasoning title harness_version",
 				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "message_tokens": "Older releases record only the session's total.", "reasoning": "A summary for OpenAI models, or only that it reasoned."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &copilotAdapter{base} },
@@ -217,7 +224,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "opencode", DisplayName: "OpenCode", Instructions: "~/.config/opencode/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
+			Kind: "opencode", DisplayName: "OpenCode", Summary: "Sessions from OpenCode.", FolderHint: "The OpenCode data folder holding opencode.db (usually ~/.local/share/opencode).", Instructions: "~/.config/opencode/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 8, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls reasoning timestamps subagents harness_version", Varies: "speed tool_results title cost",
 				Notes: map[string]string{"speed": "The tier an OpenAI reply reports. A fast mode chosen as a model of its own is not told apart.", "tool_results": "For calls that finished.", "title": "When OpenCode named the session.", "cost": "The session's total."}},
 			New:          func(base baseAdapter) Adapter { return &opencodeAdapter{baseAdapter: base} },
@@ -240,7 +247,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "cline", DisplayName: "Cline", Instructions: "~/Documents/Cline/Rules/", Mutation: "retrieval-only", Automatic: true, Setup: 8, MirrorRank: 1,
+			Kind: "cline", DisplayName: "Cline", Summary: "Sessions from Cline.", FolderHint: "The Cline data folder holding sessions (usually ~/.cline/data).", Instructions: "~/Documents/Cline/Rules/", Mutation: "retrieval-only", Automatic: true, Setup: 9, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls tool_results timestamps", Varies: "git_branch reasoning title harness_version cost",
 				Notes: map[string]string{"speed": "Cline has no fast mode.", "reasoning": "Redacted thinking records only that it reasoned.", "cost": "The session's total.", "subagents": "A teammate's transcripts aren't read."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &clineAdapter{base} },
@@ -261,7 +268,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "vscode-copilot", DisplayName: "VS Code Copilot", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 9, MirrorRank: 1,
+			Kind: "vscode-copilot", DisplayName: "VS Code Copilot", Summary: "Chats from GitHub Copilot in VS Code.", FolderHint: "The VS Code User folder (in ~/Library/Application Support/Code).", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 5, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results reasoning subagents", Varies: "cwd model message_tokens timestamps title harness_version",
 				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "cwd": "The window's folder.", "model": "Auto is known once it replied.", "message_tokens": "Some releases record only the last round's input.", "timestamps": "Per request, not per message.", "title": "When the chat was renamed.", "harness_version": "The Copilot Chat extension's version."}},
 			New:          func(base baseAdapter) Adapter { return &vscodeCopilotAdapter{base} },
@@ -287,7 +294,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "cursor", DisplayName: "Cursor", Instructions: "Cursor's User Rules (Cursor Settings → Rules)", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
+			Kind: "cursor", DisplayName: "Cursor", Summary: "Chats from the Cursor editor and Cursor CLI.", FolderHint: "The Cursor User folder (in ~/Library/Application Support/Cursor).", Instructions: "Cursor's User Rules (Cursor Settings → Rules)", Mutation: "retrieval-only", Automatic: true, Setup: 3, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls subagents", Varies: "cwd model speed message_tokens tool_results reasoning timestamps title",
 				Notes: map[string]string{"speed": "The chat's fast mode setting now, which stands for all of its requests.", "message_tokens": "Before Cursor 3. Cursor 3 records only the size of the context.", "tool_results": "For calls that finished.", "timestamps": "Some messages are given the time of the one before."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorAdapter{baseAdapter: base} },
@@ -306,7 +313,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "cursor-cli", DisplayName: "Cursor CLI", Mutation: "retrieval-only", Automatic: true, Setup: 11, MirrorRank: 1,
+			Kind: "cursor-cli", DisplayName: "Cursor CLI", Summary: "Chats from Cursor CLI.", FolderHint: "The ~/.cursor folder holding chats.", SetupWith: "cursor", Mutation: "retrieval-only", Automatic: true, Setup: 4, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model reasoning timestamps title",
 				Notes: map[string]string{"speed": "Fast mode is kept in the CLI's settings, which Pharos does not read.", "message_tokens": "Only the size of the context.", "reasoning": "Encrypted: only that it reasoned.", "timestamps": "Prompts only; replies are placed after them."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorCLIAdapter{baseAdapter: base} },
@@ -316,6 +323,7 @@ func init() {
 				Folders:  []string{".cursor/chats"}, // the editor's extensions are in .cursor too
 				Defaults: func(r *probeRun, home string) { r.cursorCLI(filepath.Join(home, ".cursor"), "default location") },
 				Folder:   (*probeRun).cursorCLI,
+				Chosen:   chosenParentOf("chats"),
 				NewSources: func(home string, config Config) int {
 					dir := filepath.Join(home, ".cursor")
 					chats, _ := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).chats()
@@ -324,7 +332,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "zed", DisplayName: "Zed", Instructions: "~/.config/zed/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 12, MirrorRank: 1,
+			Kind: "zed", DisplayName: "Zed", Summary: "Threads from Zed’s agent panel.", FolderHint: "Zed’s folder holding threads (in ~/Library/Application Support).", Instructions: "~/.config/zed/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model effort speed message_tokens reasoning subagents title",
 				Notes: map[string]string{"speed": "The thread's fast mode setting now, which stands for all of its requests.", "message_tokens": "Each turn's last request.", "reasoning": "Or only that it was redacted.", "timestamps": "Every message is given its thread's start."}, VariesNote: "When the thread records it."},
 			New:          func(base baseAdapter) Adapter { return &zedAdapter{baseAdapter: base} },
@@ -336,6 +344,7 @@ func init() {
 					r.zed(filepath.Join(home, filepath.FromSlash(zedUserDir)), "default location")
 				},
 				Folder: (*probeRun).zed,
+				Chosen: chosenParentOf("threads"),
 				NewSources: func(home string, config Config) int {
 					dir := filepath.Join(home, filepath.FromSlash(zedUserDir))
 					stats, err := zedProbeStats(filepath.Join(dir, filepath.FromSlash(zedDatabase)))
@@ -344,7 +353,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "antigravity", DisplayName: "Antigravity", Instructions: "~/.gemini/GEMINI.md", Mutation: "retrieval-only", Automatic: true, Setup: 5, MirrorRank: 1,
+			Kind: "antigravity", DisplayName: "Antigravity", Summary: "Conversations from Antigravity.", FolderHint: "The Antigravity profile folder (usually ~/.gemini/antigravity).", Instructions: "~/.gemini/GEMINI.md", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps subagents", Varies: "cwd model effort message_tokens title harness_version",
 				Notes: map[string]string{"reasoning": "Only how many tokens it spent thinking.", "message_tokens": "When the conversation's database is present.", "harness_version": "The installed app's version, seen on this Mac."}, VariesNote: "When the conversation records it."},
 			New:          func(base baseAdapter) Adapter { return &antigravityAdapter{baseAdapter: base} },
@@ -373,7 +382,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "conductor", DisplayName: "Conductor", Mutation: "retrieval-only", Automatic: true, Setup: 3, MirrorRank: 9,
+			Kind: "conductor", DisplayName: "Conductor", Summary: "Workspaces and chats run in Conductor.", FolderHint: "Conductor’s app data folder holding its databases.", OfferWhenFound: true, Mutation: "retrieval-only", Automatic: true, Setup: 11, MirrorRank: 9,
 			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results reasoning", Varies: "git_branch effort speed message_tokens timestamps title harness_version",
 				Notes: map[string]string{"harness_version": "When the Claude Code or Codex session it ran is also a source.", "subagents": "Recorded by the Claude Code or Codex session it ran."}, VariesNote: "When Conductor stores it."},
 			New:  func(base baseAdapter) Adapter { return &conductorAdapter{baseAdapter: base} },
@@ -394,7 +403,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "tl1", DisplayName: "TL1", Mutation: "retrieval-only", Setup: 4, MirrorRank: 0,
+			Kind: "tl1", DisplayName: "TL1", Summary: "Agent runs, tasks and project context from TL1.", FolderHint: "The TL1 folder holding registry.json or workspaces.json.", OfferWhenFound: true, Mutation: "retrieval-only", Setup: 12, MirrorRank: 0,
 			Content: contentCapabilities{Supported: "cwd model effort tool_calls title", Varies: "git_branch speed message_tokens tool_results reasoning timestamps subagents harness_version cost",
 				Notes: map[string]string{"cwd": "The repository's folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1's run summary."}, VariesNote: "When the run records it."},
 			New: func(base baseAdapter) Adapter { return &tl1Adapter{baseAdapter: base} },
@@ -417,6 +426,38 @@ func init() {
 			},
 		},
 		{
+			Kind: "openclaw", DisplayName: "OpenClaw", Summary: "Conversations and agent sessions from OpenClaw.", FolderHint: "The OpenClaw state folder (usually ~/.openclaw), an agent folder, or a native transcript database.", Instructions: "~/.openclaw/workspace/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 13, MirrorRank: 2,
+			Content: contentCapabilities{Varies: "cwd model effort message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version", Notes: map[string]string{"message_tokens": "Per model response when the transcript records usage.", "harness_version": "From the native database's schema metadata."}, VariesNote: "When the native history records it."},
+			New:     func(base baseAdapter) Adapter { base.config.Kind = "openclaw"; return &personalAgentAdapter{base} },
+			Plan:    (*capturePlan).personalAgents, Preservation: retainedInputs, CaptureTables: personalAgentKept("openclaw"),
+			Probe: &providerProbe{
+				Folders: []string{".openclaw"}, Env: []probeEnv{{Name: "OPENCLAW_STATE_DIR"}},
+				Defaults: func(r *probeRun, home string) {
+					r.personalAgent("openclaw", filepath.Join(home, ".openclaw"), "default location")
+				},
+				Folder: func(r *probeRun, path, foundBy string) { r.personalAgent("openclaw", path, foundBy) },
+				NewSources: func(home string, config Config) int {
+					return newPersonalAgentSources(home, config, "openclaw", ".openclaw", "OPENCLAW_STATE_DIR")
+				},
+			},
+		},
+		{
+			Kind: "hermes", DisplayName: "Hermes Agent", Summary: "Conversations and agent sessions from Hermes, including named profiles.", FolderHint: "The Hermes home folder (usually ~/.hermes), a profile folder, or its state.db.", Instructions: "~/.hermes/SOUL.md", Mutation: "retrieval-only", Automatic: true, Setup: 14, MirrorRank: 2,
+			Content: contentCapabilities{Varies: "cwd git_branch model effort tool_calls tool_results reasoning timestamps subagents title cost", Notes: map[string]string{"message_tokens": "Session and model totals, not per-request token counts; totals are attributed to their recorded reporting time.", "cost": "Actual reported cost only; estimates are not reported as charges."}, VariesNote: "When the native history records it."},
+			New:     func(base baseAdapter) Adapter { base.config.Kind = "hermes"; return &personalAgentAdapter{base} },
+			Plan:    (*capturePlan).personalAgents, Preservation: retainedInputs, CaptureTables: personalAgentKept("hermes"),
+			Probe: &providerProbe{
+				Folders: []string{".hermes"}, Env: []probeEnv{{Name: "HERMES_HOME"}},
+				Defaults: func(r *probeRun, home string) {
+					r.personalAgent("hermes", filepath.Join(home, ".hermes"), "default location")
+				},
+				Folder: func(r *probeRun, path, foundBy string) { r.personalAgent("hermes", path, foundBy) },
+				NewSources: func(home string, config Config) int {
+					return newPersonalAgentSources(home, config, "hermes", ".hermes", "HERMES_HOME")
+				},
+			},
+		},
+		{
 			Kind: "canonical", DisplayName: "Canonical export", Mutation: "retrieval-only", MirrorRank: 5,
 			Content: contentCapabilities{Varies: "cwd git_branch model effort speed message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version cost", VariesNote: "When the export holds it."},
 			New:     func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
@@ -429,14 +470,14 @@ func init() {
 			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
 		},
 		{
-			Kind: "chatgpt", DisplayName: "ChatGPT", Instructions: "ChatGPT's custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
+			Kind: "chatgpt", DisplayName: "ChatGPT", Export: "In ChatGPT, open Settings → Data controls → Export data. The email it sends links to a ZIP.", Instructions: "ChatGPT's custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
 			Content: contentCapabilities{Supported: "model tool_calls tool_results timestamps", Varies: "effort speed reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
 				Notes: map[string]string{"speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{base} },
 			Plan: (*capturePlan).chatGPT, Preservation: retainedInputs,
 		},
 		{
-			Kind: "claude-ai", DisplayName: "Claude.ai", Mutation: "retrieval-only", MirrorRank: 1,
+			Kind: "claude-ai", DisplayName: "Claude.ai", Export: "On claude.ai, open Settings → Privacy → Export data. The email it sends links to a ZIP.", Mutation: "retrieval-only", MirrorRank: 1,
 			Content: contentCapabilities{Supported: "timestamps", Varies: "tool_calls tool_results reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
 				Notes: map[string]string{"tool_calls": "Not in older exports, which flatten each message to text.", "tool_results": "Not in older exports, which flatten each message to text.", "model": "The export names no model.", "message_tokens": "Exports have no token counts.", "reasoning": "A summary, when the export holds one."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &claudeAIAdapter{base} },
@@ -571,6 +612,17 @@ func registeredKind(kind string) (*providerSpec, bool) {
 	return nil, false
 }
 
+// otherProviders are those setup does not offer, in registry order.
+func otherProviders() []*providerSpec {
+	specs := []*providerSpec{}
+	for index := range providerRegistry {
+		if providerRegistry[index].Setup == 0 {
+			specs = append(specs, &providerRegistry[index])
+		}
+	}
+	return specs
+}
+
 // setupProviders are the providers the setup wizard offers, in its order.
 func setupProviders() []*providerSpec {
 	specs := []*providerSpec{}
@@ -594,6 +646,17 @@ func mirrorRank(kind string) int {
 
 // newProbeSource is 1 when has, for a usual location dir holding history,
 // and no configured source reads it.
+// chosenParentOf reads a chosen folder named name, which the person may pick
+// because it holds the history, as the folder the source reads: its parent.
+func chosenParentOf(name string) func(string) string {
+	return func(path string) string {
+		if filepath.Base(path) == name {
+			return filepath.Dir(path)
+		}
+		return path
+	}
+}
+
 func newProbeSource(home string, config Config, kind, dir string, has bool) int {
 	if !has {
 		return 0

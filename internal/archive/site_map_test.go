@@ -31,6 +31,13 @@ type siteCases struct {
 		URL     string                  `json:"url"`
 		Decoded map[string]qt.LinkQuery `json:"decoded"`
 	} `json:"example"`
+	Population struct {
+		Page    string         `json:"page"`
+		Chart   map[string]any `json:"chart"`
+		Filters []qt.WhereTerm `json:"filters"`
+		Days    int            `json:"days"`
+		URL     string         `json:"url"`
+	} `json:"population"`
 	Analyze map[string][]struct {
 		Chart   map[string]any `json:"chart"`
 		Verdict string         `json:"verdict"`
@@ -220,6 +227,29 @@ func linkArgs(t *testing.T, text string) map[string]any {
 	return args
 }
 
+// A dashboard's population is its filters other than the range: an agent
+// writes the legend's exclusion and an inclusion as site_link filters and
+// gets the page's link, and the link reads back as the same terms.
+func TestSiteLinkBuildsAPartialPopulation(t *testing.T) {
+	site, cases := testSiteMap(t), readSiteCases(t)
+	example := cases.Population
+	args := linkArgs(t, `{"page": "analyze/session_shape", "days": 30,
+		"filters": [{"any": [{"field": "harness", "op": "!=", "value": "antigravity-cli"}, {"field": "harness", "op": "is_null", "value": ""}]}, {"field": "agent_kind", "op": "=", "value": "root"}]}`)
+	args["options"] = linkArgs(t, compactJSON(example.Chart))
+	result, err := site.linkTool(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameLink(t, "population", result["url"].(string), example.URL)
+	read := roundTrip(t, site, "population", example.URL)
+	if compactJSON(read.Filters) != compactJSON(example.Filters) || read.Days != example.Days {
+		t.Errorf("population read filters %s days %d", compactJSON(read.Filters), read.Days)
+	}
+	if summary, _ := result["summary"].(string); !strings.Contains(summary, "antigravity-cli") || !strings.Contains(summary, "root") {
+		t.Errorf("summary %q does not name the population", summary)
+	}
+}
+
 func TestSiteLinkBuildsTheMotivatingExample(t *testing.T) {
 	site, cases := testSiteMap(t), readSiteCases(t)
 	example := cases.Example
@@ -280,6 +310,9 @@ func TestSiteLinkErrorsNameTheArgumentAndListTheChoices(t *testing.T) {
 		{`{"page": "analyze/tokens", "options": {"view": "compare", "unit": "agent_session", "split": "model_family"}}`, "options.split", "session_kind"},
 		{`{"page": "analyze/tokens", "options": {"view": "trend", "unit": "conversation"}}`, "options.unit", "rollingPeriods"},
 		{`{"page": "analyze/tokens", "options": {"view": "pie"}}`, "options.view", "compare"},
+		{`{"page": "analyze/tokens", "options": {"view": "trend", "percentiles": ["p42"]}}`, "options.percentiles", "p50"},
+		{`{"page": "analyze/tokens", "options": {"view": "trend", "percentiles": "p50"}}`, "options.percentiles", "p90"},
+		{`{"page": "analyze/session_shape", "options": {"view": "trend", "metric": "sessions", "split": "length_band", "percentiles": ["mean", "p90"]}}`, "options.percentiles", "p99"},
 		{`{"page": "analyze/tokens", "options": {"hours": 0}}`, "options.hours", ""},
 		{`{"page": "analyze/tokens", "filters": [{"field": "provider", "op": "=", "value": "anthropic"}]}`, "filters[0].value", "claude"},
 		{`{"page": "analyze/tokens", "filters": [{"field": "provider", "op": "contains", "value": "c"}]}`, "filters[0].op", "is_not_null"},
@@ -308,6 +341,53 @@ func TestSiteLinkErrorsNameTheArgumentAndListTheChoices(t *testing.T) {
 		if linkErr.Arg != test.arg || test.wants != "" && !slices.Contains(linkErr.Choices, test.wants) {
 			t.Errorf("%s: %s, want %s with choice %q", test.args, err, test.arg, test.wants)
 		}
+	}
+}
+
+// The %ile control's levels reach a link as the page draws them: lines at
+// levels of earlier points, a heatmap's traced percentiles, and the older
+// norm read as the mean.
+func TestSiteLinkDrawsTheChosenPercentiles(t *testing.T) {
+	site := testSiteMap(t)
+	chart := func(result map[string]any) map[string]any {
+		state, err := site.parseURL(result["url"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Chart.toMap()
+	}
+	lines, err := site.linkTool(linkArgs(t, `{"page": "analyze/tokens", "options": {"view": "trend", "metric": "tokens", "split": "none", "percentiles": ["p50", "p90"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := chart(lines)["percentiles"]; compactJSON(got) != `["p50","p90"]` {
+		t.Errorf("percentiles %s", compactJSON(got))
+	}
+	if !strings.Contains(lines["summary"].(string), "against the median and 90th %ile of the previous 30 periods") {
+		t.Errorf("summary %q", lines["summary"])
+	}
+	heatmap, err := site.linkTool(linkArgs(t, `{"page": "analyze/session_shape", "options": {"view": "trend", "metric": "sessions", "split": "length_band", "percentiles": ["p75", "p99"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(heatmap["summary"].(string), "tracing each period's 75th %ile and 99th %ile") {
+		t.Errorf("summary %q", heatmap["summary"])
+	}
+	// Shares have no reference level: the link says which levels it draws.
+	_, err = site.linkTool(linkArgs(t, `{"page": "analyze/tokens", "options": {"view": "trend", "metric": "tokens", "split": "provider", "share": true, "percentiles": ["p90"]}}`))
+	var linkErr *siteLinkError
+	if !errors.As(err, &linkErr) || linkErr.Arg != "options.percentiles" || !strings.Contains(err.Error(), "[]") {
+		t.Errorf("shares with a level: %v", err)
+	}
+	// An older link's norm opens as the mean, written under its current name.
+	dashboard := site.Analyze.Dashboards["tokens"]
+	old := map[string]any{"v": float64(2), "view": "trend", "metric": "tokens", "split": "none", "norm": true}
+	if verdict, _ := site.judge(dashboard, old); verdict != verdictCoercible {
+		t.Errorf("norm judged %s", verdict)
+	}
+	written := dashboard.viewChart(old).toMap()
+	if _, kept := written["norm"]; kept || compactJSON(written["percentiles"]) != `["mean"]` {
+		t.Errorf("norm written as %s", compactJSON(written))
 	}
 }
 

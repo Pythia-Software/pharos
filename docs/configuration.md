@@ -407,12 +407,26 @@ want the library brought up to date: it adds sources that appeared since, and
 captures and indexes only what changed.
 
 The app offers a guided setup after library configuration, and the first time
-a library is opened on another Mac. It first detects tools using application
-bundles and familiar data folders, then shows those tools selected as options.
-Undetected tools are under **Other tools**. Continuing checks the selected
-tools' conversation locations below. It never searches the
-rest of the home folder and never enters a folder that macOS guards with a
-permission prompt: Desktop, Documents, Downloads, iCloud Drive and other cloud
+a library is opened on another Mac. It first asks how to find the history:
+
+- **Look in the usual places** (recommended) checks the folders below for every
+  tool found here and lists what each holds. **Which places?** lists those
+  folders, from the provider registry.
+- **I'll tell Pharos where to look** asks which tools you use (**More tools**
+  holds TL1 and Conductor, which most people don't use), with each tool's usual
+  folder filled in to keep or change, and then checks only the folders named
+  there: not the usual places, not the variables that move them, and not the
+  count of new history in the usual places (`"only_locations": true`). A
+  folder chosen because it holds the history (Claude's `projects`, Zed's
+  `threads`, Cursor CLI's `chats`) is read as the folder above it. TL1's
+  registry names each project's `tl1.json`, which is read too.
+- **Import an export** adds a ChatGPT or Claude.ai export (below).
+
+Setup lists the tools in the registry's `Setup` order, Cursor and Cursor CLI as
+one tool. A tool marked `OfferWhenFound` (TL1, Conductor) is listed only when it
+is found on this Mac. Either way, Pharos never searches the rest of the home
+folder and never enters a folder that macOS guards with a permission prompt
+unless you name it: Desktop, Documents, Downloads, iCloud Drive and other cloud
 storage, other apps' containers, Mail, Messages, and other volumes.
 
 | Kind | Where Pharos looks |
@@ -424,16 +438,18 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
 | Copilot CLI | `~/.copilot`, or `COPILOT_HOME`, when it has a `session-state` folder; each `session-state/<id>/events.jsonl` (or an older release's `session-state/<id>.jsonl`) is a session |
 | OpenCode | `~/.local/share/opencode`, or `$XDG_DATA_HOME/opencode`; each session in its `opencode*.db` databases is a session |
+| OpenClaw | `~/.openclaw` or `$OPENCLAW_STATE_DIR`; native `agents/<agent>/agent/openclaw-agent.sqlite` databases and legacy `agents/<agent>/sessions/*.jsonl` transcripts |
+| Hermes Agent | `~/.hermes` or `$HERMES_HOME`; `state.db` and named `profiles/<name>/state.db` databases |
 | Cline | `~/.cline/data`, `CLINE_DATA_DIR`, or `$CLINE_DIR/data`, when it has a `sessions` folder; each `sessions/<id>/<id>.messages.json` is a session |
 | VS Code Copilot | the `User` folder of VS Code, VS Code Insiders, VSCodium or Positron under `~/Library/Application Support`; each chat session (`workspaceStorage/<hash>/chatSessions/<id>.jsonl`, an older release's `.json`, or a window without a folder's in `globalStorage/emptyWindowChatSessions`) is a session |
 | Cursor | `~/Library/Application Support/Cursor/User`; each composer with a message in `globalStorage/state.vscdb` is a session |
 | Cursor CLI | `~/.cursor`, when it has a chat (`chats/<hash>/<chat>/store.db`); each chat is a session |
 | Zed | `~/Library/Application Support/Zed`, when `threads/threads.db` holds a thread; each thread of Zed's agent is a session |
-| ChatGPT | nothing on disk: export your data from ChatGPT and add a `chatgpt` source for the downloaded ZIP, the folder it unzips to, or one of its conversation files |
-| Claude.ai | nothing on disk: export your data from Claude.ai and add a `claude-ai` source for the downloaded ZIP, its `conversations.json`, or the folder holding it |
+| ChatGPT | nothing on disk: export your data from ChatGPT, then **Import an export** (or add a `chatgpt` source) for the downloaded ZIP, the folder it unzips to, or one of its conversation files |
+| Claude.ai | nothing on disk: export your data from Claude.ai, then **Import an export** (or add a `claude-ai` source) for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
 The app and its service do not inherit the shell's environment, so Pharos also
-reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR` and `CLINE_DIR` from the login shell (`$SHELL -l -i -c`,
+reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR`, `CLINE_DIR`, `OPENCLAW_STATE_DIR` and `HERMES_HOME` from the login shell (`$SHELL -l -i -c`,
 two-second limit, cached for ten minutes). This runs the shell's startup files;
 set `PHAROS_PROBE_SHELL=0` in the service's environment to skip it.
 
@@ -450,16 +466,16 @@ Conductor, installations for TL1), their size and date range, and:
 - Whether it is already configured, and as which source.
 
 The setup guide initially checks only tool presence, without parsing history,
-opening databases, or launching a shell. Detected tools are selected by default;
-you can exclude them or add undetected tools under **Other tools**. The next
-step checks only the selected tools and their relevant environment overrides. You can
-review discovered folders, exclude profiles, and check an additional folder.
-The review shows locations and estimated source-file size before **Add and
-capture** saves access and copies history. Checked locations become enabled
-sources and unchecked found locations become paused sources; enable those
-later in Settings → Sources. New tool support is available through the guide
-without automatically selecting it. The choice
-is written, atomically, to `hosts/<host-id>.toml` in the library:
+opening databases, or launching a shell. Looking in the usual places then
+checks the found tools and their relevant environment overrides, and lists
+their folders under **Found on this Mac**, with the tools not found named in
+one line. You can exclude folders, and **Add a folder Pharos didn't find**
+checks one more for any tool. The review shows locations, estimated
+source-file size and what each tool doesn't record (**What each tool records**
+has the whole table) before **Add and capture** saves access and copies
+history. Checked locations become enabled sources and unchecked found
+locations become paused sources; enable those later in Settings → Sources.
+The choice is written, atomically, to `hosts/<host-id>.toml` in the library:
 
 ```toml
 # Pharos sources for MacBook Air (user gbw).
@@ -494,8 +510,22 @@ service restarts; accepting in the panel reloads sources immediately.
 
 **Set up later** saves an empty host choice without discovering or capturing
 sources, so the guide does not interrupt the next launch. Settings → Sources
-names the Mac its sources belong to and offers **Configure sources on this Mac…**
-to revisit the guide, for example after installing another agent.
+lists each source with its tool and whether it is this Mac's or every Mac's,
+and offers **Look for sources…** (the usual places), **Add a folder…** (only
+folders you name) and **Import an export…**. Settings does not look in the
+usual places on its own. A source in this Mac's host file has **Remove…**,
+which deletes its block (`POST /api/sources/<name>/remove`); what was captured
+and indexed from it stays in the library. When the host source replaces a
+same-named one in `library.toml` (`replaces` in `GET /api/sources`), removing
+it brings that one back, as `library.toml` sets it up, and the confirmation
+says so. Sources in `library.toml` are removed there.
+
+**Import an export** checks that the ZIP, folder or file holds the export's
+conversations (a ZIP's listing or a folder's names; nothing is parsed) and adds
+it to this Mac's host file as an enabled source named for its kind
+(`POST /api/sources/import` with `{"kind":"chatgpt","path":"~/Downloads/….zip"}`),
+then captures it like any source. Importing the same file again adds nothing.
+An export in Downloads may make macOS ask to let Pharos read that folder.
 
 After adding sources the panel captures them onto the library straight away
 (see [Capture](#capture)), showing each source's files and bytes as they are
@@ -521,8 +551,10 @@ The API equivalents are `GET /api/probe/status` (cheap; includes
 `{"accept": ["claude"], "decline": ["codex"], "names": {"claude": "claude-mbp"}}`.
 The guided UI uses `GET /api/probe/status?discovery=none` and the lightweight
 `GET /api/probe/tools` presence check, then `POST /api/probe`
-with `{"kinds":["claude"],"locations":[]}`. The same `kinds` and `locations`
-are sent with approval, so revalidation stays within those choices. Empty
+with `{"kinds":["claude"],"locations":[]}`, or with `"only_locations": true`
+when you named the folders. The same request is sent with approval, so
+revalidation stays within those choices. `GET /api/providers` gives each
+tool's name, summary, folder hint, usual locations and variables. Empty
 `kinds` explicitly means no tools. Legacy requests and the CLI retain full
 discovery when that field is omitted.
 
@@ -532,7 +564,7 @@ copied into `archive.toml` by hand.
 
 Pharos has two verbs for keeping the library current: **capture** copies
 this Mac's source files into the library, and **index** makes conversations
-searchable. Settings → Sources keeps **Configure sources on this Mac**, source
+searchable. Settings → Sources keeps the ways to add sources, source
 configuration, and enable switches, with **Open Background Processing** linking to
 the controls. Settings → Background Processing shows what Pharos keeps current
 on its own, Frequently, Hourly and Daily, with each item's measured cost, and
@@ -802,6 +834,8 @@ upload permissions keep their existing behavior.
 | `claude-ai` | the export's ZIP or `conversations.json`, whole |
 | `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
 | `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so a snapshot is a copy of those tables, row by row, and nothing else is ever written to the capture, even by one that stops part way. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
+| `openclaw` | selective snapshots of native session and transcript tables, including embedded compressed payloads and canonical reset/deletion archive blobs before file publication; referenced cold archives and, for legacy JSONL, `sessions.json`. Authentication, configuration, workspace files and memory indexes are excluded |
+| `hermes` | selective snapshots of `sessions`, `messages` and `session_model_usage`, including each named profile. Authentication, configuration, memory, trajectories and unrelated runtime tables are excluded |
 | `cline` | each session's `<id>.json` and `<id>.messages.json` under `sessions`; not its compacted context (`<id>.compaction.json`), nor Cline's settings (which hold provider credentials), index database or checkpoints |
 | `vscode-copilot` | each chat session's file under `workspaceStorage/<hash>/chatSessions` or `globalStorage/emptyWindowChatSessions`, and its window's `workspace.json`; not a session's older `.json` beside its journal, nor the rest of the user folder: settings, `state.vscdb` databases and extension storage, which can hold other extensions' secrets |
 | `cursor` | a snapshot of `globalStorage/state.vscdb` and of each window's `state.vscdb`, and each window's `workspace.json`. A snapshot is a copy, row by row, of only the composers, their messages and headers, and a window's list of its composers, with each composer's encryption keys and encrypted state left out: Cursor's sign-in tokens (`cursorAuth/*`), settings and every other row are never written to the capture, even by one that stops part way. No rows are copied before indexing, even with `sqlite_record_capture`, since only a snapshot leaves them out; rows that option exports come from the snapshot. A composer deleted in Cursor before its last capture was indexed is indexed from an older snapshot that holds it |

@@ -31,7 +31,8 @@ globalThis.location ??= new URL("http://localhost/");
 const archive = dirname(assets), ui = readFileSync(join(assets, "ui.py"), "utf8");
 const goSource = readdirSync(archive).filter(file => file.endsWith(".go") && !file.endsWith("_test.go")).map(file => readFileSync(join(archive, file), "utf8")).join("\n");
 const params = url => new URL(url, "http://localhost").searchParams;
-const plain = value => JSON.parse(JSON.stringify(value));
+// An option the page leaves unset (an absent cycleOn) is drawn unset too.
+const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 
 test("the site map's routes are the ones the server and the page shell serve", () => {
   const served = new Set(/func isUIPage[\s\S]*?case ([^:]*):/.exec(goSource)[1].match(/"[^"]*"/g).map(path => JSON.parse(path)));
@@ -252,4 +253,38 @@ test('native query help includes every referenced public type from the pinned re
  for(const name of ['GroupingDefinition','SummaryColumn','GroupKey','RepresentativeRow'])assert.ok(types[name],`Undocumented inherited grouping type ${name}`);
  assert.ok(types.GroupingState.uses.includes('GroupingDefinition'));
  for(const type of Object.values(types)){assert.ok(type.definition);for(const name of type.uses)assert.ok(types[name],`Undocumented query type ${name}`);}
+});
+
+// The %ile control's levels are a list rule: each level the chart can draw
+// stays, in the control's order; links read and write them as the page does,
+// and an older norm opens as the mean.
+test("the %ile levels: checked in every view, drawn by context as the page draws them, norm read as the mean", () => {
+  const judge = (topic, chart) => judgeChart(map.analyze.dashboards[topic], map.analyze.version, chart);
+  const drawn = (topic, chart) => drawChart(map.analyze.dashboards[topic].views[chart.view], readChart(map.analyze.dashboards[topic], chart).merged).percentiles;
+  const lines = { v: 2, view: "trend", metric: "tokens", split: "none" };
+  for (const [topic, chart, levels, verdict] of [
+    ["tokens", { ...lines, percentiles: ["p50", "p90"] }, ["p50", "p90"], "valid"],
+    ["tokens", { ...lines, percentiles: ["p90", "mean"] }, ["mean", "p90"], "coercible"],
+    ["tokens", { ...lines, split: "provider", share: true, percentiles: ["p50"] }, [], "coercible"],
+    ["tokens", { ...lines, display: "cumulative", percentiles: ["mean"] }, [], "coercible"],
+    ["session_shape", { v: 2, view: "trend", metric: "sessions", split: "length_band", percentiles: ["mean", "p90"] }, ["p90"], "coercible"],
+    ["session_shape", { v: 2, view: "trend", metric: "sessions", split: "none", percentiles: ["mean", "p99"] }, ["mean", "p99"], "valid"],
+  ]) {
+    const name = `${topic} ${JSON.stringify(chart)}`;
+    assert.deepEqual(drawn(topic, chart), levels, name);
+    assert.deepEqual(normalizeAnalysis(analysisCatalogs[topic], { ...dashboardDefaults[topic], ...chart }).percentiles, levels, `${name}: the page`);
+    assert.equal(judge(topic, chart), verdict, name);
+    assert.equal(chartVerdict(topic, chart), verdict, `${name}: the page`);
+  }
+  for (const chart of [{ ...lines, percentiles: ["p42"] }, { ...lines, percentiles: "p50" }, { ...lines, percentiles: ["p50", "p50"] }, { v: 2, view: "compare", metric: "tokens", split: "provider", percentiles: ["p42"] }])
+    assert.equal(judge("tokens", chart), "invalid", JSON.stringify(chart));
+  // An older link's norm opens as the mean, written under its current name.
+  const old = { ...lines, norm: true };
+  assert.deepEqual(readChart(map.analyze.dashboards.tokens, old).merged.percentiles, ["mean"]);
+  assert.equal(judge("tokens", old), "coercible");
+  assert.deepEqual(viewChart("tokens", old), { ...lines, percentiles: ["mean"] });
+  assert.deepEqual(canonicalState(analysisCatalogs.tokens, old), { ...lines, percentiles: ["mean"] });
+  // A link with levels opens with them.
+  const url = dashboardURL("tokens", { ...lines, percentiles: ["p50", "p90"] }, [], 30);
+  assert.deepEqual(plain(openDashboard(url).view.percentiles), ["p50", "p90"]);
 });

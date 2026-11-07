@@ -8,6 +8,7 @@ import { cumulativeBuckets, legendGroups, legendGroupSeries, rollingAverageBucke
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
 import { sliceGroupState, type LegendAction } from "./chart-selection";
+import type { PopulationAction } from "./dashboard-population";
 import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
@@ -207,8 +208,11 @@ export function ScaleControl({ value, onChange, percent = false }: { value: Char
     title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
 }
 
-export function DisplayControl({ value = "interval", onChange, disabled }: { value?: ChartDisplay; onChange: (next: ChartDisplay) => void; disabled?: string }) {
-  return <ChartSelect label="Display" value={value} options={[["interval", "Per interval"], ["cumulative", "Cumulative", disabled]]} onChange={onChange} />;
+// heatmap offers the engine's heatmap (dashboard-heatmap-model.ts), with the
+// reason it is unavailable, if it is.
+export function DisplayControl<T extends ChartDisplay | "heatmap">({ value = "interval" as T, onChange, disabled, heatmap }: { value?: T; onChange: (next: T) => void; disabled?: string; heatmap?: { disabled?: string } }) {
+  const options = [["interval", "Per interval"], ["cumulative", "Cumulative", disabled], ...heatmap ? [["heatmap", "Heatmap", heatmap.disabled]] : []] as Array<[T, string, string?]>;
+  return <ChartSelect label="Display" value={value} options={options} onChange={onChange} />;
 }
 
 export function SmoothingControl({ value, unit, onChange, disabled = false, note = "Trailing average · includes preceding history" }: { value: number; unit: string; onChange: (next: number) => void; disabled?: boolean; note?: string }) {
@@ -230,7 +234,7 @@ export function SmoothingControl({ value, unit, onChange, disabled = false, note
   </div>;
 }
 
-export function RollingControl({ value, period, count = 1, onChange, disabled, note, display }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void; disabled?: boolean; note?: string; display?: ChartDisplay }) {
+export function RollingControl({ value, period, count = 1, onChange, disabled, note, display }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void; disabled?: boolean; note?: string; display?: ChartDisplay | "heatmap" }) {
   const cumulative = display === "cumulative";
   return <SmoothingControl value={cumulative ? 0 : value} unit={`${count > 1 ? `× ${count} ` : ""}${chartPeriods[period].unit}s`} onChange={onChange} disabled={disabled || cumulative} note={cumulative ? "Cumulative values use original amounts. Smoothing applies per interval." : note} />;
 }
@@ -248,11 +252,11 @@ export function RollingControl({ value, period, count = 1, onChange, disabled, n
 // lines with no total, and a reference value draws a labelled level line.
 // Without zeroes (nonzero), prepared buckets hold no zero values, and lines
 // pass over a series' missing points.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", reference, action, titleSlot, onSelect, onSelectGroup, onExpand, onRange, seriesHref }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, prepared = false, lines = false, bars: forceBars = false, additive = true, nonzero = false, rolling = "average", references = [], action, titleSlot, onSelect, onSelectGroup, onPopulation, onExpand, onRange, seriesHref }: {
   title: string; controls: React.ReactNode; action?: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
-  prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; reference?: { value: number; label: string };
+  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onSelectGroup?: (keys: string[], action: LegendAction) => void; onPopulation?: (key: string, action: PopulationAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
+  prepared?: boolean; lines?: boolean; bars?: boolean; additive?: boolean; nonzero?: boolean; rolling?: "average" | "sum" | "pooled"; references?: Array<{ value: number; label: string; level?: string }>;
   seriesHref?: (range: ChartInspectionRange, series: ChartSeries) => string | undefined;
   /** Draws the title and action there instead, such as in a page's heading. */
   titleSlot?: HTMLElement | null;
@@ -282,7 +286,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
   const grouped = forceBars && (!additive || scale === "logarithmic" && !percent);
-  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: reference?.value });
+  const geometry = timelineGeometry(buckets, drawn, { scale, lines: cumulative || lines, bars: forceBars, grouped, percent, reference: references.length ? Math.max(...references.map(item => item.value)) : 0 });
   const lineChart = geometry.lines;
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : geometry;
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1 && additive;
@@ -302,7 +306,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const present = (bucket: ChartBucket) => drawn.filter(item => additive ? (bucket.values[item.key] ?? 0) > 0 : bucket.values[item.key] !== undefined).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
     + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
-    + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + (reference ? `; ${reference.label} ${format(reference.value)}` : "") + (bucket.detail ? `; ${bucket.detail}` : "");
+    + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + references.map(item => `; ${item.label} ${format(item.value)}`).join("") + (bucket.detail ? `; ${bucket.detail}` : "");
   const path = (key: string) => timelinePath(buckets, key, y, additive, nonzero);
   const columnAt = (index: number) => bars.current?.querySelectorAll<HTMLButtonElement>(":scope > button")[index];
   useLayoutEffect(() => {
@@ -384,7 +388,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
       const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}</>;
       return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
-        : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} />
+        : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} onPopulation={onPopulation && (action => onPopulation(item.key, action))} />
         : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
     });
     const children = group.groups.map(child => <React.Fragment key={JSON.stringify(child.path)}>{legendGroup(child)}</React.Fragment>);
@@ -395,9 +399,9 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   };
   return <div className="usage-chart" ref={root} data-view-field="chart_pins" data-pharos-target={`section:chart:${title}`}>
     <div className="usage-chart-head">{titleSlot ? createPortal(<div className="usage-chart-title usage-chart-headline"><h2>{titleText}</h2>{action}</div>, titleSlot) : <div className="usage-chart-title"><h3>{titleText}</h3>{action}</div>}<div className="usage-chart-controls">{controls}</div></div>
-    {series.length > 1 || legend || reference ? <div className="usage-chart-legend">
+    {series.length > 1 || legend || references.length ? <div className="usage-chart-legend">
       {series.length > 1 || legend ? legendGroup(legendGroups(series)) : null}
-      {reference ? <span className="usage-legend-item usage-legend-reference"><span className="usage-swatch usage-reference-swatch" aria-hidden="true" />{reference.label} · {format(reference.value)}</span> : null}
+      {references.map(item => <span key={item.label} className="usage-legend-item usage-legend-reference"><span className="usage-swatch usage-reference-swatch" data-level={item.level} aria-hidden="true" />{item.label} · {format(item.value)}</span>)}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
@@ -408,7 +412,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
         {lineChart && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
           {drawn.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke" d={path(item.key)} />)}
         </svg> : null}
-        {reference ? <div className="usage-chart-reference" style={{ bottom: `${y(reference.value)}%` }} aria-hidden="true" /> : null}
+        {references.map(item => <div key={item.label} className="usage-chart-reference" data-level={item.level} style={{ bottom: `${y(item.value)}%` }} aria-hidden="true" />)}
         {buckets.map((bucket, index) => {
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", tip?.pinned && tip.bucket.key === bucket.key && !drag ? "inspected" : "", picked && index >= picked.first && index <= picked.last ? "picked" : ""].filter(Boolean).join(" ");
           return <button key={bucket.key} type="button" aria-label={describe(bucket)} aria-pressed={Boolean(tip?.pinned && tip.bucket.key === bucket.key)} className={className} onMouseEnter={() => show(index)} onFocus={() => show(index)} onMouseLeave={hidePreview} onBlur={hidePreview}
@@ -437,7 +441,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
         </li>;
       })}</ul> : <div className="usage-chart-tip-more">Nothing in this {unit}</div>}
       {stacked && present(tip.bucket).length > 1 ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">Total</span><span className="usage-chart-tip-value">{format(total(tip.bucket))}{suffix}</span></div> : null}
-      {reference ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">{reference.label}</span><span className="usage-chart-tip-value">{format(reference.value)}{suffix}</span></div> : null}
+      {references.map(item => <div key={item.label} className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">{item.label}</span><span className="usage-chart-tip-value">{format(item.value)}{suffix}</span></div>)}
       {tip.bucket.detail ? <div className="usage-chart-tip-more">{tip.bucket.detail}</div> : null}
     </ChartPopover> : null}
   </div>;

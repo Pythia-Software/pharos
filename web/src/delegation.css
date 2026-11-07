@@ -1100,7 +1100,7 @@
 
 /* Session navigation stays independent of event disclosure and clock editing. */
 button.lt-session-identity.is-interactive{border:0;border-radius:0;color:var(--ink);text-align:left;padding-top:0;padding-bottom:0;cursor:pointer;font:inherit}
-button.lt-session-identity.is-interactive strong{color:var(--accent)}
+.lt-session-identity[aria-current="true"] strong,button.lt-session-identity.is-interactive strong{color:var(--accent)}
 button.lt-session-identity.is-interactive:hover strong,button.lt-session-identity.is-interactive:focus-visible strong{text-decoration:underline}
 button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:-2px}
 .is-preview button.lt-session-identity.is-interactive{z-index:11}
@@ -1117,7 +1117,6 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 .lt-session-gutter{background:var(--panel)}
 .lt-session-fold-anchor{position:sticky;left:0;width:var(--lt-execution,175px);height:0;z-index:3;pointer-events:none}
 .lt-session-branches{position:absolute;left:0;top:0;fill:none;stroke:color-mix(in srgb,var(--muted) 55%,transparent);stroke-width:1;pointer-events:none}
-.lt-session-outline{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--ink)}
 .lt-session-fold{top:9px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;pointer-events:auto}
 .lt-session-fold button,.lt-session-fold .lt-preview-fold{width:20px;height:20px;min-width:0;padding:2px;background:transparent}
 .lt-session-fold .app-icon{width:13px;height:13px}
@@ -1146,10 +1145,13 @@ button.lt-session-identity.is-interactive:focus-visible{outline:2px solid var(--
 /* Session identity and selection are shared by the usage table and timeline. */
 .delegation-table tbody .delegation-label-cell{padding-top:0;padding-bottom:0}
 .delegation-node .lt-session-identity{position:relative;width:100%;max-width:330px}
-.session-fold{z-index:3;position:absolute;top:13px;width:20px;height:20px;padding:2px;background:transparent}
+.session-fold{z-index:3;position:absolute;top:13px;width:20px;height:20px;box-sizing:border-box;padding:2px;background:var(--panel);border:1px solid var(--line);border-radius:3px}
 .lt-session-identity[aria-current="true"]{cursor:default}
 .lt-session-root>summary,.lt-session-preview,.lt-session-empty-root{position:relative}
 .delegation-inbox-row.current::after,.delegation-lane-current .lt-session-root>summary::after,.delegation-lane-current .lt-session-preview::after,.delegation-lane-current .lt-session-empty-root::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 1px var(--accent);pointer-events:none;z-index:13}
 .is-preview .lt-session-identity[aria-current="true"]{z-index:11}
 .without-events .lt-session-node>summary,.without-events .lt-session-row,.without-events .delegation-axis.lt-resizable-axis{grid-template-columns:var(--lt-execution) var(--lt-time)}
-.delegation-ancestor .lt-session-identity:not(.is-interactive) strong{color:var(--muted)}
+.delegation-ancestor .lt-session-identity:not(.is-interactive):not([aria-current="true"]) strong{color:var(--muted)}
+.delegation-parallel.is-preview .delegation-lane-scroll{border:1px solid var(--line);border-radius:4px}
+
+.delegation-token-evidence { color: var(--muted); font-size: var(--fs-sm); margin: 8px 0; max-width: 85ch; }

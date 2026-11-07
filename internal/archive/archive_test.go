@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -1503,8 +1504,18 @@ func TestConductorSemanticEventsRepositoryAndPR(t *testing.T) {
 
 func TestSourceTogglePreservesOtherConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.toml")
-	source := "api_token = \"secret\" # keep\n\n[[sources]]\nname = \"one\"\nkind = \"canonical\"\npath = \"/tmp/one\"\nenabled = true\n\n[[sources]]\nname = \"two\"\nkind = \"canonical\"\npath = \"/tmp/two\"\nenabled = true\n"
+	// A table between two sources belongs to neither.
+	source := "api_token = \"secret\" # keep\n\n[[sources]]\nname = \"one\"\nkind = \"canonical\"\npath = \"/tmp/one\"\nenabled = true\n\n[findings]\nkept = true\n\n[[sources]]\nname = \"two\"\nkind = \"canonical\"\npath = \"/tmp/two\"\nenabled = true\n"
 	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSourceEnabled(path, "one", false); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := os.ReadFile(path); !strings.Contains(string(text), "path = \"/tmp/one\"\nenabled = false\n\n[findings]\nkept = true\n") {
+		t.Fatalf("pausing one changed the table after it:\n%s", text)
+	}
+	if err := SetSourceEnabled(path, "one", true); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetSourceEnabled(path, "two", false); err != nil {
@@ -1519,6 +1530,12 @@ func TestSourceTogglePreservesOtherConfig(t *testing.T) {
 	}
 	if config.APIToken != "secret" {
 		t.Fatal("root configuration was changed")
+	}
+	if err := RemoveSource(path, "one"); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := os.ReadFile(path); strings.Contains(string(text), "/tmp/one") || !strings.Contains(string(text), "[findings]\nkept = true\n\n[[sources]]\nname = \"two\"") {
+		t.Fatalf("removing one took more than its block:\n%s", text)
 	}
 }
 
@@ -1593,6 +1610,37 @@ func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 		// The page is the embedded shell, served without Python.
 		if body := response.Body.String(); response.Code != http.StatusOK || !strings.HasPrefix(body, "<!doctype html>") || !strings.Contains(body, "id=\"navigator\"") {
 			t.Errorf("GET %s: status %d, missing app UI", path, response.Code)
+		}
+	}
+	// The fixture serves files directly, so exercise the service allowlist too.
+	icons, err := assets.ReadDir("assets/data-guide-apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, icon := range icons {
+		if icon.IsDir() || !strings.HasSuffix(icon.Name(), ".png") {
+			continue
+		}
+		path := "/assets/data-guide-apps/" + icon.Name()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		expected, err := assets.ReadFile("assets/data-guide-apps/" + icon.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/png" || !bytes.Equal(response.Body.Bytes(), expected) {
+			t.Errorf("GET %s: status %d, missing application icon", path, response.Code)
+		}
+	}
+	for _, path := range []string{"/assets/data-guide.js", "/assets/data-guide.css"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Body.Len() == 0 || response.Header().Get("Content-Type") != uiAssets[path].contentType {
+			t.Errorf("GET %s: status %d, missing setup guide asset", path, response.Code)
 		}
 	}
 	// The browser fixture serves the asset directory directly. Check the live

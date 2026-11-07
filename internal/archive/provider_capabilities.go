@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"path"
 	"slices"
 	"strings"
 )
@@ -93,15 +94,41 @@ type providerCapability struct {
 
 // providerInfo is what the API tells people about a provider.
 type providerInfo struct {
-	Kind         string               `json:"kind"`
-	DisplayName  string               `json:"display_name"`
-	Setup        bool                 `json:"setup"`
+	Kind        string `json:"kind"`
+	DisplayName string `json:"display_name"`
+	Setup       bool   `json:"setup"`
+	// SetupWith is the tool setup shows it under; WhenFound, that setup
+	// lists it only when it is found here.
+	SetupWith  string `json:"setup_with,omitempty"`
+	WhenFound  bool   `json:"when_found,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	FolderHint string `json:"folder_hint,omitempty"`
+	// Locations are where looking in the usual places checks, home-relative
+	// ("~/.claude-*" for alternate profiles); Variables name folders that
+	// move them.
+	Locations []string `json:"locations,omitempty"`
+	Variables []string `json:"variables,omitempty"`
+	// Export says how to download a history kept in the cloud, which is
+	// imported rather than found.
+	Export       string               `json:"export,omitempty"`
 	Automatic    bool                 `json:"automatic"`
 	Capabilities []providerCapability `json:"capabilities"`
 }
 
 func (spec *providerSpec) info() providerInfo {
-	info := providerInfo{Kind: spec.Kind, DisplayName: spec.DisplayName, Setup: spec.Setup > 0, Automatic: spec.Automatic, Capabilities: []providerCapability{}}
+	info := providerInfo{Kind: spec.Kind, DisplayName: spec.DisplayName, Setup: spec.Setup > 0, SetupWith: spec.SetupWith, WhenFound: spec.OfferWhenFound,
+		Summary: spec.Summary, FolderHint: spec.FolderHint, Export: spec.Export, Automatic: spec.Automatic, Capabilities: []providerCapability{}}
+	if probe := spec.Probe; probe != nil {
+		for _, folder := range probe.Folders {
+			info.Locations = append(info.Locations, "~/"+folder)
+		}
+		if probe.Profiles != nil {
+			info.Locations = append(info.Locations, "~/"+path.Join(probe.Profiles.Dir, probe.Profiles.Prefix+"*"))
+		}
+		for _, variable := range probe.Env {
+			info.Variables = append(info.Variables, "$"+variable.Name)
+		}
+	}
 	for _, capability := range contentCapabilityList {
 		info.Capabilities = append(info.Capabilities, providerCapability{capability.Key, capability.Label, spec.Content.support(capability.Key), spec.Content.note(capability.Key)})
 	}
@@ -130,10 +157,8 @@ func providerInfos() []providerInfo {
 	for _, spec := range setupProviders() {
 		infos = append(infos, spec.info())
 	}
-	for index := range providerRegistry {
-		if spec := &providerRegistry[index]; spec.Setup == 0 {
-			infos = append(infos, spec.info())
-		}
+	for _, spec := range otherProviders() {
+		infos = append(infos, spec.info())
 	}
 	return infos
 }

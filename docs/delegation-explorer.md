@@ -88,6 +88,19 @@ inclusive values deduplicate shared paths across agents. Missing paths/results
 and first-path-only patch evidence show partial or unknown coverage. Shell edits
 without recorded file paths are outside this metric. Pages show up to 40 sessions;
 range text and navigation appear only when pagination is needed.
+Self tokens show usage attributed to that agent session. A harness result without
+request envelopes shows a reported minimum (`≥`), with its exact count in the
+tooltip. Hierarchy & usage cells append an asterisk (`≥116.8K*`), with a
+visible footnote explaining the minimum. Compact rows also show the marked minimum
+beside the session metadata. The reader header explains the coverage and links to the retained result. Missing
+input/cache/output categories leave API cost unknown. For sessions with delegates, aggregate remainders are
+shown as unallocated within the branch, excluded from Self tokens and Self API
+cost, and included once in Self + children. Leaf sessions retain their aggregate
+usage and API cost as Self. Inclusive token totals reconcile
+observations against ancestor remainders only within their own branch; the
+priced ledger remains unchanged. The API exposes `token_attribution` with direct,
+accounted, unallocated and observed-minimum tokens and source-message references.
+
 The read API still supports filtering and matching-only accounting for analysis.
 
 The timeline retains a full-workspace density overview while detail is zoomed.

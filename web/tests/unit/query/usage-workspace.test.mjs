@@ -19,6 +19,7 @@ import parallelism from "../../../../schemas/parallelism.schema.json";
 import rhythm from "../../../../schemas/rhythm.schema.json";
 import mcpCalls from "../../../../schemas/mcp_calls.schema.json";
 import agentEvents from "../../../../schemas/agent_events.schema.json";
+import sessionShape from "../../../../schemas/session_shape.schema.json";
 import agentEventMessages from "../../../../schemas/agent_event_messages.schema.json";
 import { queryURL, queryFromURL, readRollingWindow, resolveRollingQuery } from "../../../src/query-links";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDashboardReturn, usageDatasets, usageSearchQuery, usageTopics, usageWorkspaceURL } from "../../../src/usage-workspace-model.ts";
@@ -246,7 +247,7 @@ test("focused dashboard queries execute group thresholds and weighted measures",
 });
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
-  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const documents = {compactions, message_labels:messageLabels, model_requests: modelRequests, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, session_shape: sessionShape };
   const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true };
   for (const [dataset, document] of Object.entries(documents)) {
     const schema = loadSchema(document), cases = queryCases(dataset, document, []);
@@ -276,7 +277,7 @@ test("every Analyze dataset and dashboard topic has a reloadable route", t => {
   const originalLocation = globalThis.location;
   globalThis.location = new URL("http://localhost/");
   t.after(() => { globalThis.location = originalLocation; });
-  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages };
+  const schemas = {people_message_labels:peopleMessageLabels, compactions, message_labels:messageLabels, model_requests: modelRequests, tl1_attempts: tl1Attempts, usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism, rhythm, agent_events: agentEvents, agent_event_messages: agentEventMessages, session_shape: sessionShape };
   for (const [dataset, target] of Object.entries(usageDatasets)) assert.ok(schemas[dataset].fields.some(field => field.name === target.field), `${dataset}'s search entry point belongs to its own schema`);
   for (const dataset of Object.keys(usageDatasets)) for (const mode of ["query", "search"]) {
     const url = new URL(usageWorkspaceURL({ mode, dataset }), "http://localhost");
@@ -682,7 +683,7 @@ test("Aggregate time and cross-query links express their source scope", () => {
   const calls = new URL(links.find(link => link.label.includes("Tool calls")).href, "http://localhost");
   assert.equal(calls.searchParams.get("analyze_carbon"), "custom-assumptions");
   assert.deepEqual(decodeQueryStrict(calls.searchParams.get("q_tool_calls")).where, [{ field: "conversation_id", op: "=", value: "child" }]);
-  assert.equal(links.find(link => link.label === "Root conversation").href, "/conversation/root");
+  assert.equal(links.find(link => link.kind === "root").href, "/conversation/root");
   const human = usageRowLinks("writing", row, current).find(link => link.label.startsWith("Messages"));
   assert.deepEqual(decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages")).where, [{ field: "work_id", op: "=", value: "work" }]);
 });
@@ -708,7 +709,7 @@ test("MCP Details links use explicit request targets while workspace units link 
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: "invalid" }), []);
   assert.deepEqual(usageRowLinks("mcp_calls", { arguments_json: '{"query":"search terms"}' }), []);
   const [checkout] = usageRowLinks("parallelism", { counting: "workspace", location: "/worktree /+" });
-  assert.equal(checkout.label, "Works at this checkout");
+  assert.equal(checkout.label, "Workspaces at this checkout");
   const url = new URL(checkout.href, "http://localhost");
   assert.equal(url.pathname, "/library");
   assert.deepEqual(decodeQueryStrict(url.searchParams.get("q_library")).where, [{ field: "location", op: "=", value: "/worktree /+" }]);

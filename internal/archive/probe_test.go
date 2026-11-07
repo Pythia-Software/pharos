@@ -291,6 +291,8 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 		t.Setenv("XDG_DATA_HOME", "/profiles/data")
 		t.Setenv("CLINE_DATA_DIR", "/profiles/cline data")
 		t.Setenv("CLINE_DIR", "/profiles/cline")
+		t.Setenv("OPENCLAW_STATE_DIR", "/profiles/openclaw")
+		t.Setenv("HERMES_HOME", "/profiles/hermes")
 		override(t, &shellEnvCache.key, "")
 		override(t, &shellEnvCache.at, time.Time{})
 		override(t, &shellEnvCache.values, map[string]string{})
@@ -516,6 +518,100 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 	if source, _ := server.configuredSource("codex"); !source.Enabled {
 		t.Fatal("codex was not enabled in the running config")
 	}
+	// Sources says which tool each is, and which are this Mac's own.
+	if _, inventory := probeCall(t, server, http.MethodGet, "/api/sources", ""); !strings.Contains(jsonText(inventory["items"]), `"scope":"host"`) ||
+		!strings.Contains(jsonText(inventory["items"]), `"tool":"Claude Code"`) {
+		t.Fatalf("inventory = %v", inventory["items"])
+	}
+	// Removing one of this Mac's sources deletes its block and nothing else.
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 200 || result["removed"] != true {
+		t.Fatalf("remove = %d %v", code, result)
+	}
+	if text := probeReadText(t, host); strings.Contains(text, "claude-work") || strings.Count(text, "\n[[sources]]\n") != 2 || !strings.HasPrefix(text, "# Pharos sources for") {
+		t.Fatalf("host file after removal:\n%s", text)
+	}
+	if _, err := server.configuredSource("claude-work"); err == nil {
+		t.Fatal("the removed source is still running")
+	}
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 400 || !strings.Contains(firstString(result["error"]), "not found") {
+		t.Fatalf("second removal = %d %v", code, result)
+	}
+	// Told to check only a named folder, setup counts no new history in the
+	// usual places, which it would otherwise read.
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID1, "events.jsonl"), "{}\n")
+	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["new_sources"] != float64(1) {
+		t.Fatalf("new Copilot history: %v", status["new_sources"])
+	}
+	named := `{"kinds":["copilot"],"locations":[{"kind":"copilot","path":"` + filepath.Join(home, "elsewhere") + `"}],"only_locations":true}`
+	if code, report := probeCall(t, server, http.MethodPost, "/api/probe", named); code != 200 || report["new_sources"] != float64(0) {
+		t.Fatalf("named folders only = %d %v", code, report["new_sources"])
+	}
+	// A host source that replaces a library.toml one says so, since removing
+	// it brings that one back: here, reading again what was paused.
+	library := probeReadText(t, path) + "\n[[sources]]\nname = \"codex\"\nkind = \"codex\"\npath = \"/shared/codex\"\nenabled = true\n"
+	probePut(t, path, library)
+	if _, inventory := probeCall(t, server, http.MethodGet, "/api/sources", ""); !strings.Contains(jsonText(inventory["items"]), `"replaces":{"enabled":true,"path":"/shared/codex"}`) {
+		t.Fatalf("inventory = %v", inventory["items"])
+	}
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/sources/codex/remove", `{}`); code != 200 {
+		t.Fatal("remove codex", code)
+	}
+	if source, err := server.configuredSource("codex"); err != nil || source.Path != "/shared/codex" || !source.Enabled {
+		t.Fatalf("library codex = %+v %v", source, err)
+	}
+}
+
+// A downloaded export is imported by naming it: checked without parsing,
+// then written as one of this Mac's sources.
+func TestImportSourceChecksTheExport(t *testing.T) {
+	home := probeHome(t)
+	useHost(t, "host-a")
+	path := probeLibrary(t, "")
+	host := filepath.Join(filepath.Dir(path), "hosts", "host-a.toml")
+	server := probeServer(t, path)
+	zipped := filepath.Join(home, "Downloads", "chatgpt.zip")
+	if err := os.MkdirAll(filepath.Dir(zipped), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chatGPTZip(t, zipped, map[string]string{"conversations.json": "[]", "user.json": "{}"})
+	chatGPTZip(t, filepath.Join(home, "Downloads", "photos.zip"), map[string]string{"cat.jpg": "x"})
+	probePut(t, filepath.Join(home, "claude-export", "conversations.json"), "[]")
+	probePut(t, filepath.Join(home, "notes.txt"), "x")
+	for body, problem := range map[string]string{
+		`{"kind":"claude","path":"~/.claude"}`:                             "not a kind of export",
+		`{"kind":"chatgpt","path":"Downloads/chatgpt.zip"}`:                "absolute path",
+		`{"kind":"chatgpt","path":"~/Downloads/missing.zip"}`:              "nothing is at",
+		`{"kind":"chatgpt","path":"~/Downloads/photos.zip"}`:               "holds no conversations.json",
+		`{"kind":"chatgpt","path":"~/notes.txt"}`:                          "choose the ChatGPT export",
+		`{"kind":"claude-ai","path":"~/Downloads"}`:                        "choose the Claude.ai export",
+		`{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip","name":"a b"}`: "must start with",
+	} {
+		if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", body); code != 400 || !strings.Contains(firstString(result["error"]), problem) {
+			t.Fatalf("%s: %d %v", body, code, result)
+		}
+	}
+	if _, err := os.Stat(host); !os.IsNotExist(err) {
+		t.Fatalf("a rejected import wrote the host file: %v", err)
+	}
+	for _, body := range []string{`{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip"}`, `{"kind":"claude-ai","path":"~/claude-export"}`, `{"kind":"chatgpt","path":"` + filepath.Join(home, "claude-export", "conversations.json") + `"}`} {
+		if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", body); code != 200 || len(result["added"].([]any)) != 1 {
+			t.Fatalf("%s: %d %v", body, code, result)
+		}
+	}
+	// The same export again is not added twice; a second ChatGPT export gets
+	// a name of its own.
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", `{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip"}`); code != 200 || jsonText(result["added"]) != `[]` || !strings.Contains(jsonText(result["skipped"]), "already imported as chatgpt") {
+		t.Fatalf("again = %d %v", code, result)
+	}
+	text := probeReadText(t, host)
+	for _, fragment := range []string{"name = \"chatgpt\"\nkind = \"chatgpt\"\npath = \"~/Downloads/chatgpt.zip\"\nenabled = true", "name = \"claude-ai\"\nkind = \"claude-ai\"\npath = \"~/claude-export\"", "name = \"chatgpt-2\""} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("host file lacks %q:\n%s", fragment, text)
+		}
+	}
+	if source, err := server.configuredSource("claude-ai"); err != nil || !source.Enabled {
+		t.Fatalf("the import is not running: %+v %v", source, err)
+	}
 }
 
 func TestProbeAcceptRefusesPerUserConfig(t *testing.T) {
@@ -562,7 +658,7 @@ func TestProbeToolPresence(t *testing.T) {
 	if len(tools) != 5 {
 		t.Fatal("missed a common application or data folder", tools)
 	}
-	for index, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity"} {
+	for index, kind := range []string{"claude", "codex", "antigravity", "conductor", "tl1"} {
 		if tools[index].Kind != kind || tools[index].Path == "" {
 			t.Fatal("missing detection evidence", tools)
 		}
@@ -648,8 +744,27 @@ func TestProbeSelectedTools(t *testing.T) {
 			t.Fatal(candidate)
 		}
 	}
+	// Told where to look, it looks only there: not the usual places, nor the
+	// variables that move them.
+	request, _ = json.Marshal(ProbeSelection{Kinds: &[]string{"claude"}, Locations: []ProbeLocation{{Kind: "claude", Path: custom}}, OnlyLocations: true})
+	if code, result = probeCall(t, server, http.MethodPost, "/api/probe", string(request)); code != 200 || shellCalls != 1 ||
+		len(result["candidates"].([]any)) != 1 || !strings.Contains(jsonText(result["candidates"]), "chosen profile") || jsonText(result["environment"]) != `[]` {
+		t.Fatal("named folders only", code, shellCalls, result["candidates"])
+	}
+	// A folder picked because it holds the history is read as the folder the
+	// source reads.
+	for kind, chosen := range map[string]string{"claude": ".claude/projects", "zed": zedUserDir + "/threads", "cursor-cli": ".cursor/chats"} {
+		spec, _ := providerFor(kind)
+		if got := spec.Probe.Chosen(filepath.Join(home, chosen)); got != filepath.Dir(filepath.Join(home, chosen)) {
+			t.Fatal(kind, got)
+		}
+	}
 	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["claude"],"accept":["codex"]}`); code != 400 {
 		t.Fatal("accepted an unselected tool", code)
+	}
+	calls := shellCalls
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"only_locations":true,"accept":[]}`); code != 400 || shellCalls != calls {
+		t.Fatal("named folders only, with no tools, looked everywhere", code, shellCalls)
 	}
 	if _, err := os.Stat(hostConfigPath(server.Config())); !os.IsNotExist(err) {
 		t.Fatal("discovery changed source permissions", err)

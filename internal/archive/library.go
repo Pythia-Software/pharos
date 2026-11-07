@@ -492,7 +492,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	schedule := searchScheduleGate{}
-	var view, previews, parallelism *daemonPass
+	var view, previews, parallelism, shape *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
 			(*pass).end(err)
@@ -504,11 +504,16 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			*pass = c.beginPass(ctx, kind, triggerChained)
 		}
 	}
-	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
+	defer func() {
+		settle(&view, false, nil)
+		settle(&previews, false, nil)
+		settle(&parallelism, false, nil)
+		settle(&shape, false, nil)
+	}()
 	var originsAt time.Time
 	for {
 		workCtx := ctx
-		for _, active := range []*daemonPass{view, previews, parallelism} {
+		for _, active := range []*daemonPass{view, previews, parallelism, shape} {
 			if active.active() {
 				workCtx = active.context(ctx)
 				break
@@ -571,11 +576,22 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 					if err != nil && pass.Err() == nil {
 						fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
 					}
-					wait = 2 * time.Second
-					// Warming only reads; its operation is never published.
-					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-					warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
-					warm.end(nil)
+					// Then changed conversations' session shape, likewise.
+					begin(&shape, "maintenance.session-shape")
+					var shaped int
+					shape.runIO(pass, func(ctx context.Context) { shaped, err = c.refreshSessionShape(ctx, sessionShapeBatch, false) })
+					shape.worked(shaped)
+					settle(&shape, shaped > 0, err)
+					if err != nil || shaped == 0 {
+						if err != nil && pass.Err() == nil {
+							fmt.Fprintf(os.Stderr, "Session shape: %v\n", err)
+						}
+						wait = 2 * time.Second
+						// Warming only reads; its operation is never published.
+						warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
+						warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
+						warm.end(nil)
+					}
 				}
 			}
 		}

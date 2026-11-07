@@ -198,7 +198,7 @@ function trailingCard(id, scale = 1, window = 7) {
   const opened = new URL(cardDestination(recipe, instantiateRecipe(recipe, window, new Date(at)).query, { days: window, field: recipe.field, mode: "relative" }), "http://localhost");
   const state = { ...JSON.parse(opened.searchParams.get("analyze_chart")), view: "trend" };
   assert.deepEqual(state, { ...windowedChart(id, recipe.destination.chart, window), view: "trend" });
-  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.norm, state.split], [lookback, Boolean(trend.completeDays), true, "none"], id);
+  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.percentiles, state.split], [lookback, Boolean(trend.completeDays), ["mean"], "none"], id);
   const query = trendQuery(catalog, state, where, { now: at, zone });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(dashboardRows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
   assert.equal(built.error, undefined);
@@ -212,7 +212,7 @@ function trailingCard(id, scale = 1, window = 7) {
   });
   assert.ok(card.points.some(point => point > 0), `${id}: the fixture has values`);
   assert.equal(built.normPoints, card.points.slice(0, -1).filter(point => point !== null).length);
-  assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.norm * scale} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.references?.[0]?.value * scale} != baseline ${card.baseline}`);
 }
 test("human-messages-per-day and human-conversations-per-day: 7-day means over complete days, with their norms", () => {
   trailingCard("human-messages-per-day");
@@ -353,7 +353,7 @@ test("parallel-hours, parallel-active-weekday and parallel-weekday: agent hours 
 test("Parallelism names the settings its records carry, warns when they differ, and offers provider and model only under agent counting", () => {
   assert.equal(parallelism.request, undefined, "no built-under filter: the service serves only the saved settings' records");
   const workspace = { counting: "workspace", gap: 60 };
-  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns need agent counting (Count by Sessions)." });
+  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns require Count by Conversations." });
   assert.doesNotMatch(parallelismSettingsNote([{ counting: "agent", gap: 60 }], { counting: "agent", gap: 60 }).note, /need agent counting/);
   // Links are read with the shape, so a Provider link opened under
   // workspace counting draws the default breakdown instead of failing.
@@ -362,7 +362,7 @@ test("Parallelism names the settings its records carry, warns when they differ, 
   assert.equal(validAnalysisState(parallelismAnalysisCatalog("workspace"), provider), false, "the counting-specific catalog alone would reject it");
   assert.equal(normalizeAnalysis(parallelismAnalysisCatalog("workspace"), provider).split, "level_band");
   const stale = parallelismSettingsNote([{ counting: "agent", gap: 15 }], workspace);
-  assert.match(stale.note, /count top-level sessions and join turns across gaps up to 15 minutes/);
+  assert.match(stale.note, /count top-level conversations and join turns across gaps up to 15 minutes/);
   assert.match(stale.warning, /believes the saved settings count workspaces/);
   assert.match(parallelismSettingsNote([], workspace).note, /No records in range/);
   assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.provider, undefined);

@@ -67,6 +67,13 @@ export type Session = {
   end: number | null;
   subtree_start: number | null;
   subtree_end: number | null;
+  token_attribution?: {
+    accounted_tokens: number;
+    direct_tokens: number;
+    unallocated_tokens: number;
+    observed_minimum_tokens: number;
+    evidence?: {scope: string; total_tokens: number; message_id: string; conversation_id: string; workspace_id: string}[];
+  };
   self: Record<string, Metric>;
   all: Record<string, Metric>;
 };
@@ -280,6 +287,27 @@ async function readJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
 }
+export function metricText(metric: Metric | undefined, unit = "tokens") {
+  const value = formatted(metric?.value, unit);
+  if (metric?.value != null && metric.quality === "reported-minimum") {
+    // Do not round a lower bound upward (116,837 is not at least 117,000).
+    const scale = metric.value >= 1e9 ? 1e9 : metric.value >= 1e6 ? 1e6 : metric.value >= 1e3 ? 1e3 : 1;
+    const minimum = Math.floor(metric.value / scale * 10) / 10;
+    return `≥${minimum.toLocaleString("en-US", {maximumFractionDigits: 1})}${scale === 1e9 ? "B" : scale === 1e6 ? "M" : scale === 1e3 ? "K" : ""}`;
+  }
+  return metric?.value != null && metric.quality === "partial" ? `${value}+` : value;
+}
+export function tableMetricText(metric: Metric | undefined, unit = "tokens") {
+  return metricText(metric, unit) + (metric?.value != null && metric.quality === "reported-minimum" ? "*" : "");
+}
+export function tokenAttributionText(session: Session) {
+  const a = session.token_attribution;
+  if (!a) return "";
+  const parts: string[] = [];
+  if (a.observed_minimum_tokens > a.direct_tokens) parts.push(`${metricText(session.self.tokens)} tokens · Reported minimum; may cover only the last request. Full session usage unknown. Input/cache/output breakdown not recorded for this observation; API cost unavailable.`);
+  if (a.unallocated_tokens > 0) parts.push(`${formatted(a.unallocated_tokens)} tokens unallocated within this branch. Included in Self + children; child observations may overlap this amount. API cost for this remainder is included in the branch total.`);
+  return parts.join(" ");
+}
 export function cellTitle(metric: Metric, spec: Spec) {
   const raw = metric.value?.toLocaleString(undefined, { maximumFractionDigits: 6 });
   const shown = formatted(metric.value, spec.unit);
@@ -289,7 +317,7 @@ export function cellTitle(metric: Metric, spec: Spec) {
       : spec.unit === "date"
         ? `${localTime(metric.value)}\n`
         : `${raw} ${spec.unit}\n`;
-  return `${exact}${spec.definition}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
+  return `${exact}${spec.definition}${metric.quality === "reported-minimum" ? "\n* Reported minimum; may cover only the last request. Full session usage and token breakdown were not recorded." : ""}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
 }
 
 function ColumnPicker({
@@ -684,13 +712,15 @@ export function DelegationExplorer({
       .filter((m): m is Spec => !!m);
   }, [data, columnOrder]);
   const specs = orderedMetrics.filter((m) => columns.includes(m.id));
+  const reportedMinimumShown = rows.some(n => (compact || scope === "self" ? n.self : n.all).tokens?.quality === "reported-minimum");
   const sessionBranches = useMemo(() => timelineSessionBranches(rows), [rows]);
   const current =
     data?.focus.filter((n) => n.conversation_id === conversation) || [];
   const shownSession = current.find((n) => n.id === selected) || current[0];
   const currentSessionID = splitReader || single ? shownSession?.id : undefined;
-  const childSessions =
+  const conversationChildren =
     data?.focus.filter((n) => current.some((c) => c.id === n.parent_id)) || [];
+  const childSessions = conversationChildren.filter(n => n.parent_id === shownSession?.id);
   function externalURL(ref: Reference, message?: string) {
     const params = new URLSearchParams({ conversation: ref.conversation_id });
     if (message) params.set("message", message);
@@ -729,7 +759,7 @@ export function DelegationExplorer({
     if (!panel) return;
     const added: HTMLElement[] = [];
     const pending = new Map<string, Session[]>();
-    for (const n of childSessions) {
+    for (const n of conversationChildren) {
       const hasTranscript = n.external_child || n.conversation_id !== conversation ||
         n.self.messages?.value || n.self.requests?.value || n.self.calls?.value;
       if (!n.message_id || !hasTranscript) continue;
@@ -787,7 +817,6 @@ export function DelegationExplorer({
     >
       <h2>{shownSession.label}</h2>
       <small>
-        Session {shownSession.outline} ·{" "}
         {shownSession.provider} ·{" "}
         {shownSession.model || "model unknown"} ·{" "}
         {shownSession.effort || "unknown"}
@@ -811,17 +840,9 @@ export function DelegationExplorer({
                 {n.external_parent!.label}
               </button>
             ))}
-          {current.length > 0 && (
-            <span title="Reconciled usage of this conversation's sessions">
-              {formatted(
-                current.some((n) => n.self.tokens.value !== null)
-                  ? current.reduce(
-                      (sum, n) => sum + (n.self.tokens.value || 0),
-                      0,
-                    )
-                  : null,
-              )}{" "}
-              self tokens
+          {shownSession && (
+            <span title="Usage attributed to the selected agent session. Aggregate branch remainders are shown separately.">
+              {metricText(shownSession.self.tokens)} tokens · This agent session
             </span>
           )}
           {childSessions.length > 0 && (
@@ -835,7 +856,7 @@ export function DelegationExplorer({
                     <strong>{n.label}</strong>
                     <small>
                       {n.external_child ? "Another workspace · " : ""}
-                      {n.provider} · {formatted(n.self.tokens.value)} tokens ·{" "}
+                      {n.provider} · {metricText(n.self.tokens)} tokens ·{" "}
                       {formatted(n.self.clock.value, "ms")} evidence span
                     </small>
                   </button>
@@ -849,6 +870,10 @@ export function DelegationExplorer({
             </ViewDisclosure>
           )}
         </div>
+        {shownSession && tokenAttributionText(shownSession) && <p className="delegation-token-evidence">
+          {tokenAttributionText(shownSession)}{" "}
+          {shownSession.token_attribution?.evidence?.slice(0, 1).map(e => <a key={e.message_id} href={externalURL({workspace_id: e.workspace_id, conversation_id: e.conversation_id, label: "Token evidence", provider: shownSession.provider}, e.message_id)}>View token evidence</a>)}
+        </p>}
       </>,
       contextHost,
     );
@@ -873,9 +898,9 @@ export function DelegationExplorer({
       {context}
       {headingHost && createPortal(heading, headingHost)}
       {statsHost && createPortal(totals, statsHost)}
-      <section className={`delegation-panel${single ? " delegation-single" : ""}`} aria-label={single ? "Conversation views" : "Workspace sessions"}>
+      <section className={`delegation-panel${single ? " delegation-single" : ""}`} aria-label={single ? "Conversation views" : "Agent sessions"}>
         <div className="delegation-controls delegation-toolbar">
-          {!single && <span className="delegation-heading">Workspace Sessions</span>}
+          {!single && <span className="delegation-heading">Agent sessions</span>}
           <div
             className="delegation-tabs"
             role="tablist"
@@ -971,7 +996,6 @@ export function DelegationExplorer({
                   collapsed={collapsed}
                   toggle={toggle}
                   openNode={openNode}
-                  openTimeline={openTimeline}
                 />
               ) : !single && tab === "table" ? (
                 <>
@@ -984,7 +1008,7 @@ export function DelegationExplorer({
                         <thead>
                           <tr>
                             <th className="delegation-label-cell">
-                              <button onClick={showHierarchy} title="Show the session hierarchy">Session</button>
+                              <button onClick={showHierarchy} title="Show the agent session hierarchy">Session</button>
                             </th>
                             {specs.map(m => (
                               <th key={m.id} title={m.definition} aria-sort={mode === "rank" && sort === m.id ? direction === "desc" ? "descending" : "ascending" : "none"}>
@@ -993,7 +1017,7 @@ export function DelegationExplorer({
                                 </button>
                               </th>
                             ))}
-                            <th>Timeline</th>
+                            {!splitReader && <th>Timeline</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -1021,7 +1045,6 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      outline={n.outline}
                                       metadata={<>{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}<SessionAge start={n.start} prefix=" · " /></>}
                                       title={`${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
@@ -1064,27 +1087,21 @@ export function DelegationExplorer({
                                             ? `color-mix(in srgb, var(--delegation-tint) ${strength * 34}%, var(--panel))`
                                             : undefined,
                                         }}
-                                        title={cellTitle(metric, m)}
+                                        title={`${cellTitle(metric, m)}${family === "self" && tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}
                                       >
-                                        {formatted(metric.value, m.unit)}
-                                        {metric.quality === "partial" &&
-                                          metric.value != null && (
-                                            <span className="delegation-partial">
-                                              +
-                                            </span>
-                                          )}
+                                        {tableMetricText(metric, m.unit)}
                                       </td>
                                     );
                                   })}
-                                <td>
+                                {!splitReader && <td>
                                   <button type="button" className="delegation-timeline-button" aria-label={`View timeline for ${n.label}`} disabled={!sessionTimelineState(n, {})} onClick={() => openTimeline(n)} title="Show this session’s time span with its event rows expanded">View</button>
-                                </td>
+                                </td>}
                               </tr>
                             );
                           })}
                         </tbody>
                       </table>
-                      {!rows.length && <p>No sessions match these filters.</p>}
+                      {!rows.length && <p>No agent sessions match these filters.</p>}
                     </div>
                   </div>
                 </>
@@ -1109,6 +1126,9 @@ export function DelegationExplorer({
               ) : (
                 <p>No retained timestamps are available for a timeline.</p>
               )}
+              {!single && tab === "table" && reportedMinimumShown && (compact || specs.some(m => m.id === "tokens")) && <p className="delegation-token-evidence">
+                * Reported token minimum; may cover only the last request. Full session usage is unknown.
+              </p>}
               {(data.offset > 0 || !!data.next_cursor) && (
                 <div className="delegation-pagination">
                   <span>
@@ -1145,10 +1165,10 @@ export function DelegationExplorer({
               )}
               {!single && !compact && !splitReader && <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Metric definitions & evidence">
                 <p>
-                  Self is one execution. Self + children includes distinct
-                  ownership descendants. Workspace totals count each canonical
+                  Self counts one agent session. Self + children includes its
+                  delegated sub-agents. Workspace totals count each recorded
                   execution once. Unknown values are —; + denotes partial
-                  coverage. Last evidence is not proof of completion. Source
+                  coverage; * marks a reported token minimum that may cover only the last request. Last evidence is not proof of completion. Source
                   coverage and lifecycle boundaries may be incomplete.
                 </p>
                 {data.warnings.map((warning, i) => (
@@ -1165,39 +1185,37 @@ export function DelegationExplorer({
               </ViewDisclosure>}
             </>
           )}
-          {!data && !error && <p>Loading session analysis…</p>}
+          {!data && !error && <p>Loading agent session analysis…</p>}
         </div>
       </section>
     </>
   );
 }
 
-function InboxSessions({ rows, data, shown, collapsed, toggle, openNode, openTimeline }: {
+function InboxSessions({ rows, data, shown, collapsed, toggle, openNode }: {
   rows: Session[];
   data: Analysis;
   shown: string;
   collapsed: Set<string>;
   toggle: (node: Session) => void;
   openNode: (node: Session) => void;
-  openTimeline: (node: Session) => void;
 }) {
   const branches = timelineSessionBranches(rows);
   // Self usage keeps each session comparable; parallel children do not inflate its run time.
   const metrics = ["cost", "clock"].map(id => data.metrics.find(spec => spec.id === id)).filter((spec): spec is Spec => !!spec);
-  return <div className="delegation-inbox-list" role="table" aria-label="Session hierarchy and usage">
-    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Time to run" : spec.label}</span>)}<span role="columnheader">Timeline</span></div>
+  return <div className="delegation-inbox-list" role="table" aria-label="Agent session hierarchy and usage">
+    <div className="delegation-inbox-heading" role="row"><span role="columnheader">Agent session</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} outline={n.outline} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : ""}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 10}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
       </div>
       {metrics.map(spec => {
         const value = n.self[spec.id];
-        return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={value ? cellTitle(value, spec) : "No retained evidence"}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</span>;
+        return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={`${value ? cellTitle(value, spec) : "No retained evidence"}${tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}>{metricText(value, spec.unit)}</span>;
       })}
-      <span role="cell"><button type="button" className="delegation-timeline-button" aria-label={`View timeline for ${n.label}`} disabled={!sessionTimelineState(n, {})} onClick={() => openTimeline(n)}>View</button></span>
     </div>)}
-    {!rows.length && <p>No retained sessions.</p>}
+    {!rows.length && <p>No saved agent sessions.</p>}
   </div>;
 }
 
@@ -1722,7 +1740,7 @@ export function ParallelActivity({
           {!hideEvents && <span className="lt-column-heading">Events{columns.handle('events')}</span>}
           <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=>cutLabels.hiddenTicks.has(i)?null:<small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}{windowScale.cuts.map((cut,i)=><span key={cut.end} className="lt-idle-cut" style={{left:`${cut.fraction*100}%`}} title={`Nothing ran for ${duration(cut.end-cut.start)}; resumed ${localTime(cut.end)}`}>{cutLabels.labelled.has(i)?<time dateTime={new Date(cut.end).toISOString()}><b>{resumeTime.format(new Date(cut.end))}</b>+{idleDuration(cut.end-cut.start)}</time>:null}</span>)}</div>
         </div>:<div className="delegation-axis">
-          <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Session</span><span>Events</span></>:"Session"}</span>
+          <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Agent session</span><span>Events</span></>:"Agent session"}</span>
           <div ref={clock} {...brushHandlers}>
             {ticks.map((tick, i) => (
               <small key={i} style={{ left: `${i/(ticks.length-1)*100}%` }}>
@@ -1753,7 +1771,7 @@ export function ParallelActivity({
             n.start <= range[1] &&
             n.end >= range[0];
           if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} outline={n.outline} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${n.provider} · ${n.model||"model not recorded"}`} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={timeline?()=>openNode(n):undefined}
               sourceHref={timeline?item=>sourceHref(n,item):undefined}
               events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
@@ -1798,7 +1816,7 @@ export function ParallelActivity({
                   onClick={() => openNode(n)}
                 >
                   <strong>
-                    {n.outline} · {n.label}
+                    {n.label}
                   </strong>
                   <small>
                     {n.provider} · {n.model || "unknown model"}
@@ -1902,7 +1920,7 @@ export function ParallelActivity({
         />
       )}
       {selected && !previewOnly && (
-        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected session · inferred evidence episodes">
+        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected agent session · estimated activity periods">
           <p>
             Clusters use tool/request timestamps and the first and last session
             message timestamps. A gap over 30 minutes starts a new cluster;
@@ -2012,7 +2030,7 @@ function ActivityPopover({
           <Icon name="close" />
         </button>
       </div>
-      <small>Session {node.outline} · {node.label}</small>
+      <small>Session {node.label}</small>
       <button ref={action} className="primary delegation-event-jump" onClick={jump}>
         {mark.count > 1 ? "Jump to first tool call" : "Jump to tool call"} ↗
       </button>

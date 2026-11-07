@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { postQueryRows } from "./query-transport";
 import { useEffect, useState } from "react";
 import type { WhereTerm } from "@pythia-software/query-table-core";
@@ -74,7 +75,7 @@ export function AgentEventExamples({ where, queryURL }: { where: WhereTerm[]; qu
   const rows = interleaveByKind(candidates, shown);
   return <section className="agent-event-examples" aria-busy={loading}>
     <header className="agent-event-examples-header">
-      <h3>Events to read</h3>
+      <h3>Events to read <DataReadinessIndicator id="events:examples" title="Events to read" dataset="agent_events" query={{where}} /></h3>
       <p className="muted">The events the model is most confident about, for the current filters. Select a column, bar or key above to narrow them.</p>
     </header>
     {error ? <p className="query-table-error" role="alert">{error}</p> : null}

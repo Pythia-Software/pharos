@@ -76,7 +76,7 @@ test("options a measure cannot use move to the nearest one, and say why", () => 
     [{ metric: "average_fanout", split: "none", period: "days", days: 3 }, { period: "day" }, /several periods would add/],
     [{ metric: "average_fanout", split: "none", period: "hours", hours: 3 }, { period: "hour" }, /several periods would add/],
     [{ metric: "cost", split: "type" }, { split: "provider" }, /Token type splits tokens only/],
-    [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no norm/],
+    [{ metric: "tokens", split: "provider", share: true, norm: true }, { norm: false }, /Shares have no reference level/],
     [{ metric: "tokens", split: "none", display: "cumulative", norm: true }, { norm: false }, /running totals/],
     [{ metric: "cache_read_share", split: "provider", norm: true }, { norm: false }, /no total across groups/],
   ];
@@ -168,7 +168,7 @@ test("values without zeroes leave out periods with nothing drawn, and zeroes fro
   assert.deepEqual(draw({ ...state, nonzero: true, share: true }).built.buckets.length, draw({ ...state, share: true }).built.buckets.length);
   const normed = { ...base, metric: "tokens", split: "none", norm: true, normPeriods: 20 };
   const [zeroes, without] = [draw(normed).built, draw({ ...normed, nonzero: true }).built];
-  assert.ok(without.normPoints < zeroes.normPoints && without.norm > zeroes.norm);
+  assert.ok(without.normPoints < zeroes.normPoints && without.references?.[0]?.value > zeroes.references?.[0]?.value);
   assert.equal(validAnalysisState(catalog, { ...state, nonzero: "yes" }), false);
 });
 
@@ -246,18 +246,18 @@ test("a change applies to the state as asked for: old names never override it, a
     assert.deepEqual([values.metric, values.share], [alias === "percent" ? "tokens" : "cost", false], `${alias}: Values takes effect at once`);
     assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { split: "model_family" })).share, true, `${alias}: other changes keep the shares`);
   }
-  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", norm: true };
+  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] };
   const ratio = changeState(catalog, asked, { metric: "cache_read_share" });
   assert.deepEqual(["share", "rollingOp", "norm"].map(key => normalizeAnalysis(catalog, ratio)[key]), [false, "mean", false], "drawn without what the ratio cannot use");
   assert.equal(trendAdjustments(catalog, ratio).length, 3, "and each change is explained");
   const back = changeState(catalog, ratio, { metric: "tokens" });
-  assert.deepEqual(["share", "rollingOp", "norm"].map(key => back[key]), [true, "sum", true], "all three are still saved");
+  assert.deepEqual(["share", "rollingOp", "percentiles"].map(key => back[key]), [true, "sum", ["mean"]], "all three are still saved");
   assert.deepEqual(normalizeAnalysis(catalog, back), normalizeAnalysis(catalog, asked), "and tokens draws exactly as before");
-  // Shares have no norm, so without them the saved norm draws again.
+  // Shares have no reference level, so without them the saved mean draws again.
   assert.equal(normalizeAnalysis(catalog, changeState(catalog, back, { share: false })).norm, true);
   // A visit to Compare keeps the trend's own settings.
   const returned = switchView(catalog, switchView(catalog, asked, "compare"), "trend");
-  assert.deepEqual(["share", "rollingOp", "norm", "rollingPeriods"].map(key => returned[key]), [true, "sum", true, 7]);
+  assert.deepEqual(["share", "rollingOp", "percentiles", "rollingPeriods"].map(key => returned[key]), [true, "sum", ["mean"], 7]);
 });
 
 test("a share is of every group in the filters; a legend selection only chooses what is drawn, in the trend and in Compare", () => {
@@ -336,7 +336,7 @@ test("a group only smoothing or norm history holds is listed in Other, so series
   const state = { ...base, metric: "tokens", rollingPeriods: 7, norm: true };
   const byProvider = draw({ ...state, split: "provider" }, { where: week, data }).built, total = draw({ ...state, split: "none" }, { where: week, data }).built;
   assert.deepEqual(byProvider.series.find(item => item.key === "other")?.foldedValues, ["tl1"], "Other lists the history-only group");
-  assert.ok(Math.abs(byProvider.norm - total.norm) < 1e-9, `norm by provider ${byProvider.norm} != ${total.norm}`);
+  assert.ok(Math.abs(byProvider.references?.[0]?.value - total.references?.[0]?.value) < 1e-9, `norm by provider ${byProvider.references?.[0]?.value} != ${total.references?.[0]?.value}`);
   assert.ok(total.buckets.some(bucket => bucket.values.total > 0));
   byProvider.buckets.forEach((bucket, index) => {
     const stacked = byProvider.series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);

@@ -30,6 +30,7 @@
     "gemini-3.8-flash": { "provider": "google", "class": "Flash", "color": "#669cf6" },
     "gemini-omni-1.2-flash": { "provider": "google", "class": "Flash", "color": "#3d7ce5" },
     "gemini-4-argon": { "provider": "google", "class": "Gemini", "color": "#174ea6" },
+    "gemini-4-argon-d": { "provider": "google", "class": "Gemini", "color": "#1d5db5" },
     "gemini-nano-banana-2.1": { "provider": "google", "class": "Nano Banana", "color": "#2f6ad0" },
     "gpt-5.3-codex": { "provider": "openai", "class": "Codex", "color": "#087e62" },
     "gpt-5.3-codex-spark": { "provider": "openai", "class": "Codex", "color": "#35b397" },

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { safeURL, boundedLog, changeTags, pendingSubmission, normalizeEntry } from "../../src/uifeedback/model.ts";
-import { annotationForUpload, restoreReview } from "../../src/uifeedback/pharos-model.ts";
+import { annotationForUpload, createAskFeedbackSender, feedbackReceipt, restoreReview } from "../../src/uifeedback/pharos-model.ts";
 
 test("annotation URLs preserve routing while excluding credentials and login tokens", () => {
   assert.equal(safeURL("http://user:secret@localhost:18765/library?q=filter&token=private&access_token=other#secret"), "http://localhost:18765/library?q=filter");
@@ -56,4 +56,61 @@ test("annotation attachments and captured URLs follow each annotation's opt-in",
   const second = annotationForUpload({ ...base, id: "b", include_url: true, url: "http://localhost/analyze?q=second", created_at: "2026-10-26T02:00:00Z" });
   assert.equal(first.url, "http://localhost/library?q=first"); assert.equal(second.url, "http://localhost/analyze?q=second");
   assert.equal(first.captured_at, base.created_at); assert.equal(first.screenshot, screenshot); assert.equal(second.screenshot, undefined);
+});
+
+
+test("Ask feedback sends survive editor remounts and reconcile confirmed outcomes before retrying", async () => {
+  const receipts = new Map(), pending = new Map(), requests = [];
+  const entered = Promise.withResolvers(), delivered = Promise.withResolvers();
+  let sequence = 0;
+  const sender = createAskFeedbackSender({
+    prepare: async (id, payload) => {
+      if (receipts.has(id)) return {status:"sent",receipt:receipts.get(id)};
+      const submission = pendingSubmission(payload, pending.get(id) ?? null, () => `report-${++sequence}`);
+      pending.set(id, submission); return {status:"pending",submission};
+    },
+    submit: async submission => {requests.push(submission); entered.resolve(); await delivered.promise;},
+    complete: async (id, submission) => {receipts.set(id,feedbackReceipt(submission)); pending.delete(id);},
+  });
+  const edited = {version:1,application:{name:"Pharos"},kind:"feedback",comment:"The edited report actually approved by the user.",email:"person@example.test",annotations:[],diagnostics:{service:"Only attached to the submission"}};
+  const first = sender.send("proposal", edited);
+  await entered.promise;
+  const remounted = sender.pending("proposal");
+  assert.equal(remounted, first, "a replacement editor observes the in-flight send");
+  assert.equal(sender.send("proposal", {...edited,comment:"A stale replacement draft"}), first, "another approval cannot start a second in-flight report");
+  delivered.resolve();
+  const outcome = await remounted;
+  assert.equal(requests.length,1);
+  assert.equal(outcome.receipt.comment,edited.comment);
+  assert.equal(outcome.receipt.kind,edited.kind);
+  assert.equal(outcome.receipt.diagnostics,undefined, "receipts keep submitted text without retaining diagnostic attachments");
+  assert.equal(sender.pending("proposal"),undefined);
+  const restored = await sender.send("proposal",{...edited,comment:"The original generated proposal"});
+  assert.deepEqual(restored,outcome,"approval reconciles the saved receipt instead of replacing it with the current draft");
+  assert.equal(requests.length,1);
+});
+
+test("Ask feedback retains retry identity after a received report's receipt cannot be saved", async () => {
+  let pending = null, attempts = 0;
+  const requests = [];
+  const sender = createAskFeedbackSender({
+    prepare: async (_id,payload) => ({status:"pending",submission:pending=pendingSubmission(payload,pending,()=>`report-${requests.length+1}`)}),
+    submit: async submission => {requests.push(submission.id);},
+    complete: async () => {if (++attempts===1) throw new Error("Receipt storage unavailable");},
+  });
+  const payload={version:1,application:{name:"Pharos"},kind:"feature",comment:"Add export",annotations:[]};
+  await assert.rejects(sender.send("proposal",payload),/Receipt storage unavailable/);
+  assert.equal(sender.pending("proposal"),undefined,"a failed save must allow an explicit retry");
+  await sender.send("proposal",payload);
+  assert.equal(requests.length,2);
+  assert.equal(requests[0],requests[1],"retry confirms the same report even after the first network request succeeded");
+});
+
+test("Ask feedback honors a persisted discard before executing any submission", async () => {
+  const sender=createAskFeedbackSender({
+    prepare:async()=>({status:"discarded"}),
+    submit:async()=>assert.fail("a discarded proposal must not submit"),
+    complete:async()=>assert.fail("a discarded proposal must not acquire a receipt"),
+  });
+  assert.deepEqual(await sender.send("proposal",{}),{status:"discarded"});
 });

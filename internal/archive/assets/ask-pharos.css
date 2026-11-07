@@ -384,3 +384,7 @@ main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
 #pharos-ask .pharos-work-preview-line+.pharos-work-preview-line{color:var(--pharos-muted)}
 #pharos-ask .pharos-work-preview-line span+span::before{content:"·";margin:0 6px;color:var(--pharos-muted)}
 #pharos-ask .pharos-work-preview-status{margin:0;color:var(--pharos-muted)}
+
+#pharos-ask .pharos-feedback { margin-top:12px; }
+#pharos-ask .pharos-product .uifeedback-inline textarea { min-height:100px; margin:0; padding:8px; border:1px solid var(--pharos-line); border-radius:4px; background:var(--pharos-bg); font:inherit; resize:vertical; overflow:auto; }
+#pharos-ask .pharos-product .uifeedback-inline .primary { color:var(--panel); }

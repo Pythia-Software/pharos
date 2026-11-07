@@ -1292,6 +1292,51 @@ enum PageZoom {
     }
 }
 
+/// Bridge permission is narrower than navigation permission. Only WebKit's
+/// actual main-frame request at this application's HTTP(S) origin is trusted.
+/// Foundation-only so the native harness can exercise routing with fake effects.
+enum NativeBridgeSender {
+    enum Handler: String, CaseIterable {
+        case library = "pharosLibrary"
+        case updates = "pharosUpdates"
+        case clipboard = "pharosClipboard"
+        case menuBar = "pharosMenuBar"
+        case window = "pharosWindow"
+
+        var replies: Bool {
+            switch self {
+            case .library, .updates, .clipboard: return true
+            case .menuBar, .window: return false
+            }
+        }
+    }
+
+    static func allows(expectedOrigin: URL, senderURL: URL?, isMainFrame: Bool) -> Bool {
+        guard isMainFrame, let senderURL,
+              let scheme = expectedOrigin.scheme, scheme == "http" || scheme == "https",
+              let host = expectedOrigin.host, !host.isEmpty,
+              expectedOrigin.port.map({ (1...65535).contains($0) }) ?? true else { return false }
+        return senderURL.scheme == scheme && senderURL.host == host && senderURL.port == expectedOrigin.port
+    }
+
+    /// Keep all effects behind this gate, including effects that finish later.
+    /// Rejections are synchronous; accepted actions own their existing replies.
+    static func dispatch(
+        name: String, expectedOrigin: URL, senderURL: URL?, isMainFrame: Bool,
+        replying: Bool, reject: (String) -> Void = { _ in }, receive: (Handler) -> Void
+    ) {
+        guard allows(expectedOrigin: expectedOrigin, senderURL: senderURL, isMainFrame: isMainFrame) else {
+            reject("Native actions must come from the Pharos app's main window document.")
+            return
+        }
+        guard let handler = Handler(rawValue: name), handler.replies == replying else {
+            reject("Unknown native message handler.")
+            return
+        }
+        receive(handler)
+    }
+}
+
 struct ArchiveWebView: NSViewRepresentable {
     let url: URL
     let service: ArchiveService
@@ -1300,8 +1345,8 @@ struct ArchiveWebView: NSViewRepresentable {
     /// Native actions for the page. `pharosLibrary` takes {"action": "eject"};
     /// the page offers Eject only when this handler exists and otherwise says
     /// how to eject in Finder.
-    static let libraryHandler = "pharosLibrary"
-    static let updateHandler = "pharosUpdates"
+    static let libraryHandler = NativeBridgeSender.Handler.library.rawValue
+    static let updateHandler = NativeBridgeSender.Handler.updates.rawValue
 
     // WKWebView has no `-webkit-app-region`, so the page reports presses on
     // the app header's empty space and the window drags or zooms natively.
@@ -1369,7 +1414,7 @@ struct ArchiveWebView: NSViewRepresentable {
       }, true);
     })();
     """
-    static let windowMessageName = "pharosWindow"
+    static let windowMessageName = NativeBridgeSender.Handler.window.rawValue
 
     /// Sets the page's `--pharos-zoom` before it first draws; the web view
     /// replaces it whenever the zoom changes.
@@ -1562,44 +1607,44 @@ struct ArchiveWebView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let webView else { return }
-            if message.name == "pharosMenuBar" {
-                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
-                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
-                      let settings = message.body as? [String: Any] else { return }
-                if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
-                service?.menuBar.applyPreferences(settings)
-                return
-            }
-            if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
-                webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
-                // Only the service's own page may offer to open files on this Mac.
-                let page = message.frameInfo.request.url
-                let ownPage = message.frameInfo.isMainFrame && page?.scheme == origin.scheme && page?.host == origin.host && page?.port == origin.port
-                webView.contextFile = ownPage ? ArchiveWKWebView.ContextFile(body["contextFile"]) : nil
-                webView.pageActions = body["pageActions"] as? Bool == true
-                return
-            }
-            if let center = (message.body as? [String: Any])?["headerCenter"] as? Double {
-                headerCenter = center
-                publishHeaderCenter()
-                return
-            }
-            if let background = (message.body as? [String: Any])?["background"] as? String {
-                if let color = Self.color(css: background) { webView.underPageBackgroundColor = color }
-                return
-            }
-            guard let window = webView.window, let action = message.body as? String else { return }
-            switch action {
-            case "drag":
-                if let event = webView.lastMouseDown { window.performDrag(with: event) }
-            case "doubleClick":
-                switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
-                case "Minimize": window.performMiniaturize(nil)
-                case "None": break
-                default: window.performZoom(nil)
+            NativeBridgeSender.dispatch(
+                name: message.name, expectedOrigin: origin, senderURL: message.frameInfo.request.url,
+                isMainFrame: message.frameInfo.isMainFrame, replying: false
+            ) { handler in
+                guard let webView else { return }
+                if handler == .menuBar {
+                    guard let settings = message.body as? [String: Any] else { return }
+                    if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
+                    service?.menuBar.applyPreferences(settings)
+                    return
                 }
-            default: break
+                if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
+                    webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
+                    webView.contextFile = ArchiveWKWebView.ContextFile(body["contextFile"])
+                    webView.pageActions = body["pageActions"] as? Bool == true
+                    return
+                }
+                if let center = (message.body as? [String: Any])?["headerCenter"] as? Double {
+                    headerCenter = center
+                    publishHeaderCenter()
+                    return
+                }
+                if let background = (message.body as? [String: Any])?["background"] as? String {
+                    if let color = Self.color(css: background) { webView.underPageBackgroundColor = color }
+                    return
+                }
+                guard let window = webView.window, let action = message.body as? String else { return }
+                switch action {
+                case "drag":
+                    if let event = webView.lastMouseDown { window.performDrag(with: event) }
+                case "doubleClick":
+                    switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+                    case "Minimize": window.performMiniaturize(nil)
+                    case "None": break
+                    default: window.performZoom(nil)
+                    }
+                default: break
+                }
             }
         }
 
@@ -1622,53 +1667,63 @@ struct ArchiveWebView: NSViewRepresentable {
             didReceive message: WKScriptMessage,
             replyHandler: @escaping (Any?, String?) -> Void
         ) {
-            if message.name == ArchiveWebView.updateHandler {
-                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
-                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
-                      let updates else {
-                    replyHandler(nil, "Updates are available only from the Pharos app."); return
-                }
-                switch (message.body as? [String: Any])?["action"] as? String {
-                case "status": replyHandler(updates.headerState.dictionary, nil)
-                case "install":
-                    guard updates.installFromHeader() else {
-                        replyHandler(nil, "This update is no longer ready. Use Check for Updates in the Pharos menu."); return
+            NativeBridgeSender.dispatch(
+                name: message.name, expectedOrigin: origin, senderURL: message.frameInfo.request.url,
+                isMainFrame: message.frameInfo.isMainFrame, replying: true,
+                reject: { replyHandler(nil, $0) }
+            ) { handler in
+                switch handler {
+                case .updates:
+                    guard let updates else {
+                        replyHandler(nil, "Updates are available only from the Pharos app."); return
                     }
-                    replyHandler(updates.headerState.dictionary, nil)
-                default: replyHandler(nil, "Unknown update action.")
+                    switch (message.body as? [String: Any])?["action"] as? String {
+                    case "status": replyHandler(updates.headerState.dictionary, nil)
+                    case "install":
+                        guard updates.installFromHeader() else {
+                            replyHandler(nil, "This update is no longer ready. Use Check for Updates in the Pharos menu."); return
+                        }
+                        replyHandler(updates.headerState.dictionary, nil)
+                    default: replyHandler(nil, "Unknown update action.")
+                    }
+                case .library:
+                    library(message.body, replyHandler: replyHandler)
+                case .clipboard:
+                    guard let text = message.body as? String else {
+                        replyHandler(nil, "Clipboard content must be text.")
+                        return
+                    }
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    if pasteboard.setString(text, forType: .string) {
+                        replyHandler(true, nil)
+                    } else {
+                        replyHandler(nil, "Could not write to the system clipboard.")
+                    }
+                case .menuBar, .window:
+                    // These names are registered only for one-way messages.
+                    break
                 }
-                return
-            }
-            if message.name == ArchiveWebView.libraryHandler {
-                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
-                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port else {
-                    replyHandler(nil, "Library actions must come from the Pharos window.")
-                    return
-                }
-                library(message.body, replyHandler: replyHandler)
-                return
-            }
-            guard let text = message.body as? String else {
-                replyHandler(nil, "Clipboard content must be text.")
-                return
-            }
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if pasteboard.setString(text, forType: .string) {
-                replyHandler(true, nil)
-            } else {
-                replyHandler(nil, "Could not write to the system clipboard.")
             }
         }
 
         private func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
             if let object = body as? [String: Any], object["action"] as? String == "chooseFolder" {
+                // The purposes and messages match pickerPurposes in application.go.
+                let purpose = object["purpose"] as? String ?? "library"
                 let picker = NSOpenPanel()
                 picker.canChooseDirectories = true
-                picker.canChooseFiles = false
+                picker.canChooseFiles = purpose == "export"
                 picker.allowsMultipleSelection = false
-                picker.canCreateDirectories = true
-                picker.message = "Choose a Pharos library or a parent folder for a new library."
+                picker.canCreateDirectories = purpose == "library"
+                switch purpose {
+                case "source":
+                    picker.message = "Choose the folder that holds this tool’s conversations."
+                case "export":
+                    picker.message = "Choose the export you downloaded: its ZIP, its conversations.json, or the folder it unzips to."
+                default:
+                    picker.message = "Choose a Pharos library or a parent folder for a new library."
+                }
                 picker.begin { response in replyHandler(response == .OK ? picker.url?.path : nil, nil) }
                 return
             }

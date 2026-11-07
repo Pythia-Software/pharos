@@ -25,7 +25,7 @@
   {
    "id": "tool-failures",
    "label": "Failing tool calls",
-   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools"],
+   "pages": ["analyze/calls","analyze/tools","analyze/query/tool_calls","analyze/query/tools","analyze/session_shape","analyze/query/session_shape"],
    "signals": ["tools.failures"]
   },
   {
@@ -66,7 +66,7 @@
   },
   {
    "id": "delegation",
-   "label": "Subagents and delegation",
+   "label": "Sub-agents and delegation",
    "pages": ["work","analyze/tokens"],
    "signals": ["delegation.agents"]
   },
@@ -91,7 +91,7 @@
   {
    "id": "writing",
    "label": "My writing and steering",
-   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages"],
+   "pages": ["analyze/human","analyze/query/writing","analyze/query/writing_messages","analyze/session_shape"],
    "signals": ["writing.volume","writing.back_and_forth"]
   },
   {
@@ -289,7 +289,7 @@
    "area": "delegation",
    "form": "understand",
    "prior": 0.9,
-   "variants": ["How much of my work do subagents do, and does it help?","When do my agents delegate, and what does it cost?"]
+   "variants": ["How much of my work do sub-agents do, and does it help?","When do my agents delegate, and what does it cost?"]
   },
   {
    "id": "parallel-pattern",

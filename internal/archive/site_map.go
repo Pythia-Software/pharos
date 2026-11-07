@@ -131,8 +131,9 @@ type siteAnalyze struct {
 	Absent       string         `json:"absent"`
 	Fallback     string         `json:"fallback"`
 	Labels       struct {
-		View   map[string]string `json:"view"`
-		Reduce map[string]string `json:"reduce"`
+		View        map[string]string `json:"view"`
+		Reduce      map[string]string `json:"reduce"`
+		Percentiles map[string]string `json:"percentiles"`
 	} `json:"labels"`
 	Dashboards map[string]*siteDashboard `json:"dashboards"`
 }
@@ -187,6 +188,12 @@ type siteView struct {
 	Domains  map[string][]any       `json:"domains"`
 	Numeric  map[string]siteNumeric `json:"numeric"`
 	Rules    []siteRule             `json:"rules"`
+	// The display a catalog that chooses its charts draws, by the given
+	// options' values (metric, then split).
+	ChosenDisplay *struct {
+		Given  []string `json:"given"`
+		Values any      `json:"values"`
+	} `json:"chosen_display"`
 }
 
 type siteNumeric struct {
@@ -196,8 +203,12 @@ type siteNumeric struct {
 	MaxValues *float64 `json:"max_values"`
 }
 
+// A list rule (List) holds a list of its domain's values, such as the %ile
+// control's levels: each value stays when every constraint allows it, in
+// the domain's order, and a missing list is left to the page.
 type siteRule struct {
 	Option      string `json:"option"`
+	List        bool   `json:"list"`
 	Fill        any    `json:"fill"`
 	Constraints []struct {
 		Given   []string `json:"given"`
@@ -631,6 +642,23 @@ func (site *siteMap) judge(d *siteDashboard, chart map[string]any) (string, *cha
 // the value is accepted.
 func (view *siteView) checkValue(name string, value any) string {
 	numeric, hasNumeric := view.Numeric[name]
+	if view.listRule(name) != nil {
+		items, ok := value.([]any)
+		if !ok {
+			return fmt.Sprintf("%s must be a list of %s", name, strings.Join(siteStrings(view.Domains[name]), ", "))
+		}
+		seen := map[string]bool{}
+		for _, item := range items {
+			if !listHolds(any(view.Domains[name]), item) {
+				return fmt.Sprintf("%s is not one of %s", compactJSON(item), strings.Join(siteStrings(view.Domains[name]), ", "))
+			}
+			if seen[siteString(item)] {
+				return fmt.Sprintf("%s holds %s twice", name, compactJSON(item))
+			}
+			seen[siteString(item)] = true
+		}
+		return ""
+	}
 	if name == "selection" {
 		limit := 0.0
 		if hasNumeric && numeric.MaxValues != nil {
@@ -684,6 +712,16 @@ func (n siteNumeric) describe() string {
 	return kind
 }
 
+// listRule is the view's list rule for a key, if it has one.
+func (view *siteView) listRule(name string) *siteRule {
+	for index := range view.Rules {
+		if view.Rules[index].List && view.Rules[index].Option == name {
+			return &view.Rules[index]
+		}
+	}
+	return nil
+}
+
 // multiplePeriods: the merge over fill_defaults has period hours with
 // hours > 1, or days with days > 1.
 func (site *siteMap) multiplePeriods(merged map[string]any) bool {
@@ -734,6 +772,27 @@ func (site *siteMap) drawChart(view *siteView, merged map[string]any) map[string
 	drawn := map[string]any{}
 	context := ruleContext{site: site, merged: merged, drawn: drawn}
 	for _, rule := range view.Rules {
+		if rule.List {
+			asked, ok := merged[rule.Option].([]any)
+			if !ok {
+				continue
+			}
+			kept := []any{}
+			for _, item := range view.Domains[rule.Option] {
+				allowed := listHolds(any(asked), item)
+				for _, constraint := range rule.Constraints {
+					if !allowed {
+						break
+					}
+					allowed = listHolds(lookupTable(constraint.Allowed, context.values(constraint.Given, nil, false)), item)
+				}
+				if allowed {
+					kept = append(kept, item)
+				}
+			}
+			drawn[rule.Option] = kept
+			continue
+		}
 		own, present := merged[rule.Option]
 		present = present && own != nil
 		fallback := func() any {

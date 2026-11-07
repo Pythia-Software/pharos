@@ -65,7 +65,7 @@ function askRetryDraft({turns = [], draft = ''}) {
   const messages=[];
   for(const turn of turns){
     const prompt='You:\n'+turn.prompt;
-    const reply=[turn.reply,turn.clarification?.question,
+    const reply=[turn.reply,turn.feedback&&'Feedback draft ('+turn.feedback.kind+'):\n'+turn.feedback.comment,turn.clarification?.question,
       ...(turn.clarification?.options||[]).map(option=>'- '+option),
       ...(turn.cards||[]).map(card=>[card.title,card.description,card.href].filter(Boolean).join('\n')),
     ].filter(text=>text&&text.trim()).join('\n\n');

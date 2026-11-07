@@ -93,8 +93,8 @@ test('saved Parallel activity links open the native Timeline and retain the sele
 
 test('workspace sidebar visibility and width restore without leaving the selected conversation',{skip},async t=>{
  const app=await open(t,{url:`/work/${workID}/conversation/${rootConversation}?sidebar_width=460`,ready:'.conversation-panel .turn'}),{page}=app;
- const show=page.getByRole('button',{name:'Show workspace sessions',exact:true}),hide=page.getByRole('button',{name:'Hide workspace sessions',exact:true});
- const divider=page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true});
+ const show=page.getByRole('button',{name:'Show agent sessions',exact:true}),hide=page.getByRole('button',{name:'Hide agent sessions',exact:true});
+ const divider=page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true});
  assert.equal(await divider.getAttribute('aria-valuenow'),'460');
  await hide.click();await page.reload();await show.waitFor();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('sidebar_visible'),'0');
@@ -112,14 +112,14 @@ for(const width of [1440,390])test(`workspace Timeline beside a reader expands b
  const params=new URLSearchParams({explorer:'timeline',conversation:rootConversation,message:'m-1',disclosures:JSON.stringify(disclosures),timeline_columns:JSON.stringify({execution:205,events:185,time:480})});
  const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.lt-preview-activate'}),{page}=app;
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();await app.settled();
- const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();}};
+ const reveal=async()=>{if(width<960){await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();}};
  const settings=()=>page.evaluate(()=>{const p=new URLSearchParams(location.search);return Object.fromEntries(['delegation_start','delegation_end','timeline_columns','disclosures','delegation_collapsed','delegation_event'].map(key=>[key,p.get(key)]));});
  await reveal();
  const before=await settings(),saved=path(page),activate=page.getByRole('button',{name:'Open full-width timeline',exact:true});
  assert.equal(await page.getByRole('slider',{name:'Timeline window start',exact:true}).evaluate(el=>{el.focus();return document.activeElement===el;}),false,'preview controls cannot receive keyboard focus');
  assert.equal(await page.locator('.delegation-parallel').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'static overview fits the sidebar');
  if(width===1440){
-  await page.getByRole('separator',{name:'Resize workspace sessions sidebar',exact:true}).press('End');
+  await page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true}).press('End');
   await page.locator('.workspace-inbox:not(.compact)').waitFor();
   assert.equal(await activate.isVisible(),true,'a wide sidebar still uses the read-only overview');
   // Even a zoom-like drag is consumed by the overview activation.
@@ -170,7 +170,8 @@ for(const width of [1440,390])test(`hierarchy metric scope and session timeline 
  const row=page.locator('.delegation-table [data-session-id="s-child"]');
  await row.getByRole('button',{name:/^Open session /}).click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(await page.locator('.workspace-reader').isVisible(),true);
- if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();
+ if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();
+ await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
  await page.getByRole('button',{name:`View timeline for ${child.label}`,exact:true}).click();
  const expanded=page.locator('[data-pharos-target="section:delegation-labels:s-child:session"]');
  await expanded.waitFor();await page.waitForFunction(()=>document.querySelector('[data-pharos-target="section:delegation-labels:s-child:session"]').open);await app.settled();
@@ -193,7 +194,7 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
  await app.settled();const before=await settings();
  await session('s-root').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-root');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-root');assert.deepEqual(await settings(),before);
- const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();};
  await show();await session('s-child').click();await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_session'),'s-child');assert.equal(await page.locator('.workspace-reader').isVisible(),true);assert.deepEqual(await settings(),before);
  await show();
@@ -215,16 +216,28 @@ for(const width of [1280,390])test(`Timeline session navigation and event expans
 for(const width of [1280,390])test(`session hierarchy sidebar retains navigation and fits usage columns at ${width}px`,{skip},async t=>{
  const params=new URLSearchParams({conversation:rootConversation,delegation_mode:'rank',delegation_sort:'cost',delegation_direction:'asc',delegation_scope:'all'});
  const app=await open(t,{url:`/work/${workID}?${params}`,viewport:{width,height:900},ready:'.delegation-inbox-row'}),{page}=app;
- const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show workspace sessions',exact:true}).click();};
+ const show=async()=>{if(width<960)await page.getByRole('button',{name:'Show agent sessions',exact:true}).click();};
  await show();await app.settled();
  assert.equal(app.calls.filter(call=>call.path.endsWith('/delegation')).at(-1).query.get('mode'),'hierarchy','the compact table loads the hierarchy even for a saved ranking');
- const table=page.getByRole('table',{name:'Session hierarchy and usage'});
+ const table=page.getByRole('table',{name:'Agent session hierarchy and usage'});
  assert.equal(await table.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'session names leave space for both usage columns');
  const current=table.locator('[aria-current="true"]');await current.click();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
- await table.getByRole('button',{name:/Open session 1\.1 ·/}).click();
+ await table.getByRole('button',{name:'Open session Review implementation',exact:true}).click();
  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-child');await app.settled();
  await show();await app.shot('hierarchy-sidebar');
+ await table.getByRole('button',{name:'Collapse Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('conversation'),'conv-child','folding the selected session leaves its reader open');
+ await table.getByRole('button',{name:'Expand Review implementation',exact:true}).click();await app.settled();
+ await table.getByRole('button',{name:'Open session Review timing',exact:true}).waitFor();
+ if(width>=960){
+  await page.getByRole('separator',{name:'Resize agent sessions sidebar',exact:true}).press('End');
+  await page.locator('.workspace-inbox:not(.compact)').waitFor();await app.settled();
+  await page.locator('.delegation-table').getByRole('button',{name:'Open session Review timing',exact:true}).click();
+  await page.waitForFunction(()=>new URLSearchParams(location.search).get('conversation')==='conv-nested');await app.settled();
+  await app.shot('hierarchy-wide-sidebar');
+ }
  await page.getByRole('button',{name:'Open workspace overview',exact:true}).first().click();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('delegation_mode'),'rank','the fixed sidebar presentation preserves the full-width ranking');
  await app.shot('hierarchy-full-width');
@@ -1292,6 +1305,68 @@ test('Compaction chart controls and source query restore in a fresh browser', {s
  await source.click(); await fresh.page.locator('.usage-workspace-table .qt-row').first().waitFor(); await fresh.settled();
  assert.equal(new URL(fresh.page.url()).searchParams.get('analyze_data'), 'compactions');
  await app.shot('compaction-compare');
+});
+
+
+test('Data Guide terms and example restore and return focus',{skip},async t=>{
+ const app=await open(t,{url:'/library',ready:'.pharos-query-page .view-heading'}),{page}=app;
+ const trigger=page.getByRole('button',{name:'Data Guide',exact:true});
+ await trigger.click();
+ const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
+ await guide.waitFor();
+ const appsBranch=guide.getByText('Apps & machines',{exact:true});
+ await appsBranch.click();
+ await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('nav_expanded'))?.['data-guide']?.apps===false);
+ await guide.getByRole('button',{name:'Work items',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='work_items');
+ await page.reload();
+ await guide.waitFor();
+ assert.equal(await appsBranch.evaluate(element=>element.closest('details').open),false,'shared guide menu expansion did not restore');
+ assert.equal(await guide.getByRole('button',{name:'Work items',exact:true}).getAttribute('aria-current'),'page');
+ await guide.getByRole('button',{name:'Conversations',exact:true}).click();
+ await guide.getByRole('button',{name:'Conversation Review',exact:true}).click();
+ await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_example')==='review');
+ await guide.getByRole('button',{name:'Repositories',exact:true}).click();
+ await app.settled();
+ await app.shot('data-guide');
+ const linked=path(page);
+ const fresh=await open(t,{url:linked,viewport:{width:320,height:820},ready:'.data-guide[open]'});
+ const mobileGuide=fresh.page.getByRole('dialog',{name:'Data Guide',exact:true});
+ assert.equal(await mobileGuide.getByRole('combobox',{name:'Guide term',exact:true}).inputValue(),'repositories');
+ const picker=mobileGuide.getByRole('combobox',{name:'Guide term',exact:true});
+ await picker.selectOption('machines');
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='machines');
+ assert.equal(await mobileGuide.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+ await fresh.shot('data-guide-narrow');
+ const olderLink=new URL(fresh.page.url());olderLink.searchParams.set('guide_entity','execution_machines');
+ await fresh.page.goto(olderLink.href);
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'machines','older execution-machine links open the combined Machines topic');
+ // Switching illustration types retains the linked example conversation.
+ await picker.selectOption('conversations');
+ assert.equal(await mobileGuide.getByRole('button',{name:'Conversation Review',exact:true}).getAttribute('aria-pressed'),'true');
+ for(const term of ['skills','compactions','tokens']){
+  await picker.selectOption(term);
+  await fresh.page.waitForFunction(value=>new URLSearchParams(location.search).get('guide_entity')===value,term);
+  assert.equal(await mobileGuide.getByRole('button',{name:'Conversation Review',exact:true}).getAttribute('aria-pressed'),'true');
+ }
+ await picker.selectOption('agents');
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='agents');
+ await fresh.page.reload();
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'agents');
+ await mobileGuide.getByRole('button',{name:'Explain tool calls',exact:true}).first().click();
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='tool_calls');
+ await fresh.page.reload();
+ await mobileGuide.waitFor();
+ assert.equal(await picker.inputValue(),'tool_calls');
+ await mobileGuide.getByRole('button',{name:'Conversation Implementation',exact:true}).click();
+ await fresh.page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_example')!=='review');
+ await guide.getByRole('button',{name:'Close data guide',exact:true}).click();
+ await trigger.click();
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>!document.querySelector('.data-guide').open);
+ assert.equal(await trigger.evaluate(el=>document.activeElement===el),true);
 });
 
 test('message card labels and sentence events restore independently in the reader',{skip},async t=>{
