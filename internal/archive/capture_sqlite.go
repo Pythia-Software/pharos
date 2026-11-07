@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -215,6 +216,12 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 		os.Remove(temporary)
 		return nil, err
 	}
+	if keep := captureTables(c.source.Kind); keep != nil {
+		if err := keepOnlyTables(c.ctx, temporary, keep); err != nil {
+			os.Remove(temporary)
+			return nil, err
+		}
+	}
 	info, err := syncPath(temporary)
 	if err != nil {
 		os.Remove(temporary)
@@ -280,6 +287,48 @@ func (c *sourceCapture) retain(sourcePath string, generations []capturedVersion)
 		c.prune = append(c.prune, old.Captured)
 	}
 	return kept
+}
+
+// captureTables are the tables a capture of a source kind keeps, or nil to
+// keep them all. A kind whose database also holds credentials keeps only the
+// tables its adapter reads.
+func captureTables(kind string) map[string]bool {
+	if strings.EqualFold(kind, "opencode") {
+		return opencodeCaptureTables
+	}
+	return nil
+}
+
+// keepOnlyTables drops every table and view of the snapshot at path that
+// keep does not name, then vacuums it, so no page of a dropped table is left
+// in the file.
+func keepOnlyTables(ctx context.Context, path string, keep map[string]bool) error {
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?_pragma=journal_mode(off)&_pragma=synchronous(off)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	rows, err := queryMapsContext(ctx, db, `SELECT type, name FROM sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type='table', name`)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		name := firstString(row["name"])
+		if keep[name] {
+			continue
+		}
+		quoted, err := quoteRecordIdentifier(name)
+		if err != nil {
+			return err
+		}
+		// A virtual table's shadow tables go with it, so may be gone already.
+		if _, err := db.ExecContext(ctx, "DROP "+strings.ToUpper(firstString(row["type"]))+" IF EXISTS "+quoted); err != nil {
+			return err
+		}
+	}
+	_, err = db.ExecContext(ctx, "VACUUM")
+	return err
 }
 
 // snapshotSQLite writes a transactionally consistent copy of src to dst with

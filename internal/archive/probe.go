@@ -32,7 +32,7 @@ const (
 	probeSmallFileLimit = 32 << 20
 )
 
-var probeEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"}
+var probeEnvNames = []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "XDG_DATA_HOME"}
 
 // tccFolders are home-relative folders whose contents macOS guards with a
 // privacy prompt (Files and Folders, App Data, iCloud, Mail, and the like).
@@ -191,6 +191,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		"conductor": {"Library/Application Support/com.conductor.app"}, "tl1": {".tl1"},
 		"antigravity": {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
 		"copilot":     {".copilot"},
+		"opencode":    {".local/share/opencode"},
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
@@ -222,8 +223,11 @@ func probeTools(home string, config Config) []ProbeTool {
 			check(kind, filepath.Join(root, bundle), "application")
 		}
 	}
-	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "COPILOT_HOME": "copilot"} {
+	for name, kind := range map[string]string{"CLAUDE_CONFIG_DIR": "claude", "CODEX_HOME": "codex", "COPILOT_HOME": "copilot", "XDG_DATA_HOME": "opencode"} {
 		if path := os.Getenv(name); path != "" {
+			if kind == "opencode" {
+				path = filepath.Join(path, "opencode")
+			}
 			check(kind, resolvePath(home, path), name)
 		}
 	}
@@ -231,7 +235,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot"} {
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode"} {
 		if tool, exists := found[kind]; exists {
 			tools = append(tools, tool)
 		}
@@ -245,6 +249,21 @@ var probeTempDirs = func() []string {
 	dirs := []string{temporary}
 	if resolved, err := filepath.EvalSymlinks(temporary); err == nil && resolved != temporary {
 		dirs = append(dirs, resolved)
+	}
+	return dirs
+}
+
+// probeStatusDirs are where the status looks for a tool not yet chosen: its
+// default folder under home, and the one the variable name moves it to, when
+// Pharos was started with it set. The status runs on every page load, so it
+// reads its own environment rather than starting a login shell; a guided
+// probe reads the shell's too.
+func probeStatusDirs(home, name, sub, fallback string) []string {
+	dirs := []string{filepath.Join(home, fallback, sub)}
+	if value := os.Getenv(name); value != "" {
+		if dir := filepath.Join(resolvePath(home, value), sub); dir != dirs[0] {
+			dirs = append(dirs, dir)
+		}
 	}
 	return dirs
 }
@@ -277,11 +296,21 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			}
 		}
 	}
+	if status.HostFileExists && (kinds == nil || kinds["opencode"]) {
+		for _, dir := range probeStatusDirs(home, "XDG_DATA_HOME", "opencode", filepath.Join(".local", "share")) {
+			if databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).databases(); err == nil && len(databases) > 0 {
+				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "opencode", resolved) == nil {
+					status.NewSources++
+				}
+			}
+		}
+	}
 	if status.HostFileExists && (kinds == nil || kinds["copilot"]) {
-		dir := filepath.Join(home, ".copilot")
-		if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
-			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "copilot", resolved) == nil {
-				status.NewSources++
+		for _, dir := range probeStatusDirs(home, "COPILOT_HOME", "", ".copilot") {
+			if info, err := os.Stat(filepath.Join(dir, "session-state")); err == nil && info.IsDir() {
+				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "copilot", resolved) == nil {
+					status.NewSources++
+				}
 			}
 		}
 	}
@@ -318,7 +347,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	shell := make(chan shellResult, 1)
 	envNames := []string{}
 	for _, name := range probeEnvNames {
-		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) || (name == "COPILOT_HOME" && kinds["copilot"]) {
+		if kinds == nil || (name == "CLAUDE_CONFIG_DIR" && kinds["claude"]) || (name == "CODEX_HOME" && kinds["codex"]) || (name == "COPILOT_HOME" && kinds["copilot"]) || (name == "XDG_DATA_HOME" && kinds["opencode"]) {
 			envNames = append(envNames, name)
 		}
 	}
@@ -353,6 +382,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	})
 	timed("codex", func() { run.codex(filepath.Join(home, ".codex"), "default location") })
 	timed("copilot", func() { run.copilot(filepath.Join(home, ".copilot"), "default location") })
+	timed("opencode", func() { run.opencode(filepath.Join(home, ".local", "share", "opencode"), "default location") })
 	timed("antigravity", func() {
 		for _, dir := range antigravityDirs(home) {
 			foundBy := "~/.gemini/antigravity* directory"
@@ -383,6 +413,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 				timed("claude", func() { run.claude(path, foundBy, false) })
 			} else if name == "COPILOT_HOME" {
 				timed("copilot", func() { run.copilot(path, foundBy) })
+			} else if name == "XDG_DATA_HOME" {
+				timed("opencode", func() { run.opencode(filepath.Join(path, "opencode"), foundBy) })
 			} else {
 				timed("codex", func() { run.codex(path, foundBy) })
 			}
@@ -418,6 +450,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.codex(path, foundBy)
 		case "copilot":
 			run.copilot(path, foundBy)
+		case "opencode":
+			run.opencode(path, foundBy)
 		case "antigravity":
 			run.antigravity(path, foundBy)
 		case "conductor":
@@ -602,6 +636,33 @@ func (r *probeRun) copilot(dir, foundBy string) {
 				}
 				return "", false
 			})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// opencode finds OpenCode's databases and counts the sessions in them.
+func (r *probeRun) opencode(dir, foundBy string) {
+	candidate, resolved := r.locate("opencode", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.Status == "found" {
+		databases, err := (&opencodeAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: resolved}}}).databases()
+		if err == nil && len(databases) == 0 {
+			r.report.Checked = append(r.report.Checked, ProbeLocation{"opencode", candidate.DisplayPath, foundBy, "no opencode.db"})
+			return
+		}
+		var stats probeStats
+		for _, database := range databases {
+			if err != nil {
+				break
+			}
+			var found probeStats
+			found, err = opencodeProbeStats(database)
+			stats.add(found)
 		}
 		stats.apply(candidate, err)
 	}

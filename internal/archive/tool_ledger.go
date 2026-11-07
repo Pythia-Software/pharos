@@ -269,14 +269,16 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		applyLineCounts(&call, input, details)
 		applyToolURLs(&call, input, content)
 		// Emitting request: the usage in the same provider event, otherwise the
-		// first usage reported at or after the call in its stream. A call the
-		// person ran themselves took no request.
+		// first usage reported at or after the call in its stream, before the
+		// next prompt. A call the person ran themselves took no request.
 		base := blockSuffixPattern.ReplaceAllString(message.NativeID, "")
 		call.RequestKey = byBase[base]
 		if call.RequestKey == "" && message.Role != "user" {
 			for _, request := range perStream[call.Stream] {
 				if request.FirstIndex >= index {
-					call.RequestKey = request.Key
+					if !promptBetween(messages, streams, call.Stream, index, request.FirstIndex) {
+						call.RequestKey = request.Key
+					}
 					break
 				}
 			}
@@ -457,6 +459,16 @@ func mergeAnonymousRequests(messages []MessageRecord, streams []string, requests
 		}
 	}
 	return merged
+}
+
+// promptBetween reports whether a prompt in stream comes between from and to.
+func promptBetween(messages []MessageRecord, streams []string, stream string, from, to int) bool {
+	for index := from + 1; index < to && index < len(messages); index++ {
+		if message := messages[index]; streams[index] == stream && message.Kind == "message" && (message.Role == "user" || message.Role == agentRole) {
+			return true
+		}
+	}
+	return false
 }
 
 func turnBetween(messages []MessageRecord, streams []string, stream string, from, to int) bool {

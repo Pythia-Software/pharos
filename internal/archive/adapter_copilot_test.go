@@ -376,13 +376,15 @@ func TestCopilotRenameIsReadWithoutANewTurn(t *testing.T) {
 	}
 }
 
-// Copilot is offered to a Mac set up before Pharos read it, chosen in
-// guided setup, and followed by automatic updates.
+// Copilot is offered to a Mac set up before Pharos read it, also where
+// COPILOT_HOME moves it, chosen in guided setup, and followed by automatic
+// updates.
 func TestCopilotIsSetUpAndFollowedLikeOtherTools(t *testing.T) {
 	home := probeHome(t)
 	useHost(t, "host-a")
 	probePut(t, filepath.Join(home, ".claude", "projects", "-r", probeID1+".jsonl"), "{}\n")
-	writeSourceFile(t, filepath.Join(home, ".copilot", "session-state", "sess-1", "events.jsonl"), copilotSessionEvents)
+	t.Setenv("COPILOT_HOME", filepath.Join(home, "copilot"))
+	writeSourceFile(t, filepath.Join(home, "copilot", "session-state", "sess-1", "events.jsonl"), copilotSessionEvents)
 	path := probeLibrary(t, "")
 	server := probeServer(t, path)
 	if code, result := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"accept":["claude"]}`); code != 200 {

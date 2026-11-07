@@ -531,7 +531,8 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 		err = group.Discover(func(record WorkspaceRecord) error {
 			matches := strings.HasPrefix(unit.ID, "sqlite:")
 			for _, conversation := range record.Conversations {
-				matches = matches || conversation.Origin == unit.ID
+				// A unit of one session group in a database is <database>#<root>.
+				matches = matches || conversation.Origin == unit.ID || conversation.Origin+"#"+record.SourceID == unit.ID
 			}
 			if !matches {
 				return nil
@@ -738,6 +739,11 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		var read []sourcePart
 		err = adapter.(*conductorAdapter).database(path, map[string]bool{part.item[separator+len(":sessions:"):]: true}, func([]sourcePart) bool { return false }, func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
 		return record, read, err
+	}
+	if unit.Source.Kind == "opencode" {
+		// As Conductor: one database holds every session, read in place.
+		adapter := &opencodeAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
+		return adapter.readGroup(unit.Parts)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
