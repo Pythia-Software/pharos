@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func recordTestStore(t *testing.T, config Config, source string) *recordStore {
@@ -276,6 +278,109 @@ func TestSQLiteRecordsRebuildKeepsAbsentSessionsAndLatestMessageSet(t *testing.T
 		t.Fatal("CLI replay did not resume after service ingestion finished", err)
 	}
 }
+func TestCatalogIngestLockFailures(t *testing.T) {
+	contended := fmt.Errorf("lock: %w", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK))
+	for _, failure := range []error{contended, filelock.ErrUnsupported, fmt.Errorf("lock: %w", syscall.EACCES), syscall.EIO, syscall.ENOLCK, syscall.EINTR, syscall.EWOULDBLOCK} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			config := testConfig(t)
+			var opened []*os.File
+			override(t, &lockCatalogIngestFile, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode != filelock.Exclusive || wait != filelock.Try {
+					t.Fatalf("ingest lock: %v, %v", mode, wait)
+				}
+				opened = append(opened, file)
+				return failure
+			})
+			want := failure
+			if errors.Is(failure, filelock.ErrContended) {
+				want = errCatalogIngestBusy
+			}
+			if lease, err := lockCatalogIngest(config.CatalogPath); lease != nil || !errors.Is(err, want) {
+				t.Fatalf("ingest acquisition: lease=%v err=%v, want %v", lease, err, want)
+			}
+			coordinator := ingestCoordinator{path: config.CatalogPath}
+			if coordinator.TryLock() {
+				coordinator.Unlock()
+				t.Fatal("coordinator admitted ingestion without a lock")
+			}
+			if coordinator.lease != nil || !coordinator.mu.TryLock() {
+				t.Fatal("failed acquisition retained coordinator state")
+			}
+			coordinator.mu.Unlock()
+			if err := runSQLiteRecordsCLI(config, []string{"replay", "host-a", "conductor"}); !errors.Is(err, want) {
+				t.Fatalf("CLI replay lost lock failure: %v, want %v", err, want)
+			}
+			if len(opened) != 3 {
+				t.Fatalf("unexpected acquisition retries: %d", len(opened))
+			}
+			for _, file := range opened {
+				if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("failed ingest acquisition leaked its descriptor: %v", err)
+				}
+			}
+			if _, err := os.Stat(config.CatalogPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed replay opened a catalog: %v", err)
+			}
+			if _, err := os.Stat(config.CaptureRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed replay published capture state: %v", err)
+			}
+		})
+	}
+}
+
+func TestCatalogIngestLockLifetime(t *testing.T) {
+	config := testConfig(t)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Dir(config.CatalogPath), alias); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(alias, filepath.Base(config.CatalogPath))
+	lease, err := lockCatalogIngest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	if lease.Name() != canonical(config.CatalogPath)+".ingest.lock" {
+		t.Fatalf("ingest lock did not use the canonical catalog path: %s", lease.Name())
+	}
+	info, err := lease.Stat()
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("ingest lock permissions: %v, %v", info, err)
+	}
+	coordinator := ingestCoordinator{path: config.CatalogPath}
+	if coordinator.TryLock() {
+		coordinator.Unlock()
+		t.Fatal("coordinator bypassed the lock through an alias")
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !coordinator.TryLock() {
+		t.Fatal("Close did not release the ingest lock")
+	}
+	held := coordinator.lease
+	if next, err := lockCatalogIngest(path); next != nil || !errors.Is(err, errCatalogIngestBusy) {
+		if next != nil {
+			next.Close()
+		}
+		coordinator.Unlock()
+		t.Fatalf("coordinator did not retain its lock: %v", err)
+	}
+	coordinator.Unlock()
+	if _, err := held.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("coordinator leaked its owning descriptor: %v", err)
+	}
+	final, err := lockCatalogIngest(path)
+	if err != nil {
+		t.Fatalf("coordinator unlock did not release its lock: %v", err)
+	}
+	defer final.Close()
+	current, err := final.Stat()
+	if err != nil || !os.SameFile(info, current) {
+		t.Fatalf("ingest lock was replaced: %v", err)
+	}
+}
+
 func TestSQLiteRecordsBudgetAndPublicationRecovery(t *testing.T) {
 	for _, stage := range []string{"records-objects", "records-inventory", "records-head", "records-receipt"} {
 		t.Run(stage, func(t *testing.T) {
