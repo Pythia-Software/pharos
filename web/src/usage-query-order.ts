@@ -6,7 +6,7 @@ const chronology: Record<UsageDataset, string> = {
   compactions: "occurred_at", model_requests: "requested_at",
   tl1_attempts: "started_at", usage: "first_usage_at", conversation_activity: "event_at", writing: "last_message_at",
   writing_messages: "sent_at", tool_calls: "started_at", tools: "day",
-  mcp_calls: "called_at", skill_usages: "created_at", parallelism: "started_at", rhythm: "started_at", agent_events: "occurred_at", agent_event_messages: "occurred_at",
+  mcp_calls: "called_at", skill_usages: "created_at", parallelism: "started_at", rhythm: "started_at", agent_events: "occurred_at", agent_event_messages: "occurred_at", session_shape: "started_at",
 };
 
 // Read a single conversation in sequence; browse populations newest first.

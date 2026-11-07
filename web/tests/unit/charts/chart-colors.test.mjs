@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
 import { chartSeriesStyle, colorFields, hourOfDayColors, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
+import { orderedValues } from '../../../src/session-shape-bands';
 import { foldSeries } from '../../../src/chart-series';
 const bucketKey = '2026-10-01';
 const fold = (names, limit = 5, selected = [], scope = 'model_family') => {
@@ -142,4 +143,23 @@ test('hours of the day take a distinct sky colour, whatever form their key takes
   const fields = colorFields({ groupBy: ['started_at'], dateGrouping: { interval: 'hourOfDay' } });
   assert.equal(metricSeriesColor(fields, [5]), hourOfDayColors[5]);
   assert.deepEqual(colorFields({ groupBy: ['started_at'], dateGrouping: { interval: 'day' } }), ['started_at']);
+});
+
+test('session bands and archetypes take ordered steps of one ramp, by value or label', () => {
+  for (const [field, ordered] of Object.entries(orderedValues)) {
+    const colors = ordered.order.map(value => chartSeriesStyle(field, value).color);
+    assert.equal(new Set(colors).size, colors.length, `${field}: a colour per step`);
+    for (const value of ordered.order) assert.deepEqual(chartSeriesStyle(field, ordered.labels[value]), chartSeriesStyle(field, value), `${field} ${value}`);
+    assert.deepEqual(ordered.order.map(value => Number(chartSeriesStyle(field, value).order)), ordered.order.map((_, index) => index), field);
+    assert.ok(!colors.includes(otherSeriesColor), field);
+  }
+  // Each ramp darkens as its values rise.
+  const lightness = color => { const [r, g, b] = [1, 3, 5].map(at => Number.parseInt(color.slice(at, at + 2), 16)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const bands = orderedValues.length_band.order.map(value => lightness(chartSeriesStyle('length_band', value).color));
+  assert.ok(bands.every((value, index) => !index || value < bands[index - 1]));
+  assert.equal(chartSeriesStyle('archetype', 'Something else').color, otherSeriesColor);
+  // Legends and stacks follow the order, not the totals: the biggest band
+  // stays in its place.
+  assert.deepEqual(fold(['121+', '1-5', '31-60'], 5, [], 'length_band').series.map(item => item.value), ['1-5', '31-60', '121+']);
+  assert.deepEqual(fold(['Marathon', 'Automated', 'Quick'], 5, [], 'archetype').series.map(item => item.value), ['Automated', 'Quick', 'Marathon']);
 });

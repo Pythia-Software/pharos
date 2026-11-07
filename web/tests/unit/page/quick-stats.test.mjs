@@ -68,3 +68,152 @@ test('new Quick Stats metrics and calendar columns are opt-in and survive saved 
   assert.deepEqual(defaults.windows,['1h','6h','today','24h','7d','30d','all']);
   for(const [value,format,want] of [[null,'duration','—'],[undefined,'percent','—'],[0,'duration','0s'],[500,'duration','500ms'],[60000,'duration','1m'],[3590000,'duration','1h 0m'],[7200000,'duration','2h 0m'],[0,'percent','0%'],[33.3333,'percent','33.3%']]) assert.equal(stats.formatQuickStatsValue(value,format),want);
 });
+
+const summary = value => ({generated_at: '2026-11-07T18:00:00Z', windows: [{key: 'today', tokens: value}]});
+function cacheStorage() {
+  const saved = new Map();
+  return {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value)};
+}
+
+test('Quick Stats reuse recent results, restore snapshots as stale, and respect expiry and calendar boundaries', () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  const storage = cacheStorage();
+  let now = Date.parse('2026-11-07T18:00:00Z'), context = 'Denver:2026-11-07';
+  const options = {scope: 'library-a', storage, now: () => now, context: () => context};
+  const cache = createQuickStatsCache(options);
+  assert.equal(cache.get(false), null);
+  cache.put(false, summary(42));
+  assert.equal(cache.get(false).fresh, true);
+  const restored = createQuickStatsCache(options);
+  assert.equal(restored.get(false).data.windows[0].tokens, 42);
+  assert.equal(restored.get(false).fresh, false, 'a new page must revalidate its saved result');
+  now += 60000;
+  assert.equal(cache.get(false).fresh, false, 'an older result stays visible while refreshing');
+  context = 'Denver:2026-11-08';
+  assert.equal(cache.get(false), null, 'yesterday’s Today total must not appear as today’s');
+  context = 'London:2026-11-07';
+  assert.equal(cache.get(false), null, 'calendar totals belong to their timezone');
+  context = 'Denver:2026-11-07'; now += 7 * 86400000;
+  assert.equal(cache.get(false), null, 'expired snapshots cannot be restored');
+});
+
+test('Quick Stats separate libraries and detail requests, and do not persist an unscoped response', () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  const storage = cacheStorage();
+  const cache = createQuickStatsCache({scope: 'library-a', storage});
+  cache.put(false, summary(10));
+  assert.equal(cache.get(true), null, 'base totals cannot satisfy the opt-in detail request');
+  cache.put(true, {...summary(20), windows: [{key: 'today', tokens: 20, message_count: 3}]});
+  assert.equal(cache.get(false).data.windows[0].tokens, 10);
+  assert.equal(cache.get(true).data.windows[0].message_count, 3);
+  assert.equal(createQuickStatsCache({scope: 'library-b', storage}).get(false), null);
+  const unscoped = createQuickStatsCache({storage});
+  unscoped.put(false, summary(30));
+  assert.equal(unscoped.get(false).fresh, true);
+  assert.equal(createQuickStatsCache({storage}).get(false), null);
+});
+
+test('Quick Stats invalidation keeps the last value while rejecting requests started before the update', () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  const storage = cacheStorage(), cache = createQuickStatsCache({scope: 'library-a', storage});
+  cache.put(false, summary(10));
+  const before = cache.generation();
+  cache.invalidate();
+  assert.equal(cache.get(false).fresh, false);
+  assert.equal(cache.get(false).data.windows[0].tokens, 10);
+  cache.put(false, summary(20));
+  cache.put(false, summary(5), before);
+  assert.equal(cache.get(false).data.windows[0].tokens, 20);
+  assert.equal(createQuickStatsCache({scope: 'library-a', storage}).get(false).data.windows[0].tokens, 20);
+});
+
+test('Quick Stats tolerate unavailable storage and discard malformed or future snapshots', () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  const blocked = createQuickStatsCache({scope: 'library-a', storage: {getItem() {throw Error('blocked');}, setItem() {throw Error('full');}}});
+  blocked.put(false, summary(10));
+  assert.equal(blocked.get(false).data.windows[0].tokens, 10, 'live results work without browser storage');
+  const now = Date.now();
+  for (const saved of ['invalid JSON', '{}', '[null]', JSON.stringify([
+    {details: false, at: now + 1, context: 'today', data: summary(10)},
+    {details: true, at: now, context: 'today', data: {generated_at: 'invalid', windows: []}},
+  ])]) {
+    const cache = createQuickStatsCache({scope: 'library-a', storage: {getItem: () => saved}, now: () => now, context: () => 'today'});
+    assert.equal(cache.get(false), null); assert.equal(cache.get(true), null);
+  }
+});
+
+test('Quick Stats share in-flight requests and bypass a recent result only for refresh or invalidation', async () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  const cache = createQuickStatsCache({storage: null});
+  let requests = 0, finish;
+  const pending = new Promise(resolve => {finish = resolve;});
+  const request = () => {requests++; return pending;};
+  const first = [], second = [];
+  const a = cache.load(false, request, value => first.push(value));
+  const b = cache.load(false, request, value => second.push(value));
+  finish(summary(10)); await Promise.all([a, b]);
+  assert.equal(requests, 1);
+  assert.equal(first[0].data.windows[0].tokens, 10);
+  assert.equal(second[0].data.windows[0].tokens, 10);
+  const live = async () => {requests++; return summary(requests * 10);};
+  await cache.load(false, live, () => {});
+  assert.equal(requests, 1, 'reopening a recent snapshot does not refetch');
+  await cache.load(false, live, () => {}, true);
+  assert.equal(requests, 2, 'Refresh and Auto bypass the one-minute reuse');
+  cache.invalidate();
+  await cache.load(false, live, () => {});
+  assert.equal(requests, 3, 'a library update fetches new totals');
+  await cache.load(true, live, () => {});
+  assert.equal(requests, 4, 'details require their own response');
+});
+
+test('Quick Stats show a restored result before the network completes and retain it after failure', async () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  const storage = cacheStorage(), options = {scope: 'library-a', storage};
+  createQuickStatsCache(options).put(false, summary(10));
+  const cache = createQuickStatsCache(options), updates = [];
+  let fail;
+  const offline = new Promise((_resolve, reject) => {fail = reject;});
+  const loading = cache.load(false, () => offline, entry => updates.push(entry));
+  assert.equal(updates[0].data.windows[0].tokens, 10, 'the old result is published synchronously');
+  assert.equal(updates[0].fresh, false);
+  fail(Error('Offline'));
+  await assert.rejects(loading, /Offline/);
+  assert.equal(cache.get(false).data.windows[0].tokens, 10);
+  await cache.load(false, async () => summary(20), entry => updates.push(entry));
+  assert.equal(updates.at(-1).data.windows[0].tokens, 20, 'failed requests are retried');
+});
+
+test('Quick Stats discard late responses after a data update or calendar change', async () => {
+  const {createQuickStatsCache} = loadClassicScript('quick-stats.js');
+  for (const change of ['data', 'calendar']) {
+    let context = 'today', finish;
+    const cache = createQuickStatsCache({storage: null, context: () => context});
+    const pending = new Promise(resolve => {finish = resolve;}), updates = [];
+    const loading = cache.load(false, () => pending, entry => updates.push(entry));
+    if (change === 'data') cache.invalidate(); else context = 'tomorrow';
+    await cache.load(false, async () => summary(20), entry => updates.push(entry));
+    finish(summary(10)); await loading;
+    assert.deepEqual(updates.map(entry => entry.data.windows[0].tokens), [20]);
+    assert.equal(cache.get(false).data.windows[0].tokens, 20);
+  }
+});
+
+test('Quick Stats coalesce calendar and usage notifications before loading the invalidated cache', async () => {
+  const {createQuickStatsCache, createQuickStatsRefreshQueue} = loadClassicScript('quick-stats.js');
+  const cache = createQuickStatsCache({storage: null});
+  cache.put(false, summary(10));
+  let requests = 0, loading;
+  const updates = [], refresh = createQuickStatsRefreshQueue(() => {
+    loading = cache.load(false, async () => {requests++; return summary(20);}, entry => updates.push(entry));
+  });
+  cache.invalidate(); refresh(); // Calendar change.
+  cache.invalidate(); refresh(); // Its accompanying usage refresh.
+  await Promise.resolve(); await loading;
+  assert.equal(requests, 1, 'both notifications share one aggregation');
+  assert.equal(updates.at(-1).fresh, true, 'the combined refresh must not invalidate its own response');
+  assert.equal(cache.get(false).data.windows[0].tokens, 20);
+  cache.invalidate(); refresh();
+  await Promise.resolve(); await loading;
+  assert.equal(requests, 2, 'a later update still fetches new totals');
+});

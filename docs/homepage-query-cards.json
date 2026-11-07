@@ -9484,7 +9484,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily writing trends"
@@ -10240,7 +10242,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily message counts"
@@ -10315,7 +10319,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "writing_messages",
         "detailAction": "Explore daily conversation counts"
@@ -19479,7 +19485,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "tool_calls",
         "detailAction": "Explore daily tool calls"
@@ -19552,7 +19560,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "tool_calls",
         "detailAction": "Inspect daily call times"
@@ -19706,7 +19716,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "completePeriods": true,
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "parallelism",
         "detailAction": "Open the parallelism view"
@@ -19976,7 +19988,9 @@
           "nonzero": false,
           "rollingPeriods": 7,
           "rollingOp": "sum",
-          "norm": true
+          "percentiles": [
+            "mean"
+          ]
         },
         "dataset": "usage",
         "detailAction": "Explore carbon impact"
@@ -20779,6 +20793,1897 @@
         },
         "dataset": "usage",
         "detailAction": "Review model pricing"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [],
+      "id": "session-sources",
+      "title": "Where sessions come from",
+      "description": "Sessions started in the last {days} days, by the app that ran them.",
+      "action": "Explore Session Shape",
+      "note": "A harness is the app that ran the session: an interactive client, an SDK or a batch runner. Delegated runs count as their own sessions.",
+      "exploration": {
+        "keys": [
+          "harness"
+        ],
+        "summaries": [
+          {
+            "id": "ss_sessions",
+            "op": "count",
+            "label": "Sessions"
+          }
+        ],
+        "valueField": "ss_sessions",
+        "unit": "sessions",
+        "subjects": "harnesses",
+        "action": "Compare harnesses",
+        "labelFields": [
+          "harness"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "ss_sessions",
+        "kind": "bar-horizontal",
+        "maxGroups": 10,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "compare",
+          "metric": "sessions",
+          "split": "harness",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare harnesses"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_archetype_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "typed_messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Typed messages per session"
+          }
+        }
+      ],
+      "id": "session-archetype-mix",
+      "title": "Your sessions by kind",
+      "description": "Your sessions each day by the messages you typed in them, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more). Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_archetype_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "typed_messages_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "sessions",
+          "split": "archetype",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore sessions over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_length_band_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      ],
+      "id": "session-length-mix",
+      "title": "How long your sessions are",
+      "description": "Your sessions each day by their message count, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Length counts every message of the session's own stream; a delegated run is its own session. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_length_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "messages_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "sessions",
+          "split": "length_band",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore sessions over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "rhythm-05",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "seconds",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_active_time",
+          "op": "count",
+          "groupBy": [
+            "archetype"
+          ],
+          "groupLimit": 1000,
+          "sort": [
+            {
+              "key": "samples",
+              "dir": "desc"
+            }
+          ],
+          "label": "Active time per session",
+          "distribution": {
+            "kind": "box",
+            "input": "[active_seconds]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box",
+            "maxGroups": 12,
+            "xLabel": "Active time per session",
+            "xScale": {
+              "mode": "log"
+            },
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "seconds"
+            }
+          }
+        }
+      ],
+      "id": "session-active-time",
+      "title": "Active time by session kind",
+      "description": "Each session's active time over the last {days} days, by archetype; log axis.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "active_seconds",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "note": "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with some active time count; kinds with fewer than three are left out.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_active_time",
+        "kind": "box",
+        "maxGroups": 6,
+        "minSamples": 3,
+        "sampleUnit": "sessions",
+        "density": "compact"
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "distribution",
+          "metric": "active_time",
+          "split": "archetype",
+          "period": "day",
+          "scale": "logarithmic",
+          "nonzero": false,
+          "minSamples": 3
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare session active time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "rhythm-07",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "seconds",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_turn_cycle",
+          "op": "count",
+          "groupBy": [
+            "provider"
+          ],
+          "groupLimit": 1000,
+          "sort": [
+            {
+              "key": "samples",
+              "dir": "desc"
+            }
+          ],
+          "label": "Turn cycle (session median)",
+          "distribution": {
+            "kind": "box",
+            "input": "[turn_cycle_p50_seconds]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box",
+            "maxGroups": 12,
+            "xLabel": "Turn cycle (session median)",
+            "xScale": {
+              "mode": "log"
+            },
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "seconds"
+            }
+          }
+        }
+      ],
+      "id": "session-turn-cycle",
+      "title": "Turn cycle by provider",
+      "description": "Each session's median wait from your message to the agent's next one, over the last {days} days; log axis.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "turn_cycle_p50_seconds",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "note": "A session's turn cycle is the median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Only sessions with a turn cycle count; providers with fewer than three are left out.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_turn_cycle",
+        "kind": "box",
+        "maxGroups": 6,
+        "minSamples": 3,
+        "sampleUnit": "sessions",
+        "density": "compact"
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "distribution",
+          "metric": "turn_cycle",
+          "split": "provider",
+          "period": "day",
+          "scale": "logarithmic",
+          "nonzero": false,
+          "minSamples": 3
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare turn cycles"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "models-02",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "calls per typed message",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_autonomy",
+          "op": "count",
+          "groupBy": [
+            "provider"
+          ],
+          "groupLimit": 1000,
+          "sort": [
+            {
+              "key": "samples",
+              "dir": "desc"
+            }
+          ],
+          "label": "Tool calls per typed message",
+          "distribution": {
+            "kind": "box",
+            "input": "[autonomy]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box",
+            "maxGroups": 12,
+            "xLabel": "Tool calls per typed message",
+            "xScale": {
+              "mode": "log"
+            },
+            "format": {
+              "kind": "number",
+              "decimals": 1
+            }
+          }
+        }
+      ],
+      "id": "session-autonomy",
+      "title": "Tool calls per typed message, by provider",
+      "description": "Each session's tool calls divided by the messages you typed in it, over the last {days} days; log axis.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "has_authorship",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "autonomy",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        }
+      ],
+      "note": "Only sessions the tool ledger covers and whose prompts are all classified count. Sessions without a tool call are left out. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Providers with fewer than three sessions are left out.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_autonomy",
+        "kind": "box",
+        "maxGroups": 6,
+        "minSamples": 3,
+        "sampleUnit": "sessions",
+        "density": "compact"
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "distribution",
+          "metric": "autonomy",
+          "split": "provider",
+          "period": "day",
+          "scale": "logarithmic",
+          "nonzero": false,
+          "minSamples": 3
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare tool calls per typed message"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "tools-01",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "percent",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [],
+      "id": "session-model-failure-rates",
+      "title": "Failure rate by model",
+      "description": "Failed tool calls divided by all tool calls, by model, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "model_family",
+          "op": "!=",
+          "value": "<synthetic>"
+        }
+      ],
+      "note": "Failed calls divided by tool calls, pooled over each group's sessions. Rejections, interrupts and hook blocks are not failures. Only sessions the tool ledger covers count. Synthetic placeholder turns are left out; the dashboard opens with that filter. Groups with fewer than 20 sessions are left out.",
+      "exploration": {
+        "keys": [
+          "model_family"
+        ],
+        "summaries": [
+          {
+            "id": "ss_failure_rate",
+            "op": "formula",
+            "expression": "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)",
+            "label": "Failure rate"
+          },
+          {
+            "id": "ss_failed_calls",
+            "op": "sum",
+            "field": "failed_calls",
+            "label": "Failed calls"
+          },
+          {
+            "id": "ss_tool_calls",
+            "op": "sum",
+            "field": "tool_calls",
+            "label": "Tool calls"
+          },
+          {
+            "id": "ss_sessions",
+            "op": "count",
+            "label": "Sessions"
+          }
+        ],
+        "having": [
+          {
+            "field": "ss_sessions",
+            "op": ">=",
+            "value": "20"
+          }
+        ],
+        "valueField": "ss_failure_rate",
+        "unit": "percent",
+        "subjects": "model failure rates",
+        "action": "Compare model failure rates",
+        "labelFields": [
+          "model_family"
+        ],
+        "tieBreakField": "ss_sessions",
+        "context": [
+          {
+            "field": "ss_tool_calls",
+            "label": "tool calls"
+          },
+          {
+            "field": "ss_sessions",
+            "label": "sessions"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "ss_failure_rate",
+        "kind": "bar-horizontal",
+        "maxGroups": 10,
+        "showOther": false
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "compare",
+          "metric": "failure_rate",
+          "split": "model_family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "minSamples": 20
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare model failure rates"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "tools-01",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "percent",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [],
+      "id": "session-kind-failure-rates",
+      "title": "Failure rate by session kind",
+      "description": "Failed tool calls divided by all tool calls, automated runs against the sessions you typed in, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "note": "Automated sessions have no typed human message. The others are Quick (5 or fewer typed messages), Standard (15 or fewer), Deep (50 or fewer) and Marathon (more). Failed calls divided by tool calls, pooled over each group's sessions. Rejections, interrupts and hook blocks are not failures. Only sessions the tool ledger covers count. Groups with fewer than 10 sessions are left out.",
+      "exploration": {
+        "keys": [
+          "archetype"
+        ],
+        "summaries": [
+          {
+            "id": "ss_failure_rate",
+            "op": "formula",
+            "expression": "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)",
+            "label": "Failure rate"
+          },
+          {
+            "id": "ss_failed_calls",
+            "op": "sum",
+            "field": "failed_calls",
+            "label": "Failed calls"
+          },
+          {
+            "id": "ss_tool_calls",
+            "op": "sum",
+            "field": "tool_calls",
+            "label": "Tool calls"
+          },
+          {
+            "id": "ss_sessions",
+            "op": "count",
+            "label": "Sessions"
+          }
+        ],
+        "having": [
+          {
+            "field": "ss_sessions",
+            "op": ">=",
+            "value": "10"
+          }
+        ],
+        "valueField": "ss_failure_rate",
+        "unit": "percent",
+        "subjects": "failure rates by session kind",
+        "action": "Compare failure rates by session kind",
+        "labelFields": [
+          "archetype"
+        ],
+        "tieBreakField": "ss_sessions",
+        "context": [
+          {
+            "field": "ss_tool_calls",
+            "label": "tool calls"
+          },
+          {
+            "field": "ss_sessions",
+            "label": "sessions"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "ss_failure_rate",
+        "kind": "bar-horizontal",
+        "maxGroups": 10,
+        "showOther": false
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "compare",
+          "metric": "failure_rate",
+          "split": "archetype",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "minSamples": 10
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare failure rates by session kind"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "tools-06",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "percent",
+      "days": [
+        30
+      ],
+      "measures": [
+        {
+          "id": "ss_daily_failure_rate",
+          "op": "sum",
+          "field": "failed_calls",
+          "expression": "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Failure rate by day"
+        }
+      ],
+      "id": "session-failure-trend",
+      "title": "Failure rate over time",
+      "description": "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last 30 days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "note": "Each point pools seven complete local days: their failed calls over their tool calls. Today is left out until it is complete. Rejections, interrupts and hook blocks are not failures. Only sessions the tool ledger covers count.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_daily_failure_rate",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "sum",
+          "field": "failed_calls"
+        },
+        "per": {
+          "op": "sum",
+          "field": "tool_calls"
+        },
+        "count": {
+          "op": "sum",
+          "field": "tool_calls"
+        },
+        "lookback": 7,
+        "completeDays": true,
+        "format": "percent",
+        "valueLabel": "failure rate · 7 days",
+        "pointValueLabel": "failure rate",
+        "trendLabel": "7d",
+        "sample": "tool calls",
+        "detail": "Each point: failed calls ÷ tool calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "failure_rate",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7,
+          "completePeriods": true,
+          "percentiles": [
+            "mean"
+          ]
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore failure rate over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "hours",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [],
+      "id": "session-repository-hours",
+      "title": "Where your active hours go",
+      "description": "Active hours of the sessions you typed in over the last {days} days, by repository.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        }
+      ],
+      "note": "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "exploration": {
+        "keys": [
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "ss_active_hours",
+            "op": "sum",
+            "field": "active_hours",
+            "label": "Active hours"
+          },
+          {
+            "id": "ss_sessions",
+            "op": "count",
+            "label": "Sessions"
+          }
+        ],
+        "valueField": "ss_active_hours",
+        "unit": "hours",
+        "subjects": "repositories",
+        "action": "Compare repositories",
+        "labelFields": [
+          "repository_name"
+        ],
+        "context": [
+          {
+            "field": "ss_sessions",
+            "label": "sessions"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "ss_active_hours",
+        "kind": "bar-horizontal",
+        "maxGroups": 10,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "compare",
+          "metric": "active_hours",
+          "split": "repository_name",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare repositories"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "verification-03",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "percent",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [],
+      "id": "session-repository-verification",
+      "title": "Verified handbacks by repository",
+      "description": "Handbacks after an edit with a test or build after the last edit, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "has_authorship",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "note": "Verified handbacks divided by handbacks after an edit, pooled. Read-only commands are not verification. Only sessions the tool ledger covers and whose prompts are all classified count. Groups with fewer than 20 sessions are left out.",
+      "exploration": {
+        "keys": [
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "ss_verification",
+            "op": "formula",
+            "expression": "SUM([verified_handbacks])/NULLIF(SUM([edit_handbacks]),0)",
+            "label": "Verified handbacks"
+          },
+          {
+            "id": "ss_verified_handbacks",
+            "op": "sum",
+            "field": "verified_handbacks",
+            "label": "Verified handbacks"
+          },
+          {
+            "id": "ss_edit_handbacks",
+            "op": "sum",
+            "field": "edit_handbacks",
+            "label": "Handbacks after an edit"
+          },
+          {
+            "id": "ss_sessions",
+            "op": "count",
+            "label": "Sessions"
+          }
+        ],
+        "having": [
+          {
+            "field": "ss_sessions",
+            "op": ">=",
+            "value": "20"
+          }
+        ],
+        "valueField": "ss_verification",
+        "unit": "percent",
+        "subjects": "verified handbacks",
+        "action": "Compare verified handbacks",
+        "labelFields": [
+          "repository_name"
+        ],
+        "tieBreakField": "ss_sessions",
+        "context": [
+          {
+            "field": "ss_edit_handbacks",
+            "label": "handbacks after an edit"
+          },
+          {
+            "field": "ss_sessions",
+            "label": "sessions"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "ss_verification",
+        "kind": "bar-horizontal",
+        "maxGroups": 10,
+        "showOther": false
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "compare",
+          "metric": "verification",
+          "split": "repository_name",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "minSamples": 20
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare verified handbacks"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_sessions_trend",
+          "op": "count",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions by day"
+        }
+      ],
+      "id": "session-count-trend",
+      "title": "Your sessions a day",
+      "description": "Sessions you typed in, a day, averaged over each trailing seven complete days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        }
+      ],
+      "note": "Each point pools seven complete local days; today is left out until it is complete. A session counts on the day it starts. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_sessions_trend",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "count"
+        },
+        "perDay": true,
+        "count": {
+          "op": "count"
+        },
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "sessions a day · 7 days",
+        "pointValueLabel": "sessions a day",
+        "trendLabel": "7d",
+        "sample": "sessions",
+        "detail": "Each point: the daily average of its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "sessions",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7,
+          "completePeriods": true,
+          "percentiles": [
+            "mean"
+          ]
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore sessions over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "hours",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_active_hours_trend",
+          "op": "sum",
+          "field": "active_hours",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours by day"
+        }
+      ],
+      "id": "session-hours-trend",
+      "title": "Your active hours a day",
+      "description": "Active hours of the sessions you typed in, a day, averaged over each trailing seven complete days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        }
+      ],
+      "note": "Each point pools seven complete local days; today is left out until it is complete. Active time adds the gaps between consecutive messages of 300 seconds or less, on the day the session starts. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_active_hours_trend",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "sum",
+          "field": "active_hours"
+        },
+        "perDay": true,
+        "count": {
+          "op": "count"
+        },
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "active hours a day · 7 days",
+        "pointValueLabel": "active hours a day",
+        "trendLabel": "7d",
+        "sample": "sessions",
+        "detail": "Each point: the daily average of its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
+      },
+      "exploration": {
+        "keys": [
+          "day"
+        ],
+        "summaries": [
+          {
+            "id": "card_active_hours",
+            "op": "sum",
+            "field": "active_hours",
+            "label": "Active hours by day"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_active_hours",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "hours",
+        "coverMetric": {
+          "id": "ss_active_hours_trend",
+          "op": "sum",
+          "field": "card_active_hours",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours by day"
+        }
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "active_hours",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7,
+          "completePeriods": true,
+          "percentiles": [
+            "mean"
+          ]
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore active hours over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_autonomy_band_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "autonomy_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Tool calls per typed message"
+          }
+        }
+      ],
+      "id": "session-autonomy-trend",
+      "title": "Tool calls per typed message over time",
+      "description": "Your sessions each day by tool calls per typed message, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Each session's tool calls divided by the messages you typed in it. Only sessions the tool ledger covers and whose prompts are all classified count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_autonomy_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "has_authorship",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "autonomy_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "autonomy",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore tool calls per typed message over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_turn_cycle_band_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "turn_cycle_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Turn cycle (session median)"
+          }
+        }
+      ],
+      "id": "session-turn-cycle-trend",
+      "title": "Turn cycle over time",
+      "description": "Your sessions each day by their median turn cycle, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "A session's turn cycle is the median gap from a typed message to the agent's next one, leaving out gaps over 1,800 seconds; only sessions with one count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_turn_cycle_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "turn_cycle_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "turn_cycle",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore turn cycle (session median) over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_context_band_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "context_peak_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Peak context share"
+          }
+        }
+      ],
+      "id": "session-context-trend",
+      "title": "Peak context over time",
+      "description": "Your sessions each day by their largest request as a share of the model's context window, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Only sessions whose model's context window is known count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_context_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "has_context_window",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "context_peak_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "context_peak",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore peak context share over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "sessions",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_active_band_daily",
+          "op": "count",
+          "groupBy": [
+            "day",
+            "active_seconds_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Sessions per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Active time per session"
+          }
+        }
+      ],
+      "id": "session-active-time-trend",
+      "title": "Active time over time",
+      "description": "Your sessions each day by their active time, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with timestamps count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_active_band_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "active_seconds_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "active_time",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore active time per session over time"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "hours",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_length_band_active_hours_daily",
+          "op": "sum",
+          "field": "active_hours",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      ],
+      "id": "session-length-hours",
+      "title": "Active hours by session length",
+      "description": "Active hours of your sessions each day by the session's message count, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Active time adds the gaps between consecutive messages of 300 seconds or less. Length counts every message of the session's own stream; a delegated run is its own session. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's active hours of sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_length_band_active_hours_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "messages_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "day",
+          "messages_bin"
+        ],
+        "summaries": [
+          {
+            "id": "card_active_hours",
+            "op": "sum",
+            "field": "active_hours",
+            "label": "Active hours per day"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_active_hours",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "hours",
+        "coverMetric": {
+          "id": "ss_length_band_active_hours_daily",
+          "op": "sum",
+          "field": "card_active_hours",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "active_hours",
+          "split": "length_band",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore active hours by session length"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "conversation-04",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "calls",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_length_band_tool_calls_daily",
+          "op": "sum",
+          "field": "tool_calls",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Tool calls per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      ],
+      "id": "session-length-tool-calls",
+      "title": "Tool calls by session length",
+      "description": "Tool calls of your sessions each day by the session's message count, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "note": "Length counts every message of the session's own stream; a delegated run is its own session. Only sessions the tool ledger covers count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's tool calls of sessions in one narrow range of the value over seven days.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_length_band_tool_calls_daily",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": false,
+        "showHeadline": false,
+        "timeline": {
+          "rollingPeriods": 7,
+          "display": "heatmap"
+        }
+      },
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        },
+        {
+          "field": "has_tool_data",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "messages_bin",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "day",
+          "messages_bin"
+        ],
+        "summaries": [
+          {
+            "id": "card_tool_calls",
+            "op": "sum",
+            "field": "tool_calls",
+            "label": "Tool calls per day"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_tool_calls",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "calls",
+        "coverMetric": {
+          "id": "ss_length_band_tool_calls_daily",
+          "op": "sum",
+          "field": "card_tool_calls",
+          "groupBy": [
+            "day",
+            "messages_bin"
+          ],
+          "groupLimit": 10000,
+          "label": "Tool calls per day",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Messages per session"
+          }
+        }
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "trend",
+          "metric": "tool_calls",
+          "split": "length_band",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "rollingPeriods": 7
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore tool calls by session length"
+      }
+    },
+    {
+      "category": "sessions",
+      "idea": "context-02",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "unit": "percent",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "ss_context_peak",
+          "op": "count",
+          "groupBy": [
+            "model_family"
+          ],
+          "groupLimit": 1000,
+          "sort": [
+            {
+              "key": "samples",
+              "dir": "desc"
+            }
+          ],
+          "label": "Peak context share",
+          "distribution": {
+            "kind": "box",
+            "input": "[context_peak_ratio]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box",
+            "maxGroups": 12,
+            "xLabel": "Peak context share",
+            "xScale": {
+              "mode": "linear"
+            },
+            "format": {
+              "kind": "percent",
+              "decimals": 1
+            }
+          }
+        }
+      ],
+      "id": "session-model-context",
+      "title": "Peak context by model",
+      "description": "Each session's largest request as a share of its model's context window, over the last {days} days.",
+      "action": "Explore Session Shape",
+      "where": [
+        {
+          "field": "has_context_window",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "field": "context_peak_ratio",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "note": "Only sessions whose model's context window is known count. Models with fewer than ten sessions are left out.",
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_context_peak",
+        "kind": "box",
+        "maxGroups": 8,
+        "minSamples": 10,
+        "sampleUnit": "sessions",
+        "density": "compact"
+      },
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "distribution",
+          "metric": "context_peak",
+          "split": "model_family",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "minSamples": 10
+        },
+        "dataset": "session_shape",
+        "detailAction": "Compare peak context"
+      }
+    },
+    {
+      "id": "session-weekday",
+      "title": "When you start sessions",
+      "description": "Sessions you typed in, started each day, by weekday, over the last {days} days, including idle days.",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "category": "sessions",
+      "idea": "rhythm-01",
+      "unit": "sessions / day",
+      "days": [
+        90
+      ],
+      "calendarTimezone": "local",
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        }
+      ],
+      "measures": [
+        {
+          "id": "ss_weekday_sessions",
+          "op": "count",
+          "groupBy": [
+            "started_at"
+          ],
+          "label": "Sessions per day",
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "dateGrouping": {
+            "field": "started_at",
+            "interval": "day",
+            "timeZone": "UTC",
+            "range": "observed",
+            "includeEmpty": true
+          },
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local day",
+            "yLabel": "sessions / day"
+          }
+        }
+      ],
+      "weekday": {
+        "metricId": "ss_weekday_sessions",
+        "unit": "sessions / day"
+      },
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_weekday_sessions",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showHeadline": false,
+        "density": "compact"
+      },
+      "action": "Explore Session Shape",
+      "note": "Each box compares complete local days of the same weekday, Monday through Sunday; days without a session count as zero. The first partial day and today are left out. Uses the device timezone. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "cycle",
+          "metric": "sessions",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "cycle": "weekday",
+          "reduce": "median"
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore when sessions start"
+      }
+    },
+    {
+      "id": "session-last-weekday",
+      "title": "When you last interact, by weekday",
+      "description": "Sessions you typed in, by the weekday of their last message, over the last {days} days, including idle days.",
+      "dataset": "session_shape",
+      "field": "started_at",
+      "category": "sessions",
+      "idea": "rhythm-01",
+      "unit": "sessions / day",
+      "days": [
+        90
+      ],
+      "calendarTimezone": "local",
+      "where": [
+        {
+          "field": "archetype",
+          "op": "!=",
+          "value": "automated"
+        }
+      ],
+      "measures": [
+        {
+          "id": "ss_last_weekday_sessions",
+          "op": "count",
+          "groupBy": [
+            "last_message_at"
+          ],
+          "label": "Sessions per day",
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "dateGrouping": {
+            "field": "last_message_at",
+            "interval": "day",
+            "timeZone": "UTC",
+            "range": "observed",
+            "includeEmpty": true
+          },
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local day",
+            "yLabel": "sessions / day"
+          }
+        }
+      ],
+      "weekday": {
+        "metricId": "ss_last_weekday_sessions",
+        "unit": "sessions / day"
+      },
+      "cover": {
+        "mode": "source",
+        "metricId": "ss_last_weekday_sessions",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showHeadline": false,
+        "density": "compact"
+      },
+      "action": "Explore Session Shape",
+      "note": "Each box compares complete local days of the same weekday, Monday through Sunday, placing each session by its last message; days without one count as zero. Sessions are those started in the range. Uses the device timezone. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter.",
+      "destination": {
+        "topic": "session_shape",
+        "chart": {
+          "v": 2,
+          "view": "cycle",
+          "metric": "sessions",
+          "split": "none",
+          "period": "day",
+          "scale": "linear",
+          "nonzero": false,
+          "cycle": "weekday",
+          "reduce": "median",
+          "cycleOn": "last_message"
+        },
+        "dataset": "session_shape",
+        "detailAction": "Explore when sessions end"
       }
     },
     {

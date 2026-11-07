@@ -20,6 +20,7 @@ import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolsAnalysisCatalog as tools } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog as mcp } from "../../../src/mcp-analysis-catalog";
 import { agentEventsAnalysisCatalog as agentEvents } from "../../../src/agent-events-analysis-catalog";
+import { sessionShapeAnalysisCatalog as sessionShape } from "../../../src/session-shape-analysis-catalog";
 import { toolTimeAnalysisCatalog as time, skillsAnalysisCatalog as skills } from "../../../src/record-analysis-catalogs";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links";
 import { toolMetricPresentation } from "../../../src/tools-dashboard-model";
@@ -28,8 +29,8 @@ import { runAnalysisQuery } from "../../../src/analysis-request";
 import { answerQuery } from "../../support/query-server.mjs";
 import { peopleMessageLabelCatalog } from "../../../src/people-message-labels";
 
-const rows = { people_message_labels: population(schemas.people_message_labels, { now }), compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }) };
-const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents];
+const rows = { people_message_labels: population(schemas.people_message_labels, { now }), compactions: population(schemas.compactions, { now }), conversation_activity: population(schemas.conversation_activity, { now }), tools: toolsRollup(), mcp_calls: mcpCalls(), tool_calls: toolCalls(), skill_usages: skillUsages(), agent_events: population(schemas.agent_events, { now }), session_shape: population(schemas.session_shape, { now }) };
+const catalogs = [compaction,tools, mcp, time, skills, activity, agentEvents, sessionShape];
 const month = catalog => withTimeRange([], catalog.time, new Date(now - 30 * 86400000), new Date(now));
 const run = (catalog, query) => core.evaluateMetrics(rows[catalog.dataset], query, schemas[catalog.dataset], { now }).metrics;
 // A cycle's per-occurrence clause is planned into plain calendar metrics

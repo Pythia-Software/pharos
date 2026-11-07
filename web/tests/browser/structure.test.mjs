@@ -295,6 +295,7 @@ const ROUTES = [
   }},
   ...['',' \n '].map(reply=>({name:`Ask Pharos destinations with ${reply?'blank':'empty'} intro`,url:'/?ask_chat=saved-chat',ready:'#pharos-ask .pharos-destinations:not([hidden])',api:{...askAPI,'GET /api/ask/session':{...askSession,conversation:askSession.conversation.map(turn=>({...turn,reply}))}}})),
   {name:"Ask Pharos error activity",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-activity:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:askSession.conversation.map(turn=>({...turn,status:'error',cards:[],reply:'Could not finish checking the destination. Try again.',activity:[{message:"Browsing available views…",elapsedMs:1200},{message:"Browsing available views — done",elapsedMs:2500},{message:"Checking a destination link…",elapsedMs:3000}]}))}},open:page=>page.locator('#pharos-ask .pharos-activity summary').click(),shown:'#pharos-ask .pharos-activity[open]'},
+  {name:"Ask Pharos feedback draft",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-feedback:not([hidden])",api:{...askAPI,"GET /api/ask/session":{...askSession,conversation:[{...askSession.conversation[0],status:"feedback",cards:[],feedback:{kind:"feature",comment:"Add Markdown export of selected conversations so I can share a review.\nPreserve message order and tool-call context."}}]}}},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
   {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
@@ -483,6 +484,13 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace agent experience dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=agent_experience", ready: `.usage-agent-experience-dashboard ${overTimeReady}` },
+  // With a partial population, so its chips share the control row at 320 px.
+  { name: "Analyze workspace session shape dashboard", url: `/analyze?${new URLSearchParams({ analyze_workspace: "1", analyze_topic: "session_shape",
+    analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "-30d" }, { field: "started_at", op: "<", value: "+0s" }, { any: [{ field: "harness", op: "!=", value: "antigravity-cli" }, { field: "harness", op: "is_null", value: "" }] }] }) })}`,
+    ready: `.usage-session-shape-dashboard ${overTimeReady}`,
+    check: async page => assert.equal(await page.locator(".usage-session-shape-dashboard .dashboard-population-chip").count(), 1, "the population is not shown beside the controls") },
+  { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
+  { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   // A card's relative range, replaced by custom dates and times in the
   // dashboard's inline range picker.
   { name: "Dashboard custom date and time range", url: `/analyze?${new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens",
@@ -619,6 +627,14 @@ const ROUTES = [
   { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
+  // A signal chip reveals its message in a collapsed turn without taking focus,
+  // and replaces the link's earlier message anchor, so a reload lands there too.
+  { name: "Transcript session signals", url: `${work}/conversation/${rootConversation}?message=m-1`, ready: ".session-signals .session-signal", open: page => page.locator(".session-signal").last().click(), shown: ".conversation-panel .pharos-reveal",
+    check: async page => {
+      await page.waitForFunction(() => !document.activeElement?.closest(".pharos-reveal") && new URL(location.href).searchParams.get("reveal")?.startsWith("message:") && !new URL(location.href).searchParams.has("message"));
+      await page.reload();
+      await page.waitForFunction(() => { const target = document.querySelector(".conversation-panel .pharos-reveal"), box = target?.getBoundingClientRect(); return box && box.bottom > 0 && box.top < innerHeight; });
+    } },
   { name: "Quick search", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
   { name: "Analyze summary", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "Extended Quick Stats", url: "/library?view=table", preferences: { "pharos-quick-stats-v1": {metrics:['active_conversations','message_count','user_messages','assistant_messages','tool_calls','failed_tool_calls','tool_failure_rate','delegated_runs','active_repositories','tool_time_ms','agent_time_ms','active_time_ms'], windows:['5m','15m','yesterday','week','month','all']}, "pharos-usage-summary-links":true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page,"usageSummaryToggle"), shown: "#usageSummary" },
@@ -1347,14 +1363,15 @@ test("Card Library timeline ticks fit full dollar amounts", { skip }, async t =>
 
 // IndexedDB and painting saved charts during navigation require a real browser.
 test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
-  let hold = false, release;
+  let hold = false, release, requested;
+  const pending = new Promise(resolve => { requested = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   t.after(() => release());
   const app = await open(t, {
     url: "/cards?cards=library&card_search=tool-call-share",
     ready: ".card-library-entry .query-card",
     api: { "* /api/query/:dataset/:operation": async call => {
-      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
+      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) { requested(); await gate; }
       return defaultApi["* /api/query/:dataset/:operation"](call);
     } },
   });
@@ -1372,12 +1389,14 @@ test("Card Library restores saved covers while fresh queries are pending", { ski
   });
   hold = true;
   await app.page.reload();
-  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
+  await pending;
+  // The saved chart remains painted and usable while its request is held.
+  // Freshness describes data age; it no longer doubles as a refresh spinner.
+  await app.page.locator(".query-cover:not([aria-busy=true])").first().waitFor();
   const catalog = app.page.locator("#card-library");
   await catalog.scrollIntoViewIfNeeded();
   await app.shot("saved-covers-refreshing");
   release(); await app.settled();
-  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
   assert.deepEqual(app.problems(), []);
 });
 

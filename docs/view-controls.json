@@ -320,6 +320,18 @@
       "field": "reader_writing"
     },
     {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_open"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_preview"
+    },
+    {
+      "file": "web/src/data-readiness.tsx",
+      "field": "readiness_scope"
+    },
+    {
       "file": "web/src/safety.tsx",
       "field": "safety_case"
     },
@@ -342,6 +354,10 @@
     {
       "file": "web/src/index.tsx",
       "field": "search_cards"
+    },
+    {
+      "file": "web/src/session-shape-panels.tsx",
+      "field": "session_signal"
     },
     {
       "file": "web/src/workspace-inbox.ts",
@@ -2833,6 +2849,16 @@
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
     },
     {
+      "key": "html:d3e0918b0679042f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataReadinessToggle\" class=\"header-icon\" type=\"button\" data-view-field=\"readiness_open\" aria-label=\"Data updates\" title=\"Data updates\" aria-haspopup=\"dialog\" aria-controls=\"dataReadinessDialog\">",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "html:d77e51aab8862932:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3268,6 +3294,15 @@
       "control": "'select', 'conversation-selector'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "97a8fc4b6ef3368e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mountSessionSignals",
+      "tag": "button",
+      "control": "'button', 'session-signal'",
+      "contract": "navigation",
+      "reason": "Writes reveal=message:<id> and highlight to the URL to step through the messages where a session signal fired: scroll and highlight, never focus. The URL owns the state."
     },
     {
       "key": "089cfe80425bbb90:0",
@@ -4234,6 +4269,15 @@
       "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
     },
     {
+      "key": "32cadca8241ea727:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => filter(\"keep\")}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
       "key": "dd11cf44075d571a:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "ChartLegendChip",
@@ -4241,6 +4285,15 @@
       "control": "onClick={() => choose(\"exclude\")}",
       "contract": "dashboard",
       "reason": "Shared legend selection actions delegate to the caller: dashboards persist analyze_chart.selection; the timeline persists independent mode, event, tool and caller-origin selections in timeline_visibility through useViewState."
+    },
+    {
+      "key": "ef1a8d29a62b9643:0",
+      "file": "web/src/chart-legend-chip.tsx",
+      "owner": "ChartLegendChip",
+      "tag": "button",
+      "control": "onClick={() => filter(\"drop\")}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
     },
     {
       "key": "f1cb74ebedc04532:0",
@@ -4563,6 +4616,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "1eebb9f108766619:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ChartSelect",
+      "control": "value={view.cycleOn ?? \"\"} onChange={cycleOn => set({ cycleOn: cycleOn || undefined })}",
+      "contract": "dashboard",
+      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
       "key": "24395342a1df0a30:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4644,6 +4706,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "8838351b5ea49acf:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "PercentileControl",
+      "control": "value={view.percentiles} onChange={percentiles => set({ percentiles, norm: undefined })}",
+      "contract": "dashboard",
+      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks. The %ile levels are analyze_chart.percentiles."
+    },
+    {
       "key": "8aa13a6d57cc800a:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -4716,22 +4787,40 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "c44cfd6eb89a1568:0",
+      "key": "4725800412da7d36:0",
       "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisControls",
+      "owner": "AnalysisViewControl",
       "tag": "ChartSelect",
-      "control": "value={view.norm ? \"on\" : \"off\"} onChange={value => set({ norm: value === \"on\" })}",
+      "control": "value={shown} onChange={onChange}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "c95326deb298b518:0",
+      "key": "054ed3275e7646fc:0",
       "file": "web/src/dashboard-analysis.tsx",
-      "owner": "AnalysisViewControl",
-      "tag": "ChartSelect",
-      "control": "value={state.view ?? \"trend\"} onChange={onChange}",
+      "owner": "DashboardAnalysis",
+      "tag": "button",
+      "control": "onClick={() => { // The selection becomes the population, so every other view and breakdown counts it too. onFilter(current => selectionPopulation(catalog, current, view.split, view.selection!)); set({ selection: { values: [], excluded: false } }); }}",
       "contract": "dashboard",
-      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
+      "key": "4ab3d0652d53c61e:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "DashboardAnalysis",
+      "tag": "BinnedHistogram",
+      "control": "onSelect={low => { const bucket = entry!.buckets.find(item => Number(item.keys[0]) === low); const query = bucket && analysisInspectQuery(analysis, bucket, analysis.clause, schema, view.view); if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: \"query\", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search))); }}",
+      "contract": "action",
+      "reason": "Opens the selected bin's records in a new query view; it navigates and holds no view state of its own."
+    },
+    {
+      "key": "d837395f82219be5:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "DashboardAnalysis",
+      "tag": "PopulationControl",
+      "control": "onFilter={onFilter}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
     },
     {
       "key": "e3a5f7148f92dae8:0",
@@ -4743,6 +4832,70 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "85b6a55ef7b795c5:0",
+      "file": "web/src/dashboard-histogram.tsx",
+      "owner": "BinnedHistogram",
+      "tag": "rect",
+      "control": "onClick={onSelect ? () => onSelect(row.low) : undefined}",
+      "contract": "action",
+      "reason": "Opens the selected bin's records in a new query view; it navigates and holds no view state of its own."
+    },
+    {
+      "key": "17e7dc8b6e37bfc1:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationControl",
+      "tag": "button",
+      "control": "onClick={() => setEditing(open => !open)}",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
+      "key": "3c7713579039ca71:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationControl",
+      "tag": "PopulationEditor",
+      "control": "id={id} onApply={next => { set(next); setEditing(false); }} onCancel={() => setEditing(false)}",
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
+      "key": "e3238faab5ed3c52:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationControl",
+      "tag": "button",
+      "control": "aria-label={`Remove ${item.chip}`} onClick={() => set(population.filter(term => term !== item.term))}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
+      "key": "0d766f19bc7f48bf:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationEditor",
+      "tag": "SearchFilters",
+      "control": "onChange={setDraft}",
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
+      "key": "e0bba9776e6237eb:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationEditor",
+      "tag": "button",
+      "control": "onClick={() => onApply(draft)}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
+    },
+    {
+      "key": "f4161cd83bbcab4f:0",
+      "file": "web/src/dashboard-population-control.tsx",
+      "owner": "PopulationEditor",
+      "tag": "button",
+      "control": "onClick={onCancel}",
+      "contract": "editing",
+      "reason": "The population editor is a draft over analyze_filters; only Apply writes it, and its openness is transient."
+    },
+    {
       "key": "94c6e0900334d288:0",
       "file": "web/src/dashboard-select.tsx",
       "owner": "DashboardSelect",
@@ -4752,13 +4905,22 @@
       "reason": "Native select delegates value and changes to its dashboard caller; the hidden selected label only determines width."
     },
     {
-      "key": "20587237f8206bd5:0",
+      "key": "2407248069379e3c:0",
       "file": "web/src/dashboard-trend.tsx",
       "owner": "AnalysisTrend",
       "tag": "StackedColumns",
-      "control": "onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
+      "control": "onSelect={select} onSelectGroup={selectGroup} onPopulation={populate} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })} onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))}",
       "contract": "dashboard",
-      "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings."
+      "reason": "Leaf and category actions write analyze_chart.selection once via the shared dashboard owner. Group actions expand to stable descendant values. Range and optional series expansion retain their existing analyze_filters/analyze_chart bindings. analyze_filters carries the population: the legend's population actions write its terms."
+    },
+    {
+      "key": "bc20970451912500:0",
+      "file": "web/src/dashboard-trend.tsx",
+      "owner": "AnalysisTrend",
+      "tag": "PopulationControl",
+      "control": "onFilter={onFilter}",
+      "contract": "dashboard",
+      "reason": "analyze_filters carries the population: a chip's removal, the legend's population actions, Make this the population and Apply write its terms; analyze_chart keeps the legend selection."
     },
     {
       "key": "81c65876d0ac42ca:0",
@@ -4798,6 +4960,66 @@
       "control": "data-view-field=\"guide_entity\" aria-label=\"Show Applications\" onClick={() => props.onSelect(\"sources\")}",
       "binding": "guide_entity",
       "contract": "view.guide_entity",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "79651bd6cef8926d:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessEmpty",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_scope\" onClick={event=>openDataReadiness(id,event.currentTarget)}",
+      "binding": "readiness_scope",
+      "contract": "view.readiness_scope",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "3f1561e4222131f8:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessIndicator",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_scope\" aria-label={`${title}: ${model.label}. ${model.sentence}`} onClick={event=>{event.preventDefault();event.stopPropagation();openDataReadiness(id,event.currentTarget);}}",
+      "binding": "readiness_scope",
+      "contract": "view.readiness_scope",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "2d315ffef7e2f9a5:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "select",
+      "control": "id=\"readinessPreviewState\" data-view-field=\"readiness_preview\" value={preview} onChange={event=>setPreview(event.target.value as ReadinessScenario)}",
+      "binding": "readiness_preview",
+      "contract": "view.readiness_preview",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "a99328a9e768c962:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "button",
+      "control": "data-view-field=\"readiness_open\" aria-label=\"Close update details\" onClick={()=>dialog.current?.close()}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "ac9be1b4534065e3:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "dialog",
+      "control": "id=\"dataReadinessDialog\" data-view-field=\"readiness_open\" onClick={event=>{if(event.target!==event.currentTarget)return;const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.currentTarget.close();}}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "e7b478b2c462625d:0",
+      "file": "web/src/data-readiness.tsx",
+      "owner": "DataReadinessModal",
+      "tag": "PageLink",
+      "control": "data-view-field=\"readiness_open\" onClick={()=>{invoker.current=null;dialog.current?.close();}}",
+      "binding": "readiness_open",
+      "contract": "view.readiness_open",
       "reason": "Bound directly to the registered view field."
     },
     {
@@ -6477,6 +6699,15 @@
       "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
+      "key": "180a4f2e4634b151:0",
+      "file": "web/src/index.tsx",
+      "owner": "SessionShapeDashboard",
+      "tag": "button",
+      "control": "onClick={revealDefinitions}",
+      "contract": "navigation",
+      "reason": "Reveals the Definitions section with reveal=section:session-shape-definitions: scroll and highlight, never focus."
+    },
+    {
       "key": "6d045847d0c95152:0",
       "file": "web/src/index.tsx",
       "owner": "TokenUsageDashboard",
@@ -6827,6 +7058,34 @@
       "control": "\"input\"",
       "contract": "view.find",
       "reason": "Page Find term; readFind/writeFind keep find, find_case and find_regex in the URL (writeFindParameters)."
+    },
+    {
+      "key": "00936c79d5091590:0",
+      "file": "web/src/percentile-control.tsx",
+      "owner": "PercentileControl",
+      "tag": "input",
+      "control": "checked={value.includes(level)} onChange={() => toggle(level)}",
+      "contract": "dashboard",
+      "reason": "Each level, and None, report through PercentileControl's onChange to AnalysisControls, which writes analyze_chart.percentiles through changeState and the dashboard URL owner."
+    },
+    {
+      "key": "483a77c25372b894:0",
+      "file": "web/src/percentile-control.tsx",
+      "owner": "PercentileControl",
+      "tag": "button",
+      "control": "onClick={() => onChange([])}",
+      "contract": "dashboard",
+      "reason": "Each level, and None, report through PercentileControl's onChange to AnalysisControls, which writes analyze_chart.percentiles through changeState and the dashboard URL owner."
+    },
+    {
+      "key": "af2b45c00f4cdb35:0",
+      "file": "web/src/percentile-control.tsx",
+      "owner": "PercentileControl",
+      "tag": "button",
+      "control": "aria-label=\"%ile\" onClick={() => setOpen(current => !current)}",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Opens the %ile menu; whether it is open is a transient menu, not view state. The levels it ticks are analyze_chart.percentiles."
     },
     {
       "key": "26f74b7cb0ed5e94:0",
@@ -7505,6 +7764,25 @@
       "control": "aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
+    },
+    {
+      "key": "3c0938979a8182b4:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionsToRead",
+      "tag": "button",
+      "control": "onClick={() => setShown(value => value + 20)}",
+      "contract": "transient",
+      "reason": "Shows more sessions in the panel; how many are shown is not part of the view and resets on reload."
+    },
+    {
+      "key": "7e9cf81137729b5b:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionsToRead",
+      "tag": "select",
+      "control": "value={signal} data-view-field=\"session_signal\" onChange={event => setSignal(event.target.value as \"all\" | SessionSignal)}",
+      "binding": "session_signal",
+      "contract": "view.session_signal",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "85efc2b35d82ffac:0",
@@ -8305,13 +8583,13 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "0f5f91dee382ed29:0",
+      "key": "11a26aa66851a5e0:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
-      "tag": "button",
-      "control": "",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "tag": "select",
+      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (!proposal && kind === \"bug\" && !logs) void includeLogs(true); }}",
+      "contract": "editing",
+      "reason": "Edits the type of an unsent feedback report; changing type never grants send consent."
     },
     {
       "key": "21c546ddb1da3f5d:0",
@@ -8341,6 +8619,42 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "382c8515f9a59919:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void discardDraft()}",
+      "contract": "action",
+      "reason": "Explicitly discards only this inline feedback proposal and persists that outcome; it never submits feedback or alters a saved receipt."
+    },
+    {
+      "key": "382c8515f9a59919:1",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void discardDraft()}",
+      "contract": "action",
+      "reason": "Explicitly discards only this inline feedback proposal and persists that outcome; it never submits feedback or alters a saved receipt."
+    },
+    {
+      "key": "50916540af5cdca0:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "div",
+      "control": "onKeyDown={proposal ? event => { // This editor lives inside Ask's form. Enter in a field cannot submit that // form or approve feedback; only the dedicated button grants consent. event.stopPropagation(); if (event.key === \"Escape\") { event.preventDefault(); void keepDraft(); } else if (event.key === \"Enter\" && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLButtonElement)) event.preventDefault(); } : undefined}",
+      "contract": "editing",
+      "reason": "Feedback draft keyboard handling keeps Escape and Enter local to the inline editor; these events cannot approve feedback or submit the Ask question."
+    },
+    {
+      "key": "5553b5dc6b4c68f2:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={proposal ? () => void send() : undefined}",
+      "contract": "action",
+      "reason": "Explicit user approval submits the currently reviewed feedback report; consent is never restored from a URL."
+    },
+    {
       "key": "6f6ae816efe5c29f:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -8348,6 +8662,15 @@
       "control": "value={draft.comment} onChange={e => update({ comment: e.target.value })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "84ee876f61972562:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setCollapsed(false)}",
+      "contract": "editing",
+      "reason": "Reopens an unsent feedback editor or saved receipt inside the conversation; it cannot grant submission consent."
     },
     {
       "key": "b3dfbcb52d181747:0",
@@ -8364,15 +8687,6 @@
       "owner": "Composer",
       "tag": "textarea",
       "control": "value={diagnostics[kind] || \"\"} onChange={e => setDiagnostics(d => ({ ...d, [kind]: boundedLog(e.target.value) }))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "d50ef63da5300b1e:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (kind === \"bug\" && !logs) void includeLogs(true); }}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },

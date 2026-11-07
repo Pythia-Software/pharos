@@ -337,8 +337,9 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
+  const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
+  await settled();
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
   await page.evaluate(() => window.dispatchEvent(new Event("pharos:carbon-settings")));
@@ -346,6 +347,18 @@ test("summary value links retain keyboard focus when the summary rerenders", { s
   await page.keyboard.press("Escape");
   await page.locator("#usageSummary").waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.activeElement?.id === "usageSummaryToggle");
+  // A full reload restores the saved card while its fresh request is pending.
+  let finish;
+  const pending = new Promise(resolve => {finish = resolve;});
+  t.after(() => finish());
+  await page.route('**/api/usage/summary*', async route => {await pending; await route.continue();});
+  await page.reload();
+  await activateHeaderTool(page, 'usageSummaryToggle');
+  await link.waitFor();
+  await link.focus();
+  await shot('quick-stats-cached-refresh');
+  finish(); await settled();
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label')?.startsWith('Tokens, 6h:'));
 });
 
 // Focus is in `surface`, or with the browser itself (a native modal dialog
@@ -1144,6 +1157,118 @@ async function annotate(t) {
   await app.page.locator(".feedback-composer").waitFor();
   return app.page;
 }
+
+test("Ask Pharos feedback requires explicit approval of the reviewed draft", { skip, timeout:60000 }, async t => {
+  const selection = {provider:"Codex",model:"test-model",effort:"Low"};
+  const feedback = {kind:"feature",comment:"Add Markdown export of selected conversations."};
+  const session = {id:"feedback-chat",createdAt:Date.now(),updatedAt:Date.now(),selection,draft:"",conversation:[{id:"feature-1",prompt:"Request Markdown export",cli:"Codex",model:"test-model",effort:"Low",status:"feedback",reply:"I prepared a feature request for review.",cards:[],feedback}]};
+  const submissions = [], questions = [];
+  const other = {...session,id:"another-chat",conversation:[{...session.conversation[0],id:"another-turn",status:"multiple",feedback:undefined,prompt:"Another chat",reply:"An unrelated conversation."}]};
+  const delivered = Promise.withResolvers();
+  const { page, settled, shot } = await open(t, {url:"/?ask_chat=feedback-chat",viewport:{width:390,height:844},ready:".pharos-feedback .uifeedback-form",api:{
+    "GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection},providers:[{id:"Codex"}]},
+    "GET /api/ask/models":{id:"Codex",models:[{id:"test-model",label:"Test Model",efforts:["Default","Low"],default:true}]},
+    "GET /api/ask/sessions":{sessions:[session,other]},"GET /api/ask/session":({query})=>query.get("id")==="another-chat"?other:session,
+    "POST /api/ask/session":({body})=>({...session,...body}),
+    "POST /api/ask/send":({body})=>{questions.push(body);return session;},
+    "POST /api/feedback/submit":async({body})=>{submissions.push(body);if(submissions.length===1)return {id:"wrong-receipt",received:true};await delivered.promise;return {id:body.id,received:true};},
+  }});
+  await page.evaluate(() => localStorage.setItem("uifeedback.v1.draft", JSON.stringify({kind:"feedback",comment:"An unrelated manual report"})));
+  const review = page.getByRole("button", {name:"Review feedback",exact:true});
+  assert.equal(submissions.length, 0);
+  assert.equal(await page.locator(".uifeedback-dialog").count(), 0, "a proposal does not open a dialog automatically");
+  const inline = page.locator(".pharos-feedback .uifeedback-inline"), comment = inline.getByRole("textbox", {name:"What would you like changed?"});
+  const approve = inline.getByRole("button", {name:"Approve and send feedback",exact:true});
+  await page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  assert.ok(await inline.evaluate(element => !element.contains(document.activeElement)), "restoring an inline review leaves focus alone");
+  const question = page.getByRole("textbox", {name:"Ask a question",exact:true});
+  await question.fill("An unrelated next question");
+  assert.equal(await comment.inputValue(), feedback.comment);
+  assert.ok(!await inline.getByRole("checkbox", {name:/Include recent browser errors/}).isChecked());
+  await comment.fill("Add Markdown export so I can share selected conversations in a review.");
+  await shot("ask-feedback-inline-phone");
+  await page.setViewportSize({width:1440,height:1050});await shot("ask-feedback-inline-desktop");
+  await page.setViewportSize({width:390,height:844});
+  await page.keyboard.press("Escape");await review.waitFor();
+  assert.ok(await review.evaluate(element => element === document.activeElement), "cancel returns focus to Review feedback");
+  assert.equal(submissions.length, 0, "dismissing does not consent");
+  await review.click();await page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  assert.match(await comment.inputValue(), /so I can share/);
+  assert.ok(await comment.evaluate(element => element === document.activeElement), "deliberately reopening the draft focuses its editor");
+  const email = inline.getByRole("textbox", {name:"Contact email (optional)"});
+  await email.fill("reviewer@example.test");await email.press("Enter");await settled();
+  assert.equal(submissions.length, 0, "Enter in the email field is not approval");
+  assert.equal(questions.length, 0, "feedback fields cannot submit the surrounding Ask composer");
+  assert.equal(await question.evaluate(element => element.value), "An unrelated next question");
+  await comment.focus();await comment.press("ControlOrMeta+A");await comment.press("ArrowRight");await comment.press("Enter");await page.keyboard.insertText("Keep message order.");
+  assert.match(await comment.inputValue(), /\nKeep message order\.$/);
+  assert.equal(questions.length, 0, "Enter in the report inserts a line break without asking a question");
+  await approve.focus();await page.keyboard.press("Enter");
+  await inline.getByRole("alert").waitFor();
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].comment, (await comment.inputValue()).trim(), "only the edited report is sent");
+  assert.deepEqual(submissions[0].annotations, []);
+  assert.equal(submissions[0].diagnostics, undefined);
+  assert.equal(submissions[0].email, "reviewer@example.test");
+  await comment.focus();await page.keyboard.press("Escape");await review.waitFor();
+  await page.reload();await settled();
+  await page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  assert.equal(submissions.length, 1, "reopening an uncertain submission does not send it");
+  const retryStarted = page.waitForRequest(request=>request.url().endsWith("/api/feedback/submit"));
+  await approve.click();await retryStarted;
+  await page.evaluate(()=>window.pharosNavigate('/ask?ask_chat=another-chat'));
+  await page.locator('.pharos-user-question').filter({hasText:"Another chat"}).waitFor();
+  await page.evaluate(()=>window.pharosNavigate('/ask?ask_chat=feedback-chat'));
+  const sending = inline.getByRole("button", {name:"Sending…",exact:true});
+  await sending.waitFor();
+  assert.ok(await sending.isDisabled(), "a replacement editor follows the submission already in flight");
+  // A second tab has no shared in-memory operation. Its editor can become
+  // stale while the original tab commits a receipt to their shared outbox.
+  const stalePage = await page.context().newPage();
+  await stalePage.goto(page.url());
+  const staleInline = stalePage.locator('.pharos-feedback .uifeedback-inline');
+  const staleApprove = staleInline.getByRole("button", {name:"Approve and send feedback",exact:true});
+  await staleApprove.waitFor();
+  await stalePage.waitForFunction(() => !document.querySelector('.uifeedback-inline .primary')?.disabled);
+  await staleInline.getByRole("textbox", {name:"What would you like changed?"}).fill("A stale editor must not create a replacement report.");
+  delivered.resolve();
+  await page.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[0].id, submissions[1].id, "an unchanged retry confirms the same report");
+  await staleApprove.click();
+  await stalePage.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+  assert.equal(submissions.length,2,"approval in a stale editor restores the saved receipt without another submission");
+  await stalePage.close();
+  assert.ok(await inline.evaluate(element => !element.contains(document.activeElement)), "the replacement editor receives the receipt without stealing focus");
+  // Completion retains a receipt, while restoring it does not move focus.
+  await page.reload();await settled();await page.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+  assert.equal(submissions.length, 2, "reopening a confirmed proposal after reload shows its receipt");
+  assert.ok(await inline.evaluate(element => !element.contains(document.activeElement)), "restoring a receipt leaves focus alone");
+  const sentSummary = inline.getByRole("status");
+  await sentSummary.focus();await sentSummary.press("Escape");
+  await inline.getByRole("button", {name:"View receipt",exact:true}).waitFor();
+  assert.equal(await inline.locator('.uifeedback-draft-text').textContent(),submissions[1].comment,"a restored sent summary shows the submitted edits");
+  await inline.getByRole("button", {name:"View receipt",exact:true}).click();
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  await page.getByRole("dialog", {name:"Send feedback",exact:true}).waitFor();
+  assert.equal(await page.locator(".uifeedback-dialog").getByRole("textbox", {name:"What would you like changed?"}).inputValue(), "An unrelated manual report", "Ask preserves the manual feedback draft");
+  await page.locator(".uifeedback-dialog").getByRole("button", {name:"Close feedback",exact:true}).click();
+  session.conversation.push({...session.conversation[0],id:"discard-2",feedback:{kind:"feature",comment:"A second proposed feature request."}});
+  await page.reload();await settled();
+  const discardReview = page.locator('[data-turn-id="discard-2"] .uifeedback-inline');
+  await discardReview.getByRole("textbox", {name:"What would you like changed?"}).fill("Discard these edits, without sharing them.");
+  await discardReview.getByRole("button", {name:"Keep draft",exact:true}).click();
+  await discardReview.getByRole("button", {name:"Discard draft",exact:true}).click();
+  await page.getByRole("region", {name:"Feedback draft discarded",exact:true}).waitFor();
+  const discardedStatus = await discardReview.getByRole("status").elementHandle();
+  await page.waitForFunction(element => element === document.activeElement, discardedStatus);
+  assert.equal(submissions.length, 2, "discarding a draft does not submit it");
+  await page.reload();await settled();
+  await page.getByRole("region", {name:"Feedback draft discarded",exact:true}).waitFor();
+  assert.ok(await discardReview.evaluate(element => !element.contains(document.activeElement)), "restoring a discard leaves focus alone");
+  assert.equal(submissions.length, 2, "discard survives restoring the original proposal from the chat");
+  await page.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+});
 
 test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
   const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
@@ -2155,13 +2280,28 @@ test('Ask Pharos blocking and reopened browsing overlays handle a ready destinat
 });
 
 test('Quick Stats disclosure and editing keep keyboard focus on the control being used', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
+  const { page, settled, shot } = await open(t, { url: '/settings/layout', ready: '#quickStatsExpand' });
+  let finish;
+  const pending = new Promise(resolve => {finish = resolve;});
+  t.after(() => finish());
+  await page.route('**/api/usage/summary*', async route => {await pending; await route.continue();});
   const disclosure = page.locator('#quickStatsExpand');
   await press(disclosure);
   await page.locator('#quickStatsOptions').waitFor();
+  await page.locator('#quickStatsPreview td.usage-summary-pending').first().waitFor();
   assert.ok(await disclosure.evaluate(element => document.activeElement === element));
   const handle = page.getByRole('button', { name: 'Arrange Tokens', exact: true });
   const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
+  await handle.focus();
+  finish(); await settled();
+  // Loaded preview and toolbox values follow the numeric column headings,
+  // even when their existing cells were first rendered as placeholders.
+  await page.waitForFunction(() => {
+    const heading = document.querySelector('#quickStatsPreview th[data-quick-stats-window]');
+    return [...document.querySelectorAll('#quickStatsEditor td')].every(cell => getComputedStyle(cell).textAlign === getComputedStyle(heading).textAlign);
+  });
+  await focused(handle);
+  await shot('quick-stats-values-loaded');
   await press(handle, 'Alt+ArrowUp');
   await focused(handle);
   await page.keyboard.press('Delete');
@@ -2364,4 +2504,149 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   await link.click();
   await page.waitForURL(url=>url.pathname==='/analyze'&&url.searchParams.get('analyze_topic')==='tokens');
   await modal.waitFor({state:'hidden'});
+});
+
+for(const width of [1440,390])test(`Data freshness follows the native modal and Background Processing at ${width}px`,{skip},async t=>{
+  const {idleStatus}=await import('./fixtures.mjs');
+  const status={...idleStatus,freshness:[...idleStatus.freshness,{domain:'an.ledger',label:'Tool ledger',behind:{state:'current'}},{domain:'an.authorship',group:'analyses',label:'Writing estimates',as_of:new Date(Date.now()-3600000).toISOString(),pending_since:new Date(Date.now()-187*60000).toISOString(),behind:{state:'behind',count:128,unit:'message'},reason:{code:'changed',text:'New messages are waiting'},next:'Next frequent update'}]};
+  const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+  assert.equal(await page.locator('.data-freshness-icon use').evaluateAll(elements=>elements.filter(element=>!document.getElementById(element.getAttribute('href').slice(1))).length),0,'freshness symbols resolve in the served page shell');
+  await shot('lag-clock');
+  await activateHeaderTool(page,'dataReadinessToggle');
+  const dialog=page.locator('#dataReadinessDialog');await dialog.waitFor();
+  assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  await page.locator('body>header .brand').evaluate(element=>element.focus());assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  const picker=dialog.getByRole('combobox',{name:'Preview example'});
+  await picker.selectOption('days');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent.includes('2 days'));
+  await picker.selectOption('missing');await page.locator('.data-readiness-empty').first().waitFor();
+  assert(await page.locator('.data-readiness-empty [role="progressbar"]').count()>0);
+  await picker.selectOption('clear');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent==='Up to date as of 6 minutes ago');
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  await shot('current-check');
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
+  await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
+  const updated={...status,freshness:status.freshness.map(row=>row.domain==='an.authorship'?{...row,pending_since:null,behind:{state:'current'},reason:null,as_of:new Date().toISOString()}:row)};
+  push('/api/status/stream',updated);await page.waitForFunction(()=>/Up to date|No updates waiting|Showing saved results/.test(document.getElementById('dataReadinessTitle')?.textContent));
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  assert.ok(await page.evaluate(()=>['dataReadinessToggle','headerMore'].includes(document.activeElement?.id)));
+  push('/api/status/stream',status);
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tools'));
+  await page.locator('.usage-tools-dashboard [aria-busy="false"]').first().waitFor();
+  await page.waitForFunction(()=>document.getElementById('dataReadinessToggle')?.getAttribute('aria-label').includes('Up to date'));
+  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
+  await page.locator('[data-readiness-result="chart:writing_messages"]').click();await dialog.waitFor();
+  assert.notEqual(await dialog.locator('header small').innerText(),'This page');
+  await dialog.getByRole('link',{name:'Update settings',exact:true}).click();await page.locator('#backgroundSchedule .bg-col').first().waitFor();await settled();
+  assert(await page.locator('.data-readiness-workload').isVisible());
+  assert.equal(calls.filter(call=>call.method==='POST'&&/^\/api\/(sync|background|labels)/.test(call.path)).length,0,'reviewing status never enqueues work or changes Settings');
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await shot('settings');
+});
+
+for(const width of [1440,390])test(`Freshness is reachable on collapsed tables and bespoke dashboard panels at ${width}px`,{skip},async t=>{
+ const queryLayout=encodeURIComponent(JSON.stringify({library:true}));
+ const {idleStatus}=await import('./fixtures.mjs');
+ const background=structuredClone(defaultApi['GET /api/background']);
+ const upgrade={...background.view.items.find(item=>item.id==='writing-refine'),id:'upgrade',label:'Library upgrade',verb:'Upgrading the library',fixed:true};
+ background.view.items.push(upgrade);background.view.cadences.find(cadence=>cadence.id==='daily').items.push('upgrade');
+ const status={...idleStatus,background:background.view};
+ const {page,settled,push}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+ const dialog=page.locator('#dataReadinessDialog');
+ const check=async (selector)=>{
+  const button=page.locator(selector).first();await button.waitFor();
+  await button.focus();assert(await button.evaluate(element=>element===document.activeElement));
+  await button.click();await dialog.waitFor();assert(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  assert(await button.evaluate(element=>element===document.activeElement));
+  await settled();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ };
+ await check('[data-readiness-result="query:library"]');
+ for(const [url,identity] of [
+  ['/findings?view=table','query:findings'],
+  ['/findings?optimize_area=safety&view=table','query:safety'],
+  ['/findings?optimize_area=fixes&view=table','query:fixes'],
+  ['/analyze?analyze_topic=habits','chart:habits-calendar'],
+  ['/analyze?analyze_topic=thinking-overview','chart:thinking-waits'],
+  ['/analyze?analyze_topic=thinking-detail','chart:thinking-distributions'],
+  ['/analyze?analyze_topic=parallelism','chart:ribbon'],
+  ['/analyze?analyze_topic=carbon','carbon:estimate'],
+  ['/analyze?analyze_topic=agent_experience','events:examples'],
+ ]){
+  await page.evaluate(url=>window.pharosNavigate(url),url);
+  await check(`[data-readiness-result="${identity}"]`);
+ }
+ // Follow a bespoke chart's prerequisite through the real Settings disclosure.
+ // The domain/task reduction itself is covered by the readiness unit tests.
+ push('/api/status/stream',{...status,freshness:[...status.freshness,{domain:'an.ledger',label:'Tools ledger',behind:{state:'behind',count:8,unit:'conversation'},reason:{code:'version',text:'This version of Pharos rebuilds it'},next:'updates when you run the library upgrade'}]});
+ await page.waitForFunction(()=>window.pharosStatusStore?.current()?.view?.library?.freshness?.some(row=>row.domain==='an.ledger'));
+ await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=thinking-overview'));
+ await page.locator('[data-readiness-result="chart:thinking-waits"]').click();await dialog.waitFor();
+ await dialog.getByRole('link',{name:'Update settings',exact:true}).click();
+ await page.locator('#background-detail-upgrade').waitFor();
+});
+
+// These are live ledger snapshots: no preview parameter, and the running
+// snapshot has the same reason replacement the Go ledger actually emits.
+test('Live data updates keep real backlog, existing results and first-build progress', {skip}, async t=>{
+ const {idleStatus}=await import('./fixtures.mjs');
+ const iso=minutes=>new Date(Date.now()-minutes*60000).toISOString();
+ const currentSource={domain:'conv:claude',label:'Conversations (claude)',task_id:'conversations',as_of:iso(2),behind:{state:'current'}};
+ const view={domain:'view',label:'Search view',behind:{state:'current'}};
+ const status={...idleStatus,freshness:[{...currentSource,pending_since:iso(540),behind:{state:'behind'},reason:{code:'needs-capture',text:'New conversations are waiting'}},view,{domain:'conv:new',label:'Conversations (new)',as_of:null,output_missing:true,behind:{state:'behind'},reason:{code:'never-indexed',text:'Not indexed yet'}}]};
+ const excluded={...EMPTY_QUERY,where:[{field:'source_kind',op:'=',value:'new',negated:true}]};
+ const bookmark={id:'durable-readiness',title:'Saved conversations',url:'/library?q_library=@aaaaaaaaaaaaaaaaaaaaaa',query:excluded};
+ const {page,push,settled}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{'pharos-bookmarks-v1':[bookmark]},api:{
+  'GET /api/status':status,'GET /api/status/stream':eventStream(status),
+  '* /api/query/:dataset/:operation':call=>{
+   const reply=defaultApi['* /api/query/:dataset/:operation'](call);
+   if(call.params.dataset==='writing_messages'&&call.body?.metrics?.some(metric=>metric.dateGrouping||metric.groupBy?.length)&&reply.metrics)return {...reply,metrics:reply.metrics.map(metric=>({...metric,buckets:[]}))};
+   return call.params.dataset==='writing_messages'&&['rows','rows-v2','query-v3'].includes(call.params.operation)?{...reply,rows:[],total:0,sourceTotal:0}:reply;
+  },
+ }});
+ // Settle the capture frame as well as fetches, then check an ordinary reload.
+ for(let attempt=0;attempt<2;attempt++){
+  await settled();
+  assert.equal(new URL(page.url()).searchParams.has('readiness_preview'),false);
+  assert.equal(await page.locator('.conversation-result-card').count(),48);
+  await activateHeaderTool(page,'dataReadinessToggle');
+  const dialog=page.locator('#dataReadinessDialog');await dialog.waitFor();
+  assert.match(await dialog.getByRole('heading').innerText(),/9 hours behind/);
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'hidden'});
+  // Native dismissal precedes the close event that persists URL state.
+  await page.waitForFunction(()=>new URL(location.href).searchParams.get('readiness_open')==='0');
+  if(!attempt){await page.reload();await page.locator('.conversation-result-card').first().waitFor();}
+ }
+ const first={...status,freshness:[currentSource,view,{domain:'an.authorship',label:'Writing estimates',as_of:null,output_missing:true,behind:{state:'behind',count:128,unit:'message'},reason:{code:'never-built',text:'Not built yet'}}]};
+ push('/api/status/stream',first);
+ await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_mode=query&analyze_data=writing_messages'));
+ const empty=page.locator('.data-readiness-empty');await empty.waitFor();
+ await empty.getByRole('progressbar').waitFor();
+ for(const state of ['queued','running']){
+  push('/api/status/stream',{...first,freshness:first.freshness.map(row=>row.domain==='an.authorship'?{...row,reason:{code:'running',text:'Updating now'},catching_up:'op-writing'}:row),operations:[{id:'op-writing',kind:'analysis.authorship',label:'Writing estimates',state,step:{done:58,total:128,unit:'message'}}]});
+  await page.waitForFunction(state=>window.pharosStatusStore?.current()?.view?.library?.operations?.some(operation=>operation.id==='op-writing'&&operation.state===state),state);
+  await empty.locator('[role=progressbar][aria-valuenow]').waitFor();
+  assert(await empty.isVisible());
+  assert.equal(new URL(page.url()).searchParams.has('readiness_preview'),false);
+ }
+ // The chart's first-build surface must not hide independently loaded tiles.
+ await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
+ await page.locator('.usage-analysis-trend[aria-busy="false"]').waitFor();
+ await empty.waitFor();
+ await page.locator('[aria-label="Human Words summary"][aria-busy="false"]').waitFor();
+ assert(await empty.isVisible());
+ push('/api/status/stream',{...first,freshness:first.freshness.map(row=>row.domain==='an.authorship'?{...row,output_missing:false,reason:null,as_of:iso(0),behind:{state:'current'}}:row),operations:[]});
+ await empty.waitFor({state:'hidden'});
+ await page.locator('[data-readiness-result="chart:writing_messages"]').waitFor();
+ // A saved query still renders with a durable URL and no local snapshot. Its
+ // update details must use the same stored definition as its loaded preview.
+ push('/api/status/stream',status);
+ await page.evaluate(()=>window.pharosNavigate('/home'));
+ const saved=page.locator('[data-card-id="durable-readiness"]');
+ await saved.locator('.query-cover:not([aria-busy="true"])').waitFor();
+ await saved.locator('[data-readiness-result="card:durable-readiness"]').click();
+ const details=page.locator('#dataReadinessDialog');await details.waitFor();
+ await details.getByRole('progressbar').first().waitFor();
+ await details.getByRole('link',{name:'Update settings',exact:true}).click();
+ await page.locator('#background-detail-conversations').waitFor();
 });

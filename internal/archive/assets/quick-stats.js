@@ -40,6 +40,72 @@ function normalizeQuickStatsLayout(saved, metrics = quickStatsMetrics()) {
 }
 // The detail request is opt-in; ordinary token/cost summaries stay small.
 const QUICK_STATS_DETAIL_METRICS = quickStatsMetrics().map(row => row[1]).filter(id => !QUICK_STATS_DEFAULT_METRICS.includes(id) && !['agent_time_ms', 'active_time_ms'].includes(id));
+
+// Like homepage covers, show the last snapshot while revalidating and reuse
+// results for one minute in this page. These two small responses are local to
+// the browser and library, never synced preferences. A new page revalidates.
+function createQuickStatsCache({scope = '', storage, now = () => Date.now(), context = () => {
+  const date = new Date(now());
+  return JSON.stringify([Intl.DateTimeFormat().resolvedOptions().timeZone, date.getFullYear(), date.getMonth(), date.getDate()]);
+}} = {}) {
+  const entries = new Map(), pending = new Map(), lifetime = 7 * 86400000, key = 'pharos-quick-stats-cache-v1:' + scope;
+  let generation = 1;
+  if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
+  const valid = entry => entry && typeof entry.details === 'boolean' && typeof entry.context === 'string'
+    && Number.isFinite(entry.at) && entry.at <= now() && now() - entry.at <= lifetime
+    && typeof entry.data?.generated_at === 'string' && Number.isFinite(Date.parse(entry.data.generated_at))
+    && Array.isArray(entry.data.windows) && entry.data.windows.every(bucket => bucket && typeof bucket.key === 'string');
+  if (scope) try {
+    const saved = JSON.parse(storage?.getItem(key) || '[]');
+    if (Array.isArray(saved)) for (const entry of saved) if (valid(entry)) entries.set(entry.details, {...entry, generation: 0});
+  } catch {}
+  const cache = {
+    get(details) {
+      const entry = entries.get(details);
+      if (!valid(entry) || entry.context !== context()) return null;
+      return {...entry, fresh: entry.generation === generation && now() - entry.at < 60000};
+    },
+    put(details, data, expectedGeneration = generation) {
+      // An invalidated request cannot replace a newer snapshot or be saved.
+      if (expectedGeneration !== generation) return;
+      const entry = {details, data, at: now(), context: context(), generation};
+      if (!valid(entry)) return;
+      entries.set(details, entry);
+      if (scope) try { storage?.setItem(key, JSON.stringify([...entries.values()].filter(valid).map(({generation, ...saved}) => saved))); } catch {}
+    },
+    invalidate() { generation++; },
+    generation: () => generation,
+    async load(details, request, publish, refresh = false) {
+      const saved = cache.get(details);
+      if (saved) publish(saved);
+      if (saved?.fresh && !refresh) return;
+      const version = generation, calendar = context(), requestKey = JSON.stringify([details, version, calendar]);
+      if (!pending.has(requestKey)) {
+        const result = Promise.resolve().then(request).then(data => {
+          if (version !== generation || calendar !== context()) return null;
+          cache.put(details, data, version);
+          return cache.get(details);
+        }).finally(() => pending.delete(requestKey));
+        pending.set(requestKey, result);
+      }
+      const result = await pending.get(requestKey);
+      if (result) publish(result);
+    },
+  };
+  return cache;
+}
+
+// The day clock can announce a calendar change and a usage refresh together.
+// Apply every invalidation before starting their single replacement request.
+function createQuickStatsRefreshQueue(refresh) {
+  let queued = false;
+  return () => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; refresh(); });
+  };
+}
+
 function formatQuickStatsValue(value, format) {
   if (value == null || !Number.isFinite(Number(value))) return '—';
   const number = Number(value);
@@ -245,6 +311,7 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
       for (const cell of table.querySelectorAll('td[data-quick-stats-metric]')) {
         const source = [...fresh.querySelectorAll('td')].find(other => other.dataset.quickStatsMetric === cell.dataset.quickStatsMetric && other.dataset.quickStatsWindow === cell.dataset.quickStatsWindow);
         cell.replaceChildren(...source.childNodes); cell.title = source.title;
+        cell.classList.toggle('usage-summary-pending', source.classList.contains('usage-summary-pending'));
       }
     }
   }

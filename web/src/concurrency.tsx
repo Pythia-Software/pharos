@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { DashboardSelect } from "./dashboard-select";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clipIntervals, concurrencyAverage, concurrencyPalette, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
@@ -277,7 +278,7 @@ export function ConcurrencyPanel({ routeParameter, onSelection }: { routeParamet
       <SmoothingControl value={settings.smoothingMinutes} unit="minutes" onChange={smoothingMinutes => update({ smoothingMinutes })} note="Average occupancy line" />
     </div>
     <ZoomNavigation canBack={navigation.canBack} zoomed={Boolean(zoom || selected)} onBack={() => navigation.back(snapshot => update(snapshot))} onReset={() => update({ zoom: null, workspace: "", agent: "" })}>
-      <span className="machine-zoom-status" aria-live="polite">{zoom ? `${clock.format(bounds[0])} – ${clock.format(bounds[1])}` : "Full time range"}{selected ? " · Selected conversations" : ""}</span>
+      {!routeParameter ? <DataReadinessIndicator id="ribbon:dialog" title="Parallelism" dataset="parallelism" query={{settings,repository}} /> : null}<span className="machine-zoom-status" aria-live="polite">{zoom ? `${clock.format(bounds[0])} – ${clock.format(bounds[1])}` : "Full time range"}{selected ? " · Selected conversations" : ""}</span>
     </ZoomNavigation>
     {settings.smoothingMinutes ? <p className="usage-dashboard-note">The line shows a {settings.smoothingMinutes}-minute trailing average. Ribbons, hover counts, summary metrics, and linked records retain actual activity.</p> : null}
     <ConcurrencyChart key={counting} mode={mode} counting={counting} threads={rangeThreads} historyThreads={threads} historyStart={zonedDayBounds(data.period_start, data.timezone)[0]} gap={gap} order={order} bounds={bounds} ceiling={Math.max(2, visibleMetrics[mode].peak)} colors={colors} selected={highlighted} hover={hover} onHover={setHover} onSelect={chooseUnit} onZoom={value => update({ zoom: value })} timezone={data.timezone} smoothingMinutes={settings.smoothingMinutes}/>
