@@ -320,7 +320,7 @@ test("a Tools minimum sums calls natively: it reports what it hides, and a bar o
 });
 
 test("a scatter says when one measure's population narrows the other", () => {
-  assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only retained body volume's records here/);
+  assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only saved instruction size's records here/);
   assert.doesNotMatch(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "conversations", split: "none" }), /counts only/);
 });
 

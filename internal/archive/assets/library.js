@@ -678,7 +678,7 @@
       && new Date(activity.started_at).getTime() >= new Date(lastIndex.started_at).getTime());
     const updating = activities.filter(activity => ['capture', 'sync', 'index'].includes(activity.kind)
       || activity.label === 'Upgrading the library'
-      || (upgradeState?.running && upgradeState.step === 'tools' && activity.label === 'Building the Tools ledger')
+      || (upgradeState?.running && upgradeState.step === 'tools' && activity.label === 'Building the tool index')
       || (indexFollowUp && (activity === indexFollowUp || activity.label === 'Updating findings')));
     if (!updating.length) return null;
     const capturing = updating.find(activity => activity.kind === 'capture');
@@ -920,7 +920,7 @@
 
     if (recentIndex && !update) {
       const last = node('div', 'pharos-last-index');
-      last.append(node('h3', '', 'Last index this session'));
+      last.append(node('h3', '', 'Last index since Pharos opened'));
       const failed = indexFailed(recentIndex);
       const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed'
         : indexDeferred(recentIndex) ? 'Complete, except sources a capture was using' : 'Complete';
@@ -1083,7 +1083,7 @@
     if (!run?.conversations && !parsed && !unchanged && (current || !results.length)) return 'Already up to date; no conversations rewritten';
     const parts = [plural(run?.conversations || 0, 'conversation') + ' written'];
     if (parsed) parts.push(`${plural(parsed, 'source part')} parsed`);
-    if (unchanged) parts.push(`${unchanged.toLocaleString()} unchanged files/sessions skipped`);
+    if (unchanged) parts.push(`${unchanged.toLocaleString()} unchanged history files or conversations skipped`);
     if (current) parts.push(`${plural(current, 'source')} already current`);
     return parts.join(' · ');
   }

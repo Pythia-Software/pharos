@@ -1049,7 +1049,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
   return <div className="findings-page">
     <div className="view-heading findings-heading">
       <div><h1>Efficiency</h1>
-        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or a harness setting can fix. Each is measured before and after you hand it to an agent.</p>
+        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or an agent app setting can fix. Each is measured before and after you hand it to an agent.</p>
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
     </div>

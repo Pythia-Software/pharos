@@ -38,6 +38,14 @@ Release-only tasks must never run release-machine setup or create/import signing
 keys. Missing deployment configuration or signing keys is a blocker to report;
 signing and publication belong on the separately configured deployment Mac.
 
+## User-facing vocabulary
+
+Use the Data Guide vocabulary in `web/src/data-taxonomy-model.ts` and the
+relationship/copy rules in [docs/ui-vocabulary.md](docs/ui-vocabulary.md).
+Name the actual counting unit: workspace, conversation, agent session, message
+or tool call. Work items are source-recorded tasks, not another name for
+workspace rows. Preserve source text, stored field keys and URL/API identities.
+
 ## Query Table dependency policy
 
 Do not add, extend, or reintroduce local Query Table patches. Required fixes

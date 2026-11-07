@@ -322,6 +322,8 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
+	"/assets/data-guide.js":        {"data-guide.js", "text/javascript; charset=utf-8"},
+	"/assets/data-guide.css":       {"data-guide.css", "text/css; charset=utf-8"},
 	"/assets/query-tables.js":      {"query-tables.js", "text/javascript; charset=utf-8"},
 	"/assets/query-tables.css":     {"query-tables.css", "text/css; charset=utf-8"},
 	"/assets/onboarding.js":        {"onboarding.js", "text/javascript; charset=utf-8"},
@@ -350,6 +352,17 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/page-errors.js":       {"page-errors.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.js":   {"managed-library.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.css":  {"managed-library.css", "text/css; charset=utf-8"},
+
+	// Application icons shown in the Data Guide.
+	"/assets/data-guide-apps/calculator.png": {"data-guide-apps/calculator.png", "image/png"},
+	"/assets/data-guide-apps/chatgpt.png":    {"data-guide-apps/chatgpt.png", "image/png"},
+	"/assets/data-guide-apps/claude.png":     {"data-guide-apps/claude.png", "image/png"},
+	"/assets/data-guide-apps/codex.png":      {"data-guide-apps/codex.png", "image/png"},
+	"/assets/data-guide-apps/conductor.png":  {"data-guide-apps/conductor.png", "image/png"},
+	"/assets/data-guide-apps/cursor.png":     {"data-guide-apps/cursor.png", "image/png"},
+	"/assets/data-guide-apps/notes.png":      {"data-guide-apps/notes.png", "image/png"},
+	"/assets/data-guide-apps/safari.png":     {"data-guide-apps/safari.png", "image/png"},
+	"/assets/data-guide-apps/vscode.png":     {"data-guide-apps/vscode.png", "image/png"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -777,15 +790,15 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// in the background; progress is reported by /api/tools/status. A
 		// release stops it between conversations; the next build resumes.
 		started := s.start(OperationSpec{Kind: "tools.ledger.build", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
-			op.Plan(StepPlan{Name: "Build the Tools ledger", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild the Tools rollup", Total: -1})
-			op.Step("Build the Tools ledger", "conversation", -1)
+			op.Plan(StepPlan{Name: "Build the tool index", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild tool summaries", Total: -1})
+			op.Step("Build the tool index", "conversation", -1)
 			_, err := s.Catalog.BackfillToolLedger(ctx, func(done, total int) {
-				op.progress("Build the Tools ledger", "", "conversation", float64(done), float64(total), total > 0)
+				op.progress("Build the tool index", "", "conversation", float64(done), float64(total), total > 0)
 			})
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Tool ledger build: %v\n", err)
 			}
-			op.Step("Rebuild the Tools rollup", "", -1)
+			op.Step("Rebuild tool summaries", "", -1)
 			rollup := s.Catalog.ensureToolRollup(ctx)
 			if rollup != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", rollup)
