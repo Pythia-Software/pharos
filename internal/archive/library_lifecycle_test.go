@@ -1348,6 +1348,63 @@ func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) 
 			}
 		}
 	})
+	t.Run("Claude replies copied across sessions", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		r1, r2 := claudeUsageMessage("a1", "msg_1", "req_1", 100, 10), claudeUsageMessage("b1", "msg_2", "req_2", 200, 20)
+		ingest := func(config Config, records ...WorkspaceRecord) {
+			c := reopenCatalog(t, config.CatalogPath)
+			defer c.Close()
+			for _, record := range records {
+				tx, err := c.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		// This library knows the original session; the other only the one
+		// that resumed it, which counts the copied reply there.
+		resumed := claudeSessionRecord("claude", "s2", "2026-09-20T11:00:00Z", "/a/s2.jsonl", r1, r2)
+		ingest(b, claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1), resumed)
+		// It also holds a TL1 run stored before advisor records were.
+		run := claudeUsageMessage("t1", "msg_7", "req_7", 100, 10)
+		run.RawText = jsonText(map[string]any{"type": "assistant", "uuid": "t1", "requestId": "req_7", "message": map[string]any{"id": "msg_7", "model": "claude-test",
+			"usage": map[string]any{"input_tokens": 100, "output_tokens": 10, "iterations": []any{map[string]any{"type": "advisor_message", "model": "claude-advisor", "input_tokens": 50, "output_tokens": 5}}}}})
+		ingest(a, resumed, claudeSessionRecord("tl1", "tl1-run", "2026-09-20T12:00:00Z", "/a/run.jsonl", run))
+		if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := reopenCatalog(t, b.CatalogPath)
+		defer c.Close()
+		var tokens int64
+		if err := c.DB.QueryRow(`SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions WHERE provider='claude'`).Scan(&tokens); err != nil || tokens != 330+165 {
+			t.Fatalf("Claude tokens = %d, %v; want %d", tokens, err, 330+165)
+		}
+		// Its requests are those of a library that indexed both sessions.
+		requests := func(c *Catalog) string {
+			rows, err := queryMaps(c.DB, `SELECT c.native_id conversation,r.native_id,r.sequence,r.total_tokens,r.context_growth_tokens
+				FROM model_requests r JOIN conversations c ON c.id=r.conversation_id WHERE c.native_id IN ('s1','s2') ORDER BY 1,2`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return jsonText(rows)
+		}
+		indexed, _ := testCatalog(t)
+		for _, record := range []WorkspaceRecord{claudeSessionRecord("claude", "s1", "2026-09-20T10:00:00Z", "/a/s1.jsonl", r1), resumed} {
+			if result := indexed.Ingest(newCopyFixture(t, record), nil); result.Error != nil {
+				t.Fatal(result)
+			}
+		}
+		if got, want := requests(c), requests(indexed); got != want {
+			t.Fatalf("imported requests %s, want %s", got, want)
+		}
+	})
 	t.Run("Claude group delegation", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		c := reopenCatalog(t, a.CatalogPath)
@@ -1907,6 +1964,35 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		}
 		if catalogCount(t, a, "messages") != 0 {
 			t.Fatal("delivered rewrite returned to pending")
+		}
+	})
+	t.Run("Claude replies another session claimed", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		useHost(t, currentHost().ID)
+		original := []string{
+			claudeTurn("s1", "p1", "", "user", "Investigate", nil),
+			claudeReply("s1", "a1", "p1", "msg_1", "req_1", text("Looking"), usage(100, 10)),
+		}
+		resumed := []string{
+			strings.Replace(strings.ReplaceAll(original[0], `"sessionId":"s1"`, `"sessionId":"s2"`), "2026-09-24T17:00:00Z", "2026-09-24T18:00:00Z", 1),
+			strings.ReplaceAll(original[1], `"sessionId":"s1"`, `"sessionId":"s2"`),
+		}
+		source := claudeSessionFiles(t, map[string][]string{"s1.jsonl": original, "s2.jsonl": resumed})
+		a.Sources = []SourceConfig{source}
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		// s2's copy of s1's reply counted nothing in the library it reached.
+		writeSourceFile(t, filepath.Join(source.Path, "-p", "s2", "subagents", "agent-x.jsonl"),
+			strings.Join(withSidechain([]string{claudeReply("s2", "x1", "", "msg_9", "req_9", text("Checked"), usage(50, 5))}), "\n")+"\n")
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if n := catalogCount(t, a, "conversations"); n != 1 {
+			t.Fatalf("%d conversations pending, want the new subagent alone", n)
 		}
 	})
 	a, b := lifecycleLibraries(t)

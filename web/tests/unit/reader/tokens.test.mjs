@@ -47,6 +47,13 @@ test("turn and sub-agent spend include nested usage across many turns", () => {
   assert.deepEqual([...new Set(sampled.map(sample => sample.stream))], ["main", "child"]);
 });
 
+test("an advisor's request leaves the conversation's context alone", () => {
+  const reply = (id, input) => event(id, "metadata", { type: "assistant", message: { id, usage: { input_tokens: input, output_tokens: 10 } } });
+  const advisor = event("advisor", "metadata", { type: "assistant", advisor_of: "r1", message: { id: "r1:advisor:0", usage: { input_tokens: 50, output_tokens: 5 } } });
+  const { events } = render([human(), reply("r1", 1000), advisor, reply("r2", 1020)]);
+  assert.deepEqual(plain(samples(events).map(sample => sample.size)), [1000, 1020]);
+});
+
 test("split message usage includes cache once and reconciles result totals", () => {
   const message = { id: "request-1", usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 }, content: [{ type: "text", text: "Reply" }, { type: "thinking", thinking: "Thought" }] };
   const { events, graph } = render([human(), event("reply", "message", { message }), event("retry", "message", { message: { ...message, usage: { ...message.usage, output_tokens: 30 } } }),

@@ -892,6 +892,10 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			}
 		}
 	}
+	unclaimed := record.Conversations
+	if err := claimClaudeUsage(tx, &record); err != nil {
+		return 0, 0, err
+	}
 	messageCount, conversationCount := 0, 0
 	conversationIDs := make([]string, len(record.Conversations))
 	merged := map[string]bool{}
@@ -935,8 +939,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if err := recordOriginObservation(tx, conversationID, host, record.SourceKind, conversation); err != nil {
 			return 0, 0, err
 		}
-		// What the source gave is what a delivery checkpoint matches.
-		delivered := conversation
+		// What the source gave is what a delivery checkpoint matches, before
+		// another conversation's claim on its replies.
+		delivered := unclaimed[index]
 		if conversation.Coverage == "partial" {
 			if conversation.Messages, err = keepStoredMessages(ctx, tx, conversationID, conversation); err != nil {
 				return 0, 0, err
@@ -957,12 +962,16 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 		retained := map[string]bool{}
+		usageChanged := false
 		for sourceOrder, message := range conversation.Messages {
 			if err := ctx.Err(); err != nil {
 				messageWriter.statement.Close()
 				return 0, 0, err
 			}
 			message.SourceOrder = sourceOrder
+			if prior, stored := messageWriter.states[message.NativeID]; stored && claudeUsageRecord(message) && prior.message.RawText != message.RawText {
+				usageChanged = true
+			}
 			id, changed, err := messageWriter.write(message)
 			if err != nil {
 				messageWriter.statement.Close()
@@ -1012,7 +1021,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		if inputErr != nil && inputErr != sql.ErrNoRows {
 			return 0, 0, inputErr
 		}
-		if !force && input == priorInput {
+		// A claim can change what an unchanged conversation's replies count:
+		// another conversation's start moved, or it came or went.
+		if !force && input == priorInput && !usageChanged {
 			continue
 		}
 		if force {
@@ -1070,7 +1081,7 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 			return 0, 0, err
 		}
 		metrics := record.Metrics
-		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 {
+		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 || claudeRecordHasUsage(record) {
 			if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
 				return 0, 0, err
 			}
@@ -1120,6 +1131,16 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 		return 0, 0, err
 	}
 	if err := recordCopyVersions(tx, host, workspaceID, conversationIDs, record, !authority.older); err != nil {
+		return 0, 0, err
+	}
+	merges := make([]bool, len(record.Conversations))
+	for index := range merges {
+		merges[index] = !authority.conversations[index].writer
+	}
+	if err := settleClaudeUsage(ctx, tx, record, conversationIDs, merges, "", nil); err != nil {
+		return 0, 0, err
+	}
+	if err := settleStoredClaude(ctx, tx, record, workspaceID, conversationIDs, slices.Contains(merges, true)); err != nil {
 		return 0, 0, err
 	}
 	if err := refreshWorkspaceNames(tx, []string{workspaceID}); err != nil {

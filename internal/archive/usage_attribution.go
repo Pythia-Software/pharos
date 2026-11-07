@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const usageAttributionVersion = "3"
+const usageAttributionVersion = "4"
 
 func claudeChildren(conversations []ConversationRecord, root ConversationRecord) []ConversationRecord {
 	if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -57,7 +57,9 @@ func claudeGroupRemainder(conversations []ConversationRecord, root ConversationR
 	requests := map[string]tokenCounts{}
 	hasRequests := false
 	for _, conversation := range append([]ConversationRecord{root}, claudeChildren(conversations, root)...) {
-		modelRequests, _ := buildToolLedger(conversation.Messages, conversation.Model)
+		// A claim counts whatever the process sent, so a reply counted in
+		// another conversation is not left over beyond it.
+		modelRequests, _ := buildToolLedger(withUsageCopies(conversation.Messages), conversation.Model)
 		for _, request := range modelRequests {
 			if request.Counts["total_tokens"] <= 0 {
 				continue
@@ -145,7 +147,7 @@ func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int,
 }
 
 func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int, int), walLimit int64) (int, error) {
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id FROM workspaces w WHERE EXISTS
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.source_kind FROM workspaces w WHERE EXISTS
 		(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id AND c.provider='claude')
 		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=w.id AND s.version=?)`, usageAttributionVersion)
 	if err != nil {
@@ -156,47 +158,27 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			return index, err
 		}
 		workspaceID := firstString(row["id"])
-		items, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,parent_id,provider,model,effort,agent_depth,started_at FROM conversations
-			WHERE workspace_id=? ORDER BY agent_depth,native_id`, workspaceID)
-		if err != nil {
-			return index, err
-		}
-		conversations, ids := make([]ConversationRecord, 0, len(items)), make([]string, 0, len(items))
-		nativeIDs := map[string]string{}
-		for _, item := range items {
-			nativeIDs[firstString(item["id"])] = firstString(item["native_id"])
-		}
-		for _, item := range items {
-			messages, err := storedMessages(ctx, c.DB, item["id"])
+		// Read under the writer: what an ingest adds meanwhile must not be
+		// lost to an earlier snapshot.
+		err := c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
+			conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
 			if err != nil {
-				return index, err
-			}
-			ids = append(ids, firstString(item["id"]))
-			nativeID := firstString(item["native_id"])
-			parentNativeID := nativeIDs[firstString(item["parent_id"])]
-			if before, _, ok := strings.Cut(nativeID, ":subagent:"); ok && parentNativeID == "" {
-				parentNativeID = before
-			}
-			conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})
-		}
-		err = c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
-			for j, conversation := range conversations {
-				if err := replaceAgentSessions(tx, workspaceID, ids[j], conversation); err != nil {
-					return err
-				}
-			}
-			if err := applyClaudeGroupUsage(tx, workspaceID, conversations, ids, nil); err != nil {
 				return err
 			}
-			if metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: conversations}); len(metrics) > 0 {
-				if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
-					return err
-				}
-				if err := replaceMetrics(tx, workspaceID, metrics); err != nil {
-					return err
+			if firstString(row["source_kind"]) == "claude" {
+				err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids)
+			} else {
+				// TL1 runs Claude Code too; its stored replies get their
+				// advisor records, but its copies are not settled.
+				var changed map[string]bool
+				if changed, err = backfillClaudeAdvisorUsage(tx, conversations, ids); err == nil {
+					err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed)
 				}
 			}
-			_, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
 				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion)
 			return err
 		})

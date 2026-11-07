@@ -549,7 +549,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 		}
 		return filepath.Dir(path) == a.config.Path && (entry.Name() == "session_index.jsonl" || codexStateName(strings.TrimSuffix(entry.Name(), "-wal")))
 	})
-	return jsonlExtractor + ":" + fingerprint, err
+	return a.extractorVersion() + ":" + fingerprint, err
 }
 
 // jsonlExtractor versions the Claude and Codex parsers; bump it when parsing
@@ -587,7 +587,20 @@ func (a *jsonlAdapter) Discover(emit func(WorkspaceRecord) error) error {
 	})
 }
 
-func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + jsonlExtractor }
+func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + a.extractorVersion() }
+
+// claudeExtractor versions what changed in the Claude parser alone since
+// jsonlExtractor, so a change to it reads Claude Code's transcripts again and
+// not Codex's: v2 selects the active branch, counts once a reply several of a
+// session's transcripts hold, and counts advisor iterations.
+const claudeExtractor = "claude-v2-active-branch"
+
+func (a *jsonlAdapter) extractorVersion() string {
+	if a.provider == "claude" {
+		return jsonlExtractor + "+" + claudeExtractor
+	}
+	return jsonlExtractor
+}
 
 // readsEveryIndex: every Codex plan reads the naming databases (state_*.sqlite)
 // for thread names; Claude captures no database.
@@ -717,6 +730,7 @@ func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []
 	}
 	if combined != nil && a.provider == "claude" {
 		reconcileClaudeLineage(combined)
+		dedupeClaudeGroupUsage(combined)
 		combined.Metrics = reconciledTokenMetrics(*combined)
 	}
 	return combined, read, nil
@@ -1085,7 +1099,23 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	toolNames := map[string]string{}
 	resultCalls := map[string]string{}
 	replayed := map[string]bool{}
+	// Every record an entry makes is selected when the entry is on the
+	// conversation's active branch; an abandoned turn keeps its records, and
+	// its usage still counts, since it was sent.
+	onBranchIDs := claudeActiveBranch(events)
+	pending, pendingSelected := 0, true
+	settle := func() {
+		for i := pending; i < len(messages); i++ {
+			messages[i].Selected = messages[i].Selected && pendingSelected
+		}
+		pending = len(messages)
+	}
 	for _, event := range events {
+		settle()
+		pendingSelected = true
+		if id := firstString(event["uuid"]); id != "" {
+			pendingSelected = onBranchIDs[id]
+		}
 		// Claude Code can write a session's earlier entries into its file again
 		// under their original uuids, with tool results stripped. The first copy
 		// is the one that happened; parsing a replay would give a message two
@@ -1254,7 +1284,9 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			}
 		}
 		if usage := mapValue(message["usage"]); usage != nil {
-			messages = append(messages, MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+			usageRecord := MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+			messages = append(messages, usageRecord)
+			messages = append(messages, claudeAdvisorUsage(usageRecord, event, usage)...)
 			for _, key := range []string{"input_tokens", "output_tokens"} {
 				if value, ok := number(usage[key]); ok {
 					tokens[key] += value
@@ -1267,6 +1299,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			}
 		}
 	}
+	settle()
 	if rootID != "" {
 		subagentsDir := filepath.Join(strings.TrimSuffix(claudeRootPath(path), ".jsonl"), "subagents")
 		relative, _ := filepath.Rel(subagentsDir, path)
@@ -1274,7 +1307,13 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	}
 	repository := a.repository(cwd, "")
 	messages = normalizeHandbackMessages(messages)
-	purpose, outcome := agentPurposeOutcome(messages)
+	onBranch := make([]MessageRecord, 0, len(messages))
+	for _, message := range messages {
+		if message.Selected {
+			onBranch = append(onBranch, message)
+		}
+	}
+	purpose, outcome := agentPurposeOutcome(onBranch)
 	metrics := []map[string]any{}
 	for key, value := range tokens {
 		if value > 0 {
