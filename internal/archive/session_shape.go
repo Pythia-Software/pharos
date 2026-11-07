@@ -1217,3 +1217,35 @@ func (c *Catalog) sessionShapeQueryRows(ctx context.Context, fields libraryField
 	}
 	return rows, nil
 }
+
+// SessionSignals is one conversation's forensic signals for the reader's
+// strip: each signal that fired, named by its dataset field, with its count
+// and the messages that triggered it, and the session's evidence coverage.
+// Nil when the conversation is not in the workspace.
+func (c *Catalog) SessionSignals(ctx context.Context, workspaceID, conversationID string) (map[string]any, error) {
+	var found bool
+	if err := c.reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=? AND workspace_id=?)", conversationID, workspaceID).Scan(&found); err != nil || !found {
+		return nil, err
+	}
+	facts, evidence, err := c.sessionShapeOf(ctx, conversationID)
+	if err != nil || facts == nil {
+		return nil, err
+	}
+	row := sessionShapeRow(*facts)
+	signals := []map[string]any{}
+	for _, signal := range sessionShapeSignals {
+		ids := evidence[signal]
+		if len(ids) == 0 {
+			continue
+		}
+		// The longest failure streak's evidence is its calls; its field is
+		// the streak's length.
+		field := signal
+		if signal == "failure_streak" {
+			field = "failure_streak_max"
+		}
+		signals = append(signals, map[string]any{"signal": field, "count": row[field], "message_ids": ids})
+	}
+	coverage := map[string]any{"has_tool_data": facts.HasToolData, "has_timestamps": facts.HasTimestamps, "has_authorship": facts.HasAuthorship, "has_context_window": facts.HasContextWindow}
+	return map[string]any{"conversation_id": conversationID, "signals": signals, "coverage": coverage}, nil
+}

@@ -329,7 +329,7 @@ func shapeRows(t *testing.T, c *Catalog) map[string]map[string]any {
 // tool-call text decides identical input, and embedded sub-agents' messages
 // and calls are their own.
 func TestSessionShapeCatalogInputs(t *testing.T) {
-	c, _ := testCatalog(t)
+	c, config := testCatalog(t)
 	shapeWorkspaces(t, c, "ws-1 claude /code/one", "ws-2 codex /code/two")
 	ids := seedShapeConversation(t, c, "cv-1", "ws-1", "claude", "claude-sonnet-4-5",
 		"user message 0 you misunderstood, fix the parser", "assistant message 5 ok",
@@ -365,6 +365,21 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	want := []any{int64(10), int64(1), int64(1), int64(3), int64(2), int64(1), 0.75, []string{ids[8]}, []string{ids[4], ids[6]}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v\nwant %#v", got, want)
+	}
+	// The reader's strip names each signal by its field and lists the
+	// messages to step through; another workspace's reader gets nothing.
+	status, body := delegationGET(t, testServer(t, config, c), "/api/work/ws-1/conversations/cv-1/signals")
+	signals := map[string]any{}
+	for _, item := range body["signals"].([]any) {
+		signal := item.(map[string]any)
+		signals[signal["signal"].(string)] = []any{signal["count"], signal["message_ids"]}
+	}
+	if want := map[string]any{"corrections": []any{1.0, []any{ids[8]}}, "identical_retries": []any{2.0, []any{ids[4], ids[6]}}}; status != http.StatusOK || !reflect.DeepEqual(signals, want) ||
+		body["coverage"].(map[string]any)["has_authorship"] != true {
+		t.Fatalf("status %d signals %#v body %v", status, signals, body)
+	}
+	if other, err := c.SessionSignals(t.Context(), "ws-2", "cv-1"); other != nil || err != nil {
+		t.Fatal("another workspace read cv-1's signals", other, err)
 	}
 	row := shapeRows(t, c)["cv-1"]
 	if row["subagents"] != int64(1) || row["repository_name"] != "pharos" || row["model_family"] == nil || row["day"] != "2026-10-20" || row["agent_kind"] != "root" {
