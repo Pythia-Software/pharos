@@ -178,6 +178,9 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   const {page,calls,shot}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'source-review-library',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create':{saved:true},
+    // A folder added on the found screen fails its check: the reply cannot be
+    // read. (Error statuses count as test failures here.)
+    'POST /api/probe':({body})=>body.locations.length?{checked:[]}:undefined,
     'POST /api/probe/accept':{added:['claude'],enabled:[],declined:['claude-work'],skipped:[]},
     'POST /api/capture':{run:{id:'capture-test',state:'complete',sources:['claude'],bytes_copied:2400000,results:[]}},
     'POST /api/index':{run:{id:'index-test',state:'complete',sources:['claude'],conversations:24,messages:100,results:[]}},
@@ -197,6 +200,14 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   await guide.getByRole('checkbox',{name:/claude-work\/projects/}).uncheck();
   await shot('source-locations');
+  // A folder for another tool that fails its check leaves the list as it was.
+  await guide.getByText('Add a folder Pharos didn’t find',{exact:true}).click();
+  await guide.getByRole('combobox',{name:'Tool for this folder'}).selectOption('codex');
+  await guide.getByRole('textbox',{name:'Folder'}).fill('/missing');
+  await guide.getByRole('button',{name:'Check folder',exact:true}).click();
+  await guide.locator('.pharos-error').waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible(),'a failed folder check left no way on');
+  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked(),'a failed folder check forgot a folder left out');
   await guide.getByRole('button',{name:'Continue',exact:true}).click();
   assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
   await shot('source-review');

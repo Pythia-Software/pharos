@@ -80,6 +80,13 @@ test('source consent includes only selected tools and preserves excluded folders
   assert.deepEqual(plain(wizard.selection()),{kinds:['claude'],locations:[],accept:['claude'],decline:['work'],names:{}});
   wizard.choose('claude',false);wizard.discovered({candidates:[personal]});
   assert.deepEqual(plain(wizard.selection().accept),[]);
+  // A folder added for another tool, whose check fails, leaves the list as it was.
+  const report=plain(wizard.report),restore=wizard.checkpoint();
+  wizard.choose('codex',true);wizard.locations.push({kind:'codex',path:'/missing'});
+  assert.equal(wizard.report,null);
+  restore();
+  assert.deepEqual(plain(wizard.report),report);
+  assert.deepEqual(plain(wizard.request()),{kinds:[],locations:[]},'the failed folder and its tool are dropped');
 });
 
 test('source changes retain folder provenance and cannot enable already configured shared sources',()=>{

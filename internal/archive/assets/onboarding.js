@@ -58,6 +58,11 @@ function createPharosSourceWizard(providers=[]) {
       if(path.trim())this.locations.push({kind,path:path.trim()});
       this.report=null;
     },
+    // What a failed check returns to: the tools, folders and report before it.
+    checkpoint() {
+      const saved={mode:this.mode,tools:[...this.tools],locations:this.locations.map(location=>({...location})),report:this.report};
+      return ()=>Object.assign(this,saved);
+    },
     discovered(report) {
       this.report={...report,candidates:report.candidates.filter(c=>this.tools.includes(c.kind))};
       for(const candidate of this.report.candidates)if(!this.decisions.has(key(candidate)))this.decisions.set(key(candidate),candidate.recommended===true);
@@ -418,11 +423,13 @@ function pharosCapabilityRows(providers,kinds) {
       if(!wizard.tools.length)return renderNothing();
       await discover('Looking in the usual places…','Checking where your tools keep their history. Nothing is added or copied yet.',renderFound,renderStart);
     }
-    async function discover(text,description,next,back){
+    // restore undoes what led to a failed check, so back finds the screen as
+    // it was.
+    async function discover(text,description,next,back,restore=()=>{}){
       heading(text,description);
       body.replaceChildren(working('Counting conversations…'));actions.replaceChildren();active.back=()=>{};
       try{wizard.discovered(await call('/api/probe',{method:'POST',body:JSON.stringify(wizard.request())}));next()}
-      catch(failure){back();fail(failure)}
+      catch(failure){restore();back();fail(failure)}
     }
 
     function renderNothing(){
@@ -464,9 +471,10 @@ function pharosCapabilityRows(providers,kinds) {
       custom.append(kind,hint,field.row,button('Check folder',false,()=>{
         const value=path.trim();
         if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute folder path, or one starting with ~/.'));field.input.focus();return}
+        const restore=wizard.checkpoint();
         if(!wizard.tools.includes(kind.value))wizard.choose(kind.value,true);
         if(!wizard.locations.some(l=>l.kind===kind.value&&l.path===value))wizard.locations.push({kind:kind.value,path:value});
-        discover('Checking that folder…','Nothing is added or copied yet.',renderFound,renderFound);
+        discover('Checking that folder…','Nothing is added or copied yet.',renderFound,renderFound,restore);
       }));
       return custom;
     }
