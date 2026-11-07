@@ -1030,6 +1030,16 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		return nil, err
 	}
 	config := s.Config()
+	// A host source replaces a same-named one in library.toml, which applies
+	// again when the host source is removed.
+	shared := map[string]SourceConfig{}
+	if config.Library && config.Path != "" {
+		if sources, err := readSourceBlocks(config.Path, filepath.Dir(config.Path)); err == nil {
+			for _, source := range sources {
+				shared[source.Name] = source
+			}
+		}
+	}
 	items := []map[string]any{}
 	enabled := 0
 	for _, source := range config.Sources {
@@ -1060,6 +1070,9 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		item["scope"] = "library"
 		if source.File != "" && source.File == hostConfigPath(config) {
 			item["scope"] = "host"
+			if replaced, ok := shared[source.Name]; ok {
+				item["replaces"] = map[string]any{"path": nilIfEmpty(replaced.Path), "enabled": replaced.Enabled}
+			}
 		}
 		if spec, ok := providerFor(source.Kind); ok {
 			item["tool"] = spec.DisplayName

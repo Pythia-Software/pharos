@@ -535,9 +535,7 @@ const ROUTES = [
       await page.getByRole('button',{name:`Step ${step}: ${label}`,exact:true}).click();
     },shown:`#cloud-step-${step-1}`
   })),
-  { name: "Sources", url: "/settings/sources", ready: "#sourceNewNotice .source-new-notice", api: {
-    "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, new_source_kinds: ["zed", "cursor"], host: { id: "test-mac", label: "This Mac" } },
-  } },
+  { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Background Processing integrity warning", url: "/settings/sync", ready: ".sync-warning", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], issues: [{ id: "mismatch", source_name: "codex", unit: `/sessions/${"long-workspace-name/".repeat(12)}rollout.jsonl` }] },

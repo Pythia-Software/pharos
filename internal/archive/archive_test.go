@@ -1503,8 +1503,18 @@ func TestConductorSemanticEventsRepositoryAndPR(t *testing.T) {
 
 func TestSourceTogglePreservesOtherConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.toml")
-	source := "api_token = \"secret\" # keep\n\n[[sources]]\nname = \"one\"\nkind = \"canonical\"\npath = \"/tmp/one\"\nenabled = true\n\n[[sources]]\nname = \"two\"\nkind = \"canonical\"\npath = \"/tmp/two\"\nenabled = true\n"
+	// A table between two sources belongs to neither.
+	source := "api_token = \"secret\" # keep\n\n[[sources]]\nname = \"one\"\nkind = \"canonical\"\npath = \"/tmp/one\"\nenabled = true\n\n[findings]\nkept = true\n\n[[sources]]\nname = \"two\"\nkind = \"canonical\"\npath = \"/tmp/two\"\nenabled = true\n"
 	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSourceEnabled(path, "one", false); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := os.ReadFile(path); !strings.Contains(string(text), "path = \"/tmp/one\"\nenabled = false\n\n[findings]\nkept = true\n") {
+		t.Fatalf("pausing one changed the table after it:\n%s", text)
+	}
+	if err := SetSourceEnabled(path, "one", true); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetSourceEnabled(path, "two", false); err != nil {
@@ -1519,6 +1529,12 @@ func TestSourceTogglePreservesOtherConfig(t *testing.T) {
 	}
 	if config.APIToken != "secret" {
 		t.Fatal("root configuration was changed")
+	}
+	if err := RemoveSource(path, "one"); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := os.ReadFile(path); strings.Contains(string(text), "/tmp/one") || !strings.Contains(string(text), "[findings]\nkept = true\n\n[[sources]]\nname = \"two\"") {
+		t.Fatalf("removing one took more than its block:\n%s", text)
 	}
 }
 

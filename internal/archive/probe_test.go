@@ -521,14 +521,6 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 		!strings.Contains(jsonText(inventory["items"]), `"tool":"Claude Code"`) {
 		t.Fatalf("inventory = %v", inventory["items"])
 	}
-	// A tool whose history appears later is named, for Sources to offer.
-	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); jsonText(status["new_source_kinds"]) != `[]` {
-		t.Fatalf("nothing new yet: %v", status["new_source_kinds"])
-	}
-	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID1, "events.jsonl"), "{}\n")
-	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); jsonText(status["new_source_kinds"]) != `["copilot"]` || status["new_sources"] != float64(1) {
-		t.Fatalf("new Copilot history: %v %v", status["new_source_kinds"], status["new_sources"])
-	}
 	// Removing one of this Mac's sources deletes its block and nothing else.
 	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 200 || result["removed"] != true {
 		t.Fatalf("remove = %d %v", code, result)
@@ -541,6 +533,29 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 	}
 	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 400 || !strings.Contains(firstString(result["error"]), "not found") {
 		t.Fatalf("second removal = %d %v", code, result)
+	}
+	// Told to check only a named folder, setup counts no new history in the
+	// usual places, which it would otherwise read.
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID1, "events.jsonl"), "{}\n")
+	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["new_sources"] != float64(1) {
+		t.Fatalf("new Copilot history: %v", status["new_sources"])
+	}
+	named := `{"kinds":["copilot"],"locations":[{"kind":"copilot","path":"` + filepath.Join(home, "elsewhere") + `"}],"only_locations":true}`
+	if code, report := probeCall(t, server, http.MethodPost, "/api/probe", named); code != 200 || report["new_sources"] != float64(0) {
+		t.Fatalf("named folders only = %d %v", code, report["new_sources"])
+	}
+	// A host source that replaces a library.toml one says so, since removing
+	// it brings that one back: here, reading again what was paused.
+	library := probeReadText(t, path) + "\n[[sources]]\nname = \"codex\"\nkind = \"codex\"\npath = \"/shared/codex\"\nenabled = true\n"
+	probePut(t, path, library)
+	if _, inventory := probeCall(t, server, http.MethodGet, "/api/sources", ""); !strings.Contains(jsonText(inventory["items"]), `"replaces":{"enabled":true,"path":"/shared/codex"}`) {
+		t.Fatalf("inventory = %v", inventory["items"])
+	}
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/sources/codex/remove", `{}`); code != 200 {
+		t.Fatal("remove codex", code)
+	}
+	if source, err := server.configuredSource("codex"); err != nil || source.Path != "/shared/codex" || !source.Enabled {
+		t.Fatalf("library codex = %+v %v", source, err)
 	}
 }
 
@@ -733,6 +748,14 @@ func TestProbeSelectedTools(t *testing.T) {
 	if code, result = probeCall(t, server, http.MethodPost, "/api/probe", string(request)); code != 200 || shellCalls != 1 ||
 		len(result["candidates"].([]any)) != 1 || !strings.Contains(jsonText(result["candidates"]), "chosen profile") || jsonText(result["environment"]) != `[]` {
 		t.Fatal("named folders only", code, shellCalls, result["candidates"])
+	}
+	// A folder picked because it holds the history is read as the folder the
+	// source reads.
+	for kind, chosen := range map[string]string{"claude": ".claude/projects", "zed": zedUserDir + "/threads", "cursor-cli": ".cursor/chats"} {
+		spec, _ := providerFor(kind)
+		if got := spec.Probe.Chosen(filepath.Join(home, chosen)); got != filepath.Dir(filepath.Join(home, chosen)) {
+			t.Fatal(kind, got)
+		}
 	}
 	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["claude"],"accept":["codex"]}`); code != 400 {
 		t.Fatal("accepted an unselected tool", code)

@@ -33,13 +33,22 @@ function createPharosSourceWizard(providers=[]) {
     },
     // Look in the usual places of every found tool.
     scan() {this.mode='scan';this.tools=this.found().flatMap(tool=>tool.kinds);this.locations=[];this.report=null},
-    // Check only the folders named for the chosen tools.
-    manual() {this.mode='manual';this.locations=[];this.report=null},
+    // Check only the folders named for the chosen tools. Each starts with its
+    // usual folder filled in, but not a second face (Cursor CLI), which many
+    // people never use; a folder cleared stays clear until the tool is chosen
+    // again.
+    manual() {
+      this.mode='manual';this.locations=[];this.report=null;
+      for(const tool of this.chosen())this.prefill(tool);
+    },
+    prefill(tool) {if(tool.locations[0])this.locations.push({kind:tool.kind,path:tool.locations[0]})},
     choose(kind,checked) {
       const tool=toolOf(kind);
       if(!tool)throw Error('Unsupported tool');
+      const was=tool.kinds.some(each=>this.tools.includes(each));
       this.tools=supported.filter(other=>tool.kinds.includes(other)?checked:this.tools.includes(other));
       this.locations=this.locations.filter(location=>this.tools.includes(location.kind));
+      if(this.mode==='manual'&&checked&&!was)this.prefill(tool);
       this.report=null;
     },
     chosen() {return catalog.filter(tool=>tool.kinds.some(kind=>this.tools.includes(kind)))},
@@ -344,8 +353,6 @@ function pharosCapabilityRows(providers,kinds) {
     const body=node('div','pharos-onboard-body'),actions=node('div','pharos-onboard-actions');
     let wizard=createPharosSourceWizard();
     let choice='scan';
-    // Kinds whose usual folder has been filled in once, so clearing it sticks.
-    const seeded=new Set();
     active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderStart()};
     dialog.append(title,intro,body,actions);
     if(embedded){embedded.classList.add('source-setup-open');embedded.setAttribute('aria-labelledby',title.id);embedded.querySelector('.application-body').append(dialog)}
@@ -480,7 +487,7 @@ function pharosCapabilityRows(providers,kinds) {
 
     // Which tools, then a folder for each: only those folders are checked.
     function renderManual(){
-      if(wizard.mode!=='manual'){wizard.manual();if(kind)wizard.tools=[];if(kind)wizard.choose(kind,true)}
+      if(wizard.mode!=='manual'){if(kind)wizard.tools=[];wizard.manual();if(kind)wizard.choose(kind,true)}
       active.stage=1;active.back=renderStart;
       heading('Which tools do you use?','Pick your tools, then the folder that holds each one’s history. Pharos checks only the folders you name here.');
       clear();
@@ -495,17 +502,14 @@ function pharosCapabilityRows(providers,kinds) {
         const fieldset=node('fieldset','pharos-chips');fieldset.setAttribute('aria-label','More tools');fieldset.append(...cards(groups.more));
         more.append(fieldset);body.append(more);
       }
+      let next;
+      const ready=()=>{if(next)next.disabled=!wizard.request().locations.length};
       const folders=node('section','pharos-folders');
       for(const tool of wizard.chosen()){
         const group=node('div','pharos-folder');group.append(node('h3','',tool.name));
-        tool.kinds.forEach((each,index)=>{
-          const named=wizard.locations.find(location=>location.kind===each);
-          // The tool's own folder starts filled in; a second face (Cursor CLI)
-          // starts empty, since many people never use it.
-          if(!named&&index===0&&!seeded.has(each)&&tool.locations[0])wizard.name(each,tool.locations[0]);
-          seeded.add(each);
+        tool.kinds.forEach(each=>{
           const usual=PROVIDERS[each]?.locations?.[0]||'';
-          const field=pathField(`${toolName(each)} folder`,wizard.locations.find(location=>location.kind===each)?.path||'',usual?`Usually ${usual}`:'/path/to/folder','source',value=>wizard.name(each,value),fail);
+          const field=pathField(`${toolName(each)} folder`,wizard.locations.find(location=>location.kind===each)?.path||'',usual?`Usually ${usual}`:'/path/to/folder','source',value=>{wizard.name(each,value);ready()},fail);
           if(tool.kinds.length>1)group.append(node('label','pharos-folder-label',toolName(each)));
           group.append(field.row,node('p','pharos-muted',HINTS[each]||''));
         });
@@ -513,13 +517,13 @@ function pharosCapabilityRows(providers,kinds) {
       }
       if(wizard.chosen().length)body.append(node('h3','pharos-folders-heading','Folders to check'),folders);
       body.append(exportsLink(renderManual));
-      const next=button('Check these folders',true,()=>{
+      next=button('Check these folders',true,()=>{
         const named=wizard.request();
         const bad=named.locations.find(location=>!location.path.startsWith('/')&&!location.path.startsWith('~/'));
         if(bad){fail(Error(`Enter an absolute folder for ${toolName(bad.kind)}, or one starting with ~/.`));return}
         discover('Checking the folders you named…','Only these folders. Nothing is added or copied yet.',renderFound,renderManual);
       });
-      next.disabled=!wizard.request().locations.length;
+      ready();
       actions.replaceChildren(step(2),button('Back',false,renderStart),next);
     }
 
@@ -792,15 +796,13 @@ function pharosCapabilityRows(providers,kinds) {
     done.focus();
   }
 
-  const NEW_DISMISSED = 'pharos-new-sources-dismissed:';
-  // Settings → Sources: look again, name a folder, or import an export; and
-  // say when a tool has history no source reads yet.
+  // Settings → Sources: look again, name a folder, or import an export.
   async function refreshNote() {
-    const slot = document.getElementById('sourceSetupAction'), notice = document.getElementById('sourceNewNotice');
+    const slot = document.getElementById('sourceSetupAction');
     let status;
     try { status = await call('/api/probe/status?discovery=none'); } catch { return null; }
     if (!slot) return status;
-    if (!status.library) { slot.replaceChildren(); notice?.replaceChildren(); return status; }
+    if (!status.library) { slot.replaceChildren(); return status; }
     const action = (id, text, title, options) => {
       const b = button(text, false, () => openPanel(status, options));
       b.id = id;
@@ -811,19 +813,6 @@ function pharosCapabilityRows(providers,kinds) {
       action('pharosFindSources', 'Look for sources…', `Look in the usual places on ${hostLabel(status)}. Sources are saved in ${status.host_file_display}.`, {mode: 'scan'}),
       action('pharosAddSource', 'Add a folder…', 'Name a folder that holds a tool’s history. Pharos checks only that folder.', {mode: 'manual'}),
       action('pharosImportSource', 'Import an export…', 'Add a ChatGPT or Claude.ai export you downloaded.', {mode: 'import'}));
-    if (notice) {
-      const kinds = status.new_source_kinds || [], key = NEW_DISMISSED + status.host?.id + ':' + kinds.join(',');
-      notice.replaceChildren();
-      if (kinds.length && !sessionStorage.getItem(key)) {
-        if (!Object.keys(NAMES).length) { try { learn((await call('/api/providers')).providers); } catch {} }
-        const names = kinds.map(toolName), box = node('div', 'source-new-notice');
-        box.setAttribute('role', 'status');
-        box.append(node('span', '', `Pharos found conversations from ${names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names.at(-1) : names[0]} that no source reads yet.`),
-          button('Review', true, () => openPanel(status, {mode: 'scan'})),
-          button('Not now', false, () => { sessionStorage.setItem(key, '1'); notice.replaceChildren(); }));
-        notice.append(box);
-      }
-    }
     return status;
   }
 

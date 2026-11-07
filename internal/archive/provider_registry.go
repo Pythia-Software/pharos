@@ -180,12 +180,7 @@ func init() {
 				},
 				Folder: func(r *probeRun, path, foundBy string) { r.claude(path, foundBy, false) },
 				// A chosen projects folder is read as its configuration folder's.
-				Chosen: func(path string) string {
-					if filepath.Base(path) == "projects" {
-						return filepath.Dir(path)
-					}
-					return path
-				},
+				Chosen: chosenParentOf("projects"),
 			},
 		},
 		{
@@ -328,6 +323,7 @@ func init() {
 				Folders:  []string{".cursor/chats"}, // the editor's extensions are in .cursor too
 				Defaults: func(r *probeRun, home string) { r.cursorCLI(filepath.Join(home, ".cursor"), "default location") },
 				Folder:   (*probeRun).cursorCLI,
+				Chosen:   chosenParentOf("chats"),
 				NewSources: func(home string, config Config) int {
 					dir := filepath.Join(home, ".cursor")
 					chats, _ := (&cursorCLIAdapter{baseAdapter: baseAdapter{config: SourceConfig{Path: dir}}}).chats()
@@ -336,7 +332,7 @@ func init() {
 			},
 		},
 		{
-			Kind: "zed", DisplayName: "Zed", Summary: "Threads from Zed’s agent panel.", FolderHint: "Zed’s threads folder (in ~/Library/Application Support/Zed).", Instructions: "~/.config/zed/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
+			Kind: "zed", DisplayName: "Zed", Summary: "Threads from Zed’s agent panel.", FolderHint: "Zed’s folder holding threads (in ~/Library/Application Support).", Instructions: "~/.config/zed/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model effort speed message_tokens reasoning subagents title",
 				Notes: map[string]string{"speed": "The thread's fast mode setting now, which stands for all of its requests.", "message_tokens": "Each turn's last request.", "reasoning": "Or only that it was redacted.", "timestamps": "Every message is given its thread's start."}, VariesNote: "When the thread records it."},
 			New:          func(base baseAdapter) Adapter { return &zedAdapter{baseAdapter: base} },
@@ -348,6 +344,7 @@ func init() {
 					r.zed(filepath.Join(home, filepath.FromSlash(zedUserDir)), "default location")
 				},
 				Folder: (*probeRun).zed,
+				Chosen: chosenParentOf("threads"),
 				NewSources: func(home string, config Config) int {
 					dir := filepath.Join(home, filepath.FromSlash(zedUserDir))
 					stats, err := zedProbeStats(filepath.Join(dir, filepath.FromSlash(zedDatabase)))
@@ -617,6 +614,17 @@ func mirrorRank(kind string) int {
 
 // newProbeSource is 1 when has, for a usual location dir holding history,
 // and no configured source reads it.
+// chosenParentOf reads a chosen folder named name, which the person may pick
+// because it holds the history, as the folder the source reads: its parent.
+func chosenParentOf(name string) func(string) string {
+	return func(path string) string {
+		if filepath.Base(path) == name {
+			return filepath.Dir(path)
+		}
+		return path
+	}
+}
+
 func newProbeSource(home string, config Config, kind, dir string, has bool) int {
 	if !has {
 		return 0

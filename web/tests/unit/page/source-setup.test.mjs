@@ -53,14 +53,20 @@ test('looking in the usual places reads every found tool, and only those',()=>{
 
 test('naming folders checks only those folders, for the tools chosen',()=>{
   const wizard=create();wizard.detect([{kind:'claude'}]);wizard.manual();
-  assert.deepEqual(plain(wizard.request()),{kinds:[],locations:[],only_locations:true},'no folder named, nothing checked');
-  wizard.name('claude','~/.claude');wizard.choose('cursor',true);wizard.name('cursor-cli','  ~/.cursor ');
+  assert.deepEqual(plain(wizard.request()),{kinds:['claude'],locations:[{kind:'claude',path:'~/.claude'}],only_locations:true},'a chosen tool starts with its usual folder');
+  wizard.choose('cursor',true);
+  assert.deepEqual(plain(wizard.request().locations.map(location=>location.kind)),['claude','cursor'],'a second face (Cursor CLI) starts empty');
+  wizard.name('cursor','');wizard.name('cursor-cli','  ~/.cursor ');
   assert.deepEqual(plain(wizard.request()),{kinds:['claude','cursor-cli'],locations:[{kind:'claude',path:'~/.claude'},{kind:'cursor-cli',path:'~/.cursor'}],only_locations:true});
-  wizard.name('claude','');wizard.name('cursor-cli','/elsewhere');
-  assert.deepEqual(plain(wizard.request().locations),[{kind:'cursor-cli',path:'/elsewhere'}],'a cleared folder is dropped; a changed one replaced');
+  wizard.name('claude','');wizard.name('cursor-cli','/elsewhere');wizard.choose('cursor',true);
+  assert.deepEqual(plain(wizard.request().locations),[{kind:'cursor-cli',path:'/elsewhere'}],'a cleared folder stays clear; a changed one is replaced');
   wizard.choose('cursor',false);
   assert.deepEqual(plain(wizard.request()),{kinds:[],locations:[],only_locations:true},'a tool unchosen takes its folders with it');
+  wizard.choose('claude',false);wizard.choose('claude',true);
+  assert.deepEqual(plain(wizard.request().locations),[{kind:'claude',path:'~/.claude'}],'chosen again, it starts again from its usual folder');
+  wizard.scan();wizard.choose('codex',true);assert.deepEqual(plain(wizard.request().locations),[],'looking in the usual places names no folders');
   const accepted=create();accepted.manual();accepted.choose('codex',true);accepted.name('codex','/codex');
+  assert.deepEqual(plain(accepted.request().locations),[{kind:'codex',path:'/codex'}]);
   accepted.discovered({candidates:[candidate('codex','/codex')]});
   assert.equal(accepted.selection().only_locations,true,'approval repeats the same narrow check');
 });

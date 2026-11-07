@@ -984,7 +984,7 @@
         }
       ],
       "display_name": "Zed",
-      "folder_hint": "Zed’s threads folder (in ~/Library/Application Support/Zed).",
+      "folder_hint": "Zed’s folder holding threads (in ~/Library/Application Support).",
       "kind": "zed",
       "locations": [
         "~/Library/Application Support/Zed/threads"

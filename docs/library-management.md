@@ -118,8 +118,8 @@ their estimated source-file size and what each tool doesn't record before
 **Add and capture** saves the choices and copies history. Indexing is a
 separate next step. **Set up later** saves an empty host choice without
 discovering or capturing sources. Settings → Sources offers **Look for
-sources…**, **Add a folder…** and **Import an export…**, says when a tool has
-new history no source reads, and removes this Mac's sources. See
+sources…**, **Add a folder…** and **Import an export…**, and removes this
+Mac's sources. See
 [Adding a Mac](configuration.md#adding-a-mac) for details.
 
 Source

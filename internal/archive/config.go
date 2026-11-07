@@ -389,10 +389,6 @@ func sourceBlockLines(path, name string) (lines []string, start, end int, err er
 	for index, line := range lines {
 		trimmed := stripTOMLComment(strings.TrimSpace(line))
 		if trimmed == "[[sources]]" {
-			if start >= 0 {
-				end = index
-				break
-			}
 			candidateEnd := len(lines)
 			for check := index + 1; check < len(lines); check++ {
 				if strings.HasPrefix(strings.TrimSpace(lines[check]), "[") {
@@ -402,7 +398,10 @@ func sourceBlockLines(path, name string) (lines []string, start, end int, err er
 			}
 			block := strings.Join(lines[index:candidateEnd], "")
 			if regexpAssignment(block, "name") == name {
+				// The block ends at the next table of any kind, so a table
+				// between two sources stays where it is.
 				start, end = index, candidateEnd
+				break
 			}
 		}
 	}

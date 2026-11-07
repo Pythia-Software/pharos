@@ -415,8 +415,10 @@ a library is opened on another Mac. It first asks how to find the history:
 - **I'll tell Pharos where to look** asks which tools you use (**More tools**
   holds TL1 and Conductor, which most people don't use), with each tool's usual
   folder filled in to keep or change, and then checks only the folders named
-  there: not the usual places, and not the variables that move them
-  (`"only_locations": true`).
+  there: not the usual places, not the variables that move them, and not the
+  count of new history in the usual places (`"only_locations": true`). A
+  folder chosen because it holds the history (Claude's `projects`, Zed's
+  `threads`, Cursor CLI's `chats`) is read as the folder above it.
 - **Import an export** adds a ChatGPT or Claude.ai export (below).
 
 Setup lists the tools in the registry's `Setup` order, Cursor and Cursor CLI as
@@ -507,12 +509,13 @@ service restarts; accepting in the panel reloads sources immediately.
 sources, so the guide does not interrupt the next launch. Settings → Sources
 lists each source with its tool and whether it is this Mac's or every Mac's,
 and offers **Look for sources…** (the usual places), **Add a folder…** (only
-folders you name) and **Import an export…**. When a tool's usual folder holds
-history that no source reads (`new_source_kinds` in `GET /api/probe/status`),
-it says so and offers **Review**; **Not now** hides that for the session. A
-source in this Mac's host file has **Remove…**, which deletes its block
-(`POST /api/sources/<name>/remove`); what was captured and indexed from it
-stays in the library. Sources in `library.toml` are removed there.
+folders you name) and **Import an export…**. Settings does not look in the
+usual places on its own. A source in this Mac's host file has **Remove…**,
+which deletes its block (`POST /api/sources/<name>/remove`); what was captured
+and indexed from it stays in the library. When the host source replaces a
+same-named one in `library.toml` (`replaces` in `GET /api/sources`), removing
+it brings that one back, as `library.toml` sets it up, and the confirmation
+says so. Sources in `library.toml` are removed there.
 
 **Import an export** checks that the ZIP, folder or file holds the export's
 conversations (a ZIP's listing or a folder's names; nothing is parsed) and adds

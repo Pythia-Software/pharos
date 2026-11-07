@@ -64,9 +64,6 @@ type ProbeStatus struct {
 	// file predates: Antigravity's, when no source covers them yet. Declined
 	// ones are written as paused sources, so they are not counted again.
 	NewSources int `json:"new_sources"`
-	// NewSourceKinds are the kinds those folders belong to, in setup order,
-	// so Sources can say which tools have history to add.
-	NewSourceKinds []string `json:"new_source_kinds"`
 }
 
 type ProbeReport struct {
@@ -271,13 +268,9 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 			status.SharedSources++
 		}
 	}
-	status.NewSourceKinds = []string{}
-	for _, spec := range append(setupProviders(), otherProviders()...) {
+	for _, spec := range providerRegistry {
 		if status.HostFileExists && spec.Probe != nil && spec.Probe.NewSources != nil && (kinds == nil || kinds[spec.Kind]) {
-			if count := spec.Probe.NewSources(home, config); count > 0 {
-				status.NewSources += count
-				status.NewSourceKinds = append(status.NewSourceKinds, spec.Kind)
-			}
+			status.NewSources += spec.Probe.NewSources(home, config)
 		}
 	}
 	if catalog != nil {
@@ -303,7 +296,12 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 // only the folders the person named.
 func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation, onlyLocations bool) ProbeReport {
 	started := time.Now()
-	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, kinds), Home: home, Environment: []ProbeVariable{},
+	statusKinds := kinds
+	if onlyLocations {
+		// Counting new history reads the usual places.
+		statusKinds = map[string]bool{}
+	}
+	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, statusKinds), Home: home, Environment: []ProbeVariable{},
 		Candidates: []ProbeCandidate{}, Checked: []ProbeLocation{}, TimingsMS: map[string]int64{}}
 	run := &probeRun{home: home, config: config, report: &report, seen: map[string]*ProbeCandidate{}, deadline: started.Add(probeWalkBudget)}
 	type shellResult struct {

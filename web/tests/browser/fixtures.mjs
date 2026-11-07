@@ -719,7 +719,7 @@ export const defaultApi = {
   // The header, menus and status polling on every page.
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
-  "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, new_source_kinds: [], host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, host: { id: "test-mac", label: "This Mac" } },
   "GET /api/providers": JSON.parse(readFileSync(join(repo, "testdata", "providers.json"), "utf8")),
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
