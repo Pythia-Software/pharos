@@ -1145,6 +1145,118 @@ async function annotate(t) {
   return app.page;
 }
 
+test("Ask Pharos feedback requires explicit approval of the reviewed draft", { skip, timeout:60000 }, async t => {
+  const selection = {provider:"Codex",model:"test-model",effort:"Low"};
+  const feedback = {kind:"feature",comment:"Add Markdown export of selected conversations."};
+  const session = {id:"feedback-chat",createdAt:Date.now(),updatedAt:Date.now(),selection,draft:"",conversation:[{id:"feature-1",prompt:"Request Markdown export",cli:"Codex",model:"test-model",effort:"Low",status:"feedback",reply:"I prepared a feature request for review.",cards:[],feedback}]};
+  const submissions = [], questions = [];
+  const other = {...session,id:"another-chat",conversation:[{...session.conversation[0],id:"another-turn",status:"multiple",feedback:undefined,prompt:"Another chat",reply:"An unrelated conversation."}]};
+  const delivered = Promise.withResolvers();
+  const { page, settled, shot } = await open(t, {url:"/?ask_chat=feedback-chat",viewport:{width:390,height:844},ready:".pharos-feedback .uifeedback-form",api:{
+    "GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection},providers:[{id:"Codex"}]},
+    "GET /api/ask/models":{id:"Codex",models:[{id:"test-model",label:"Test Model",efforts:["Default","Low"],default:true}]},
+    "GET /api/ask/sessions":{sessions:[session,other]},"GET /api/ask/session":({query})=>query.get("id")==="another-chat"?other:session,
+    "POST /api/ask/session":({body})=>({...session,...body}),
+    "POST /api/ask/send":({body})=>{questions.push(body);return session;},
+    "POST /api/feedback/submit":async({body})=>{submissions.push(body);if(submissions.length===1)return {id:"wrong-receipt",received:true};await delivered.promise;return {id:body.id,received:true};},
+  }});
+  await page.evaluate(() => localStorage.setItem("uifeedback.v1.draft", JSON.stringify({kind:"feedback",comment:"An unrelated manual report"})));
+  const review = page.getByRole("button", {name:"Review feedback",exact:true});
+  assert.equal(submissions.length, 0);
+  assert.equal(await page.locator(".uifeedback-dialog").count(), 0, "a proposal does not open a dialog automatically");
+  const inline = page.locator(".pharos-feedback .uifeedback-inline"), comment = inline.getByRole("textbox", {name:"What would you like changed?"});
+  const approve = inline.getByRole("button", {name:"Approve and send feedback",exact:true});
+  await page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  assert.ok(await inline.evaluate(element => !element.contains(document.activeElement)), "restoring an inline review leaves focus alone");
+  const question = page.getByRole("textbox", {name:"Ask a question",exact:true});
+  await question.fill("An unrelated next question");
+  assert.equal(await comment.inputValue(), feedback.comment);
+  assert.ok(!await inline.getByRole("checkbox", {name:/Include recent browser errors/}).isChecked());
+  await comment.fill("Add Markdown export so I can share selected conversations in a review.");
+  await shot("ask-feedback-inline-phone");
+  await page.setViewportSize({width:1440,height:1050});await shot("ask-feedback-inline-desktop");
+  await page.setViewportSize({width:390,height:844});
+  await page.keyboard.press("Escape");await review.waitFor();
+  assert.ok(await review.evaluate(element => element === document.activeElement), "cancel returns focus to Review feedback");
+  assert.equal(submissions.length, 0, "dismissing does not consent");
+  await review.click();await page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  assert.match(await comment.inputValue(), /so I can share/);
+  assert.ok(await comment.evaluate(element => element === document.activeElement), "deliberately reopening the draft focuses its editor");
+  const email = inline.getByRole("textbox", {name:"Contact email (optional)"});
+  await email.fill("reviewer@example.test");await email.press("Enter");await settled();
+  assert.equal(submissions.length, 0, "Enter in the email field is not approval");
+  assert.equal(questions.length, 0, "feedback fields cannot submit the surrounding Ask composer");
+  assert.equal(await question.evaluate(element => element.value), "An unrelated next question");
+  await comment.focus();await comment.press("ControlOrMeta+A");await comment.press("ArrowRight");await comment.press("Enter");await page.keyboard.insertText("Keep message order.");
+  assert.match(await comment.inputValue(), /\nKeep message order\.$/);
+  assert.equal(questions.length, 0, "Enter in the report inserts a line break without asking a question");
+  await approve.focus();await page.keyboard.press("Enter");
+  await inline.getByRole("alert").waitFor();
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].comment, (await comment.inputValue()).trim(), "only the edited report is sent");
+  assert.deepEqual(submissions[0].annotations, []);
+  assert.equal(submissions[0].diagnostics, undefined);
+  assert.equal(submissions[0].email, "reviewer@example.test");
+  await comment.focus();await page.keyboard.press("Escape");await review.waitFor();
+  await page.reload();await settled();
+  await page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  assert.equal(submissions.length, 1, "reopening an uncertain submission does not send it");
+  const retryStarted = page.waitForRequest(request=>request.url().endsWith("/api/feedback/submit"));
+  await approve.click();await retryStarted;
+  await page.evaluate(()=>window.pharosNavigate('/ask?ask_chat=another-chat'));
+  await page.locator('.pharos-user-question').filter({hasText:"Another chat"}).waitFor();
+  await page.evaluate(()=>window.pharosNavigate('/ask?ask_chat=feedback-chat'));
+  const sending = inline.getByRole("button", {name:"Sending…",exact:true});
+  await sending.waitFor();
+  assert.ok(await sending.isDisabled(), "a replacement editor follows the submission already in flight");
+  // A second tab has no shared in-memory operation. Its editor can become
+  // stale while the original tab commits a receipt to their shared outbox.
+  const stalePage = await page.context().newPage();
+  await stalePage.goto(page.url());
+  const staleInline = stalePage.locator('.pharos-feedback .uifeedback-inline');
+  const staleApprove = staleInline.getByRole("button", {name:"Approve and send feedback",exact:true});
+  await staleApprove.waitFor();
+  await stalePage.waitForFunction(() => !document.querySelector('.uifeedback-inline .primary')?.disabled);
+  await staleInline.getByRole("textbox", {name:"What would you like changed?"}).fill("A stale editor must not create a replacement report.");
+  delivered.resolve();
+  await page.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+  assert.equal(submissions.length, 2);
+  assert.equal(submissions[0].id, submissions[1].id, "an unchanged retry confirms the same report");
+  await staleApprove.click();
+  await stalePage.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+  assert.equal(submissions.length,2,"approval in a stale editor restores the saved receipt without another submission");
+  await stalePage.close();
+  assert.ok(await inline.evaluate(element => !element.contains(document.activeElement)), "the replacement editor receives the receipt without stealing focus");
+  // Completion retains a receipt, while restoring it does not move focus.
+  await page.reload();await settled();await page.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+  assert.equal(submissions.length, 2, "reopening a confirmed proposal after reload shows its receipt");
+  assert.ok(await inline.evaluate(element => !element.contains(document.activeElement)), "restoring a receipt leaves focus alone");
+  const sentSummary = inline.getByRole("status");
+  await sentSummary.focus();await sentSummary.press("Escape");
+  await inline.getByRole("button", {name:"View receipt",exact:true}).waitFor();
+  assert.equal(await inline.locator('.uifeedback-draft-text').textContent(),submissions[1].comment,"a restored sent summary shows the submitted edits");
+  await inline.getByRole("button", {name:"View receipt",exact:true}).click();
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  await page.getByRole("dialog", {name:"Send feedback",exact:true}).waitFor();
+  assert.equal(await page.locator(".uifeedback-dialog").getByRole("textbox", {name:"What would you like changed?"}).inputValue(), "An unrelated manual report", "Ask preserves the manual feedback draft");
+  await page.locator(".uifeedback-dialog").getByRole("button", {name:"Close feedback",exact:true}).click();
+  session.conversation.push({...session.conversation[0],id:"discard-2",feedback:{kind:"feature",comment:"A second proposed feature request."}});
+  await page.reload();await settled();
+  const discardReview = page.locator('[data-turn-id="discard-2"] .uifeedback-inline');
+  await discardReview.getByRole("textbox", {name:"What would you like changed?"}).fill("Discard these edits, without sharing them.");
+  await discardReview.getByRole("button", {name:"Keep draft",exact:true}).click();
+  await discardReview.getByRole("button", {name:"Discard draft",exact:true}).click();
+  await page.getByRole("region", {name:"Feedback draft discarded",exact:true}).waitFor();
+  const discardedStatus = await discardReview.getByRole("status").elementHandle();
+  await page.waitForFunction(element => element === document.activeElement, discardedStatus);
+  assert.equal(submissions.length, 2, "discarding a draft does not submit it");
+  await page.reload();await settled();
+  await page.getByRole("region", {name:"Feedback draft discarded",exact:true}).waitFor();
+  assert.ok(await discardReview.evaluate(element => !element.contains(document.activeElement)), "restoring a discard leaves focus alone");
+  assert.equal(submissions.length, 2, "discard survives restoring the original proposal from the chat");
+  await page.getByRole("region", {name:"Feedback sent",exact:true}).waitFor();
+});
+
 test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
   const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
   await activateHeaderTool(page, "feedbackSubmitToggle");

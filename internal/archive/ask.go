@@ -29,6 +29,7 @@ type askCard struct {
 	Href        string `json:"href"`
 }
 type askTurn struct {
+	Feedback   *askFeedback  `json:"feedback,omitempty"`
 	ID         string        `json:"id"`
 	Prompt     string        `json:"prompt"`
 	CurrentURI string        `json:"currentURI,omitempty"`
@@ -165,6 +166,9 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 		}
 		for index, turn := range session.Conversation {
 			text := turn.Reply
+			if turn.Feedback != nil {
+				text += "\nFeedback draft (" + turn.Feedback.Kind + "):\n" + turn.Feedback.Comment
+			}
 			if turn.Clarification != nil {
 				text += "\n" + turn.Clarification.Question
 				for i, option := range turn.Clarification.Options {
@@ -582,7 +586,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		if saving := s.ask.saving[id]; saving != nil {
 			conversation := slices.Clone(saving.session.Conversation)
 			turn := &conversation[len(conversation)-1]
-			turn.Status, turn.Reply, turn.Cards, turn.Clarification = "canceled", askCanceledReply, []askCard{}, nil
+			turn.Status, turn.Reply, turn.Cards, turn.Clarification, turn.Feedback = "canceled", askCanceledReply, []askCard{}, nil, nil
 			saving.session.Conversation = conversation
 			saving.version++
 		}
@@ -754,8 +758,11 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			turn.Omitted = result.Omitted
 			turn.Reply = result.Message
 			turn.Clarification = result.Clarification
+			turn.Feedback = result.Feedback
 			turn.Status = "multiple"
-			if turn.Clarification != nil {
+			if turn.Feedback != nil {
+				turn.Status = "feedback"
+			} else if turn.Clarification != nil {
 				turn.Status = "clarification"
 			} else if len(turn.Cards) == 1 {
 				turn.Status = "single"

@@ -36,6 +36,15 @@ into a bounded memory tail; it does not create a log file. Reports and optional
 contact details are used for feedback follow-up. Resolution emails are manual.
 Submitted prompts are data for review; this service never executes them.
 
+Ask Pharos embeds this composer directly in its conversation with a separate
+draft and no inherited annotations or logs. Receiving or restoring a draft does
+not move keyboard focus. Sending requires **Approve and send feedback** after
+reviewing the report and optional contact email. An affirmative chat reply does
+not send it. **Keep draft** collapses the editor; **Review feedback** reopens it.
+**Discard draft** removes the proposal's local edits and prevents it reopening
+after reload; it does not retract feedback already submitted. Ask proposals keep
+their own edited drafts, retry IDs, and confirmed receipts on this browser.
+
 ## Boundaries and extraction
 
 - `internal/uifeedback/protocol`: v1 Go wire types and validation, with no cloud,

@@ -70,6 +70,99 @@ func askReply(ids ...string) []byte {
 	return []byte(jsonText(map[string]any{"message": "Here are useful places to look.", "destinations": choices, "lookup": askLookup{Kind: "none"}, "clarification": nil}))
 }
 
+func TestAskFeedbackDraftConversation(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	var sends atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sends.Add(1)
+		t.Error("Ask must not submit feedback")
+	}))
+	defer upstream.Close()
+	t.Setenv("PHAROS_FEEDBACK_URL", upstream.URL)
+	proposal := &askFeedback{Kind: "feature", Comment: "Add export of selected conversations to Markdown so I can share a review."}
+	calls := 0
+	override(t, &askRunCLI, func(ctx context.Context, provider askProvider, selection askSelection, prompt string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte(jsonText(askAgentResponse{Feedback: proposal, Lookup: askLookup{Kind: "none"}})), nil
+		}
+		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+		var data struct {
+			Conversation []struct {
+				Feedback *askFeedback `json:"feedbackDraft"`
+			} `json:"conversation"`
+		}
+		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) != 2 || data.Conversation[0].Feedback == nil || *data.Conversation[0].Feedback != *proposal {
+			t.Fatalf("draft missing from follow-up context: %s %v", raw, err)
+		}
+		// Even affirmative chat text only returns another draft for review.
+		return []byte(jsonText(askAgentResponse{Feedback: proposal, Lookup: askLookup{Kind: "none"}})), nil
+	})
+	input := askInput()
+	input["prompt"] = "Please request Markdown export"
+	askOK(t, s, "send", input)
+	restarted := testServer(t, s.Config(), s.Catalog)
+	session, err := restarted.askSession(t.Context(), "chat-1")
+	if err != nil || len(session.Conversation) != 1 || session.Conversation[0].Status != "feedback" || session.Conversation[0].Feedback == nil || *session.Conversation[0].Feedback != *proposal || len(s.ask.active) != 0 {
+		t.Fatalf("draft not saved while waiting for consent: %+v %v", session, err)
+	}
+	input["turnID"], input["prompt"] = "turn-2", "yes, send it"
+	askOK(t, s, "send", input)
+	if sends.Load() != 0 {
+		t.Fatal("draft or affirmative chat text sent feedback")
+	}
+	var count int
+	if err := s.Catalog.reader().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?", `"Markdown"`).Scan(&count); err != nil || count < 1 {
+		t.Fatalf("visible feedback draft was not indexed: %d %v", count, err)
+	}
+}
+
+func TestAskFeedbackValidation(t *testing.T) {
+	s := askTestServer(t)
+	for _, tc := range []struct {
+		name, kind, comment, lookup string
+		clarification, destination  bool
+	}{
+		{name: "empty", kind: "feature", comment: " "},
+		{name: "unsupported kind", kind: "prompt", comment: "Build it"},
+		{name: "oversize", kind: "bug", comment: strings.Repeat("x", 16001)},
+		{name: "lookup", kind: "feature", comment: "Add export", lookup: "visits"},
+		{name: "clarification", kind: "feature", comment: "Add export", clarification: true},
+		{name: "destination", kind: "feature", comment: "Add export", destination: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+				var response askAgentResponse
+				reply := askReply()
+				if tc.destination {
+					reply = askReply("analyze")
+				}
+				_ = json.Unmarshal(reply, &response)
+				response.Feedback = &askFeedback{Kind: tc.kind, Comment: tc.comment}
+				if tc.lookup != "" {
+					response.Lookup.Kind = tc.lookup
+				}
+				if tc.clarification {
+					response.Clarification = &askClarification{Question: "Which export?", Options: []string{"Markdown"}}
+				}
+				return []byte(jsonText(response)), nil
+			})
+			if _, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil {
+				t.Fatal("invalid or mixed feedback proposal accepted")
+			}
+		})
+	}
+	for _, kind := range []string{"feature", "bug", "feedback"} {
+		override(t, &askRunCLI, func(context.Context, askProvider, askSelection, string) ([]byte, error) {
+			return []byte(jsonText(askAgentResponse{Feedback: &askFeedback{Kind: kind, Comment: "Reviewed report"}, Lookup: askLookup{Kind: "none"}})), nil
+		})
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err != nil || answer.Feedback == nil || answer.Feedback.Kind != kind {
+			t.Fatalf("valid feedback: %+v %v", answer, err)
+		}
+	}
+}
+
 func TestAskClarificationConversation(t *testing.T) {
 	s := askTestServer(t)
 	askEnable(t, s)
