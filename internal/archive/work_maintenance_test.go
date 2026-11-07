@@ -442,6 +442,30 @@ func TestAwaitedRequestsWithdrawWhenHeld(t *testing.T) {
 		t.Fatalf("an automatic refresh, paused: %v", err)
 	}
 	ended()
+	// A separate model pass (for example Terminal labels/agent-events) may
+	// hold its invocation lease for hours. Yield the awaited request without
+	// charging failures or holding the pass/index schedule behind that owner.
+	for _, kind := range []string{kindLabels, kindAgentEvents} {
+		task := &maintenanceTask{kind: kind, phase: "pass", step: func(context.Context, workAllocation) (bool, int64, error) {
+			return false, 0, workBlocked(workBlocker{Reason: workBlockedWriter, Detail: "another analysis pass owns the invocation lock"})
+		}}
+		other := scheduledTestServer(t, workDefinition{Kind: kind, Coarse: true, Task: task})
+		err := within("a contended model pass", func() error {
+			return other.work.runLibraryMode(t.Context(), []string{kind}, false, triggerChained, workModePass)
+		})
+		if !errors.Is(err, errWorkHeld) {
+			t.Fatalf("%s contention should yield: %v", kind, err)
+		}
+		waitUntil(t, 5*time.Second, "the contended request to withdraw", func() bool { return len(other.work.runner.Inspect().Requests) == 0 })
+		for _, request := range other.work.runner.Inspect().Ended {
+			if request.Failed != 0 || request.Exhausted != 0 {
+				t.Fatalf("lease contention charged a failure: %+v", request)
+			}
+		}
+	}
+	if blocker := workRequestHold(workRequestFacts{State: opBlocked, Kinds: []string{kindGit}, Blocker: &workBlocker{Reason: workBlockedWriter}}); blocker != nil {
+		t.Fatal("an ordinary writer wait must not withdraw unrelated work")
+	}
 }
 
 // A page's writing request records an interruption, such as recent

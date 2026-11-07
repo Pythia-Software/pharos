@@ -532,19 +532,22 @@ func maintenanceUnpausable(kind, trigger string) bool {
 var workAwaitPoll = 250 * time.Millisecond
 
 // errWorkHeld is a request its awaiter withdrew because Stop (the Search
-// view's, or a kind's) or Pause holds it: it would not end until Resume, and
+// view's, or a kind's), Pause, or another model pass holds it: the
 // the background loop, Run now and the chain wait on their awaited items.
 // The work stays pending in its domain, as when the classic pass skipped it.
 var errWorkHeld = errors.New("held")
 
-// workRequestHold is the Stop or Pause blocker that keeps a live request
-// from ending, or nil.
+// workRequestHold is a blocker a waiting caller should yield to. A model
+// pass has only tried its invocation lock: another pass owns it, so the
+// chain skips this turn as classic did. Other writer waits remain ordinary
+// waits; an independent API request has no awaiter to withdraw its demand.
 func workRequestHold(facts workRequestFacts) *workBlocker {
 	if opTerminal(facts.State) {
 		return nil
 	}
 	holds := func(b *workBlocker) bool {
-		return b != nil && (b.Reason == workBlockedHeld || b.Reason == workBlockedPaused)
+		model := slices.Contains(facts.Kinds, kindLabels) || slices.Contains(facts.Kinds, kindAgentEvents)
+		return b != nil && (b.Reason == workBlockedHeld || b.Reason == workBlockedPaused || model && b.Reason == workBlockedWriter)
 	}
 	if holds(facts.Blocker) {
 		return facts.Blocker
