@@ -119,6 +119,39 @@ func runBackup(t *testing.T, config Config, dest string, prune bool) BackupRun {
 }
 
 func TestBackupCopiesTheLibraryIncrementally(t *testing.T) {
+	t.Run("catalog-progress", func(t *testing.T) {
+		override(t, &backupStepPages, int32(1))
+		config, dest := backupFixture(t)
+		job, err := prepareBackup(config, dest, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, parent := newOpRegistry("service").begin(context.Background(), OperationSpec{Kind: "background.update", Trigger: triggerUser})
+		defer parent.Finish(nil)
+		parent.Plan(backgroundSteps([]string{"backup"})...)
+		parent.Step("Back up", "", -1)
+		_, child := parent.Child(OperationSpec{Kind: "backup.local", Trigger: triggerChained})
+		defer child.Finish(nil)
+		inventory, partial := false, false
+		run := job.Run(child.Context(), func(run BackupRun) {
+			mirrorBackup(child, run)
+			if run.Phase != "catalog" || run.BytesTotal <= 0 {
+				return
+			}
+			inventory = inventory || run.BytesCopied == 0
+			partial = partial || run.BytesCopied > 0 && run.BytesCopied < run.BytesTotal
+			step := operationStep(child.view())
+			if step["unit"] != "byte" || step["done"] != float64(run.BytesCopied) || step["total"] != float64(run.BytesTotal) {
+				t.Fatalf("catalog progress did not reach the background operation: %+v, run=%+v", step, run)
+			}
+		})
+		if run.State != "complete" || !inventory || !partial || run.BytesCopied != run.BytesTotal || run.BytesCopied <= run.CatalogBytes {
+			t.Fatalf("backup progress or final byte accounting: inventory=%v partial=%v run=%+v", inventory, partial, run)
+		}
+		if step := parent.view().Step; step.Index != 1 || len(parent.view().Plan) != 1 {
+			t.Fatalf("snapshot progress advanced the planned task: %+v", step)
+		}
+	})
 	t.Run("hard-linked-inputs", func(t *testing.T) {
 		config, dest := backupFixture(t)
 		source := filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "p", "b.jsonl")

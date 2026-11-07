@@ -290,6 +290,13 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 		case <-c.done:
 			return nil, fmt.Errorf("Pharos could not open %s; inspect the service diagnostic", l.Name)
 		case <-timeout.C:
+			// Upgrades run before the service publishes its endpoint. Killing
+			// one here rolls back its migration and makes every retry start over.
+			if catalogInitializationInProgress(config.CatalogPath) {
+				start.Step("Upgrade the library's catalog", "Waiting for catalog initialization to finish", -1)
+				timeout.Reset(2 * time.Minute)
+				continue
+			}
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			return nil, fmt.Errorf("opening %s took too long", l.Name)
 		case <-ticker.C:

@@ -831,7 +831,7 @@ func syncFile(path string) error {
 	if err != nil {
 		return err
 	}
-	err = file.Sync()
+	err = syncToDrive(file)
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
@@ -840,7 +840,7 @@ func syncFile(path string) error {
 
 func syncDir(path string) {
 	if dir, err := os.Open(path); err == nil {
-		_ = dir.Sync()
+		_ = syncToDrive(dir)
 		dir.Close()
 	}
 }
