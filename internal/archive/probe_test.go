@@ -176,7 +176,7 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	for _, candidate := range report.Candidates {
 		names = append(names, candidate.Name)
 	}
-	if got, want := strings.Join(names, ","), "claude,claude-docs,claude-work,codex,conductor,tl1,claude-alt-claude,codex-work-codex,chatgpt"; got != want {
+	if got, want := strings.Join(names, ","), "claude,claude-docs,claude-work,codex,conductor,tl1,claude-alt-claude,codex-work-codex,chatgpt,claude-ai"; got != want {
 		t.Fatalf("candidates = %s, want %s", got, want)
 	}
 	main := candidateNamed(t, report, "claude")

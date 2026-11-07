@@ -80,6 +80,8 @@ func (c *Catalog) backfillHarnessVersionsContext(ctx context.Context) error {
 				value.harness = "conductor"
 			case "chatgpt":
 				value.harness = "chatgpt-export"
+			case "claude-ai":
+				value.harness = "claude-ai-export"
 			case "tl1", "tl1-export":
 				value.harness = "tl1"
 			case "canonical":

@@ -104,6 +104,16 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			rel = filepath.Base(file)
 		}
 		plan.files = []captureItem{{file, filepath.ToSlash(rel)}}
+	case "claude-ai":
+		file := (&claudeAIAdapter{baseAdapter{config: source}}).exportFile()
+		if _, err := os.Stat(file); err != nil {
+			return plan, fmt.Errorf("Claude.ai export is unavailable: %w", err)
+		}
+		rel, _ := filepath.Rel(source.Path, file)
+		if !info.IsDir() {
+			rel = filepath.Base(file)
+		}
+		plan.files = []captureItem{{file, filepath.ToSlash(rel)}}
 	case "conductor":
 		// The Conductor adapter's candidates: every SQLite file, of which it
 		// reads those holding sessions and messages (not, say, cache.db).

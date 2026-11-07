@@ -423,7 +423,9 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	}
 	if kinds == nil {
 		report.Candidates = append(report.Candidates, ProbeCandidate{Name: "chatgpt", Kind: "chatgpt", Status: "manual",
-			Detail: "ChatGPT keeps conversations in the cloud, so there is nothing to find on this Mac. Export them (ChatGPT → Settings → Data controls → Export data), unzip the archive, and add a [[sources]] block with kind = \"chatgpt\" whose path is the folder holding conversations.json. Inside the library a relative path works on every Mac."})
+			Detail: "ChatGPT keeps conversations in the cloud, so there is nothing to find on this Mac. Export them (ChatGPT → Settings → Data controls → Export data), unzip the archive, and add a [[sources]] block with kind = \"chatgpt\" whose path is the folder holding conversations.json. Inside the library a relative path works on every Mac."},
+			ProbeCandidate{Name: "claude-ai", Kind: "claude-ai", Status: "manual",
+				Detail: "Claude.ai keeps chats in the cloud, so there is nothing to find on this Mac. Export them (claude.ai → Settings → Export data) and add a [[sources]] block with kind = \"claude-ai\" whose path is the downloaded ZIP, its conversations.json, or the folder holding it. Inside the library a relative path works on every Mac."})
 	}
 	report.ElapsedMS = time.Since(started).Milliseconds()
 	return report
