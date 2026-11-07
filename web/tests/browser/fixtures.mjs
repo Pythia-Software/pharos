@@ -592,17 +592,17 @@ export const workBackgroundDocument = {
 export const workInspection = () => ({ engine: "scheduled", scope: "this process", state: {
   at: iso(0), authority: { cpu_cap: 4, cpu_allocated: 2, cpu_waiters: 1, memory_reserved: 0, memory_limit: 134217728, request_memory_limit: 33554432, explicit_request_limit: 8 },
   requests: [
-    { id: 7, key: `recent:${(now - 2 * day) * 1e6}:${now * 1e6}:[analysis.authorship analysis.labels]`, trigger: "user", kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true,
+    { id: 7, scope: "recent", key: `recent:${(now - 2 * day) * 1e6}:${now * 1e6}:[analysis.authorship analysis.labels]`, trigger: "user", kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true,
       state: "running", requested_at: iso(300000), membership_frozen_at: iso(290000), members: 40, sealed: 12, failed: 1, unfinished: 27, bytes: 4096,
       tasks: [{ kind: "analysis.authorship", state: "running", covered: 12 }, { kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
     { id: 8, key: "library", kinds: ["maintenance.parallelism"], priority: "live", state: "queued", library: true, requested_at: iso(60000), members: 0, sealed: 0, unfinished: 0, bytes: 0 },
   ],
-  ended: [{ id: 5, key: "explicit-backfill:[analysis.labels]", kinds: ["analysis.labels"], priority: "backfill", explicit: true, state: "interrupted", reason: "inputs-keep-changing",
+  ended: [{ id: 5, scope: "backfill", key: "explicit-backfill:[analysis.labels]", kinds: ["analysis.labels"], priority: "backfill", explicit: true, state: "interrupted", reason: "inputs-keep-changing",
     requested_at: iso(3 * 3600000), members: 900, sealed: 880, unfinished: 20, bytes: 0 }],
   tasks: [
     { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 3, units: 12, cpus: 2, demanders: [7] }, batches: 3, committed_units: 30, work: 30, active_ns: 4e9, select_ns: 1e6 },
     { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
-      failure_examples: [{ kind: "analysis.labels", unit: { ID: "c1", Revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
+      failure_examples: [{ kind: "analysis.labels", unit: { id: "c1", revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
     { kind: "maintenance.parallelism", batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0 },
   ],
   decisions: [], decisions_total: 0,

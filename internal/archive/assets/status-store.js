@@ -36,7 +36,8 @@
   // The least time between two history fetches while the panel is open.
   const HISTORY_MS = 2000;
 
-  // mergeHistory appends a since= document to the history the store holds.
+  // mergeHistory appends since= samples and replaces authoritative marker
+  // snapshots when markers_complete is set.
   // A full document (no since), an unavailable one, or one for another
   // scope replaces it. Samples are kept in time order without repeating a
   // time, and everything older than the window is dropped.
@@ -73,7 +74,8 @@
       gpu: next.gpu || previous.gpu ? columns(previous.gpu, next.gpu, ['t', 'value', 'partial']) : null,
       segments: events(previous.segments, next.segments, event => `${event.t}:${event.reason}`, true),
       coverage: events(previous.coverage, next.coverage, event => String(event.t), true),
-      markers: events(previous.markers, next.markers, event => `${event.t}:${event.event}:${event.id}`, false)};
+      markers: next.markers_complete ? events([], next.markers || [], event => `${event.t}:${event.event}:${event.id}`, false)
+        : events(previous.markers, next.markers, event => `${event.t}:${event.event}:${event.id}`, false)};
   }
   const lastSample = history => history?.samples?.t?.length ? history.samples.t.at(-1) : null;
   // The newest resources reading a snapshot carries, as a time.

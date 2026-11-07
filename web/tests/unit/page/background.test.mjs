@@ -276,19 +276,18 @@ test("on battery: each cadence's choice and the low-battery rule, only on a Mac 
 // Shared work (docs/work-execution-plan.md §10): the work descriptor of GET
 // /api/background and the state of GET /api/work.
 const work = { available: true, engine: "scheduled", cpu_slots: 4, max_cpu_slots: 10, scope: "this process", can_change: true };
-const nanos = minutes => String(BigInt(at - minutes * 60000) * 1000000n);
-const recentKey = `recent:${nanos(48 * 60)}:${nanos(0)}:[analysis.authorship analysis.labels]`;
+const recentKey = "opaque-recent-request";
 const inspection = {
   authority: { cpu_cap: 4, cpu_allocated: 3, cpu_waiters: 1 },
   requests: [
     { id: 3, key: "automatic", kinds: ["analysis.labels"], priority: "live", state: "queued", requested_at: minutesAgo(1), members: 0, sealed: 0, unfinished: 0 },
-    { id: 7, key: recentKey, kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true, state: "running", requested_at: minutesAgo(5),
+    { id: 7, scope: "recent", key: recentKey, kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true, state: "running", requested_at: minutesAgo(5),
       membership_frozen_at: minutesAgo(4), members: 40, sealed: 10, failed: 1, exhausted: 1, unfinished: 28,
       tasks: [{ kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
   ],
   ended: [
-    { id: 2, key: "explicit-backfill:[analysis.labels]", explicit: true, state: "interrupted", reason: "inputs-keep-changing", requested_at: minutesAgo(90), members: 5, sealed: 3, unfinished: 2 },
-    { id: 5, key: recentKey, explicit: true, state: "cancelled", requested_at: minutesAgo(30), members: 0, sealed: 0, unfinished: 0, membership_frozen_at: minutesAgo(29) },
+    { id: 2, scope: "backfill", key: "explicit-backfill:[analysis.labels]", explicit: true, state: "interrupted", reason: "inputs-keep-changing", requested_at: minutesAgo(90), members: 5, sealed: 3, unfinished: 2 },
+    { id: 5, scope: "recent", key: recentKey, explicit: true, state: "cancelled", requested_at: minutesAgo(30), members: 0, sealed: 0, unfinished: 0, membership_frozen_at: minutesAgo(29) },
   ],
   tasks: [
     { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 9, units: 12, cpus: 2 }, batches: 3 },
@@ -328,12 +327,12 @@ test("an allowance the process start owns cannot change here, and says why", () 
   assert.equal(background.cpuAllowance({ ...work, can_change: false, locked_reason: "Reason A" }).locked, "Reason A", "the server's reason wins");
 });
 
-test("requests: scope from the key, progress in conversations, reasons, and Cancel only for live explicit ones", () => {
+test("requests: explicit scope, progress in conversations, reasons, and Cancel only for live explicit ones", () => {
   const model = plain(background.workModel({ ...document, work }, inspection, at));
   assert.deepEqual(model.requests.map(request => request.id), [7, 3], "explicit requests first");
   const [recent, automatic] = model.requests;
   assert.equal(recent.scope, "recent");
-  assert.match(recent.title, /2 days/);
+  assert.equal(recent.title, "Recent conversations");
   assert.equal(recent.fraction, 0.25);
   assert.match(recent.progress, /^10 of 40 conversations done, 2 failed$/);
   assert.equal(recent.cancellable, true);
@@ -348,9 +347,11 @@ test("requests: scope from the key, progress in conversations, reasons, and Canc
   assert.deepEqual(model.ended.map(request => [request.id, request.scope, request.live, request.cancellable]), [[5, "recent", false, false], [2, "backfill", false, false]]);
   assert.ok(model.ended[1].reason && model.ended[1].reason !== "inputs-keep-changing", "an ended request's reason is in words");
   assert.ok(model.ended[0].progress, "a frozen empty request says nothing needed updating");
-  const hours = background.requestModel({ key: `recent:${nanos(6 * 60)}:${nanos(0)}:[a]`, state: "queued", explicit: true }, at);
-  assert.match(hours.title, /6 hours/);
+  const legacy = background.requestModel({key: "recent:private:format", state: "queued", explicit: true}, at);
+  assert.equal(legacy.title, "Requested work", "private key formats cannot become display contracts");
   assert.equal(background.requestModel({ key: "x", scope: "backfill", state: "queued" }, at).scope, "backfill", "the server's scope wins");
+  assert.equal(background.requestModel({scope: "automatic", library: true, state: "running"}, at).progress,
+    "Updating queued work…", "live queues do not pretend to enumerate a frozen population");
 });
 
 test("requests and finished requests are bounded", () => {

@@ -652,6 +652,10 @@ test("history fetched with since= appends without repeating a time and drops wha
   assert.equal(merged.coverage.length, 1);
   assert.deepEqual(merged.markers.map(marker => marker.id), ["x"]);
   assert.equal(merged.now, N + 20e3);
+  const late = {t: N - 20e3, event: "start", id: "late", kind: "k"};
+  const complete = plain(store.mergeHistory(previous, {...next, markers_complete: true, markers: [late]}));
+  assert.deepEqual(complete.markers, [late], "complete marker snapshots include late starts and retire corrected/removed markers");
+  assert.deepEqual(complete.samples.cpu, [2, 3], "only samples still use the incremental cursor");
   // A full document, an unavailable one or another scope replaces.
   assert.equal(store.mergeHistory(previous, { ...next, since: undefined }).samples.cpu[0], 99);
   assert.equal(store.mergeHistory(previous, { version: 1, available: false }).available, false);

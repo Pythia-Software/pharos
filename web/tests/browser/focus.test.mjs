@@ -73,17 +73,34 @@ test('Settings switches keep keyboard focus and their saved state across Setting
 
 test('Background CPU allowance and task Stop/Resume keep keyboard focus across their redraws', {skip}, async t => {
   const background = structuredClone(workBackgroundDocument), posts = [];
-  let held = true;
+  let held = true, cpuUsed = 2, covered = 12, historyLive = false, finishHistory, delayInspection = false, finishPoll;
+  const pollStarted = Promise.withResolvers();
   const {page, settled} = await open(t, {url:'/settings/sync', ready:'#backgroundSchedule [data-card=work] .bg-work-row', api: {
     'GET /api/background': () => background,
     'POST /api/work/settings': ({body}) => { background.work.cpu_slots = body.cpu_slots; return background; },
     'GET /api/work': () => {
       const value = workInspection();
       value.state.authority.cpu_cap = background.work.cpu_slots;
+      value.state.authority.cpu_allocated = cpuUsed;
+      value.state.requests[0].sealed = covered;
+      if (historyLive) value.state.requests.push({id: 9, scope: 'backfill', explicit: true, state: 'running', kinds: ['analysis.labels'], members: 50, sealed: 0});
       if (!held) Object.assign(value.state.tasks.find(task => task.kind === 'analysis.labels'), {state: 'queued', blocker: null});
+      if (delayInspection) {
+        delayInspection = false;
+        pollStarted.resolve();
+        return new Promise(resolve => { finishPoll = () => resolve(value); });
+      }
       return value;
     },
-    'POST /api/work': ({body}) => { posts.push(body); if (['stop', 'resume'].includes(body.action)) held = body.action === 'stop'; return {changed: true}; },
+    'POST /api/work': ({body}) => {
+      posts.push(body);
+      if (body.action === 'backfill') {
+        historyLive = true;
+        return new Promise(resolve => { finishHistory = () => resolve({request_id: 9}); });
+      }
+      if (['stop', 'resume'].includes(body.action)) held = body.action === 'stop';
+      return {changed: true};
+    },
   }});
   const allowance = page.locator('[data-focus-key="work:cpu"]');
   await allowance.focus();
@@ -92,6 +109,37 @@ test('Background CPU allowance and task Stop/Resume keep keyboard focus across t
   assert.deepEqual((await saved).postDataJSON(), {cpu_slots: 2});
   await page.waitForFunction(() => document.activeElement?.dataset.focusKey === 'work:cpu' && document.activeElement.value === '2');
   await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('2 of 2'));
+  cpuUsed = 1; covered = 18;
+  // Polling must keep updating work and other cards while the select keeps
+  // keyboard focus; it must not require the user to tab away first.
+  background.cost.text = 'about 6 h';
+  await page.evaluate(() => window.pharosBackground.refresh(true));
+  await page.waitForFunction(() => document.querySelector('[data-card="work"] .bg-state')?.textContent.includes('1 of 2') &&
+    document.querySelector('[data-request="7"]')?.textContent.includes('18 of 40'));
+  assert.equal(await allowance.evaluate(element => element === document.activeElement), true);
+
+  // Polling keeps an in-flight action disabled even while the CPU select
+  // is focused; completion must retain the server model's disabled state.
+  const history = page.locator('[data-focus-key="work:backfill"]');
+  delayInspection = true;
+  await page.evaluate(() => { window.backgroundPoll = window.pharosBackground.refresh(true); });
+  await pollStarted.promise;
+  const posting = page.waitForRequest(request => request.url().endsWith('/api/work') && request.method() === 'POST');
+  await history.click();
+  await posting;
+  await allowance.focus();
+  assert.equal(await history.isDisabled(), true);
+  const posted = page.waitForResponse(response => response.url().endsWith('/api/work') && response.request().method() === 'POST');
+  finishHistory();
+  await posted;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await history.isDisabled(), true, 'an action stays pending while an earlier poll delays its reconciliation');
+  finishPoll();
+  await page.evaluate(() => window.backgroundPoll);
+  await page.locator('[data-request="9"]').waitFor();
+  assert.equal(await history.isDisabled(), true);
+  assert.equal(await allowance.evaluate(element => element === document.activeElement), true);
+
   // A refused save restores the saved choice without moving keyboard focus.
   // Return the fetch refusal locally so no deliberate HTTP error pollutes
   // the browser harness's unexpected-network-error assertions.
@@ -114,6 +162,18 @@ test('Background CPU allowance and task Stop/Resume keep keyboard focus across t
     }, next);
     assert.deepEqual(posts.at(-1), {action, kind: 'analysis.labels'});
   }
+  await page.evaluate(() => {
+    const fetch = window.fetch;
+    window.fetch = (url, options) => String(url) === '/api/work' && options?.method === 'POST'
+      ? Promise.resolve({ok: false, status: 409, json: async () => ({error: 'The task is no longer running.'})})
+      : fetch(url, options);
+  });
+  await hold.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('[data-focus-key="work:hold:analysis.labels"]')?.disabled && document.activeElement?.dataset.focusKey === 'work:hold:analysis.labels');
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => window.pharosBackground.refresh(true));
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true, 'a rejected action cannot restore focus on a later poll');
   await settled();
 });
 
