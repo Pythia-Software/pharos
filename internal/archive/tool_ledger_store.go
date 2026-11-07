@@ -531,8 +531,10 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 // already running there.
 func (c *Catalog) refreshToolRollup() {
 	if c.work.declares("analysis.tools") {
-		c.work.arm("analysis.tools", findingsMeasure)
-		_, _, _ = c.work.submit(c.work.server.life.ctx, workRequestSpec{Key: "read:analysis.tools", Kinds: []string{"analysis.tools"}, Priority: workPriorityLive, Trigger: triggerRead})
+		// One pass, as the classic page refresh ran once per trigger; a page
+		// opened while one is queued shares it. Pause does not hold a read.
+		_, _, _ = c.work.submit(c.work.server.life.ctx, workRequestSpec{Key: "read:analysis.tools", Kinds: []string{"analysis.tools"}, Mode: workModePass,
+			Priority: workPriorityLive, Unpausable: true, Trigger: triggerRead})
 		return
 	}
 	state := &c.tools

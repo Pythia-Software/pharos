@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -802,6 +803,65 @@ func BenchmarkFingerprintRender(b *testing.B) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// Under population execution one admitted batch keeps both renderer slots
+// busy when its grant has two CPUs, renders one image at a time with one,
+// and drains every eligible entity without a gap between images.
+func TestFingerprintBatchUsesItsAllocation(t *testing.T) {
+	c, _ := seedFingerprintLibrary(t)
+	renderer, err := newFingerprintRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := renderer.Render(t.Context(), fingerprintTestInput(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cpus := range []int{2, 1} {
+		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0;
+UPDATE fingerprint_entities SET dirty=1,priority=100,next_attempt=0 WHERE entity='conversation'`)
+		var mu sync.Mutex
+		active, peak := 0, 0
+		release := make(chan struct{})
+		started := make(chan struct{}, 16)
+		engine := fingerprintRenderFunc(func(ctx context.Context, _ any, _ int) (fingerprintRendered, error) {
+			mu.Lock()
+			active++
+			peak = max(peak, active)
+			mu.Unlock()
+			defer func() { mu.Lock(); active--; mu.Unlock() }()
+			started <- struct{}{}
+			select {
+			case <-release:
+				return result, nil
+			case <-ctx.Done():
+				return fingerprintRendered{}, ctx.Err()
+			}
+		})
+		c.fingerprints.renderer, c.fingerprints.secondary = engine, engine
+		type outcome struct {
+			rendered int64
+			more     bool
+			err      error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			rendered, more, err := c.renderFingerprintBatch(t.Context(), workAllocation{CPUs: cpus}, false, time.Minute)
+			done <- outcome{rendered, more, err}
+		}()
+		for range cpus {
+			<-started
+		}
+		close(release)
+		got := <-done
+		if got.err != nil || got.more || got.rendered < 2 || peak != cpus {
+			t.Fatalf("%d CPUs: %+v, peak %d", cpus, got, peak)
+		}
+		if pending := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1 AND next_attempt<=unixepoch()`); pending != 0 {
+			t.Fatalf("%d CPUs left %d entities", cpus, pending)
 		}
 	}
 }

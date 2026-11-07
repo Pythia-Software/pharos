@@ -29,7 +29,16 @@ func TestPreferencesChangingAgentAnalysisEndsOldDemand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+	// Other preferences leave the analysis policy, and its demand, alone.
+	if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{"pharos-theme": "dark"}, "delete": []any{"pharos-density"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-request.done:
+		t.Fatal("an unrelated preference ended agent analysis demand")
+	default:
+	}
+	if err := c.SetUIPreferences(t.Context(), map[string]any{"delete": []any{agentEventsFlag}}); err != nil {
 		t.Fatal(err)
 	}
 	select {

@@ -495,7 +495,10 @@ func (c *Catalog) agentEventsInvocation() (release func(), err error) {
 	lease, err := fileLease(canonical(c.Path)+".agent-events.lock", true)
 	if err != nil {
 		c.agentEventsRun.Unlock()
-		return nil, fmt.Errorf("%w: %v", errAgentEventsRunning, err)
+		if errors.Is(err, filelock.ErrContended) {
+			return nil, fmt.Errorf("%w: %w", errAgentEventsRunning, err)
+		}
+		return nil, fmt.Errorf("lock the agent events pass: %w", err)
 	}
 	return func() { lease.Close(); c.agentEventsRun.Unlock() }, nil
 }
@@ -867,9 +870,6 @@ var agentEventsChainLimit = 1000
 // chainAgentEvents is the analysis chain's agent events stage, after labels:
 // the same power rules (labelsForPower) and the same backlog handling.
 func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, settings AgentEventSettings) error {
-	if s.work.declares("analysis.agent_events") {
-		return s.routePopulationStage(ctx, "agent_events", "analysis.agent_events", backgroundExplicit(ctx))
-	}
 	if labels.Worker == "" {
 		// No worker is installed beside Pharos or configured.
 		return errStageContinues

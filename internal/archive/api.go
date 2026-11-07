@@ -187,7 +187,8 @@ func (s *Server) Serve() error {
 	}
 	if s.work != nil {
 		// Population execution: one coordinator submits the projection,
-		// search-index and label-query demand; the runner executes it.
+		// search-index, label-query and fingerprint demand; the runner
+		// executes it.
 		s.daemon("maintainLibrary", s.maintainWork)
 	} else {
 		s.daemon("maintainLibrary", s.Catalog.maintainLibrary)
@@ -197,9 +198,9 @@ func (s *Server) Serve() error {
 		s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
 		s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
 		s.daemon("maintainMessageLabelFacts", s.Catalog.maintainMessageLabelFacts)
+		s.daemon("maintainFingerprintImages", s.maintainFingerprintImages)
+		s.daemon("maintainFingerprintImagesSecondary", s.maintainFingerprintImagesSecondary)
 	}
-	s.daemon("maintainFingerprintImages", s.maintainFingerprintImages)
-	s.daemon("maintainFingerprintImagesSecondary", s.maintainFingerprintImagesSecondary)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)

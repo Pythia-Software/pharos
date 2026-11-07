@@ -96,8 +96,7 @@ func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[s
 	case path == "refresh":
 		started := s.start(OperationSpec{Kind: "analysis.findings", Trigger: triggerUser, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
 			if s.work != nil {
-				s.work.arm(kindFindings, findingsForce)
-				return s.work.runLibrary(ctx, []string{kindFindings}, true, triggerUser)
+				return s.work.runLibraryMode(ctx, []string{kindFindings}, true, triggerUser, "force")
 			}
 			err := s.Catalog.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), true)
 			if err != nil && ctx.Err() == nil {

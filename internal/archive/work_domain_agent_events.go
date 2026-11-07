@@ -524,6 +524,7 @@ func (s *agentEventsSession) refresh(ctx context.Context, ids []string) (bool, e
 	}
 	since := agentEventsHorizon(s.since)
 	ledger, err := queryMapsContext(ctx, c.reader(), `SELECT j.value id,COALESCE(l.structure,'') structure,l.conversation_id IS NOT NULL built,COALESCE(l.since,'') horizon,
+ (SELECT COALESCE(c.ended_at,'') FROM conversations c WHERE c.id=j.value) ended,
  COALESCE((SELECT token FROM agent_events_dirty d WHERE d.conversation_id=j.value),'') token,
  EXISTS(SELECT 1 FROM agent_event_messages m WHERE m.conversation_id=j.value) rows,
  EXISTS(SELECT 1 FROM agent_event_messages m WHERE m.conversation_id=j.value AND (m.model<>?2 OR m.input_hash IS NULL) AND (?3='' OR m.occurred_at IS NULL OR m.occurred_at>=?3)) other
@@ -534,7 +535,7 @@ func (s *agentEventsSession) refresh(ctx context.Context, ids []string) (bool, e
 	changes := []string{}
 	for _, row := range ledger {
 		id := firstString(row["id"])
-		info := live.conversations[id]
+		info := live[id]
 		token, built, horizon := firstString(row["token"]), integer(row["built"]) != 0, firstString(row["horizon"])
 		if info == nil {
 			if p.conversations[id] != nil || built || integer(row["rows"]) != 0 || token != "" {
@@ -549,7 +550,7 @@ func (s *agentEventsSession) refresh(ctx context.Context, ids []string) (bool, e
 		if changed && (job == nil || job.token != token || job.structure != structure) {
 			changes = append(changes, id)
 		}
-		ended := live.ended[id]
+		ended := firstString(row["ended"])
 		skip := token == "" && since != "" && ended != "" && ended < since
 		widened := built && horizon != since && (horizon == "~" || since == "" || horizon != "" && since < horizon)
 		if !skip && (!built || changed || integer(row["other"]) != 0 || widened) {

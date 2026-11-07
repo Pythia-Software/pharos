@@ -37,6 +37,12 @@ func (s *Server) expandedWorkDefinitions(authority *workAuthority) ([]workDefini
 	if err != nil {
 		return nil, err
 	}
-	defs = append(defs, s.eventsWorkDefinition(authority))
+	for i := range defs {
+		if defs[i].Kind == kindParallelism {
+			// Stored activity is a projection the Search view's Stop holds.
+			defs[i].Task = projectionHeldTask{catalog: s.Catalog, workTask: defs[i].Task}
+		}
+	}
+	defs = append(defs, s.eventsWorkDefinition(authority), s.sessionShapeWorkDefinition())
 	return append(defs, more...), nil
 }

@@ -132,7 +132,9 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 	reason := "after the last index"
 	// The one-time backfill at startup is a Git lookup; after a legacy source
 	// sync it is the Git, tools and findings refresh (§3.3).
-	spec := OperationSpec{Kind: "analysis.refresh", Trigger: triggerChained}
+	// It follows a sync someone started (syncSources): their action, which
+	// makes its population requests explicit (workCallerExplicit).
+	spec := OperationSpec{Kind: "analysis.refresh", Trigger: triggerUser}
 	if backfill {
 		reason = "first scan of this catalog"
 		spec = OperationSpec{Kind: "analysis.git", Variant: "backfill", Trigger: triggerStartup}

@@ -232,7 +232,9 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 	if err != nil {
 		var classified *workError
 		switch {
-		case errors.Is(err, errWorkDomainBusy) || errors.Is(err, errLabelsRunning):
+		case errors.Is(err, errWorkDomainBusy) || errors.Is(err, errLabelsRunning) || errors.Is(err, errAgentEventsRunning):
+			// Another holder (a CLI pass, say) has the lock: wait for it.
+			// Only contention wraps these sentinels, never a failed lock.
 			return workBatchResult{}, workBlocked(workBlocker{Reason: workBlockedWriter, Detail: err.Error()})
 		case errors.Is(err, labelrt.ErrBudget):
 			// The model cache (memory, the shared GPU, a draining runner) is

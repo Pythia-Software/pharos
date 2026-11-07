@@ -406,6 +406,7 @@ const (
 // GitHub runs with identities.
 func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode, only map[string]bool, runPhase func(string, func() error) error) (err error) {
 	forceFindings := findings == findingsForce
+	explicit := workCallerExplicit(ctx)
 	ctx, chain := s.Catalog.beginOp(ctx, OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
 	defer func() { chain.Finish(err) }()
 	measure := runPhase
@@ -550,7 +551,7 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			}
 			return err
 		}
-		if err := s.routeDeferredStages(ctx, findings, only, stages, scheduled); err != nil {
+		if err := s.routeDeferredStages(ctx, findings, only, stages, scheduled, explicit); err != nil {
 			return err
 		}
 		stages = nil

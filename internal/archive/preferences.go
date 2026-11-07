@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 )
 
 // Interface preferences live in the catalog's ui_preferences table, so a
@@ -48,7 +49,6 @@ func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage
 // SetUIPreferences stores the values in body["set"] and removes the names in
 // body["delete"], all or nothing.
 func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) error {
-	wasEventsEnabled := c.work != nil && c.work.server.agentEventsEnabled(ctx)
 	set, _ := body["set"].(map[string]any)
 	remove, _ := body["delete"].([]any)
 	updates := make(map[string]string, len(set))
@@ -76,6 +76,9 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	if len(updates) == 0 && len(deletes) == 0 {
 		return nil
 	}
+	_, setsEvents := updates[agentEventsFlag]
+	checkEvents := c.work != nil && (setsEvents || slices.Contains(deletes, agentEventsFlag))
+	wasEventsEnabled := checkEvents && c.work.server.agentEventsEnabled(ctx)
 	err := c.writeTransaction(ctx, "ui-preferences", func(tx *sql.Tx) error {
 		for key, value := range updates {
 			if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
@@ -92,7 +95,7 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	c.flags.invalidate()
 	if err == nil {
 		c.rememberSavedFlags(updates, deletes)
-		if c.work != nil && wasEventsEnabled != c.work.server.agentEventsEnabled(ctx) {
+		if checkEvents && wasEventsEnabled != c.work.server.agentEventsEnabled(ctx) {
 			c.work.runner.InterruptKinds([]string{"analysis.agent_events"}, "agent analysis policy changed; reissue the request with the current analyses")
 			c.work.runner.Wake()
 		}

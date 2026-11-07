@@ -372,6 +372,10 @@ func TestAgentEventsLockFailures(t *testing.T) {
 		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_event_messages`).Scan(&n)
 		return n
 	}
+	var conversation string
+	if err := catalog.DB.QueryRow(`SELECT id FROM conversations LIMIT 1`).Scan(&conversation); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range leaseLockFailures() {
 		t.Run(tc.name, func(t *testing.T) {
 			refused := failFileLease(t, ".agent-events.lock", tc.err)
@@ -386,6 +390,15 @@ func TestAgentEventsLockFailures(t *testing.T) {
 				t.Fatalf("lease failure: %v", err)
 			}
 			requireLeasesClosed(t, *refused, 1)
+			// Population execution waits out another holder as a writer
+			// without charging the selection; any other cause is a failure.
+			_, stepErr := runConversationWork(t.Context(), catalog, workSelection{Units: []workMember{{ID: conversation}}, CPUs: 1}, workAllocation{CPUs: 1},
+				func(context.Context, []string, workAllocation) (workDomainStep, error) { return workDomainStep{}, err })
+			var classified *workError
+			if !errors.As(stepErr, &classified) || (classified.blocker.Reason == workBlockedWriter) != errors.Is(tc.err, filelock.ErrContended) ||
+				(len(classified.units) == 0) != errors.Is(tc.err, filelock.ErrContended) {
+				t.Fatalf("the work step's lock failure: %v", stepErr)
+			}
 			if !catalog.agentEventsRun.TryLock() {
 				t.Fatal("a failed lease kept the pass's mutex")
 			}

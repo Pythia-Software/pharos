@@ -812,3 +812,17 @@ The review should produce corrections to the execution contract, an inventory of
 | Existing measurement foundations | [progress-estimates.md](progress-estimates.md), [dev.py](../tools/dev.py), [incremental_bench_test.go](../internal/archive/incremental_bench_test.go), [incremental_budget_probe_test.go](../internal/archive/incremental_budget_probe_test.go), [authorship_probe_test.go](../internal/archive/authorship_probe_test.go), [query-performance.md](query-performance.md), [thinking-performance.md](thinking-performance.md), [incremental-updates.md](performance/incremental-updates.md), [incremental-analysis.md](performance/incremental-analysis.md) |
 
 Proposed implementation files should stay in `internal/archive` for task definitions, in-memory selection/execution, allocations, and inspection. Keep domain checkpoints with their current owners. A later host-resource component can connect the allocation contract to the existing broker runtime. Put the isolated workload runner and comparison/reporting helpers under `tools/`, and keep its private corpora/results under an explicitly selected experiment directory or `.context/`. Final names follow the reviewed contract; this plan does not create a new package hierarchy or a plugin system.
+
+### Coarse pass input quality
+
+The identities → Git → tools → findings declarations apply when a request
+asks for current pending prerequisites. Named coarse passes (`pass`,
+`measure`, `auto`, `force`) consume already committed inputs, preserving the
+classic bounded chain/page behavior: the chain orders its own stages once,
+and a page can refresh findings even when a Git lookup is unavailable.
+They do not claim every prerequisite's newest library generation is current.
+This prevents concurrent ingestion from repeatedly replaying whole-library
+prerequisites between each stage. Session Shape likewise stores unknown
+writing-derived fields until estimates land; its native triggers then dirty
+the affected conversations again rather than holding the projection behind
+a paused analysis.
