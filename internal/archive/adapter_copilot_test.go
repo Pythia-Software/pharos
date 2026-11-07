@@ -156,6 +156,36 @@ func TestCopilotSessionKeepsItsTurnsToolsAndSubagent(t *testing.T) {
 	}
 }
 
+// The Copilot CLI's runtime and session store also serve SDK apps and VS
+// Code, so a session's channel is the client its workspace names as its
+// creator, and an unknown client or none leaves it unknown.
+func TestCopilotChannelIsItsClient(t *testing.T) {
+	// The runtime alone proves no channel, even for a conversation with no
+	// observation.
+	if channel, _ := harnessChannel("copilot-cli", "copilot"); channel != "" {
+		t.Fatalf("the Copilot runtime alone has channel %q", channel)
+	}
+	for i, test := range []struct{ client, want string }{
+		{"client_name: vscode-agent-host\n", "ide"}, {"client_name: github/cli\n", "cli"}, {"client_name: vscode\n", "ide"}, {"client_name: acme/app\n", ""}, {"", ""},
+	} {
+		root := copilotFixture(t)
+		writeSourceFile(t, filepath.Join(root, "session-state", "sess-1", "workspace.yaml"), strings.Replace(copilotWorkspace, "client_name: github/cli\n", test.client, 1))
+		if i == 0 {
+			// Once through ingestion, to the published observations.
+			c, _ := testCatalog(t)
+			ingestSource(t, c, SourceConfig{Name: "copilot", Kind: "copilot", Path: root, Account: "local", Enabled: true})
+			if n := countRows(t, c, `SELECT COUNT(*) FROM origin_observations o JOIN conversations v ON v.id=o.conversation_id WHERE v.native_id IN ('sess-1','agent-1') AND o.channel=?`, test.want); n != 2 {
+				t.Fatalf("%q has %d conversations with channel %q", test.client, n, test.want)
+			}
+		}
+		for _, conversation := range discoverCopilot(t, root)["sess-1"].Conversations {
+			if channel, _ := nativeChannel("copilot", conversation); channel != test.want {
+				t.Errorf("%s with %q has channel %q, not %q", conversation.NativeID, test.client, channel, test.want)
+			}
+		}
+	}
+}
+
 func TestCopilotUsageCountsEachRequestOnce(t *testing.T) {
 	c, _ := testCatalog(t)
 	ingestSource(t, c, SourceConfig{Name: "copilot", Kind: "copilot", Path: copilotFixture(t), Account: "local", Enabled: true})

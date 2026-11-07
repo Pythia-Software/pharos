@@ -142,6 +142,54 @@ func TestClineSessionKeepsItsTurnsToolsAndUsage(t *testing.T) {
 	}
 }
 
+// Cline's CLI and its editor extensions share its folder; a session's
+// channel is the client that ran it. An imported history names only the app
+// that imported it, so its channel stays unknown.
+func TestClineChannelIsItsClient(t *testing.T) {
+	for i, test := range []struct{ client, mode, want string }{
+		{"neovim", "user", "ide"}, {"cli", "user", "cli"}, {"vscode", "user", "ide"}, {"jetbrains", "user", "ide"}, {"desktop", "user", "desktop"},
+		{"web", "user", "web"}, {"desktop", "import", ""}, {"cli", "automation", ""}, {"core", "user", ""},
+	} {
+		root := clineFixture(t)
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".json") {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err == nil {
+				text := strings.ReplaceAll(string(data), `"source":"cli"`, `"source":"`+test.client+`"`)
+				err = os.WriteFile(path, []byte(strings.ReplaceAll(text, `"mode":"user"`, `"mode":"`+test.mode+`"`)), 0o644)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := SourceConfig{Name: "cline", Kind: "cline", Path: root, Account: "local", Enabled: true}
+		if i == 0 {
+			// Once through ingestion, to the published observation.
+			c, _ := testCatalog(t)
+			ingestSource(t, c, source)
+			if n := countRows(t, c, `SELECT COUNT(*) FROM origin_observations o JOIN conversations v ON v.id=o.conversation_id WHERE v.native_id=? AND o.channel=?`, clineSessionID, test.want); n != 1 {
+				t.Fatalf("a session %s ran has no channel %q", test.client, test.want)
+			}
+		}
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = adapter.Discover(func(record WorkspaceRecord) error {
+			if channel, _ := nativeChannel(record.SourceKind, record.Conversations[0]); channel != test.want {
+				t.Errorf("a %s session %s ran has channel %q, not %q", test.mode, test.client, channel, test.want)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestClineUsageCountsEachRequestOnce(t *testing.T) {
 	c, _ := testCatalog(t)
 	ingestSource(t, c, SourceConfig{Name: "cline", Kind: "cline", Path: clineFixture(t), Account: "local", Enabled: true})
