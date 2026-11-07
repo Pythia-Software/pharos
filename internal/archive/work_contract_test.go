@@ -1,7 +1,6 @@
 package archive
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
@@ -15,8 +14,9 @@ func TestWorkTaskInventoryCoversRegisteredKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	var inventory struct {
-		Floor   int `json:"catalog_compatibility_floor"`
-		Classes map[string]struct {
+		Floor   int    `json:"catalog_compatibility_floor"`
+		Window  string `json:"comparison_window"`
+		Classes map[workClass]struct {
 			Scope    string `json:"scope"`
 			Boundary string `json:"boundary"`
 			Inputs   string `json:"inputs"`
@@ -27,49 +27,38 @@ func TestWorkTaskInventoryCoversRegisteredKinds(t *testing.T) {
 	if err := json.Unmarshal(data, &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if inventory.Floor != catalogSchemaVersion {
-		t.Fatalf("inventory floor %d, catalog schema %d: the execution refactor must keep the retained binary's catalog compatibility", inventory.Floor, catalogSchemaVersion)
-	}
-	// Each class owns one contract; a kind names its class explicitly.
-	known := map[string]bool{"coordinator": true, "population": true, "partition": true, "global": true, "source": true, "maintenance": true, "essential": true, "specialized": true}
-	for class, contract := range inventory.Classes {
-		if !known[class] {
-			t.Errorf("unknown execution class %s", class)
+	// The floor is the retained baseline's schema, which the experiment harness
+	// also reads. It must match only while classic and scheduled execution are
+	// compared against that binary; the plan closes the window when it removes
+	// the comparison path.
+	switch inventory.Window {
+	case "open":
+		if inventory.Floor != catalogSchemaVersion {
+			t.Fatalf("catalog schema %d, retained baseline schema %d: while the comparison window is open the retained binary must open this catalog. Rebuild the baseline at the new schema and update baseline_commit and catalog_compatibility_floor, or set comparison_window to closed once the comparison path is removed", catalogSchemaVersion, inventory.Floor)
 		}
-		if contract.Scope == "" || contract.Boundary == "" || contract.Inputs == "" || contract.Quality == "" {
+	case "closed":
+	default:
+		t.Fatalf("comparison_window is open or closed, not %q", inventory.Window)
+	}
+	// Each class owns one contract; operationKinds is the one registry of
+	// which class each kind belongs to.
+	for _, class := range workClasses {
+		contract, ok := inventory.Classes[class]
+		if !ok {
+			t.Errorf("execution class %s has no contract", class)
+		} else if contract.Scope == "" || contract.Boundary == "" || contract.Inputs == "" || contract.Quality == "" {
 			t.Errorf("incomplete execution contract for class %s", class)
 		}
 	}
-	// Decoded as tokens: a map would silently keep the last of two entries.
-	decoder := json.NewDecoder(bytes.NewReader(inventory.Kinds))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		t.Fatalf("kinds must map each kind to its class: %v", err)
+	if len(inventory.Classes) != len(workClasses) {
+		t.Errorf("inventory documents %d classes, operation_kinds.go declares %d", len(inventory.Classes), len(workClasses))
 	}
-	seen := map[string]bool{}
-	for decoder.More() {
-		var kind, class string
-		if token, err := decoder.Token(); err != nil {
-			t.Fatal(err)
-		} else {
-			kind, _ = token.(string)
-		}
-		if err := decoder.Decode(&class); err != nil {
-			t.Fatalf("%s: %v", kind, err)
-		}
-		if seen[kind] {
-			t.Errorf("duplicate classification: %s", kind)
-		}
-		seen[kind] = true
-		if _, ok := lookupOperationKind(kind); !ok {
-			t.Errorf("unregistered task %s", kind)
-		}
-		if _, ok := inventory.Classes[class]; !ok {
-			t.Errorf("%s names unknown execution class %q", kind, class)
-		}
+	if inventory.Kinds != nil {
+		t.Error("the inventory must not classify kinds; each operationKind's Class does")
 	}
 	for _, kind := range operationKinds {
-		if !seen[kind.Kind] {
-			t.Errorf("%s needs an explicit scope, quality and execution classification", kind.Kind)
+		if _, ok := inventory.Classes[kind.Class]; !ok {
+			t.Errorf("%s needs an explicit scope, quality and execution class, not %q", kind.Kind, kind.Class)
 		}
 	}
 }

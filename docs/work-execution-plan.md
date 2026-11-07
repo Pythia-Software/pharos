@@ -1,6 +1,6 @@
 # Population based work execution plan
 
-Status: revised design for critique before implementation. Updated November 7, 2026, against commit `cb2ee633ff2c2afd789dd0cd981c8033731bea77`.
+Status: implementation under review in a four-PR stack, with classic execution still the default; this design lands with the first PR's contracts and measurement harness. The [implementation and acceptance record](work-execution-acceptance.md) tracks observed evidence and the gates required before activation. Design baseline: November 7, 2026, commit `cb2ee633ff2c2afd789dd0cd981c8033731bea77`; the retained comparison baseline is now main commit `289ad3aa1c1f40dfc0c215dcf77c61eff0241beb` at catalog schema 24.
 
 ## 1 Purpose and proposed direction
 
@@ -19,7 +19,7 @@ The design must meet six requirements:
 5. Adding, disabling, invalidating, or backfilling an analysis becomes easier. The replacement should remove bespoke scheduling code after the comparison period.
 6. Resource behavior becomes observable over time, both for the Pharos process tree and for individual tasks where attribution is defensible. Live history, task summaries, and optional profiles should identify opportunities to reduce CPU/memory/I/O and increase useful parallelism without confusing an allowance with actual usage.
 
-Being pre-users favors a cohesive replacement developed in four stacked PRs, followed by one integrated production cutover after correctness, performance, and rollback gates pass. The stack divides review and rollback boundaries, not four product launches. Keep intermediate commits buildable and the new execution path dormant in lower PRs; do not spend time making every partly converted subset a supported production mode. Preserve a short-lived execution switch for comparison and a known compatible previous binary for rollback. Remove the comparison path no later than the release immediately following integrated acceptance; a failed gate postpones acceptance rather than extending duplicate coordination indefinitely.
+Being pre-users favors a cohesive replacement developed in four stacked PRs, followed by one integrated production cutover after correctness, performance, and rollback gates pass. The stack divides review and rollback boundaries, not four product launches. Keep intermediate commits buildable and the new execution path dormant in lower PRs; do not spend time making every partly converted subset a supported production mode. Preserve a short-lived execution switch for comparison and a known compatible previous binary for rollback. Remove the comparison path no later than the release immediately following integrated acceptance; a failed gate postpones acceptance rather than extending duplicate coordination indefinitely. Removing it also sets the task inventory's `comparison_window` to `closed`, which ends the test tying the retained baseline's schema to the catalog schema.
 
 ### 1.1 Design choices after review
 
@@ -54,7 +54,7 @@ The following are current behavior, not promises made by the proposed scheduler:
 | Correctness state | Dirty revisions, generations, checkpoints, and freshness markers are already maintained by domain code. | These remain authoritative. Queue completion alone cannot establish freshness. |
 | Historical measurements | Stage histories contain useful durations and work counts. Sync CPU/allocation measurements include concurrent process work; they are not exclusive task costs. | Retain useful history but attach its real scope/basis. It cannot substitute for controlled comparisons or be relabeled as per-task attribution. |
 | Resource display | The CPU/memory/I/O sampler reads processes/descendants on status requests, with a 1.5-second minimum interval. GPU driver-client time is also request-driven, shared for five seconds. There is no retained rolling resource history or general task attribution. The native app is currently outside that total. | Add one bounded history collector per observed process scope, independent of an open page, and task instrumentation at execution boundaries. Preserve partial/unavailable semantics and disclose process coverage. |
-| Compatibility | The catalog has a schema-version guard; this checkout supports version 23 and refuses newer versions. | A scheduler-only release must not increase the catalog compatibility floor. Test the exact retained baseline binary. |
+| Compatibility | The catalog has a schema-version guard; the retained baseline supports version 24 and refuses newer versions. | A scheduler-only release must not increase the catalog compatibility floor. Test the exact retained baseline binary. |
 
 Implementation references are collected in section 16. The classification below is intentionally conservative where partition correctness has not been established.
 
@@ -139,7 +139,7 @@ Compound kinds such as `analysis.chain`, `analysis.refresh`, `library.update`, `
 
 Read-only queries, read-only MCP calls, browser work, and ordinary Ask interactions remain outside the background job queue. Existing interactive-query admission remains authoritative. A read that initiates structural derived work must submit that work through the shared path, with a truthful pending response or the existing synchronous response contract. It must not secretly run a second rebuild.
 
-Before implementation, export the complete kinds registry and enumerate launch sites to catch work not listed here. Each entry must be a population task, coordinator, specialized operation, essential maintenance, or interactive/read-only path. Unknown structural work fails tests. No “legacy” classification without a named replacement phase and owner.
+Before implementation, export the complete kinds registry and enumerate launch sites to catch work not listed here. Each entry must be a population task, coordinator, specialized operation, essential maintenance, or interactive/read-only path. Each registered kind's class is a typed field of its row in the kinds registry (`operation_kinds.go`); the task inventory holds only each class's contract. Unknown structural work fails tests. No “legacy” classification without a named replacement phase and owner.
 
 ### 4.3 Worked tasks and the first scope and quality table
 
@@ -445,7 +445,7 @@ Unfinished analysis remains discoverable after restart. Finite explicit recent-p
 
 ### 8.2 One temporary execution seam
 
-Introduce a process-start execution choice, proposed as `PHAROS_WORK_EXECUTOR=classic|scheduled`, during implementation and evaluation. This name is proposed, not an existing option. The choice selects one owner for converted work for the lifetime of a process; the converted kinds are fixed by the release, not a growing set of per-task user flags. Changing it requires a controlled stop/restart; no hot switching halfway through a writer transaction.
+Introduce a process-start execution choice, `PHAROS_WORK_ENGINE=classic|scheduled`, during implementation and evaluation. The experiment harness sends this name as a request only; the stack's executor PR adds the option. The choice selects one owner for converted work for the lifetime of a process; the converted kinds are fixed by the release, not a growing set of per-task user flags. Changing it requires a controlled stop/restart; no hot switching halfway through a writer transaction.
 
 Both choices use the same algorithms and supported data contracts. Unconverted work is explicitly inventoried during development. Every migrated launch site must route through the seam, including maintenance tails and read-started writes. No live dual-writing or background “shadow execution” on the same catalog.
 

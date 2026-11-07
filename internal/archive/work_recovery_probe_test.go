@@ -111,7 +111,16 @@ func TestWorkPreviousBinaryRecovery(t *testing.T) {
 // runRetainedLabels runs the retained binary's `labels run --json` on the
 // closed catalog with a private config, HOME and temporary directory. Only
 // the fake worker's settings pass through from this test's environment.
-func runRetainedLabels(t *testing.T, binary, catalog string, settings LabelerSettings) LabelsRunStats {
+// retainedLabelsReport is the part of the retained binary's `labels run
+// --json` report the oracle reads. It is decoded by field name rather than
+// into LabelsRunStats, so a later change to that struct cannot fail a proof
+// about a binary that is fixed; a missing field still fails it.
+type retainedLabelsReport struct {
+	Complete, Cut                                           bool
+	ConversationsBuilt, ConversationsFailed, MessagesFailed int
+}
+
+func runRetainedLabels(t *testing.T, binary, catalog string, settings LabelerSettings) retainedLabelsReport {
 	t.Helper()
 	root := t.TempDir()
 	for _, name := range []string{"home", "tmp", "preserved", "captures", "staging"} {
@@ -155,13 +164,21 @@ func runRetainedLabels(t *testing.T, binary, catalog string, settings LabelerSet
 	if err := command.Run(); err != nil {
 		t.Fatalf("retained binary could not recover current catalog: %v\n%s", err, stderr.Bytes())
 	}
-	var stats LabelsRunStats
+	var fields map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&stats); err != nil || decoder.More() {
-		t.Fatalf("retained binary's run report is not one LabelsRunStats object: %v", err)
+	if err := decoder.Decode(&fields); err != nil || decoder.More() {
+		t.Fatalf("retained binary's run report is not one JSON object: %v", err)
 	}
-	return stats
+	for _, name := range []string{"Complete", "Cut", "ConversationsBuilt", "ConversationsFailed", "MessagesFailed"} {
+		if _, ok := fields[name]; !ok {
+			t.Fatalf("retained binary's run report has no %s", name)
+		}
+	}
+	var report retainedLabelsReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("retained binary's run report: %v", err)
+	}
+	return report
 }
 
 // storedLabels is each stored label's content, without its timestamp.
