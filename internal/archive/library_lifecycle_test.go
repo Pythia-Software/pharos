@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func lifecycleLibraries(t *testing.T) (Config, Config) {
@@ -591,6 +594,143 @@ func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
 		t.Fatal("target modified before compatibility check", err)
 	}
 }
+// leaseLockFailures are adapter results a lease's consumers must tell apart:
+// only the adapter's contention, however wrapped or joined, is another
+// holder. A raw errno is not the adapter's contract.
+func leaseLockFailures() []struct {
+	name string
+	err  error
+} {
+	return []struct {
+		name string
+		err  error
+	}{
+		{"wrapped contention", fmt.Errorf("adapter: %w", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK))},
+		{"joined contention", errors.Join(errors.New("adapter context"), filelock.ErrContended, syscall.EAGAIN)},
+		{"unsupported", fmt.Errorf("adapter: %w", filelock.ErrUnsupported)},
+		{"permission", fmt.Errorf("adapter: %w", syscall.EACCES)},
+		{"io", syscall.EIO},
+		{"no locks", syscall.ENOLCK},
+		{"interrupted", syscall.EINTR},
+		{"bare errno", syscall.EWOULDBLOCK},
+	}
+}
+
+type refusedLease struct {
+	file *os.File
+	mode filelock.Mode
+}
+
+// failFileLease makes fileLease's lock of a path ending in suffix fail with
+// failure; other leases lock normally. It returns the refused files, which
+// fileLease must have closed.
+func failFileLease(t *testing.T, suffix string, failure error) *[]refusedLease {
+	t.Helper()
+	refused := &[]refusedLease{}
+	override(t, &lockFileLease, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+		if wait != filelock.Try {
+			t.Errorf("a lease waited for %s", file.Name())
+		}
+		if !strings.HasSuffix(file.Name(), suffix) {
+			return filelock.Lock(file, mode, wait)
+		}
+		*refused = append(*refused, refusedLease{file, mode})
+		return failure
+	})
+	return refused
+}
+
+func requireLeasesClosed(t *testing.T, refused []refusedLease, want int) {
+	t.Helper()
+	if len(refused) != want {
+		t.Fatalf("%d lock attempts, want %d", len(refused), want)
+	}
+	for _, lease := range refused {
+		if _, err := lease.file.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("a failed lock leaked %s: %v", lease.file.Name(), err)
+		}
+	}
+}
+
+// fileLease shares and excludes across independent opens (and with raw
+// flock, the native side of the same protocol), and a close releases it.
+// Only contention is "Pharos is using this library"; any other failure keeps
+// its cause and names the lock. The app's single-instance lock is the same.
+func TestLibraryLeaseModesAndLockFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".pharos-use.lock")
+	busy := func(err error) bool {
+		return errors.Is(err, filelock.ErrContended) && strings.Contains(err.Error(), "Pharos is using this library")
+	}
+	first, err := fileLease(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fileLease(path, false)
+	if err != nil {
+		t.Fatal("shared leases exclude each other:", err)
+	}
+	if lease, err := fileLease(path, true); lease != nil || !busy(err) {
+		t.Fatalf("exclusive beside shared: %v, %v", lease, err)
+	}
+	raw, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if err := syscall.Flock(int(raw.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("raw exclusive beside a shared lease: %v", err)
+	}
+	first.Close()
+	second.Close()
+	exclusive, err := fileLease(path, true)
+	if err != nil {
+		t.Fatal("closing shared leases did not release them:", err)
+	}
+	if lease, err := fileLease(path, false); lease != nil || !busy(err) {
+		t.Fatalf("shared beside exclusive: %v, %v", lease, err)
+	}
+	if err := syscall.Flock(int(raw.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("raw shared beside an exclusive lease: %v", err)
+	}
+	exclusive.Close()
+	if err := syscall.Flock(int(raw.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal("closing the exclusive lease did not release it:", err)
+	}
+	_ = syscall.Flock(int(raw.Fd()), syscall.LOCK_UN)
+
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			contended := errors.Is(tc.err, filelock.ErrContended)
+			refused := failFileLease(t, path, tc.err)
+			for _, exclusive := range []bool{false, true} {
+				lease, err := fileLease(path, exclusive)
+				if lease != nil || !errors.Is(err, tc.err) {
+					t.Fatalf("exclusive=%v: lease=%v err=%v", exclusive, lease, err)
+				}
+				if busy(err) != contended || !contended && !strings.Contains(err.Error(), path) {
+					t.Fatalf("exclusive=%v: misleading failure: %v", exclusive, err)
+				}
+			}
+			requireLeasesClosed(t, *refused, 2)
+			if (*refused)[0].mode != filelock.Shared || (*refused)[1].mode != filelock.Exclusive {
+				t.Fatalf("lease modes: %+v", *refused)
+			}
+
+			support := useSupportDir(t)
+			refused = failFileLease(t, ".application.lock", tc.err)
+			err := runApplicationCLI([]string{"--application", filepath.Join(t.TempDir(), "Pharos.app")})
+			if !errors.Is(err, tc.err) || strings.Contains(err.Error(), "already open") != contended {
+				t.Fatalf("application lock: %v", err)
+			}
+			requireLeasesClosed(t, *refused, 1)
+			registries, _ := filepath.Glob(filepath.Join(support, "applications", "*", "registry.json"))
+			if len(registries) != 0 {
+				t.Fatalf("the app started without its lock: %v", registries)
+			}
+		})
+	}
+}
+
 func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 	a, b := lifecycleLibraries(t)
 	m, err := newApplicationManager(context.Background(), filepath.Join(t.TempDir(), "Pharos.app"))

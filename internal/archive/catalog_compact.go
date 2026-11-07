@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Compacting the catalog gives the drive back the free pages deleted data
@@ -176,7 +178,8 @@ func CompactLibrary(ctx context.Context, config Config, progress func(phase stri
 // compactLease takes the library's use lock exclusively. While the service
 // is stopped, an agent's MCP call opens the catalog itself under a shared
 // lease for the call alone, so a busy lock is retried for a few seconds; a
-// Terminal command holds it until it ends.
+// Terminal command holds it until it ends. Every acquisition failure is
+// retried until the deadline; only contention is then reported as busy.
 func compactLease(ctx context.Context, config Config) (*os.File, error) {
 	deadline := time.Now().Add(compactLeaseWait)
 	for {
@@ -185,7 +188,10 @@ func compactLease(ctx context.Context, config Config) (*os.File, error) {
 			return lease, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("another Pharos process has this library open, such as a Terminal command or an agent's long Pharos MCP call; let it finish and compact again")
+			if errors.Is(err, filelock.ErrContended) {
+				return nil, fmt.Errorf("another Pharos process has this library open, such as a Terminal command or an agent's long Pharos MCP call; let it finish and compact again")
+			}
+			return nil, fmt.Errorf("lock the library to compact it: %w", err)
 		}
 		select {
 		case <-ctx.Done():

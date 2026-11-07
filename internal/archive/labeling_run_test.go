@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Fake model CLIs are this test binary started through a small script:
@@ -1034,6 +1036,59 @@ func TestLabelingStopAndOneRunnerPerJob(t *testing.T) {
 	}
 	if got := requestStates(t, db); !strings.HasPrefix(got, "completed,completed,pending") || fakeCalls(t, calls) != 2 {
 		t.Fatalf("after SIGINT: %s, %d calls", got, fakeCalls(t, calls))
+	}
+}
+
+// Each labeling command says another command holds the dataset or job only
+// when its lock is contended; any other lock failure keeps its cause. None
+// calls the CLI, creates run tables, exports or prepares without its lock.
+func TestLabelingLockFailures(t *testing.T) {
+	quickLabelingTimers(t)
+	dir := writeLabelingFixture(t, labelingFixtureUnits())
+	cli, calls, _ := fakeLabelingCLI(t, "ok")
+	out := filepath.Join(t.TempDir(), "export")
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			contended := errors.Is(tc.err, filelock.ErrContended)
+			check := func(what, busy string, err error) {
+				t.Helper()
+				if err == nil || strings.Contains(err.Error(), busy) != contended || !contended && !errors.Is(err, tc.err) {
+					t.Fatalf("%s: %v", what, err)
+				}
+			}
+			const prepareBusy = "a labeling prepare is using"
+			refused := failFileLease(t, filepath.Join(dir, labelingLockFile), tc.err)
+			check("run", prepareBusy, runLabelingJob(context.Background(), labelingTestOptions(dir, cli, io.Discard)))
+			check("stop", prepareBusy, runLabelingCLI("", []string{"stop", "--dir", dir, "--job", "pilot"}, io.Discard, io.Discard))
+			check("reconcile", prepareBusy, runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "pilot"}, io.Discard, io.Discard))
+			_, _, err := exportLabeling(context.Background(), dir, "pilot", out, false, false)
+			check("export", prepareBusy, err)
+			requireLeasesClosed(t, *refused, 4)
+
+			refused = failFileLease(t, filepath.Join(dir, ".run-pilot.lock"), tc.err)
+			check("run", "already running job", runLabelingJob(context.Background(), labelingTestOptions(dir, cli, io.Discard)))
+			check("reconcile", "stop it first", runLabelingCLI("", []string{"reconcile", "--dir", dir, "--job", "pilot"}, io.Discard, io.Discard))
+			requireLeasesClosed(t, *refused, 2)
+
+			prepared := t.TempDir()
+			refused = failFileLease(t, filepath.Join(prepared, labelingLockFile), tc.err)
+			_, err = prepareLabelingDataset(context.Background(), labelingPrepareOptions{Dir: prepared}, false)
+			check("prepare", "another labeling command", err)
+			requireLeasesClosed(t, *refused, 1)
+			if entries, _ := os.ReadDir(prepared); len(entries) != 1 {
+				t.Fatalf("prepare wrote without its lock: %v", entries)
+			}
+
+			if n := fakeCalls(t, calls); n != 0 {
+				t.Fatalf("%d labeling calls without a lock", n)
+			}
+			if foreign, err := labelingForeignTables(filepath.Join(dir, labelingDatasetFile)); err != nil || len(foreign) > 0 {
+				t.Fatalf("run tables created without a lock: %v, %v", foreign, err)
+			}
+			if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("exported without a lock: %v", err)
+			}
+		})
 	}
 }
 
