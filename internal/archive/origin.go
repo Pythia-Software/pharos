@@ -161,7 +161,7 @@ func harnessChannel(harness, source string) (string, int) {
 		return "cli", 10
 	case "codex/codex_desktop", "codex/codex-desktop", "codex/codex desktop", "codex/desktop":
 		return "desktop", 10
-	case "codex/vscode", "codex/codex_vscode", "claude-code/vscode", "antigravity":
+	case "codex/vscode", "codex/codex_vscode", "claude-code/vscode", "antigravity", "vscode-copilot":
 		return "ide", 10
 	}
 	return "", 0

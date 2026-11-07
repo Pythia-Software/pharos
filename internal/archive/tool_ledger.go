@@ -94,15 +94,15 @@ var (
 	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
 	blockSuffixPattern    = regexp.MustCompile(`(:(reasoning-)?block:\d+|:usage)$`)
 	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
-	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true, "run_commands": true}
+	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true, "run_commands": true, "run_in_terminal": true}
 	toolCategoryByName    = map[string]string{}
 	toolCategoryEntries   = map[string][]string{
-		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec", "run_commands"},
-		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item", "read_files"},
-		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name", "search_codebase"},
-		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content", "editor"},
-		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content", "fetch_web_content"},
-		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents"},
+		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec", "run_commands", "run_in_terminal"},
+		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item", "copilot_readfile", "copilot_listdirectory", "read_files"},
+		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name", "search_codebase", "copilot_findfiles", "copilot_findtextinfiles", "copilot_searchcodebase"},
+		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content", "editor", "copilot_createfile", "copilot_replacestring", "copilot_multireplacestring", "copilot_insertedit", "copilot_applypatch", "vscode_renamesymbol"},
+		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content", "copilot_fetchwebpage", "vscode_fetchwebpage_internal", "fetch_web_content"},
+		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents", "runsubagent"},
 		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree", "manage_task"},
 		"user":    {"askuserquestion", "request_user_input", "request_user_input_async", "ask_question"},
 		"meta":    {"toolsearch", "skill", "skills", "get_skill", "request_plugin_install", "slashcommand"},
@@ -886,9 +886,11 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	call.Truncated = persisted || details["truncated"] == true || strings.Contains(content, "<persisted-output>") ||
 		strings.Contains(content, "Output truncated") || strings.Contains(content, "tokens truncated") || strings.Contains(content, "[... truncated")
 	benign := call.ExitCode != nil && *call.ExitCode == 1 && benignExitPrograms[call.Program] && len(call.Commands) <= 1
-	failed := isError || failedCommand || call.Interrupted || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
+	// An adapter names the harness policy (a hook) that turned a call down.
+	blocked := firstString(details["blocked_by"]) != ""
+	failed := isError || failedCommand || call.Interrupted || blocked || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
 		(call.ExitCode != nil && *call.ExitCode != 0 && !benign)
-	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted {
+	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted && !blocked {
 		failed = false
 	}
 	if !failed {
@@ -900,6 +902,10 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	}
 	if call.Interrupted {
 		call.ErrorType = "interrupted"
+		return
+	}
+	if blocked {
+		call.ErrorType = "hook_blocked"
 		return
 	}
 	head := strings.ToLower(clipText(content, 2000))

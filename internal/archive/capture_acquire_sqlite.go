@@ -254,7 +254,7 @@ func preservationMode(source SourceConfig) string {
 			return "filesystem-retained-sqlite-gated"
 		}
 		return "retained-inputs"
-	case "claude", "canonical", "tl1-export", "chatgpt", "chatgpt-export", "claude-ai", "copilot", "cline":
+	case "claude", "canonical", "tl1-export", "chatgpt", "chatgpt-export", "claude-ai", "copilot", "cline", "vscode-copilot":
 		return "retained-inputs"
 	default:
 		return fmt.Sprintf("unsupported:%s", source.Kind)

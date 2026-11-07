@@ -189,10 +189,11 @@ func probeTools(home string, config Config) []ProbeTool {
 	for kind, paths := range map[string][]string{
 		"claude": {".claude", ".config/claude"}, "codex": {".codex"},
 		"conductor": {"Library/Application Support/com.conductor.app"}, "tl1": {".tl1"},
-		"antigravity": {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
-		"copilot":     {".copilot"},
-		"opencode":    {".local/share/opencode"},
-		"cline":       {".cline/data"},
+		"antigravity":    {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"},
+		"copilot":        {".copilot"},
+		"opencode":       {".local/share/opencode"},
+		"cline":          {".cline/data"},
+		"vscode-copilot": vscodeUserDirs,
 	} {
 		for _, path := range paths {
 			check(kind, filepath.Join(home, filepath.FromSlash(path)), "data folder")
@@ -238,7 +239,7 @@ func probeTools(home string, config Config) []ProbeTool {
 		check(source.Kind, source.Path, "configured source")
 	}
 	tools := []ProbeTool{}
-	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline"} {
+	for _, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity", "copilot", "opencode", "cline", "vscode-copilot"} {
 		if tool, exists := found[kind]; exists {
 			tools = append(tools, tool)
 		}
@@ -313,6 +314,16 @@ func probeStatusForKinds(home string, config Config, catalog *Catalog, kinds map
 		if info, err := os.Stat(filepath.Join(dir, "sessions")); err == nil && info.IsDir() {
 			if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "cline", resolved) == nil {
 				status.NewSources++
+			}
+		}
+	}
+	if status.HostFileExists && (kinds == nil || kinds["vscode-copilot"]) {
+		for _, user := range vscodeUserDirs {
+			dir := filepath.Join(home, filepath.FromSlash(user))
+			if sessions, _, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: dir}}}).sessions(); err == nil && len(sessions) > 0 {
+				if resolved, err := resolveUnprotected(home, dir); err == nil && configuredSource(config, home, "vscode-copilot", resolved) == nil {
+					status.NewSources++
+				}
 			}
 		}
 	}
@@ -395,6 +406,11 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	timed("copilot", func() { run.copilot(filepath.Join(home, ".copilot"), "default location") })
 	timed("opencode", func() { run.opencode(filepath.Join(home, ".local", "share", "opencode"), "default location") })
 	timed("cline", func() { run.cline(filepath.Join(home, ".cline", "data"), "default location") })
+	timed("vscode-copilot", func() {
+		for _, user := range vscodeUserDirs {
+			run.vscodeCopilot(filepath.Join(home, filepath.FromSlash(user)), "default location")
+		}
+	})
 	timed("antigravity", func() {
 		for _, dir := range antigravityDirs(home) {
 			foundBy := "~/.gemini/antigravity* directory"
@@ -470,6 +486,8 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 			run.opencode(path, foundBy)
 		case "cline":
 			run.cline(path, foundBy)
+		case "vscode-copilot":
+			run.vscodeCopilot(path, foundBy)
 		case "antigravity":
 			run.antigravity(path, foundBy)
 		case "conductor":
@@ -687,6 +705,42 @@ func (r *probeRun) cline(dir, foundBy string) {
 				}
 				return "", false
 			})
+		}
+		stats.apply(candidate, err)
+	}
+	r.keep(candidate)
+}
+
+// vscodeUserDirs are the home-relative user folders of VS Code and the builds
+// that share its chat: Insiders, VSCodium and Positron.
+var vscodeUserDirs = []string{"Library/Application Support/Code/User", "Library/Application Support/Code - Insiders/User",
+	"Library/Application Support/VSCodium/User", "Library/Application Support/VSCodium - Insiders/User", "Library/Application Support/Positron/User"}
+
+// vscodeCopilot finds a VS Code user folder's chat sessions, as the adapter
+// lists them.
+func (r *probeRun) vscodeCopilot(dir, foundBy string) {
+	candidate, resolved := r.locate("vscode-copilot", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	// Named for the build rather than its User folder: vscode-copilot for
+	// VS Code's, vscode-copilot-insiders, -vscodium or -positron for others.
+	candidate.Unit, candidate.baseName = "session", filepath.Base(dir)
+	if candidate.baseName == "User" {
+		candidate.baseName = strings.TrimPrefix(strings.TrimPrefix(strings.ReplaceAll(strings.ToLower(filepath.Base(filepath.Dir(dir))), " ", ""), "code"), "-")
+	}
+	if candidate.Status == "found" {
+		sessions, failures, err := (&vscodeCopilotAdapter{baseAdapter{config: SourceConfig{Path: resolved}}}).sessions()
+		if err == nil {
+			err = errors.Join(failures...)
+		}
+		var stats probeStats
+		for _, session := range sessions {
+			info, statErr := os.Stat(session.file)
+			if statErr != nil {
+				continue
+			}
+			stats.add(probeStats{files: 1, sessions: 1, bytes: info.Size(), oldest: info.ModTime(), newest: info.ModTime(), samples: []probeSession{{session.id, info.ModTime()}}})
 		}
 		stats.apply(candidate, err)
 	}

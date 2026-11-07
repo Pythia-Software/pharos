@@ -157,6 +157,18 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 			rel, _ := filepath.Rel(source.Path, file)
 			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
 		}
+	case "vscode-copilot":
+		// The chat sessions and the workspace.json naming each one's folder:
+		// not the rest of the user folder, which holds settings, extension
+		// state and other extensions' secrets.
+		files, err := (&vscodeCopilotAdapter{baseAdapter{config: source}}).captureFiles()
+		if err != nil {
+			return plan, fmt.Errorf("VS Code chat sessions are unavailable: %w", err)
+		}
+		for _, file := range files {
+			rel, _ := filepath.Rel(source.Path, file)
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
+		}
 	case "opencode":
 		// Each database, without the tables that hold credentials and
 		// settings (captureTables).
