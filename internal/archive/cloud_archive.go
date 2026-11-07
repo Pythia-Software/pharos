@@ -321,7 +321,7 @@ func buildCloudArchive(ctx context.Context, d cloudDestination, r *cloudRun, con
 			return "", m, err
 		}
 	}
-	if err = file.Sync(); err != nil {
+	if err = syncToDrive(file); err != nil {
 		return "", m, err
 	}
 	info, err := file.Stat()
