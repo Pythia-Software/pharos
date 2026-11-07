@@ -1,5 +1,8 @@
 # Fingerprint backfill profile — 100 real conversations
 
+This records the original 0.8.9 Goja implementation and its earlier optimization.
+The current renderer is native Go; see [native parity and performance](fingerprint-native-renderer.md).
+
 The cohort contains 100 distinct conversation IDs selected by sorting the library's
 IDs by SHA-256 of a fixed seed plus ID. It contains 1,896 messages, 628 agent events
 and 3,197 tools. Each pass generates and publishes 400 PNGs: both approved profiles
@@ -60,7 +63,8 @@ The build-tagged `TestCompactFingerprintBatch` probe documents all environment
 variables. It requires a manifest of exactly 100 unique IDs. First passes save
 frozen input projections next to the manifest; later passes can replay those.
 Use a fresh manifest directory to include live library reads again. Set
-`PHAROS_FINGERPRINT_PROFILE=1` for Go CPU and Goja execution profiles,
+`PHAROS_FINGERPRINT_PROFILE=1` for Go CPU profiles (the historical Goja
+profile hook has been removed),
 `PHAROS_FINGERPRINT_WORKERS=1` or `2` to compare concurrency, and
 `PHAROS_FINGERPRINT_DURABLE=1` plus `PHAROS_FINGERPRINT_CACHE_ROOT` for production
 flushes on a chosen volume. Destinations remain disposable and separate from the

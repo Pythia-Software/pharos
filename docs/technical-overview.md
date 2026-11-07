@@ -106,6 +106,8 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 Compact fingerprints in tables and conversation cards use background-generated
 PNGs with a durable, versioned queue and deduplicated storage in the catalog.
 The two profiles are 1024×128 and 1024×256, each with light/dark appearances.
+Layout and rasterization run entirely in Go, with cross-language fixture parity
+against the TypeScript model and the original PNG renderer.
 Detailed timelines retain interactive rendering. See
 [Compact fingerprint images](fingerprint-images.md) for processing, invalidation,
 recovery and API details.
