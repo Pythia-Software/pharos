@@ -125,6 +125,48 @@ const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pendin
 const settingsArchive={id:'archive',name:'My archive',config:'/Volumes/Archive/library.toml',available:true};
 const settingsState={selected:settingsLocal.id,mcp:settingsLocal.id,busy:false,libraries:[settingsLocal,settingsArchive],local_library_parent:'/Users/test/Libraries'};
 
+for(const embedded of [false,true])test(`Obsolete folder pickers leave focus in the replacement source form (${embedded?'startup':'normal shell'})`,{skip},async t=>{
+  let releaseBroker,brokerStarted;
+  const brokerReady=new Promise(resolve=>{brokerStarted=resolve});
+  const {page}=await open(t,{url:embedded?'/app':'/settings/sources',ready:embedded?'#application-setup[open]':'#pharosAddSource',api:{
+    'POST /api/app/choose-folder':()=>new Promise(resolve=>{releaseBroker=resolve;brokerStarted()}),
+  }});
+  if(!embedded)await page.evaluate(()=>{
+    window.webkit={messageHandlers:{pharosLibrary:{postMessage:()=>new Promise((resolve,reject)=>{window.finishFolder=(fail)=>fail?reject(Error('Obsolete chooser error')):resolve('/obsolete')})}}};
+  });
+  const guide=page.locator('#pharosOnboarding');
+  for(const purpose of (embedded?['source']:['source','export'])){
+    await page.evaluate(({purpose})=>window.pharosOnboarding.open({mode:purpose==='source'?'manual':'import',kind:'claude'}),{purpose});
+    const field=guide.getByRole('textbox',{name:purpose==='source'?'Claude Code folder':'Export',exact:true});
+    await field.waitFor();
+    const picker=guide.getByRole('button',{name:purpose==='source'?'Choose folder… Claude Code folder':'Choose file… Export',exact:true});
+    await picker.evaluate(button=>{window.originalFolderButton=button});
+    await picker.click();
+    await page.waitForFunction(()=>window.originalFolderButton.disabled);
+    if(embedded)await brokerReady;
+    await guide.getByRole('button',{name:'Back',exact:true}).click();
+    if(!embedded&&purpose==='source'){
+      await guide.getByRole('button',{name:'Cancel',exact:true}).click();
+      await page.evaluate(()=>window.pharosOnboarding.open({mode:'manual',kind:'claude'}));
+    }else if(purpose==='source'){
+      await guide.getByRole('radio',{name:/I’ll tell Pharos where to look/}).check();
+      await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    }else await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+    const replacement=guide.getByRole('textbox',{name:purpose==='source'?'Claude Code folder':'Export',exact:true});
+    await replacement.fill('/replacement');
+    assert.ok(await replacement.evaluate(element=>document.activeElement===element));
+    if(embedded){
+      assert.ok(releaseBroker,'the startup broker chooser was not requested');
+      releaseBroker({path:'/obsolete'});releaseBroker=null;
+    }else await page.evaluate(fail=>window.finishFolder(fail),purpose==='export');
+    await page.waitForFunction(()=>!window.originalFolderButton.disabled);
+    assert.ok(await replacement.evaluate(element=>document.activeElement===element),'an obsolete picker moved focus out of the replacement form');
+    // Return to the start screen for the next purpose.
+    await guide.getByRole('button',{name:'Back',exact:true}).click();
+    if(!embedded)await guide.getByRole('button',{name:'Cancel',exact:true}).click();
+  }
+});
+
 test('Library settings opens inline forms and returns focus when cancelled', {skip}, async t => {
   const {page,shot}=await open(t,{url:'/settings',ready:'#healthCards .panel',managedLibrary:settingsLocal,api:{
     'GET /api/app/state':settingsState,

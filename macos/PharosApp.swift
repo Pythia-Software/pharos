@@ -1337,6 +1337,11 @@ enum NativeBridgeSender {
     }
 }
 
+protocol ArchiveFolderPicker: AnyObject {
+    func begin(_ completion: @escaping (String?) -> Void)
+    func cancel()
+}
+
 struct ArchiveWebView: NSViewRepresentable {
     let url: URL
     let service: ArchiveService
@@ -1422,6 +1427,34 @@ struct ArchiveWebView: NSViewRepresentable {
         "document.documentElement.style.setProperty('--pharos-zoom', '\(zoom)')"
     }
 
+    final class NativeFolderPicker: ArchiveFolderPicker {
+        private let panel = NSOpenPanel()
+
+        init(purpose: String) {
+            // The purposes and messages match pickerPurposes in application.go.
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = purpose == "export"
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = purpose == "library"
+            switch purpose {
+            case "source":
+                panel.message = "Choose the folder that holds this tool’s conversations."
+            case "export":
+                panel.message = "Choose the export you downloaded: its ZIP, its conversations.json, or the folder it unzips to."
+            default:
+                panel.message = "Choose a Pharos library or a parent folder for a new library."
+            }
+        }
+
+        func begin(_ completion: @escaping (String?) -> Void) {
+            panel.begin { [weak self] response in
+                completion(response == .OK ? self?.panel.url?.path : nil)
+            }
+        }
+
+        func cancel() { panel.cancel(nil) }
+    }
+
     final class Coordinator: NSObject, WKScriptMessageHandlerWithReply, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
         let origin: URL
         weak var webView: ArchiveWKWebView?
@@ -1433,7 +1466,29 @@ struct ArchiveWebView: NSViewRepresentable {
         private var headerCenter: Double?
         private var zoomUserScript: WKUserScript?
 
-        init(origin: URL) { self.origin = origin }
+        private final class PendingFolderPicker {
+            let picker: ArchiveFolderPicker
+            let reply: (Any?, String?) -> Void
+            init(picker: ArchiveFolderPicker, reply: @escaping (Any?, String?) -> Void) {
+                self.picker = picker
+                self.reply = reply
+            }
+        }
+        private let makeFolderPicker: (String) -> ArchiveFolderPicker
+        private var pendingFolderPicker: PendingFolderPicker?
+
+        init(origin: URL, makeFolderPicker: @escaping (String) -> ArchiveFolderPicker = { NativeFolderPicker(purpose: $0) }) {
+            self.origin = origin
+            self.makeFolderPicker = makeFolderPicker
+        }
+
+        func cancelFolderPicker() {
+            guard let pending = pendingFolderPicker else { return }
+            // AppKit cancellation and the reply may both reenter the coordinator.
+            pendingFolderPicker = nil
+            pending.picker.cancel()
+            pending.reply(nil, nil)
+        }
 
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
@@ -1484,6 +1539,7 @@ struct ArchiveWebView: NSViewRepresentable {
         private var navigations = 0
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            cancelFolderPicker()
             navigations += 1
         }
         static let loadRetries = 4
@@ -1514,6 +1570,7 @@ struct ArchiveWebView: NSViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            cancelFolderPicker()
             noteFailure("The page's web process stopped unexpectedly (WebKit web content process terminated).", page: webView.url)
             if repeatedFailure(webView, reason: "The page stopped unexpectedly.") { return }
             loadFailed(webView, error: nil)
@@ -1707,24 +1764,20 @@ struct ArchiveWebView: NSViewRepresentable {
             }
         }
 
-        private func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
+        func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
             if let object = body as? [String: Any], object["action"] as? String == "chooseFolder" {
-                // The purposes and messages match pickerPurposes in application.go.
-                let purpose = object["purpose"] as? String ?? "library"
-                let picker = NSOpenPanel()
-                picker.canChooseDirectories = true
-                picker.canChooseFiles = purpose == "export"
-                picker.allowsMultipleSelection = false
-                picker.canCreateDirectories = purpose == "library"
-                switch purpose {
-                case "source":
-                    picker.message = "Choose the folder that holds this tool’s conversations."
-                case "export":
-                    picker.message = "Choose the export you downloaded: its ZIP, its conversations.json, or the folder it unzips to."
-                default:
-                    picker.message = "Choose a Pharos library or a parent folder for a new library."
+                guard pendingFolderPicker == nil else {
+                    replyHandler(nil, "A folder picker is already open. Finish or cancel it before choosing another folder.")
+                    return
                 }
-                picker.begin { response in replyHandler(response == .OK ? picker.url?.path : nil, nil) }
+                let purpose = object["purpose"] as? String ?? "library"
+                let pending = PendingFolderPicker(picker: makeFolderPicker(purpose), reply: replyHandler)
+                pendingFolderPicker = pending
+                pending.picker.begin { [weak self, weak pending] path in
+                    guard let self, let pending, self.pendingFolderPicker === pending else { return }
+                    self.pendingFolderPicker = nil
+                    pending.reply(path, nil)
+                }
                 return
             }
             guard (body as? [String: Any])?["action"] as? String == "eject" else {
@@ -1886,6 +1939,7 @@ struct ArchiveWebView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: ArchiveWKWebView, coordinator: Coordinator) {
+        coordinator.cancelFolderPicker()
         view.configuration.userContentController.removeScriptMessageHandler(forName: updateHandler, contentWorld: .page)
         view.configuration.userContentController.removeScriptMessageHandler(forName: windowMessageName)
         view.configuration.userContentController.removeScriptMessageHandler(forName: "pharosMenuBar")

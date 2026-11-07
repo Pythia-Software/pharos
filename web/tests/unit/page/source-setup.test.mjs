@@ -126,7 +126,7 @@ test('source and export pickers use host capabilities, retaining service fallbac
   for(const native of [false,true]) for(const managed of [false,true]) for(const purpose of ['source','export']) {
     const calls=[],window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:async value=>{calls.push(['host',value]);return '/chosen';}}},pharosManagedSession:managed};
     const model=vm.runInNewContext(picker+pathField+';({pickerAvailable,choosePath,pathField})',{
-      window,document:{getElementById:()=>null},node:element,button:()=>element(),
+      window,active:null,document:{getElementById:()=>null},node:element,button:()=>element(),
       call:async(path,options)=>{calls.push([path,JSON.parse(options.body)]);return {path:'/service-machine'};},
     });
     assert.equal(model.pickerAvailable(),native||managed);
@@ -139,5 +139,42 @@ test('source and export pickers use host capabilities, retaining service fallbac
     assert.equal(row.children.length,native||managed?2:1,'manual entry is always available; unsupported pickers stay hidden');
     window.pharosHost.folders.chooseLibraryFolder=async()=>null;
     if(native)assert.equal(await model.choosePath(purpose),null);
+  }
+});
+
+test('source and export picker completions belong to their connected field and current onboarding view',async()=>{
+  const source=readFileSync(join(assets,'onboarding.js'),'utf8');
+  const pathField=source.slice(source.indexOf('  function pathField('),source.indexOf('\n  // mode: start'));
+  for(const purpose of ['source','export'])for(const result of ['/chosen',null,new Error('Picker failed')])for(const change of ['current','field replaced','closed','view replaced']){
+    let settle;
+    const pending=new Promise((resolve,reject)=>{settle=()=>result instanceof Error?reject(result):resolve(result)});
+    const changes=[],errors=[],focused=[];
+    const node=()=>({isConnected:true,disabled:false,children:[],append(...children){this.children.push(...children)},setAttribute(){},focus(){focused.push(this)}});
+    const model=vm.runInNewContext('let active={};'+pathField+`;({pathField,close(){active=null},replace(){active={}}})`,{
+      node,button:(text,primary,onclick)=>Object.assign(node(),{textContent:text,onclick}),
+      pickerAvailable:()=>true,choosePath:()=>pending,
+    });
+    const original=model.pathField('Folder','/original','',purpose,value=>changes.push(value),error=>errors.push(error));
+    const pick=original.row.children[1],operation=pick.onclick();
+    assert.equal(pick.disabled,true);
+    let replacement;
+    if(change==='field replaced')original.input.isConnected=false;
+    if(change==='closed')model.close();
+    if(change==='view replaced')model.replace();
+    if(change!=='current'){
+      replacement=model.pathField('Folder','/replacement','',purpose,()=>assert.fail('obsolete chooser changed the replacement'),()=>assert.fail('obsolete chooser failed in the replacement'));
+      replacement.input.focus();
+    }
+    settle();await operation;
+    const current=change==='current';
+    assert.equal(original.input.value,current&&typeof result==='string'?result:'/original');
+    assert.deepEqual(changes,current&&typeof result==='string'?[result]:[]);
+    assert.deepEqual(errors,current&&result instanceof Error?[result]:[]);
+    assert.equal(pick.disabled,false,'the original control is cleaned up');
+    assert.equal(focused.at(-1),current?pick:replacement.input,'obsolete finally must leave focus in the replacement');
+    if(replacement){
+      assert.equal(replacement.input.value,'/replacement');
+      assert.equal(replacement.row.children[1].disabled,false);
+    }
   }
 });

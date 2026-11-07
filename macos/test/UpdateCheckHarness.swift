@@ -58,8 +58,8 @@ func refuses(_ work: () throws -> Void, _ message: String) {
 }
 
 /// Records WebKit's native sender metadata and forwards the real messages to
-/// the production entry points. The pages request no successful clipboard write,
-/// file picker, update installation, eject or real window movement.
+/// the production entry points. The pages use an injected picker and request no
+/// successful clipboard write, update installation, eject or real window movement.
 @MainActor final class BridgeMessages: NSObject, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
     let coordinator: ArchiveWebView.Coordinator
     var results: [Bool: [String: String]] = [:]
@@ -87,6 +87,21 @@ func refuses(_ work: () throws -> Void, _ message: String) {
             self.replies[mainFrame, default: 0] += 1
             replyHandler(value, error)
         }
+    }
+}
+
+/// A retained completion can fire synchronously during cancellation or arrive late.
+final class FakeFolderPicker: ArchiveFolderPicker {
+    var completion: ((String?) -> Void)?
+    var cancellations = 0
+    var onBegin: (() -> Void)?
+    func begin(_ completion: @escaping (String?) -> Void) {
+        self.completion = completion
+        onBegin?()
+    }
+    func cancel() {
+        cancellations += 1
+        completion?(nil)
     }
 }
 
@@ -166,6 +181,73 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         print("Native sender predicate and recorded dispatch checks passed")
     }
 
+    @MainActor static func nativeFolderPickerTests() {
+        let origin = URL(string: "http://localhost:18765/")!
+        for selected in ["/tmp/chosen", nil] as [String?] {
+            var pickers: [FakeFolderPicker] = []
+            var purposes: [String] = []
+            let coordinator = ArchiveWebView.Coordinator(origin: origin) { purpose in
+                let picker = FakeFolderPicker()
+                pickers.append(picker)
+                purposes.append(purpose)
+                return picker
+            }
+            var replies: [(String?, String?)] = []
+            coordinator.library(["action": "chooseFolder", "purpose": "source"]) { value, error in
+                replies.append((value as? String, error))
+            }
+            var refused: [(Any?, String?)] = []
+            coordinator.library(["action": "chooseFolder", "purpose": "export"]) { refused.append(($0, $1)) }
+            expect(pickers.count == 1 && purposes == ["source"], "concurrent requests must not replace the first picker")
+            expect(refused.count == 1 && refused[0].0 == nil && refused[0].1?.isEmpty == false, "the concurrent caller gets its own clear error")
+            expect(replies.isEmpty, "refusing another request must leave the first pending")
+            pickers[0].completion?(selected)
+            pickers[0].completion?("/tmp/duplicate")
+            expect(replies.count == 1 && replies[0].0 == selected && replies[0].1 == nil, "selection and user cancellation each reply once with the existing payload")
+            expect(pickers[0].cancellations == 0, "a completed picker needs no cancellation")
+            // Completion clears ownership before user code can start the next request.
+            coordinator.library(["action": "chooseFolder", "purpose": "export"]) { _, _ in
+                coordinator.library(["action": "chooseFolder"]) { _, _ in }
+            }
+            pickers[1].completion?(nil)
+            expect(purposes == ["source", "export", "library"], "all purposes pass through, including the default and a reentrant request")
+            coordinator.cancelFolderPicker()
+        }
+        for event in ["navigation", "termination", "dismantle"] {
+            let page = ArchiveWKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+            var pickers: [FakeFolderPicker] = []
+            let coordinator = ArchiveWebView.Coordinator(origin: origin) { _ in
+                let picker = FakeFolderPicker()
+                pickers.append(picker)
+                return picker
+            }
+            var oldReplies = 0, freshReplies = 0
+            coordinator.library(["action": "chooseFolder"]) { value, error in
+                oldReplies += 1
+                expect(value == nil && error == nil, "\(event) replies as cancellation")
+                // Invalidation clears ownership before invoking the original reply.
+                coordinator.library(["action": "chooseFolder"]) { value, error in
+                    freshReplies += 1
+                    expect(value as? String == "/tmp/fresh" && error == nil, "the fresh request retains its own result")
+                }
+            }
+            switch event {
+            case "navigation": coordinator.webView(page, didStartProvisionalNavigation: nil)
+            case "termination": coordinator.webViewWebContentProcessDidTerminate(page)
+            default: ArchiveWebView.dismantleNSView(page, coordinator: coordinator)
+            }
+            expect(oldReplies == 1 && pickers[0].cancellations == 1, "\(event) dismisses and settles the owned picker once")
+            expect(pickers.count == 2 && freshReplies == 0, "\(event) admits a fresh request after invalidation")
+            pickers[0].completion?("/tmp/obsolete")
+            pickers[0].completion?(nil)
+            expect(oldReplies == 1 && freshReplies == 0, "late callbacks must neither duplicate the old reply nor finish the new request")
+            pickers[1].completion?("/tmp/fresh")
+            coordinator.cancelFolderPicker()
+            expect(freshReplies == 1 && pickers[1].cancellations == 0, "the fresh picker completes normally")
+        }
+        print("Owned native folder picker lifecycle checks passed")
+    }
+
     @MainActor static func nativeWebKitSenderTests(root: URL) throws {
         _ = NSApplication.shared
         let pages = root.appendingPathComponent("bridge-pages")
@@ -205,6 +287,7 @@ func refuses(_ work: () throws -> Void, _ message: String) {
           handlers.pharosMenuBar.postMessage(null);
           await post('pharosUpdates', {action: 'status'});
           await post('pharosLibrary', {action: 'invalid'});
+          await post('pharosLibrary', {action: 'chooseFolder', purpose: 'source'}, 'chooseFolder');
           // Invalid payloads keep this integration fixture harmless even if
           // sender validation regresses; iframe errors must precede parsing.
           await post('pharosClipboard', {});
@@ -218,7 +301,14 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         """
         try ("<!doctype html>" + script + "<iframe src='/frame.html'></iframe>").write(to: pages.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
         try ("<!doctype html>" + script).write(to: pages.appendingPathComponent("frame.html"), atomically: true, encoding: .utf8)
-        let coordinator = ArchiveWebView.Coordinator(origin: origin)
+        var pickerCount = 0
+        let coordinator = ArchiveWebView.Coordinator(origin: origin) { purpose in
+            expect(purpose == "source", "the allowed main-document picker preserves its purpose")
+            pickerCount += 1
+            let picker = FakeFolderPicker()
+            picker.onBegin = { [weak picker] in picker?.completion?(nil) }
+            return picker
+        }
         let updates = UpdateNotice()
         coordinator.updates = updates
         let recorder = BridgeMessages(coordinator)
@@ -247,7 +337,8 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         for error in recorder.results[false]!.values {
             expect(error.contains("main window document"), "every iframe reply reports a native sender rejection: \(error)")
         }
-        expect(recorder.replies[true] == 3 && recorder.replies[false] == 3, "each real WebKit reply finishes once")
+        expect(recorder.results[true]?["chooseFolder"] == "ok" && pickerCount == 1, "only the real main-document sender creates a picker")
+        expect(recorder.replies[true] == 4 && recorder.replies[false] == 4, "each real WebKit reply finishes once")
         for mainFrame in [true, false] {
             let senders = recorder.senders.filter { $0.2 == mainFrame }
             expect(Set(senders.map { $0.0 }) == Set(NativeBridgeSender.Handler.allCases.map(\.rawValue)), "both frames exercise every registered name")
@@ -587,6 +678,7 @@ func refuses(_ work: () throws -> Void, _ message: String) {
         defer { try? FileManager.default.removeItem(at: root) }
         setenv("PHAROS_SUPPORT_DIR", root.appendingPathComponent("support").path, 1)
         nativeSenderTests()
+        nativeFolderPickerTests()
         try nativeWebKitSenderTests(root: root)
         try applicationLifecycleTests(root: root)
         let app = root.appendingPathComponent("Library with spaces/Pharos.app")
