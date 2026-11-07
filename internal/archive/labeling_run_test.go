@@ -401,7 +401,7 @@ func writeLabelingFixture(t *testing.T, units []fixtureUnit) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, labelingDatasetFile))
+	db, err := sql.Open("sqlite", filepath.Join(dir, labelingDatasetFile)+"?_pragma=synchronous("+labelingLedgerSynchronous+")")
 	if err != nil {
 		t.Fatal(err)
 	}

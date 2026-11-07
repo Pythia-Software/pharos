@@ -58,7 +58,7 @@ var (
 	crashReportBytes int64 = 32 << 20
 )
 
-const diagnosticJournalLimit = 300
+var diagnosticJournalLimit = 300
 
 func diagnosticLogsRoot() string { return filepath.Join(pharosSupportDir(), "logs") }
 

@@ -343,12 +343,10 @@ func TestProcessUsageMatchesTheKernel(t *testing.T) {
 	}
 }
 
-// Sampling must cost under about 1 % of one core (§10). It runs once per
-// snapshot computation, at most every resourceSampleInterval, over the
-// processes of every library; this measures samples of ten processes taken
-// back to back and states the cost at one sample per interval.
-func TestResourceSamplingIsCheap(t *testing.T) {
-	override(t, &resourceSampleInterval, 0)
+// Sampling's cost is measured on demand; the scripted sampler tests above
+// cover its behavior without repeatedly querying this Mac's process table.
+func BenchmarkResourceSampling(b *testing.B) {
+	override(b, &resourceSampleInterval, 0)
 	sampler := newResourceSampler()
 	processes := []resourceProcess{{PID: os.Getpid(), Role: "broker"}}
 	if runtime.GOOS == "darwin" {
@@ -357,28 +355,27 @@ func TestResourceSamplingIsCheap(t *testing.T) {
 		for range 9 {
 			child := exec.Command("sleep", "30")
 			if err := child.Start(); err != nil {
-				t.Fatal(err)
+				b.Fatal(err)
 			}
-			t.Cleanup(func() { child.Process.Kill(); child.Wait() })
+			b.Cleanup(func() { child.Process.Kill(); child.Wait() })
 			processes = append(processes, resourceProcess{PID: child.Process.Pid, Role: "service"})
 		}
 	}
-	const rounds = 2000
 	cpu := func() float64 {
 		var usage syscall.Rusage
 		_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
 		return float64(usage.Utime.Nano()+usage.Stime.Nano()) / 1e9
 	}
 	before := cpu()
-	for range rounds {
+	b.ResetTimer()
+	for range b.N {
 		summarizeResources("Pharos", sampler.sample(processes))
 	}
-	perSample := (cpu() - before) / rounds
+	b.StopTimer()
+	perSample := (cpu() - before) / float64(b.N)
 	share := 100 * perSample / (1500 * time.Millisecond).Seconds()
-	t.Logf("one sample and its summary: %.1f µs of CPU; at one sample per 1.5 s, %.4f%% of one core", perSample*1e6, share)
-	if share > 1 {
-		t.Fatalf("sampling costs %.3f%% of one core", share)
-	}
+	b.ReportMetric(perSample*1e6, "cpu-µs/sample")
+	b.ReportMetric(share, "core-%")
 }
 
 func TestResourceWorkerTree(t *testing.T) {

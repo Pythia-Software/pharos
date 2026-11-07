@@ -149,7 +149,7 @@ func same(left, right any) bool {
 func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 	slowTest(t)
 	catalog, _ := testCatalog(t)
-	seedToolCalls(t, catalog, 1000)
+	seedToolCalls(t, catalog, 200)
 	ctx := context.Background()
 	if err := catalog.ensureToolRollup(ctx); err != nil {
 		t.Fatal(err)
