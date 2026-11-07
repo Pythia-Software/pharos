@@ -129,7 +129,7 @@ function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string
   return key => { const option = values.options.find(option => typeof option === "object" && option.value === key); return typeof option === "object" ? option.label : String(key ?? "Unspecified"); };
 }
 
-const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum";
+const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && (clause.op === "sum" || clause.op === "count" && !clause.field);
 function smoothingPeriods(job: PreviewJob, query: QueryState): number {
   const options = job.options, clause = query.aggregations?.find(metric => metric.id === options?.coverMetricId) ?? query.aggregations?.[0];
   const periods = (options?.cover ?? options?.recipe?.cover)?.timeline?.rollingPeriods;

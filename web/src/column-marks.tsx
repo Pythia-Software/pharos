@@ -49,10 +49,17 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
   for (const tick of ticks) if (y(tick) - y(axis.at(-1)!) >= 20) axis.push(tick);
   const dates = [...new Set([0, Math.floor((buckets.length - 1) / 2), buckets.length - 1])].filter(index => buckets[index]);
   const dateLabel = (date: Date, detail = false) => date.toLocaleString(undefined, { month: "short", day: "numeric", ...detail ? { year: "numeric" as const } : {}, ...prepared && ["hour", "hours"].includes(xLabel) ? { hour: "numeric" as const, minute: "2-digit" as const } : {} });
+  // The tooltip keys each line to its colour, so notes get none.
+  const tooltipLines = (bucket: typeof buckets[number]) => {
+    const notes = [dateLabel(bucket.date, true), accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}d rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined].filter(Boolean) as string[];
+    const values = series.filter(item => !nonzero || bucket.values[item.key] !== undefined);
+    return { "data-chart-colors": JSON.stringify([...notes.map(() => null), ...values.map(item => item.color), ...(bucket.detail ? [null] : [])]),
+      "data-chart-tooltip": [...notes, ...values.map(item => `${item.label}: ${tooltipValue(bucket.values[item.key] ?? 0, percent ? "percent" : unit)}`), bucket.detail].filter(Boolean).join("\n") };
+  };
   return <span className="query-cover-timeline" aria-hidden="true">
     <span className="query-timeline-plot">
       <span className="query-timeline-ticks">{axis.map(value => <span key={value} style={{ bottom: `${y(value)}%` }}>{percentageValues ? tooltipValue(value, "percent") : unit === "USD" ? formatUSD(value) : value.toLocaleString(undefined, { notation: "compact", maximumSignificantDigits: 3 })}</span>)}</span>
-      <span className="query-cover-columns">{buckets.map(bucket => <span key={bucket.key} style={drawLines || grouped ? { position: "relative" } : undefined} data-chart-colors={JSON.stringify([null, ...series.map(item => item.color)])} data-chart-tooltip={[dateLabel(bucket.date, true), accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}d rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined, ...series.filter(item => !nonzero || bucket.values[item.key] !== undefined).map(item => `${item.label}: ${tooltipValue(bucket.values[item.key] ?? 0, percent ? "percent" : unit)}`), bucket.detail].filter(Boolean).join("\n")} title="">
+      <span className="query-cover-columns">{buckets.map(bucket => <span key={bucket.key} style={drawLines || grouped ? { position: "relative" } : undefined} {...tooltipLines(bucket)} title="">
         {drawLines ? series.filter(item => bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="query-timeline-point" style={{ bottom: `${y(bucket.values[item.key])}%`, background: item.color }} />) : <ColumnMarks bucket={bucket} series={series} scale={y} percent={percent} grouped={grouped} />}
       </span>)}
         {drawLines && buckets.length ? <svg className="query-timeline-lines" viewBox="0 0 1000 100" preserveAspectRatio="none">{series.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" d={timelinePath(buckets, item.key, y, !percentageValues || percent, nonzero)} />)}</svg> : null}

@@ -5,6 +5,7 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import { sessionSignals } from "./session-shape-model";
 import {validTimelineVisibility} from "./timeline-visibility";
 import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
 import { syncSchemas } from "./sync-table-model";
@@ -83,6 +84,7 @@ export const viewFields: Record<string, ViewField> = {
   reader_collapsed: field("reader_collapsed", ["work"], "strings", "Explicitly collapsed disclosure identities, overriding initially open content."),
   reader_expanded: field("reader_expanded", ["work"], "strings", "Expanded disclosure identities: message:<id>, call:<id>, or section:<key>."),
   reader_writing: field("reader_writing", ["work","library"], "boolean", "Highlight human-written text (typed or dictated, not pasted, quoted or templated) in the conversation reader and a library card's Browse. Default on; one of the reader's Highlight checkboxes.", undefined, true),
+  session_signal: field("session_signal", ["analyze/session_shape"], "enum", "Session Shape: the forensic signal the sessions table lists sessions by, most first. Omit to list sessions by all their forensic events.", ["all", ...sessionSignals], "all"),
   reader_events: field("reader_events", ["work","library"], "boolean", "Highlight agent events (Agent Experience, the sentence classifier) in the conversation reader and a library card's Browse: each event's sentence in its kind group's hue, what it was about and what the agent did underlined; hovering names the message's events. Default off; one of the reader's Highlight checkboxes."),
   reader_labels: field("reader_labels", ["work","library"], "boolean", "Tint whole message cards by their local labels (Message labels, the message classifier), including reasoning, in the conversation reader and a library card's Browse; hovering a card names its labels. Default off; one of the reader's Highlight checkboxes."),
   reader_event_link: field("reader_event_link", ["work"], "text", "Selected two-sided agent event in the conversation reader, by event ID (e<number>): the observation and the earlier text it points back at are highlighted, joined in the gutter, and the observation is revealed. Set from the fingerprint, the session timeline or a click on either end; shown with the Agent events highlight."),

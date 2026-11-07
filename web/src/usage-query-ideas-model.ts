@@ -47,6 +47,8 @@ const occupancy = [sum("unit_hours", "Summed activity hours"), distinct("unit_id
 
 // Agent events: each row is one event; agent_event_messages: one row per message read.
 const agentEvents: SummaryColumn[] = [count("idea_events", "Events"), distinct("conversation_id", "Conversations"), distinct("message_id", "Messages")];
+// Session shape: one row per agent session; rates pool their parts.
+const sessionShape: SummaryColumn[] = [count("idea_sessions", "Sessions"), sum("forensic_events", "Forensic events"), ratio("idea_failure_rate", "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)", "Failure rate", true), ratio("idea_steering", "SUM([corrections])/NULLIF(SUM([typed_human_messages]),0)", "Steering load", true)];
 const agentEventMessages: SummaryColumn[] = [sum("message_count", "Messages read"), sum("candidates", "Keyword hits"), sum("events", "Events"), ratio("idea_events_per_message", "SUM([events])/NULLIF(SUM([message_count]),0)", "Events per message")];
 
 export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
@@ -121,6 +123,11 @@ export const usageQueryIdeas: Record<UsageDataset, QueryIdea[]> = {
     idea("agent_events", "weeks", "Over time", "Weekly events", "Events per week by kind group", ["week", "family_group"], agentEvents, "idea_events", true),
     idea("agent_events", "repos", "Compare", "Events by repository", "Compare events and affected conversations across repositories", ["repository_name"], agentEvents),
     idea("agent_events", "threads", "Explore", "Conversations with the most events", "Rank conversations by their events and open them in the reader", ["conversation_id"], [...agentEvents, conversation]),
+  ],
+  session_shape: [
+    idea("session_shape", "archetypes", "Compare", "Sessions by archetype", "Compare sessions, forensic events, failure rate and steering load across archetypes", ["archetype"], sessionShape),
+    idea("session_shape", "weeks", "Over time", "Weekly session length", "Sessions per week in each length band", ["week", "length_band"], sessionShape, "idea_sessions", true),
+    idea("session_shape", "threads", "Explore", "Sessions with the most forensic events", "Rank sessions by their forensic events and open them in the reader", ["conversation_id"], [...sessionShape, conversation], "idea_forensic_events"),
   ],
   agent_event_messages: [
     idea("agent_event_messages", "repos", "Compare", "Messages read by repository", "Compare messages read, keyword hits and events across repositories", ["repository_name"], agentEventMessages),

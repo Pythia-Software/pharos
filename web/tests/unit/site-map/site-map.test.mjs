@@ -31,7 +31,8 @@ globalThis.location ??= new URL("http://localhost/");
 const archive = dirname(assets), ui = readFileSync(join(assets, "ui.py"), "utf8");
 const goSource = readdirSync(archive).filter(file => file.endsWith(".go") && !file.endsWith("_test.go")).map(file => readFileSync(join(archive, file), "utf8")).join("\n");
 const params = url => new URL(url, "http://localhost").searchParams;
-const plain = value => JSON.parse(JSON.stringify(value));
+// An option the page leaves unset (an absent cycleOn) is drawn unset too.
+const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 
 test("the site map's routes are the ones the server and the page shell serve", () => {
   const served = new Set(/func isUIPage[\s\S]*?case ([^:]*):/.exec(goSource)[1].match(/"[^"]*"/g).map(path => JSON.parse(path)));

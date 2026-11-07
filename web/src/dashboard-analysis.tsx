@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { MAX_WHERE_CLAUSES, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldDef, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers, type MetricTheme } from "@pythia-software/query-table-ui";
 import { chartSeriesStyle, colorFields, metricSeriesColor } from "./chart-colors";
+import { orderedValues } from "./session-shape-bands";
 import { isTrendView, changeState, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
 import type { RequestParams } from "./metric-request";
@@ -77,6 +78,8 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
     {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} onChange={display => set({ display })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit && !catalog.components?.[view.split] ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
+    {view.view === "cycle" && catalog.cycleOn ? <ChartSelect label="Placed by" value={view.cycleOn ?? ""} options={[["", catalog.cycleOn.label], ...Object.entries(catalog.cycleOn.options).map(([id, option]) => [id, option.label] as [string, string])]}
+      title="Which of each record's times places it in the cycle" onChange={cycleOn => set({ cycleOn: cycleOn || undefined })} /> : null}
     {trend ? <ScaleControl value={view.scale!} percent={view.share} onChange={scale => set({ scale })} />
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
     {view.view === "scatter" ? <ChartSelect label="Y scale" value={axis(view.scaleY)} options={scales} onChange={scaleY => set({ scaleY })} /> : null}
@@ -142,9 +145,10 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
   const presentation = useMemo(() => toolMetricPresentation(entry, clause.groupBy, analysisLabels(catalog, view)), [entry, originRevision, clause, catalog]);
-  // Hours of the day take the sky's colour at that hour.
-  const hourTheme: MetricTheme | undefined = colorFields(clause)[0] === "hour_of_day" && presentation.metric ? { dimensions: { [clause.groupBy[0]]: { layer: "hours",
-    overrides: presentation.metric.buckets.map(bucket => ({ value: bucket.keys[0] as AggregationBucket["keys"][number], color: chartSeriesStyle("hour_of_day", String(bucket.keys[0])).color })) } } } : undefined;
+  // Hours of the day take the sky's colour at that hour; a band's or an
+  // archetype's steps, their ramp's.
+  const themed = colorFields(clause)[0], hourTheme: MetricTheme | undefined = (themed === "hour_of_day" || Object.hasOwn(orderedValues, themed)) && presentation.metric ? { dimensions: { [clause.groupBy[0]]: { layer: "hours",
+    overrides: presentation.metric.buckets.map(bucket => ({ value: bucket.keys[0] as AggregationBucket["keys"][number], color: chartSeriesStyle(themed, String(bucket.keys[0])).color })) } } } : undefined;
   const componentTheme: MetricTheme | undefined = analysis.components ? { dimensions: { [view.split]: { layer: "components",
     overrides: analysis.components.parts.map(part => ({ value: part.label, color: metricSeriesColor([view.split], [part.label]) })) } } } : undefined;
   const empty = !result.loading && !error && entry && (analysis.components ? !entry.buckets.some(bucket => Number(bucket.value) > 0) && !Number(entry.other?.value) : !entry.buckets.length || entry.buckets.every(bucket => bucket.distribution?.kind === "histogram" ? !bucket.distribution.n : bucket.distribution?.kind === "box" && !bucket.distribution.summary));

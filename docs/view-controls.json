@@ -356,6 +356,10 @@
       "field": "search_cards"
     },
     {
+      "file": "web/src/session-shape-panels.tsx",
+      "field": "session_signal"
+    },
+    {
       "file": "web/src/workspace-inbox.ts",
       "field": "sidebar_visible"
     },
@@ -4585,6 +4589,15 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
+      "key": "1eebb9f108766619:0",
+      "file": "web/src/dashboard-analysis.tsx",
+      "owner": "AnalysisControls",
+      "tag": "ChartSelect",
+      "control": "value={view.cycleOn ?? \"\"} onChange={cycleOn => set({ cycleOn: cycleOn || undefined })}",
+      "contract": "dashboard",
+      "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
+    },
+    {
       "key": "24395342a1df0a30:0",
       "file": "web/src/dashboard-analysis.tsx",
       "owner": "AnalysisControls",
@@ -6559,6 +6572,15 @@
       "reason": "Query Table owns q_*; inspecting a bucket or group sets the native query and clears pinned widths for its new fitted view. Host search stays in hostState."
     },
     {
+      "key": "180a4f2e4634b151:0",
+      "file": "web/src/index.tsx",
+      "owner": "SessionShapeDashboard",
+      "tag": "button",
+      "control": "onClick={revealDefinitions}",
+      "contract": "navigation",
+      "reason": "Reveals the Definitions section with reveal=section:session-shape-definitions: scroll and highlight, never focus."
+    },
+    {
       "key": "6d045847d0c95152:0",
       "file": "web/src/index.tsx",
       "owner": "TokenUsageDashboard",
@@ -7587,6 +7609,25 @@
       "control": "aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
+    },
+    {
+      "key": "3c0938979a8182b4:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionsToRead",
+      "tag": "button",
+      "control": "onClick={() => setShown(value => value + 20)}",
+      "contract": "transient",
+      "reason": "Shows more sessions in the panel; how many are shown is not part of the view and resets on reload."
+    },
+    {
+      "key": "7e9cf81137729b5b:0",
+      "file": "web/src/session-shape-panels.tsx",
+      "owner": "SessionsToRead",
+      "tag": "select",
+      "control": "value={signal} data-view-field=\"session_signal\" onChange={event => setSignal(event.target.value as \"all\" | SessionSignal)}",
+      "binding": "session_signal",
+      "contract": "view.session_signal",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "85efc2b35d82ffac:0",

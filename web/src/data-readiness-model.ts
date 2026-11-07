@@ -45,6 +45,7 @@ const domainScopes: Record<string,string[]> = {
   conversation_activity:[...sources,'an.authorship'],writing:[...sources,'an.authorship'],writing_messages:[...sources,'an.authorship'],
   tools:[...sources,'an.ledger','an.tools'],tool_calls:[...sources,'an.ledger'],skill_usages:[...sources,'an.ledger'],
   parallelism:sources,rhythm:[...sources,'an.authorship'],tl1_attempts:sources,
+  session_shape:[...sources,'an.ledger','an.authorship'],
   message_labels:[...sources,'an.authorship','@labels'],people_message_labels:[...sources,'an.authorship','@labels'],
   agent_events:[...sources,'@agent_events'],agent_event_messages:[...sources,'@agent_events'],
   findings:[...sources,'findings'],safety:[...sources,'an.ledger','findings'],fixes:[...sources,'@agent_events','findings'],

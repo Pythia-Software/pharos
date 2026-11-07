@@ -43,7 +43,7 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
     const metric: AggregationClause = daily ? { ...view!.coverMetric!, id: column.id, display: { ...view!.coverMetric!.display, kind: cover.kind ?? "auto" } } : {
       id: column.id, op: ["sum", "count"].includes(column.op) ? "sum" : "max", field: column.id, groupBy: groupKeyFields(query.grouping.keys),
       label: column.label ?? column.id, groupLimit: 12,
-      display: { kind: cover.kind ?? "bar-horizontal", ...(unit === "percent" ? { format: { kind: "percent", decimals: 1 } } : unit === "ms" ? { format: { kind: "duration", sourceUnit: "milliseconds" } } : {}) },
+      display: { kind: cover.kind ?? "bar-horizontal", ...(unit === "percent" ? { format: { kind: "percent", decimals: 1 } } : unit === "ms" ? { format: { kind: "duration", sourceUnit: "milliseconds" } } : unit === "hours" ? { format: { kind: "number", decimals: 0 } } : {}) },
     };
     metric.display = { ...metric.display, ...coverDisplay(cover), kind: metric.display?.kind ?? "auto" };
     // Fetch complete cohorts before applying the cover's sample threshold;

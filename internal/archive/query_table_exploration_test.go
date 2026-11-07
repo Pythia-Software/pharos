@@ -55,7 +55,7 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			limits := handshake.QueryCapabilities
 			groups := 10_000
-			if dataset == "usage" || dataset == "message_labels" {
+			if dataset == "usage" || dataset == "message_labels" || dataset == "session_shape" {
 				groups = 100_000
 			}
 			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {

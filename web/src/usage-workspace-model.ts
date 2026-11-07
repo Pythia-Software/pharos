@@ -25,6 +25,7 @@ export const usageDatasets = {
   rhythm: { label: "Rhythm", description: "Hourly activity for you and agents working with you, unattended or automatically.", field: "unit_label", searchLabel: "Rhythm Conversation Titles" },
   agent_events: { label: "Agent events", description: "Sentences where agents hit obstacles, were surprised, discovered something, worked around a problem, and more.", field: "sentence", searchLabel: "Agent Event Sentences" },
   agent_event_messages: { label: "Messages checked for agent events", description: "Agent replies and thinking blocks checked for events, with matching keywords and classifications.", field: "title", searchLabel: "Agent Event Conversation Titles" },
+  session_shape: { label: "Session shape", description: "One row per agent session: its length, active time, tool calls and autonomy, and the forensic signals that fired.", field: "title", searchLabel: "Session Titles" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
@@ -43,6 +44,7 @@ export const engineUsageTopics = {
   mcp: { label: "Pharos MCP", description: "How are agents using Pharos? Explore calls, reliability, response sizes, and time spent serving requests." },
   carbon: { label: "Carbon Impact", description: "Estimated electricity and emissions, with explicit assumptions." },
   agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
+  session_shape: { label: "Session Shape", description: "What does a typical session look like, and which went badly? Session length, active time, tool calls, autonomy and turn cycles, and forensic signals against your own history." },
 } as const;
 export const usageTopics = { ...engineUsageTopics,
   "thinking-overview": {label:"Waiting",description:"Understand observed model waits, context associations and timing evidence."},
@@ -52,12 +54,12 @@ export type UsageTopic = keyof typeof usageTopics;
 export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
   people_message_labels:"labels", message_labels:"labels",
   compactions: "compaction", model_requests: "thinking-detail", usage: "tokens", conversation_activity: "activity", writing: "human", writing_messages: "human",
-  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience",
+  tools: "tools", tool_calls: "calls", mcp_calls: "mcp", skill_usages: "skills", parallelism: "parallelism", rhythm: "habits", tl1_attempts: "tokens", agent_events: "agent_experience", agent_event_messages: "agent_experience", session_shape: "session_shape",
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
-  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events",
+  calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", session_shape: "session_shape",
 };
 
 // Fields that hold a dashboard's dates, by dataset: its range, and the day
@@ -69,7 +71,7 @@ const timeFields: Record<UsageDataset, string[]> = {
   usage: ["first_usage_at", "last_usage_at", "day", "hour", "week", "month"], conversation_activity: ["event_at"],
   writing: ["first_message_at", "last_message_at"], writing_messages: ["sent_at", "day", "week", "month"], tools: ["day", "week", "month"], tool_calls: ["started_at", "ended_at", "day", "week", "month"],
   mcp_calls: ["called_at", "day", "week", "month"], skill_usages: ["created_at", "day", "week", "month"], parallelism: ["started_at", "day", "hour_of_day", "week", "month"], rhythm: ["started_at", "day", "hour_of_day", "week", "month"],
-  agent_events: ["occurred_at", "day", "week", "month"], agent_event_messages: ["occurred_at", "day", "week", "month"],
+  agent_events: ["occurred_at", "day", "week", "month"], agent_event_messages: ["occurred_at", "day", "week", "month"], session_shape: ["started_at", "day", "week", "month"],
 };
 const builtWith: Partial<Record<UsageDataset, string[]>> = { parallelism: ["counting", "gap_minutes"] };
 const termFields = (term: WhereTerm): string[] => predicatesOf(term).map(clause => clause.field);

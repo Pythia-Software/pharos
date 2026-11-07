@@ -28,4 +28,5 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   time: { metric: "time", split: "activity", ...daily },
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
+  session_shape: { metric: "sessions", split: "length_band", period: "week", share: true },
 } satisfies Record<keyof typeof engineUsageTopics, AnalysisState>;

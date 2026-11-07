@@ -18,6 +18,7 @@ export const queryCategories = {
   delegation: { label: "Delegation", tone: "var(--heat-2)" },
   views: { label: "Workspace Views", tone: "var(--muted)" },
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
+  sessions: { label: "Session Shape", tone: "color-mix(in srgb,var(--sea) 55%,var(--muted))" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
   safety: { label: "Risky actions", tone: "var(--gold)" },
   findings: { label: "Findings", tone: "var(--gold)" },
@@ -40,6 +41,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "safety") return "safety";
   if (dataset === "fixes") return "findings";
   if (dataset === "parallelism" || dataset === "rhythm") return "machines";
+  if (dataset === "session_shape") return "sessions";
   if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";

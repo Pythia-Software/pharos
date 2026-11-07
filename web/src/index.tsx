@@ -101,6 +101,7 @@ import safetyDocument from "../../schemas/safety.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import agentEventsDocument from "../../schemas/agent_events.schema.json";
 import agentEventMessagesDocument from "../../schemas/agent_event_messages.schema.json";
+import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { safetyDetailURL, safetyStateLabels } from "./safety-route";
 import { SafetySelectionBar, SafetyTableContext } from "./safety";
@@ -113,6 +114,9 @@ import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
 import { HabitsPanels } from "./habits";
+import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { SessionShapeDefinitions, SessionsToRead, SignalTable, revealDefinitions } from "./session-shape-panels";
+import { formatSeconds } from "./session-shape-model";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { canonicalAnalyzeURL, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { mcpAnalysisCatalog } from "./mcp-analysis-catalog";
@@ -145,7 +149,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages";
+type Dataset = "people_message_labels" | "compactions" | "message_labels" | "model_requests" | "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "rhythm" | "findings" | "safety" | "fixes" | "agent_events" | "agent_event_messages" | "session_shape";
 function mainIntegrationLink(row: Row): React.ReactNode {
   const merge = mainIntegration(row);
   if (!merge) return "";
@@ -219,6 +223,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   fixes: loadSchema<Row>(fixesDocument),
   agent_events: loadSchema<Row>(agentEventsDocument),
   agent_event_messages: loadSchema<Row>(agentEventMessagesDocument),
+  session_shape: loadSchema<Row>(sessionShapeDocument),
 };
 
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
@@ -401,6 +406,7 @@ const emptyMessages: Record<Dataset, string> = {
   fixes: "No fixes match this query.",
   agent_events: "No agent events match this query.",
   agent_event_messages: "No messages checked for agent events match this query.",
+  session_shape: "No sessions match this query.",
 };
 
 // Query Table 1.0.0 still formats numeric metrics with a field renderer only for
@@ -1107,6 +1113,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
+  if (topic === "session_shape") return <SessionShapeDashboard />;
   return <SkillsDashboard />;
 }
 
@@ -1357,6 +1364,22 @@ function AgentExperienceDashboard() {
       <AgentExperienceRates where={where} />
       <p className="usage-dashboard-note">Events are sentences a small model judged to express one kind of event, found from keyword candidates in agents' visible replies and thinking. It is model output, not review: expect some misses and false alarms, and compare rates rather than reading single counts. Confidence threshold 0.5.</p>
       <AgentEventExamples where={where} queryURL={usageWorkspaceURL({ mode: "query", dataset: "agent_events", query: { ...EMPTY_QUERY, where } })} />
+    </>} />;
+}
+
+// Session Shape: the engine chart opens on sessions by length band as weekly
+// shares; below it, the forensic panels the chart cannot draw. Its fixed
+// views are Card Library cards that open this chart. Durations in seconds
+// read as durations.
+const sessionShapeAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" && measure.format.sourceUnit === "seconds" ? formatSeconds(value) : catalogAmount(value, measure);
+function SessionShapeDashboard() {
+  return <CatalogDashboard catalog={sessionShapeAnalysisCatalog} dataset="session_shape" name="session-shape" defaults={dashboardDefaults.session_shape} format={sessionShapeAmount}
+    panels={where => <>
+      <p className="usage-dashboard-note">Separate signals, each against your own history; there is no score. Every rate counts only sessions with the evidence it needs and says how many. <button type="button" className="usage-preset-clear" onClick={revealDefinitions}>Definitions</button></p>
+      <h2 className="session-shape-heading">Forensics</h2>
+      <SignalTable where={where} schema={schemas.session_shape} />
+      <SessionsToRead where={where} />
+      <SessionShapeDefinitions />
     </>} />;
 }
 
