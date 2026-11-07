@@ -39,6 +39,7 @@ export const dataEntityGroups = [
 
 // Each definition describes an input row, before filters and grouping.
 export const dataSources = {
+  people_message_labels:{label:"People message labels",entity:"messages",grain:"One user message within a People dashboard population, assigned to its highest-confidence accepted specific label or missing-label coverage. Label groups add up to the message total."},
   message_labels: { label: "Message labels", entity: "messages", grain: "One accepted specific label on a saved message, or one record of labeling coverage. A message can have several labels" },
   compactions: { label: "Context compactions", entity: "compactions", grain: "One recorded compaction, with a human, agent-app or unknown trigger" },
   model_requests: { label: "Model requests", entity: "tokens", grain: "One recorded response with token usage, with timing after tool results when available" },
@@ -58,6 +59,7 @@ export const dataSources = {
   tl1_attempts: { label: "TL1 attempts", entity: "work_items", grain: "One recorded attempt at a TL1 work item" },
   agent_events: { label: "Agent events", entity: "messages", grain: "One sentence classified as one kind of event (experimental)" },
   agent_event_messages: { label: "Messages checked for agent events", entity: "messages", grain: "One agent reply or thinking block checked for events" },
+  fixes: { label: "Fixes for Recurring Agent Problems", entity: "messages", grain: "One recurring problem agents ran into, grouped from agent events across work items" },
 } as const satisfies Record<string, { label: string; entity: DataEntity; grain: string }>;
 export type DataSource = keyof typeof dataSources;
 

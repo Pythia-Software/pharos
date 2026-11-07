@@ -243,7 +243,7 @@ func exportHistoryRecovery(ctx context.Context, tx *sql.Tx, u historyUnit, oracl
 	}
 	msgs := recoveryMaps(result, "messages")
 	for _, c := range recoveryMaps(result, "conversations") {
-		conversation := ConversationRecord{NativeID: firstString(c["native_id"]), Provider: firstString(c["provider"]), Account: firstString(c["account"]), Origin: firstString(c["origin"]), Model: firstString(c["model"]), Effort: firstString(c["effort"]), Coverage: firstString(c["coverage"]), StartedAt: firstString(c["started_at"]), EndedAt: firstString(c["ended_at"]), ParentNativeID: byID[firstString(c["parent_id"])], AgentDepth: int(integer(c["agent_depth"])), AgentPath: firstString(c["agent_path"]), AgentNickname: firstString(c["agent_nickname"]), Harness: firstString(c["harness"]), HarnessVersionFirst: firstString(c["harness_version_first"]), HarnessVersionLast: firstString(c["harness_version_last"]), HarnessVersionSource: firstString(c["harness_version_source"])}
+		conversation := ConversationRecord{NativeID: firstString(c["native_id"]), Provider: firstString(c["provider"]), Account: firstString(c["account"]), Origin: firstString(c["origin"]), Model: firstString(c["model"]), Effort: firstString(c["effort"]), Coverage: firstString(c["coverage"]), StartedAt: firstString(c["started_at"]), EndedAt: firstString(c["ended_at"]), ParentNativeID: byID[firstString(c["parent_id"])], AgentDepth: int(integer(c["agent_depth"])), AgentPath: firstString(c["agent_path"]), AgentNickname: firstString(c["agent_nickname"]), Harness: firstString(c["harness"]), HarnessVersionFirst: firstString(c["harness_version_first"]), HarnessVersionLast: firstString(c["harness_version_last"]), HarnessVersionSource: firstString(c["harness_version_source"]), Extractor: firstString(c["extractor"])}
 		_ = json.Unmarshal([]byte(firstString(c["aliases_json"])), &conversation.Aliases)
 		var selected []map[string]any
 		for _, m := range msgs {
@@ -495,6 +495,12 @@ func (c *Catalog) applyHistoryRecovery(ctx context.Context, e historyRecovery) (
 				workItem, conversation["id"], id, workItem, workItem); err != nil {
 				return err
 			}
+		}
+		// The usage restored above is what the workspace's replies counted in
+		// the catalog it was saved from, where another conversation here may
+		// count one of them, or none does.
+		if err = rederiveRecoveredClaudeUsage(ctx, tx, e.Record, id); err != nil {
+			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE workspaces SET preservation_completeness='catalog-derived' WHERE id=?", id); err != nil {
 			return err
@@ -769,4 +775,18 @@ func (c *Catalog) reconcileHistoryLinks(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// legacyCoveragePrefix begins the extractor Conductor stored as its
+// conversations' coverage before they had an extractor of their own.
+const legacyCoveragePrefix = "conductor-"
+
+// legacyCoverage reads a conversation's coverage and extractor as this build
+// stores them, whatever wrote the record: an older parse, a saved catalog or
+// a recovery envelope.
+func legacyCoverage(coverage, extractor string) (string, string) {
+	if strings.HasPrefix(coverage, legacyCoveragePrefix) {
+		return "complete", defaultString(extractor, coverage)
+	}
+	return coverage, extractor
 }

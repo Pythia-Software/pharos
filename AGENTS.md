@@ -8,6 +8,13 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+Main agent: delegate broad repository exploration to one read-only subagent
+(Claude Code: Explore; Codex: spawn_agent) when available. Request a short
+summary of relevant files, symbols, tests, and suggested edit points, then
+implement from it; reread only what editing or verification needs. Keep small
+lookups local; if delegation is unavailable, use targeted searches.
+Prefer a subagent with the same model and effort level as the main agent.
+
 Split long tasks. Past a few hundred requests, write a short handoff in
 `.context/` (what's done, what's next, where things are) and continue in a
 fresh session.
@@ -126,6 +133,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
+| Provider golden records | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestProviderConformance ./internal/archive` after changing what an adapter reads; it rewrites `testdata/ingestion/<kind>.json`, and refuses a change without a new index version (`same-version` overrides) |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
 | Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json` ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
 
@@ -207,7 +215,8 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   - `slowTest(t)` for a test that takes seconds, so that `-short` skips it.
 
   `TestMain` keeps tests off this Mac: no `ioreg`, `scutil`, `diskutil` or
-  GitHub, no user git configuration, and catalogs without drive flushes.
+  GitHub, no user git configuration, and disposable files and catalogs without
+  drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
 - **Go tests run in several processes, one test at a time in each.**

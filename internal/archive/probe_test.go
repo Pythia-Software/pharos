@@ -30,7 +30,7 @@ func probeHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
-	for _, name := range probeEnvNames {
+	for _, name := range probeEnvNames() {
 		t.Setenv(name, "")
 	}
 	stubShellEnv(t, nil)
@@ -132,6 +132,10 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	probePut(t, filepath.Join(home, ".codex", "sessions", "2026", "09", "01", "rollout-2026-09-01T00-00-00-"+probeID4+".jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, ".codex", "history.jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, "alt-claude", "projects", "-x", probeID5+".jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID1, "events.jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".copilot", "session-state", probeID2+".jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".copilot", "logs", "process.jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, "work-copilot", "session-state", probeID3, "events.jsonl"), "{}\n")
 	probePut(t, filepath.Join(home, "work-codex", "archived_sessions", "rollout-2026-09-02T00-00-00-"+probeID6+".jsonl"), "{}\n")
 	conductor := filepath.Join(home, "Library", "Application Support", "com.conductor.app")
 	sqliteFixture(t, filepath.Join(conductor, "conductor.db"), "sessions", "session_messages")
@@ -169,14 +173,14 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(documents, 0o755) })
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "alt-claude"))
-	stubShellEnv(t, map[string]string{"CODEX_HOME": "~/work-codex", "CLAUDE_CONFIG_DIR": filepath.Join(documents, "claude")})
+	stubShellEnv(t, map[string]string{"CODEX_HOME": "~/work-codex", "CLAUDE_CONFIG_DIR": filepath.Join(documents, "claude"), "COPILOT_HOME": "~/work-copilot"})
 
 	report := probeSources(home, Config{}, nil)
 	names := []string{}
 	for _, candidate := range report.Candidates {
 		names = append(names, candidate.Name)
 	}
-	if got, want := strings.Join(names, ","), "claude,claude-docs,claude-work,codex,conductor,tl1,claude-alt-claude,codex-work-codex,chatgpt"; got != want {
+	if got, want := strings.Join(names, ","), "claude,claude-docs,claude-work,codex,copilot,conductor,tl1,claude-alt-claude,codex-work-codex,copilot-work-copilot,chatgpt,claude-ai"; got != want {
 		t.Fatalf("candidates = %s, want %s", got, want)
 	}
 	main := candidateNamed(t, report, "claude")
@@ -195,6 +199,13 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	}
 	if alt := candidateNamed(t, report, "claude-alt-claude"); alt.Count != 1 || alt.FoundBy != "CLAUDE_CONFIG_DIR (service environment)" {
 		t.Fatalf("CLAUDE_CONFIG_DIR profile = %+v", alt)
+	}
+	// Copilot's sessions, in a folder or an older release's flat log, and not its own logs.
+	if copilot := candidateNamed(t, report, "copilot"); copilot.Count != 2 || copilot.Unit != "session" || !copilot.Recommended {
+		t.Fatalf("copilot = %+v", copilot)
+	}
+	if work := candidateNamed(t, report, "copilot-work-copilot"); work.Count != 1 || work.FoundBy != "COPILOT_HOME (login shell)" {
+		t.Fatalf("COPILOT_HOME = %+v", work)
 	}
 	if codex := candidateNamed(t, report, "codex"); codex.Count != 1 || codex.Files != 1 || codex.Path != filepath.Join(home, ".codex") {
 		t.Fatalf("codex = %+v", codex)
@@ -215,7 +226,7 @@ func TestProbeFindsKnownLocationsOnly(t *testing.T) {
 	for _, location := range report.Checked {
 		empty = empty || (location.Path == "~/.claude-empty/projects" && location.Status == "empty")
 	}
-	if !empty || len(report.Environment) != 3 || report.ShellEnv != "read" {
+	if !empty || len(report.Environment) != 4 || report.ShellEnv != "read" {
 		t.Fatalf("checked = %+v environment = %+v shell = %q", report.Checked, report.Environment, report.ShellEnv)
 	}
 }
@@ -253,41 +264,45 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 	t.Setenv("CODEX_HOME", "")
 	// Arguments are -l -i -c SCRIPT.
 	noisy := script("noisy", "echo 'Welcome!'\nprintf 'prompt junk'\neval \"$4\"\necho 'logout junk'\nexit 3\n")
-	values, err := loginShellEnv(noisy, probeEnvNames, 2*time.Second)
+	values, err := loginShellEnv(noisy, probeEnvNames(), 2*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] != "/profiles/claude work" || len(values) != 1 {
 		t.Fatalf("noisy shell = %v, %v", values, err)
 	}
 	// Waiting for the shell would take 30 s.
 	started := time.Now()
-	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames, 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
+	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames(), 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
 		t.Fatalf("hanging shell returned %v after %s", err, time.Since(started))
 	}
 	// A background job holding stdout open must not hold up the probe: waiting
 	// for it would take until the 10 s timeout.
 	started = time.Now()
-	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames, 10*time.Second)
+	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames(), 10*time.Second)
 	if err != nil || values["CLAUDE_CONFIG_DIR"] == "" || time.Since(started) > 5*time.Second {
 		t.Fatalf("background job: %v, %v after %s", values, err, time.Since(started))
 	}
-	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames, time.Second); err == nil {
+	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames(), time.Second); err == nil {
 		t.Fatal("a shell that printed nothing was accepted")
 	}
 	t.Run("cache follows selected tools", func(t *testing.T) {
 		t.Setenv("PHAROS_PROBE_SHELL", "1")
 		t.Setenv("SHELL", noisy)
 		t.Setenv("CODEX_HOME", "/profiles/codex work")
+		t.Setenv("COPILOT_HOME", "/profiles/copilot")
+		t.Setenv("XDG_DATA_HOME", "/profiles/data")
+		t.Setenv("CLINE_DATA_DIR", "/profiles/cline data")
+		t.Setenv("CLINE_DIR", "/profiles/cline")
 		override(t, &shellEnvCache.key, "")
 		override(t, &shellEnvCache.at, time.Time{})
 		override(t, &shellEnvCache.values, map[string]string{})
 		override(t, &shellEnvCache.err, error(nil))
-		for _, name := range probeEnvNames {
+		for _, name := range probeEnvNames() {
 			values, err := cachedLoginShellEnv([]string{name})
 			if err != nil || len(values) != 1 || values[name] == "" {
 				t.Fatal("previous tool choice hid this tool's override", name, values, err)
 			}
 		}
-		values, err := cachedLoginShellEnv(probeEnvNames)
-		if err != nil || len(values) != 2 {
+		values, err := cachedLoginShellEnv(probeEnvNames())
+		if err != nil || len(values) != len(probeEnvNames()) {
 			t.Fatal("full CLI discovery reused a partial result", values, err)
 		}
 	})

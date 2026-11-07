@@ -153,9 +153,9 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return stableID("message", conversationID, nativeID)
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,
+		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,service_tier,speed_source,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
@@ -171,7 +171,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			counts := request.Counts
 			uncached := max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)
 			if _, err := statement.Exec(requestID(request.Key), conversationID, sessionID(request.Stream), nilIfEmpty(request.NativeID), request.Sequence,
-				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), nilIfEmpty(request.Effort), integer(counts["input_tokens"]), integer(uncached),
+				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), nilIfEmpty(request.Effort), request.Speed, nilIfEmpty(request.ServiceTier), request.SpeedSource, integer(counts["input_tokens"]), integer(uncached),
 				integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]), integer(counts["output_tokens"]),
 				integer(counts["reasoning_output_tokens"]), integer(counts["total_tokens"]), nullableInt(request.ContextGrowth),
 				boolInt(request.CompactedBefore), request.ToolCalls); err != nil {
@@ -365,6 +365,7 @@ func storedMessageRecords(messages []map[string]any) []MessageRecord {
 			NativeID: firstString(message["native_id"]), Role: firstString(message["role"]), Kind: firstString(message["kind"]),
 			Text: firstString(message["text"]), RawText: firstString(message["raw_text"]), CreatedAt: firstString(message["created_at"]),
 			Model: firstString(message["model"]), Effort: firstString(message["effort"]),
+			Speed: firstString(message["speed"]), ServiceTier: firstString(message["service_tier"]), SpeedSource: firstString(message["speed_source"]),
 			ParentNativeID: firstString(message["parent_native_id"]), CallID: firstString(message["call_id"]),
 			PreviousNativeID: firstString(message["previous_native_id"]),
 			EvidenceLocator:  firstString(message["evidence_locator"]), SourceOrder: int(integer(message["source_order"])), Selected: integer(message["selected"]) != 0,
@@ -412,6 +413,16 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		}
 		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), Messages: messages}
 		if err := c.writeTransaction(ctx, "tool-ledger conversation="+firstString(row["id"]), func(tx *sql.Tx) error {
+			for i := range messages {
+				normalized := normalizeMessageInference(messages[i])
+				if normalized.Speed != messages[i].Speed || normalized.ServiceTier != messages[i].ServiceTier || normalized.SpeedSource != messages[i].SpeedSource {
+					if _, err := tx.Exec("UPDATE messages SET speed=?,service_tier=?,speed_source=? WHERE conversation_id=? AND native_id=?", normalized.Speed, nilIfEmpty(normalized.ServiceTier), normalized.SpeedSource, row["id"], normalized.NativeID); err != nil {
+						return err
+					}
+				}
+				messages[i] = normalized
+			}
+			conversation.Messages = messages
 			// The known checkouts are read in each write transaction: an index
 			// running alongside may add some, and re-resolves only the rows
 			// already written (see reresolveToolPaths).

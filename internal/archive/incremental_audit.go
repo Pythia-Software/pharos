@@ -28,11 +28,12 @@ var (
 const automaticAuditWall = 5 * time.Second
 
 type verificationSummary struct {
-	Checked  int `json:"checked"`
-	Passed   int `json:"passed"`
-	Mismatch int `json:"mismatch"`
-	Deferred int `json:"deferred"`
-	Errors   int `json:"errors"`
+	Checked   int `json:"checked"`
+	Passed    int `json:"passed"`
+	Mismatch  int `json:"mismatch"`
+	Deferred  int `json:"deferred"`
+	Errors    int `json:"errors"`
+	Reindexed int `json:"reindexed,omitempty"`
 }
 
 type auditResult struct {
@@ -47,6 +48,7 @@ type auditResult struct {
 	Reason        string         `json:"reason,omitempty"`
 	EvidenceBytes int64          `json:"evidence_bytes,omitempty"`
 	Attempts      []auditAttempt `json:"attempts,omitempty"`
+	Reindexed     int            `json:"reindexed,omitempty"`
 }
 
 type auditDeferral struct {
@@ -319,6 +321,12 @@ func (c *Catalog) auditIndexPending(ctx context.Context, unit syncUnit) (bool, e
 }
 
 func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, budget int64) (result auditResult) {
+	return c.auditUnitMode(ctx, unit, runID, budget, false)
+}
+
+// Repair uses the exact frozen records compared by the verifier. A successful
+// write is not a verdict: compare again before resolving the unit's issue.
+func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string, budget int64, repair bool) (result auditResult) {
 	started := time.Now()
 	result = auditResult{Outcome: "read_error", Source: unit.Source.Name, Unit: unit.ID}
 	defer func() {
@@ -368,7 +376,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		}
 		var input retainedInput
 		if unit.Source.Kind == "codex" && unit.Source.Options["sqlite_record_capture"] != true {
-			plan, e := planCapture(unit.Source)
+			plan, e := planCapture(ctx, unit.Source)
 			if e != nil {
 				result.Detail = e.Error()
 				return
@@ -435,7 +443,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 			manifest := view.manifest
 			// Historical Conductor readers map one superseded database, not
 			// the current source root. Lease exactly that generation.
-			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).captured(manifest.Source.Path)
+			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).capturedSource(manifest.Source)
 			if isConductorSource(unit.Source.Kind) && canonicalRoot != unit.Reader.Config().Path {
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
@@ -490,6 +498,25 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 			return err
 		}
 		differences, err := c.compareRetainedAuditRecord(ctx, unit, record, scope, budget)
+		if err == nil && repair && len(differences) > 0 {
+			if err = c.openAuditIssue(ctx, unit, runID, differences, partsSignature(read)); err != nil {
+				return err
+			}
+			var id string
+			id, err = c.reindexAuditRecord(ctx, unit, record)
+			if err != nil {
+				return err
+			}
+			result.Reindexed++
+			if err = c.refreshLibraryWorkspaces(ctx, []string{id}); err != nil {
+				return err
+			}
+			recheck := filepath.Join(scope, "recheck")
+			if err = os.MkdirAll(recheck, 0o700); err != nil {
+				return err
+			}
+			differences, err = c.compareRetainedAuditRecord(ctx, unit, record, recheck, budget)
+		}
 		for _, difference := range differences {
 			if !slices.Contains(result.Differences, difference) {
 				result.Differences = append(result.Differences, difference)
@@ -504,7 +531,8 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		err = group.Discover(func(record WorkspaceRecord) error {
 			matches := strings.HasPrefix(unit.ID, "sqlite:")
 			for _, conversation := range record.Conversations {
-				matches = matches || conversation.Origin == unit.ID
+				// A unit of one session group in a database is <database>#<root>.
+				matches = matches || conversation.Origin == unit.ID || conversation.Origin+"#"+record.SourceID == unit.ID
 			}
 			if !matches {
 				return nil
@@ -546,10 +574,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 	if len(result.Differences) > 0 {
 		result.Outcome = "mismatch"
 		result.Detail = "full reference ingest disagrees with retained catalog rows"
-		id := stableID("sync-integrity", unit.hostID(), unit.Source.Name, unit.ID)
-		detail := map[string]any{"categories": result.Differences, "run_id": runID, "source_signature": partsSignature(read), "index_version": sourceIndexVersion(mustAuditAdapter(unit.Source)), "comparison": "isolated full reference ingest", "source_kind": unit.Source.Kind}
-		_, err := c.DB.Exec(`INSERT INTO sync_integrity_issues(id,host_id,source_name,unit,first_at,last_at,state,detail_json)
-			VALUES(?,?,?,?,?,?,'open',?) ON CONFLICT(id) DO UPDATE SET last_at=excluded.last_at,state='open',detail_json=excluded.detail_json,occurrences=occurrences+1,resolved_at=NULL`, id, unit.hostID(), unit.Source.Name, unit.ID, now(), now(), jsonText(detail))
+		err := c.openAuditIssue(ctx, unit, runID, result.Differences, partsSignature(read))
 		if err != nil {
 			result.Outcome, result.Detail = "read_error", err.Error()
 		}
@@ -561,6 +586,14 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		}
 	}
 	return
+}
+
+func (c *Catalog) openAuditIssue(ctx context.Context, unit syncUnit, runID string, differences []string, signature string) error {
+	id := stableID("sync-integrity", unit.hostID(), unit.Source.Name, unit.ID)
+	detail := map[string]any{"categories": differences, "run_id": runID, "source_signature": signature, "index_version": sourceIndexVersion(mustAuditAdapter(unit.Source)), "comparison": "isolated full reference ingest", "source_kind": unit.Source.Kind}
+	_, err := c.DB.ExecContext(ctx, `INSERT INTO sync_integrity_issues(id,host_id,source_name,unit,first_at,last_at,state,detail_json)
+		VALUES(?,?,?,?,?,?,'open',?) ON CONFLICT(id) DO UPDATE SET last_at=excluded.last_at,state='open',detail_json=excluded.detail_json,occurrences=occurrences+1,resolved_at=NULL`, id, unit.hostID(), unit.Source.Name, unit.ID, now(), now(), jsonText(detail))
+	return err
 }
 
 func mustAuditAdapter(source SourceConfig) Adapter { adapter, _ := MakeAdapter(source); return adapter }
@@ -587,7 +620,11 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 			if separator := strings.LastIndex(original, ":sessions:"); separator >= 0 {
 				original = original[:separator]
 			}
-			path, ok := view.captured(original)
+			lookup := view.captured
+			if isCodexSource(unit.Source.Kind) {
+				lookup = view.capturedRollout
+			}
+			path, ok := lookup(original)
 			if !ok {
 				return "", errAuditUnstable
 			}
@@ -664,7 +701,7 @@ func jsonlAuditDependencies(adapter *jsonlAdapter, paths []string) ([]string, []
 		} else if err != nil && !os.IsNotExist(err) {
 			return nil, nil, err
 		}
-		databases, err := codexNamingDatabases(adapter.config.Path)
+		databases, err := codexNamingDatabases(adapter.files(), adapter.config.Path)
 		return files, databases, err
 	}
 	seen := map[string]bool{}
@@ -686,22 +723,13 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 	if unit.Reader != nil && captureViewOf(unit.Reader) != nil {
 		return readCapturedAuditRecord(ctx, unit)
 	}
-	if unit.Source.Kind == "conductor" {
-		adapter, err := MakeAdapter(unit.Source)
-		if err != nil {
-			return nil, nil, err
+	// A source whose sessions share one database (Conductor, OpenCode,
+	// Cursor, Zed), or are each one (the Cursor CLI), is read in place.
+	if adapter, err := MakeAdapter(unit.Source); err == nil {
+		if group, ok := adapter.(groupReader); ok {
+			setAdapterContext(adapter, ctx)
+			return group.readGroup(unit.Parts)
 		}
-		setAdapterContext(adapter, ctx)
-		part := unit.Parts[0]
-		separator := strings.LastIndex(part.item, ":sessions:")
-		if separator < 0 {
-			return nil, nil, errors.New("invalid session identity")
-		}
-		path := strings.TrimPrefix(part.item[:separator], "sqlite:")
-		var record *WorkspaceRecord
-		var read []sourcePart
-		err = adapter.(*conductorAdapter).database(path, map[string]bool{part.item[separator+len(":sessions:"):]: true}, func([]sourcePart) bool { return false }, func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
-		return record, read, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
@@ -720,6 +748,9 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		}
 		if strings.HasPrefix(part.item, "sqlite:") {
 			databases = append(databases, strings.TrimPrefix(part.item, "sqlite:"))
+		} else if isCodexSource(unit.Source.Kind) {
+			// A compressed rollout is frozen as it is, under its own name.
+			files = append(files, rolloutFile(part.item))
 		} else {
 			files = append(files, part.item)
 		}
@@ -799,7 +830,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 			return nil, nil, err
 		}
-		if err := snapshotSQLite(ctx, path, destination); err != nil {
+		if err := snapshotSourceSQLite(ctx, path, destination); err != nil {
 			return nil, nil, err
 		}
 		after, err := sqliteDependencyState(path)
@@ -1186,6 +1217,12 @@ func (s *Server) auditOpenIssues(ctx context.Context, runID string, names []stri
 }
 
 func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body map[string]any) {
+	repair := boolValue(body, "repair", false)
+	all := boolValue(body, "all", false)
+	if repair && !all {
+		writeError(w, errors.New("repair requires all=true"), 400)
+		return
+	}
 	names := []string{}
 	if value, present := body["sources"]; present {
 		values, valid := sliceValue(value)
@@ -1200,30 +1237,43 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 	variant := "sample"
-	if boolValue(body, "all", false) {
+	if all {
 		variant = "all"
 	}
-	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "index.verify", Variant: variant, Trigger: triggerUser})
-	run := s.startRunFor(handle, "verification", nil)
+	if repair {
+		variant = "repair"
+	}
+	spec := OperationSpec{Kind: "index.verify", Variant: variant, Trigger: triggerUser}
+	if repair {
+		spec.Affects = []string{"conv:*", "view", "an.*"}
+	}
+	_, handle := s.begin(s.life.ctx, spec)
+	run := s.startRunFor(handle, "verification", names)
 	ctx, end := s.beginIngest(run.ID)
 	ctx = withOp(ctx, handle)
 	if !s.launch(handle, func(context.Context, *Op) error {
 		defer s.ingestMu.Unlock()
 		defer end()
 		result := auditResult{}
-		if boolValue(body, "all", false) {
-			summary := s.verifyAllInputs(ctx, run.ID, func(summary verificationSummary) {
+		if all {
+			summary := s.verifyInputs(ctx, run.ID, func(summary verificationSummary) {
 				s.updateRun(run.ID, func(run *SyncRun) {
 					run.Phase = "verifying retained inputs"
 					run.DoneConversations = summary.Checked
+					run.Workspaces = summary.Reindexed
 					run.setWork(run.Phase, firstString(run.CurrentSource), "input", float64(summary.Checked), 0)
 					run.Verification = &summary
 				})
-			}, names)
+			}, names, repair)
 			if summary.Errors > 0 {
-				result.Outcome, result.Detail = "read_error", fmt.Sprintf("%d inputs could not be read; see verification coverage", summary.Errors)
+				result.Outcome, result.Detail = "read_error", fmt.Sprintf("%d inputs could not be verified; see verification coverage", summary.Errors)
+			} else if summary.Mismatch > 0 {
+				result.Outcome, result.Detail = "mismatch", fmt.Sprintf("%d inputs still mismatch; see verification issues", summary.Mismatch)
 			} else if summary.Deferred > 0 {
+				result.Outcome = "deferred"
 				result.Detail = fmt.Sprintf("%d inputs deferred; see verification coverage", summary.Deferred)
+			} else {
+				result.Outcome = "passed"
 			}
 		} else {
 			result = s.auditIntentional(ctx, run.ID, names)
@@ -1239,6 +1289,12 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 			run.CompletedAt = now()
 			run.Error = nilIfEmpty(result.Detail)
 		})
+		if repair {
+			s.wakeBackground()
+		}
+		if result.Outcome == "read_error" {
+			return errors.New(result.Detail)
+		}
 		return nil
 	}) {
 		end()
@@ -1250,12 +1306,51 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 }
 
 func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress func(verificationSummary), scopes ...[]string) verificationSummary {
-	summary := verificationSummary{}
 	names := []string{}
 	if len(scopes) > 0 {
 		names = scopes[0]
 	}
-	seen := map[string]bool{}
+	return s.verifyInputs(ctx, runID, progress, names, false)
+}
+
+func (s *Server) verifyInputs(ctx context.Context, runID string, progress func(verificationSummary), names []string, repair bool) verificationSummary {
+	summary := verificationSummary{}
+	// A deferred live repair must not hide matching retained evidence that can
+	// satisfy the copy-version guard. Count the final verdict once per input,
+	// but retain every committed repair in the write count.
+	seen := map[string]string{}
+	complete := func(key string) bool {
+		return seen[key] == "passed" || seen[key] == "mismatch"
+	}
+	count := func(outcome string, delta int) {
+		switch outcome {
+		case "passed":
+			summary.Passed += delta
+		case "mismatch":
+			summary.Mismatch += delta
+		case "deferred":
+			summary.Deferred += delta
+		default:
+			summary.Errors += delta
+		}
+	}
+	check := func(unit syncUnit, key string) {
+		result := s.Catalog.auditUnitMode(ctx, unit, runID, 0, repair)
+		if err := s.Catalog.recordVerification(unit, result); err != nil {
+			result.Outcome = "read_error"
+		}
+		if previous, retried := seen[key]; retried {
+			count(previous, -1)
+		} else {
+			summary.Checked++
+		}
+		seen[key] = result.Outcome
+		count(result.Outcome, 1)
+		summary.Reindexed += result.Reindexed
+		if progress != nil {
+			progress(summary)
+		}
+	}
 	visit := func(adapter Adapter, host string) {
 		setAdapterContext(adapter, ctx)
 		partial, ok := adapter.(partialAdapter)
@@ -1270,28 +1365,10 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 			unit := unitOf(adapter.Config(), parts, false)
 			unit.Host, unit.Reader = host, adapter
 			key := host + "/" + unit.Source.Name + "/" + unit.ID + "/" + partsSignature(parts)
-			if seen[key] {
+			if complete(key) {
 				return true
 			}
-			seen[key] = true
-			result := s.Catalog.auditUnit(ctx, unit, runID, 0)
-			if err := s.Catalog.recordVerification(unit, result); err != nil {
-				result.Outcome = "read_error"
-			}
-			summary.Checked++
-			switch result.Outcome {
-			case "passed":
-				summary.Passed++
-			case "mismatch":
-				summary.Mismatch++
-			case "deferred":
-				summary.Deferred++
-			default:
-				summary.Errors++
-			}
-			if progress != nil {
-				progress(summary)
-			}
+			check(unit, key)
 			return true
 		}, func(*WorkspaceRecord, []sourcePart) error {
 			return errors.New("verification discovery attempted to parse")
@@ -1342,35 +1419,17 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 						id := "sqlite:" + record.SourceID
 						if isConductorSource(manifest.Source.Kind) {
 							for key := range seen {
-								if strings.HasPrefix(key, target.Host.ID+"/"+target.Source+"/") && strings.Contains(key, ":sessions:"+record.SourceID+"/") {
+								if complete(key) && strings.HasPrefix(key, target.Host.ID+"/"+target.Source+"/") && strings.Contains(key, ":sessions:"+record.SourceID+"/") {
 									return nil
 								}
 							}
 						}
 						key := target.Host.ID + "/" + target.Source + "/" + id
-						if seen[key] {
+						if complete(key) {
 							return nil
 						}
-						seen[key] = true
 						unit := syncUnit{ID: id, Source: reader.Config(), Host: target.Host.ID, Reader: reader, Record: &record}
-						result := s.Catalog.auditUnit(ctx, unit, runID, 0)
-						if err := s.Catalog.recordVerification(unit, result); err != nil {
-							result.Outcome = "read_error"
-						}
-						summary.Checked++
-						switch result.Outcome {
-						case "passed":
-							summary.Passed++
-						case "mismatch":
-							summary.Mismatch++
-						case "deferred":
-							summary.Deferred++
-						default:
-							summary.Errors++
-						}
-						if progress != nil {
-							progress(summary)
-						}
+						check(unit, key)
 						return nil
 					})
 					close()

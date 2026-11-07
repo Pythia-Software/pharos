@@ -4,6 +4,13 @@ import './label-ribbon-inspector.css';
 
 let pinnedInspector:{id:string;close:()=>void}|null=null;
 
+/** Fit above or below the ribbon, keeping the inspected bar reachable. */
+export function ribbonInspectorPlacement(anchor:{top:number;bottom:number},height:number,viewportHeight:number){
+ const lower=Math.max(8,Math.min(anchor.bottom+8,viewportHeight-8)),upper=Math.max(8,Math.min(anchor.top-8,viewportHeight-8));
+ const below=viewportHeight-8-lower,above=upper-8,after=height<=below||below>=above,maxHeight=after?below:above;
+ return {top:after?lower:upper-Math.min(height,maxHeight),maxHeight};
+}
+
 /** Pointer/focus inspection, including a pinned preview, is transient. */
 export function useRibbonInspector({interactive=false}:{interactive?:boolean}={}){
  const id=useId(),[card,setCard]=useState<{x:number;y:number;content:React.ReactNode;pinned:boolean;focus:boolean}|null>(null);
@@ -14,7 +21,7 @@ export function useRibbonInspector({interactive=false}:{interactive?:boolean}={}
  useEffect(()=>{
   if(!card)return;
   const key=(event:KeyboardEvent)=>{if(event.key==='Escape'){const restore=popup.current?.contains(document.activeElement);close();if(restore)(anchor.current as HTMLElement|null)?.focus?.({preventScroll:true});}};
-  const scroll=(event:Event)=>{if((interactive||current.current?.pinned)&&event.target instanceof Node&&popup.current?.contains(event.target))return;const target=anchor.current;if(target&&(target===document.activeElement||target.contains(document.activeElement))){const rect=target.getBoundingClientRect();setCard(value=>value?{...value,y:rect.bottom+8}:null);}else close();};
+  const scroll=(event:Event)=>{if(event.target instanceof Node&&popup.current?.contains(event.target))return;const target=anchor.current;if(target&&(target===document.activeElement||target.contains(document.activeElement))){const rect=target.getBoundingClientRect();setCard(value=>value?{...value,y:rect.bottom+8}:null);}else close();};
   const outside=(event:PointerEvent)=>{if(event.target instanceof Node&&!popup.current?.contains(event.target)&&!anchor.current?.contains(event.target))close();};
   const navigate=()=>close();
   window.addEventListener('keydown',key);window.addEventListener('scroll',scroll,true);window.addEventListener('resize',navigate);window.addEventListener('popstate',navigate);window.addEventListener('pharos:workspace-history',navigate);if(interactive||card.pinned)document.addEventListener('pointerdown',outside);
@@ -22,8 +29,15 @@ export function useRibbonInspector({interactive=false}:{interactive?:boolean}={}
  },[!!card,card?.pinned,interactive]);
  const show=(target:Element,content:React.ReactNode,x?:number,pinned=false,focus=false)=>{if(pinnedInspector&&!pinned)return;if(pinned){if(pinnedInspector?.id!==id)pinnedInspector?.close();pinnedInspector={id,close};}keep();anchor.current=target;const rect=target.getBoundingClientRect(),next={x:Math.max(8,Math.min(x??rect.left,window.innerWidth-Math.min(interactive?300:340,window.innerWidth-16)-8)),y:rect.bottom+8,content,pinned,focus};current.current=next;setCard(next);};
  const pin=(target:Element,content:React.ReactNode,x?:number,focus=false)=>show(target,content,x,true,focus);
- const leave=()=>{if(current.current?.pinned)return;if(!interactive){const target=anchor.current;if(!target||!(target===document.activeElement||target.contains(document.activeElement)))close();return;}const target=anchor.current;if(!target||!(target===document.activeElement||target.contains(document.activeElement))){keep();pending.current=setTimeout(()=>{pending.current=undefined;setCard(null);},150);}};
- const portal=card?createPortal(<div id={id} role={card.pinned?'group':'tooltip'} onPointerDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()} aria-label={card.pinned?'Ribbon segment details':undefined} className={`lt-ribbon-inspector${interactive?' is-interactive':''}${card.pinned?' is-pinned':''}`} onPointerEnter={keep} onPointerLeave={leave} ref={node=>{popup.current=node;if(node){const height=node.getBoundingClientRect().height;node.style.top=`${Math.max(8,Math.min(card.y,window.innerHeight-height-8))}px`;if(card.focus&&!node.contains(document.activeElement))node.querySelector<HTMLElement>('a,button')?.focus({preventScroll:true});}}} style={{left:card.x,top:card.y}}>{card.content}</div>,document.body):null;
+ const leave=()=>{if(current.current?.pinned)return;if(!interactive&&!popup.current?.classList.contains('is-scrollable')){const target=anchor.current;if(!target||!(target===document.activeElement||target.contains(document.activeElement)))close();return;}const target=anchor.current;if(!target||!(target===document.activeElement||target.contains(document.activeElement))){keep();pending.current=setTimeout(()=>{pending.current=undefined;setCard(null);},150);}};
+ const portal=card?createPortal(<div id={id} role={card.pinned?'group':'tooltip'} onPointerDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()} aria-label={card.pinned?'Ribbon segment details':undefined} className={`lt-ribbon-inspector${interactive?' is-interactive':''}${card.pinned?' is-pinned':''}`} onPointerEnter={keep} onPointerLeave={leave} ref={node=>{
+  popup.current=node;if(!node)return;
+  node.style.maxHeight=`${window.innerHeight-16}px`;
+  const height=node.getBoundingClientRect().height,placement=ribbonInspectorPlacement(anchor.current!.getBoundingClientRect(),height,window.innerHeight);
+  node.classList.toggle('is-scrollable',height>placement.maxHeight);
+  node.style.maxHeight=`${placement.maxHeight}px`;node.style.top=`${placement.top}px`;
+  if(card.focus&&!node.contains(document.activeElement))node.querySelector<HTMLElement>('a,button')?.focus({preventScroll:true});
+ }} style={{left:card.x,top:card.y}}>{card.content}</div>,document.body):null;
  return {id,show,pin,close,leave,portal};
 }
 

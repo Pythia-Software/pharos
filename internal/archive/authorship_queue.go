@@ -142,13 +142,16 @@ func (c *Catalog) ensureQuickAuthorshipState() error {
 		}
 		// Re-evaluate exclusions whose relationship changed before an interrupted
 		// bootstrap resumed, and counting rows now belonging to a mirror.
-		if _, err := tx.Exec(`INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at)
+		// Materialize the map once so SQLite can index workspace lookups. A
+		// direct LEFT JOIN json_each scans the entire map for every user message.
+		if _, err := tx.Exec(`WITH representatives AS MATERIALIZED (SELECT key,value FROM json_each(?))
+ INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at)
  SELECT m.id,hex(randomblob(16)),m.created_at,? FROM messages m JOIN conversations c ON c.id=m.conversation_id
- LEFT JOIN json_each(?) j ON j.key=c.workspace_id LEFT JOIN authorship_message_state s ON s.message_id=m.id
+ LEFT JOIN representatives j ON j.key=c.workspace_id LEFT JOIN authorship_message_state s ON s.message_id=m.id
  WHERE m.kind='message' AND m.role='user' AND
  ((s.disposition='suppressed' AND s.representative_id IS NOT COALESCE(j.value,'')) OR
   (j.value IS NOT NULL AND EXISTS(SELECT 1 FROM message_authorship a WHERE a.message_id=m.id)))
- ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision,sent_at=excluded.sent_at`, now(), jsonText(representatives)); err != nil {
+ ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision,sent_at=excluded.sent_at`, jsonText(representatives), now()); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`DELETE FROM authorship_pending WHERE message_id IN (

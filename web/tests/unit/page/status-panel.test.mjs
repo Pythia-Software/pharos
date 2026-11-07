@@ -44,12 +44,32 @@ test("each top-level operation is one line: label, step N of M, its measured amo
   assert.deepEqual(plain(panel.operationLine(operation("d", { state: "blocked", state_label: "Label d" }))).primary, []);
 });
 
-test("Now shows concurrent background work alongside foreground work, foreground first", () => {
-  const busy = model(view({ operations: [operation("b", { priority: "background" }), operation("a"), operation("old", { state: "succeeded" })] }));
-  assert.deepEqual(busy.lines.map(line => line.id), ["a", "b"]);
-  const background = model(view({ operations: [operation("b", { priority: "background" }), operation("c", { priority: "background" })] }));
-  assert.deepEqual(background.lines.map(line => line.id), ["b", "c"]);
+test("Now keeps concurrent work in start order across snapshots and child stages", () => {
+  const first = operation("first", { priority: "background", started_at: "2026-11-05T12:00:00Z" });
+  const second = operation("second", { started_at: "2026-11-05T12:01:00Z" });
+  const app = operation("app", { started_at: "2026-11-05T12:02:00Z" });
+  const old = operation("old", { state: "succeeded", started_at: "2026-11-05T11:00:00Z" });
+  const initial = view({ operations: [second, first, old] }, { appOperations: [app] });
+  assert.deepEqual(model(initial).lines.map(line => line.id), ["first", "second", "app"]);
+  assert.deepEqual(initial.library.operations.map(entry => entry.id), ["second", "first", "old"], "rendering leaves the snapshot unchanged");
+  const newest = operation("newest", { started_at: "2026-11-05T12:03:00Z" });
+  const advanced = {...first, children: [operation("child", { started_at: "2026-11-05T12:04:00Z" })]};
+  const refreshed = view({ operations: [newest, advanced, second, old] }, { appOperations: [app] });
+  assert.deepEqual(model(refreshed).lines.map(line => line.id), ["first", "second", "app", "newest"]);
+  assert.deepEqual(model(view({ operations: [newest, second] }, { appOperations: [app] })).lines.map(line => line.id), ["second", "app", "newest"]);
+  assert.deepEqual(model({ library: null, appOperations: [newest, app] }).lines.map(line => line.id), ["app", "newest"]);
   assert.equal(model(view()).lines.length, 0);
+});
+
+test("Now resolves equal or unknown start times consistently across snapshot orders", () => {
+  const operations = [
+    operation("b", { started_at: "2026-11-05T12:00:00Z" }),
+    operation("a", { started_at: "2026-11-05T07:00:00-05:00" }),
+    operation("missing"), operation("invalid", { started_at: "unknown" }),
+  ];
+  const ids = entries => model(view({ operations: entries })).lines.map(line => line.id);
+  assert.deepEqual(ids(operations), ["a", "b", "invalid", "missing"]);
+  assert.deepEqual(ids(operations.slice().reverse()), ids(operations));
 });
 
 test("unknown totals retain completed counts, a current phase, and elapsed time", () => {
@@ -158,12 +178,10 @@ test("the schedule and load stay out while the snapshot has none", () => {
   assert.ok(filled.load);
 });
 
-test("the load row is CPU, RAM and disk in one row, the server's line and each process's in its tooltip; in the app, every Pharos process's", () => {
+test("the load row shows CPU, RAM and disk for the library or the app process tree", () => {
   const library = { label: "Library line", cpu_percent: 12, memory_bytes: 340e6, disk_bytes_per_second: 12e6, processes: [{ pid: 1, text: "Service line" }, { pid: 2, text: "Terminal line" }] };
   const own = plain(model(view({ resources: library, library: { drive: { name: "Euclid", ejectable: true }, path: "/Volumes/Euclid/Pharos", storage_bytes: 48e9, wal_bytes: 64e6 } })).load);
   assert.deepEqual(own.metrics.map(metric => [metric.id, metric.label, metric.value]), [["cpu", "CPU", "12%"], ["memory", "RAM", "340 MB"], ["io", "I/O", "12 MB/s"], ["disk", "Storage", "48 GB"]]);
-  assert.ok(own.tooltip.startsWith("Library line\n"));
-  assert.ok(own.tooltip.endsWith("Service line\nTerminal line"));
   // The broker's total, when the store has one, wins over the library's.
   const app = plain(model(view({ resources: library }, { resources: { label: "Machine line", cpu_percent: 337, memory_bytes: 8.2e9, disk_bytes_per_second: null, processes: [] } })).load);
   assert.deepEqual(app.metrics.map(metric => metric.value), ["337%", "8.2 GB", "—", "—"], "a figure not measured yet is a dash");
@@ -172,23 +190,25 @@ test("the load row is CPU, RAM and disk in one row, the server's line and each p
   assert.equal(model(view({ resources: {} })).load, null);
 });
 
-test("the broker load remains visible during a service timeout, and partial rates use plain values", () => {
+test("the broker load remains visible during a service timeout, and partial rates disclose undercounting", () => {
   const unavailable = model({library: null, service: {name: "Euclid", error: "timeout", resources: {memory_bytes: 1e9}},
     resources: {cpu_percent: 12, cpu_partial: true, memory_bytes: 2e9, disk_bytes_per_second: 4e6, disk_partial: true, label: "Pharos is using resources"},
     lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
   assert.equal(unavailable.available, false);
-  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["12%", "2.0 GB", "4.0 MB/s", "last 48 GB"]);
-  assert.match(unavailable.load.tooltip, /may temporarily undercount/);
-  assert.match(unavailable.load.tooltip, /last reported/);
+  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB"]);
+  for (const id of ["cpu", "io"]) assert.match(unavailable.load.metrics.find(metric => metric.id === id).warning, /waiting for another sample.*may undercount/);
+  assert.equal(unavailable.load.metrics.find(metric => metric.id === "memory").warning, undefined);
 });
 
 test("GPU load is scoped to Pharos processes, including idle and unavailable states", () => {
   const load = gpu => model(view({ resources: { cpu_percent: 12, gpu } })).load;
-  for (const [percent, value] of [[62.4, "62%"], [0, "0%"], [null, "—"]]) {
-    const result = load({ utilization_percent: percent });
-    assert.equal(result.metrics.find(metric => metric.id === "gpu").value, value);
+  for (const [percent, value] of [[62.4, "62%"], [0, "0%"], [null, "—"]]) for (const partial of [false, true]) {
+    const result = load({ utilization_percent: percent, partial });
+    const warming = partial && percent !== null;
+    assert.equal(result.metrics.find(metric => metric.id === "gpu").value, warming ? "≥" + value : value);
     assert.equal(result.metrics.find(metric => metric.id === "gpu").label, "GPU");
-    assert.match(result.tooltip, /these Pharos processes and their subprocesses/);
+    if (warming) assert.match(result.metrics.find(metric => metric.id === "gpu").warning, /may undercount/);
+    else assert.equal(result.metrics.find(metric => metric.id === "gpu").warning, undefined);
   }
   assert.ok(!load(undefined).metrics.some(metric => metric.id === "gpu"));
   const app = model(view({ resources: { cpu_percent: 12, gpu: { utilization_percent: 10 } } },
@@ -206,7 +226,6 @@ test("WAL appears only above one decimal GB, including a last known size", () =>
   }
   assert.equal(load(1e9 + 1).metrics.find(metric => metric.id === "wal").value, "1.0 GB");
   assert.equal(load(2e9, true).metrics.find(metric => metric.id === "wal").value, "last 2.0 GB");
-  assert.match(model(view({resources: {cpu_percent: 1, gpu: {utilization_percent: 10, partial: true}}})).load.tooltip, /may undercount/);
 });
 
 const at = Date.parse("2026-10-27T12:00:00Z");
@@ -246,6 +265,10 @@ test("the schedule is the server's headline, one row per cadence with its items"
   const adhoc = schedule.rows.at(-1);
   assert.deepEqual([adhoc.id, adhoc.label, adhoc.dot, adhoc.run.cadence, adhoc.open], ["manual", "Ad hoc", "paused", "manual", false]);
   assert.deepEqual(adhoc.items.map(item => [item.id, item.text]), [["backup", "Last run 26 h ago"]]);
+  const disabled = plain(panel.scheduleModel({...background, unscheduled: ['labels'], items: [
+    ...background.items, {id: 'labels', label: 'Message labels', state: 'disabled', state_label: 'Off'},
+  ]}, at));
+  assert.equal(disabled.rows.some(row => row.id === 'manual'), false, 'disabled model settings do not offer work in the drive popover');
   // Each row runs its own cadence now, unless it is already running.
   assert.deepEqual(schedule.rows.map(row => [row.run.cadence, row.run.disabled]), [["frequent", false], ["hourly", true], ["daily", false], ["manual", false]]);
   // Updating now pulses; Up next is steady.
@@ -377,9 +400,10 @@ test("other libraries are only counted in the library line; an app operation tou
 });
 
 test("non-background work says what started it", () => {
-  const origin = changes => plain(panel.operationLine(operation("a", changes))).secondary[0];
-  assert.equal(origin({ trigger: "user" }), "Started by you");
-  assert.equal(origin({ trigger: "chained" }), "Follows other work");
+  const secondary = changes => plain(panel.operationLine(operation("a", changes))).secondary;
+  assert.equal(secondary({ trigger: "user" })[0], "Started by you");
+  assert.equal(secondary({ trigger: "schedule" })[0], "Scheduled");
+  assert.deepEqual(secondary({ trigger: "chained" }), secondary({}));
 });
 
 test("a background pass leads with the current task and its planned position", () => {

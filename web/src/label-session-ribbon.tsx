@@ -7,7 +7,7 @@ import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon
 import {PageLink} from './nested-pages';
 import {timelinePreviewText} from './timeline-preview';
 import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
-import {shortLabel,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
+import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
 import {eventKindCounts,markIds,mergeAgentEvents,type KindCounts} from './event-merge';
@@ -33,7 +33,8 @@ function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;
 function MessagePreview({message}:{message:LabelMessage}){
  const body=timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'}),characters=Array.from(body);
  const clipped=characters.length>640||message.preview_truncated===true||message.preview===undefined&&message.truncated&&Array.from(message.text).length>=320;
- return <blockquote>{characters.slice(0,640).join('')}{clipped&&!body.endsWith('…')?'…':''}</blockquote>;
+ const label=message.chunks?specificLabels(message)[0]?.[0]:undefined;
+ return <blockquote className="lt-message-quote" style={label?{'--message-label-color':stateColor(label)} as React.CSSProperties:undefined}>{characters.slice(0,640).join('')}{clipped&&!body.endsWith('…')?'…':''}</blockquote>;
 }
 function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObservation[];sourceHref?:Props['sourceHref'];eventHref?:Props['eventHref'];close?:()=>void}){
  const events=items.flatMap(item=>item.event?[item.event]:[]);
@@ -57,7 +58,7 @@ function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObserva
    {[...labels].slice(0,8).map(([id,ids])=><React.Fragment key={id}><dt><i style={{background:stateColor(id)}}/>{id==='?'?'Uncategorized':shortLabel(id)}</dt><dd>{ids.size}</dd></React.Fragment>)}
    {[...origins].map(([category,ids])=><React.Fragment key={category}><dt>{callerSource(category).name}</dt><dd>{ids.size}</dd></React.Fragment>)}
   </dl>}
-  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{part.excerpt.text}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
+  {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{part.excerpt.text}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
   {tools.slice(0,4).map(item=>{
    const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
    return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
@@ -156,8 +157,7 @@ function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,
 function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
  const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
  const inspector=useRibbonInspector();
- const fullName=[props.outline,props.name].filter(Boolean).join(' · ');
- const identity=root?<SessionIdentity name={props.name} outline={props.outline} metadata={props.metadata} depth={props.depth} branch={props.branch} folded={!!props.foldControl} current={props.current} openSession={props.openSession} title={`${fullName}\n${props.metadata}`}/>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
+ const identity=root?<SessionIdentity name={props.name} outline={props.outline} metadata={props.metadata} depth={props.depth} branch={props.branch} folded={!!props.foldControl} current={props.current} openSession={props.openSession}/>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
  const icons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
  // An Agent events row draws only its own events (with their arcs).
  const ownEvents=node.id==='events'||node.id.startsWith('events:')?new Set(node.items.flatMap(item=>item.event?[item.event.id]:[])):null;
@@ -170,7 +170,7 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
   return layer&&merge?{...layer,events:mergeAgentEvents(layer.events,props.eventCounts??eventKindCounts(props.eventLayer!.events))}:layer;
  },[props.eventLayer,props.eventCounts,root,merge,ownKey]);
  const eventGlyph=ownEvents&&node.id!=='events'?node.items[0]?.event:undefined;
- const icon=node.id==='events'?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
+ const icon=(node.id==='events'||node.id==='labels:thinking')?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
  const count=ribbonEventCount(node.items,ownEvents?'events':'session');
  const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}><span className="lt-session-caret">{node.children.length?'›':'·'}</span>{root?<strong className="lt-event-count">{count}</strong>:<>{eventGlyph?<EventGlyph group={eventGlyph.group}/>:icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{ownEvents?counts.events:counts.messages||counts.activity||counts.inferred}</small></>}</span>;
  const content=<>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;

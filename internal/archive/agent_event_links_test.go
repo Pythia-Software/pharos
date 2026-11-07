@@ -169,4 +169,47 @@ func TestAgentEventTargetsServedToViews(t *testing.T) {
 	if span, _ := served["span"].([]any); len(span) != 2 || span[0] != 0.0 || span[1] != float64(len(reply)) {
 		t.Fatalf("span = %#v, want [0 %d]", served["span"], len(reply))
 	}
+	// Workspace ribbons resolve each conversation separately and only return
+	// events on selected messages in the retained fingerprint sample.
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('sibling','w','claude','local','sibling')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash,source_order,selected) VALUES
+		 ('m3','sibling','m3','user','message','Keep the drawer only option.','2026-10-21T16:00:00.000Z','h3',1,1),
+		 ('m4','sibling','m4','assistant','message','I read "drawer only" as the bottom sheet.','2026-10-21T16:01:00.000Z','h4',2,1),
+		 ('m5','sibling','m5','assistant','message','Excluded event.','2026-10-21T16:02:00.000Z','h5',3,0)`,
+		`INSERT INTO agent_events(id,message_id,conversation_id,source,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model) VALUES
+		 (8,'m4','sibling','reply','assumption',0.9,0,40,'I read "drawer only" as the bottom sheet.','','','[]','[]','t'),
+		 (9,'m5','sibling','reply','discovery',0.9,0,15,'Excluded event.','','','[]','[]','t')`,
+	)
+	readFingerprint := func(path string) map[string]any {
+		t.Helper()
+		w := apiCall(t, srv, config.APIToken, http.MethodGet, path, nil)
+		var body map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatalf("fingerprint: %d %s", w.Code, w.Body.String())
+		}
+		return body
+	}
+	workspace := readFingerprint("/api/labels/workspaces/w")
+	events = workspace["agent_events"].([]any)
+	if len(events) != 2 || events[0].(map[string]any)["id"] != "e7" || events[1].(map[string]any)["id"] != "e8" || events[1].(map[string]any)["target"].(map[string]any)["message_id"] != "m3" {
+		t.Fatalf("workspace events lost conversation ownership or exposed excluded evidence: %v", events)
+	}
+	// Restricting events must not restrict the earlier text used for targets.
+	sample, err := catalog.agentEventLinksForMessages(t.Context(), "c", []string{"m2"})
+	if err != nil || len(sample) != 1 || sample[0]["target"].(map[string]any)["message_id"] != "m1" {
+		t.Fatalf("sample lost its earlier target: %v %v", sample, err)
+	}
+	if sample, err := catalog.agentEventLinksForMessages(t.Context(), "c", []string{}); err != nil || len(sample) != 0 {
+		t.Fatalf("empty sample returned events: %v %v", sample, err)
+	}
+	override(t, &messageLabelFingerprintLimit, 2)
+	workspace = readFingerprint("/api/labels/workspaces/w")
+	if events := workspace["agent_events"].([]any); workspace["truncated"] != true || len(events) != 1 || events[0].(map[string]any)["id"] != "e7" {
+		t.Fatalf("workspace events exceed the message sample: %v", workspace)
+	}
+	override(t, &messageLabelFingerprintLimit, 1)
+	if conversation := readFingerprint("/api/labels/conversations/c"); len(conversation["agent_events"].([]any)) != 0 {
+		t.Fatalf("conversation events exceed the message sample: %v", conversation)
+	}
 }

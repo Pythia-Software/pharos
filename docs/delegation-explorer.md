@@ -6,7 +6,7 @@ and animates the overview into an inbox sidebar alongside the existing reader.
 The panes scroll independently. Their divider supports dragging, keyboard
 resizing, and double-click reset; its width is remembered. Below 720 pixels of
 sidebar width, the usage table becomes a compact hierarchy with fixed Self API
-cost and Time to run columns. Time to run is the session's earliest-to-latest
+cost and Time to run columns, plus a Timeline button for each session. Time to run is the session's earliest-to-latest
 evidence span; its tooltip explains the evidence limits. Branch collapse and
 pagination remain available. Comparison controls and metric definitions are
 omitted. Widening the sidebar restores the full table and its saved ranking. Timeline replaces Parallel activity
@@ -74,9 +74,11 @@ The two orders are hierarchy and metric ranking. Clicking a metric header cycles
 through descending, ascending, and hierarchy; the Execution session header
 returns to hierarchy. Headers are the sole sorting controls. The explorer has no
 session search or matching-only toggle; legacy URL filters are cleared on load.
-First evidence ranking provides chronological order. Every metric supports Self and Self + children,
-with separate column families. A column picker exposes all 28 metrics, with drag handles (or arrow keys) to
-reorder them in both families. Order and visibility are saved independently.
+First evidence ranking provides chronological order. A scope selector shows either Self or Self + children
+for all visible metrics and their rankings; the default is Self + children. A column picker exposes the metrics, with drag handles (or arrow keys) to
+reorder them. Order and visibility are saved independently. Messages and Agent events appear beside Tool calls;
+Files read counts distinct successful read paths and excludes directory listings and searches.
+Each row's Timeline button opens that session's own evidence span with its immediate event groups visible and deeper groups closed.
 Large absolute values use K/M/B with three significant digits; metric tooltips
 retain exact values. A global tint control replaces per-cell percentages. Tint uses a
 softened logarithmic curve and each column's fixed, whole-workspace maximum.

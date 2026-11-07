@@ -368,7 +368,7 @@ function initHeaderControls(close = {}) {
     const node = element('button');
     node.type = 'button';
     node.dataset.action = action;
-    node.title = label;
+    if (action !== 'remove' && action !== 'add') node.title = label;
     node.setAttribute('aria-label', `${label} ${tool.label}`);
     node.append(glyph(icon));
     if (action === 'remove') node.append('Remove');
@@ -411,7 +411,7 @@ function initHeaderControls(close = {}) {
         const row = element('li', 'header-tool'), face = element('div', 'header-tool-face');
         row.dataset.tool = tool.id;
         row.draggable = true;
-        face.title = inHeader ? tool.label : `${tool.label}: ${tool.description}`;
+        if (!inHeader) face.title = tool.description;
         if (!inHeader) {
           face.tabIndex = 0;
           face.setAttribute('role', 'button');

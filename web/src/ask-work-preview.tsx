@@ -56,6 +56,6 @@ function AskWorkPreview({ address, title, openings }: { address: WorkPreviewAddr
   return <figure ref={host} className="pharos-work-preview" aria-label={`Work preview: ${title}`} aria-busy={!preview && !error}>
     {error ? <p className="pharos-work-preview-status" role="status">{unavailable}</p>
       : !view ? <p className="pharos-work-preview-status" role="status">Loading workspace summary…</p>
-      : [view.where, view.what].map((parts, line) => parts.length ? <p key={line} className="pharos-work-preview-line">{parts.map((part, index) => <span key={index} title={part.title}>{part.text}</span>)}</p> : null)}
+      : [view.where, view.what].map((parts, line) => parts.length ? <p key={line} className="pharos-work-preview-line">{parts.map((part, index) => <span key={index} title={part.title} data-overflow-title={part.title ? undefined : ""}>{part.text}</span>)}</p> : null)}
   </figure>;
 }

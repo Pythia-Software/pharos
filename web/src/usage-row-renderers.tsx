@@ -8,7 +8,7 @@ import { usageDrilldownColumns, usageDrilldownField } from "./usage-query-column
 import { navigateLink } from "./query-link-targets";
 
 export function UsageSourceLink({ link, children }: { link: UsageRowLink; children?: React.ReactNode }) {
-  return <a href={link.href} title={link.label} onClick={event => {
+  return <a href={link.href} title={children && children !== link.label ? link.label : undefined} onClick={event => {
     event.stopPropagation();
     if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.href.startsWith("/conversation/")) return;
     if (navigateLink(link.href)) event.preventDefault();
@@ -52,7 +52,7 @@ export function usageRowRenderers(dataset: UsageDataset): RenderRegistry<Record<
     usage_sources: ({ row }) => <UsageRowActions dataset={dataset} row={row} />,
     usage_timestamp: ({ value }) => {
       const date = new Date(value as string);
-      return value && Number.isFinite(date.getTime()) ? <time dateTime={date.toISOString()} title={date.toISOString()}>{date.toLocaleString()} <span className="muted">({date.toISOString()})</span></time> : "—";
+      return value && Number.isFinite(date.getTime()) ? <time dateTime={date.toISOString()}>{date.toLocaleString()} <span className="muted">({date.toISOString()})</span></time> : "—";
     },
   };
 }

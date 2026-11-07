@@ -197,7 +197,7 @@
     });
     // Ad hoc: the items set to only when you ask (Back up, unless chosen),
     // on no schedule, as one more row, run as the manual cadence.
-    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(Boolean);
+    const adhoc = (background.unscheduled || []).map(id => items[id]).filter(item => item && item.state !== 'disabled');
     if (adhoc.length) {
       const running = adhoc.some(item => item.state === 'running'), failed = adhoc.some(item => item.state === 'failed');
       rows.push({id: 'manual', label: 'Ad hoc', icon: CADENCE_ICONS.manual, dot: running ? SCHEDULE_DOTS.running : failed ? 'bad' : 'paused',
@@ -289,7 +289,7 @@
   const CADENCE_NAMES = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
   function operationOrigin(operation) {
     if (operation.kind === 'background.update') return '';
-    return {user: 'Started by you', schedule: 'Scheduled', chained: 'Follows other work'}[operation.trigger] || '';
+    return {user: 'Started by you', schedule: 'Scheduled'}[operation.trigger] || '';
   }
 
   // A line as one string, for tooltips and the other libraries' rows.
@@ -310,6 +310,10 @@
   // What runs for the selected library: the app's operations that touch it
   // (a transfer, a delivery), then its own.
   const currentOperations = view => [...(view?.appOperations || []), ...(view?.library?.operations || [])].filter(running);
+  const operationStartTime = operation => {
+    const time = Date.parse(operation.started_at);
+    return Number.isFinite(time) ? time : Infinity;
+  };
 
   // The panel's content, from the store's view. options.ejectState is the
   // panel's eject flow; options.verdict overrides the snapshot's verdict
@@ -318,10 +322,10 @@
   function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set(), now = Date.now()} = {}) {
     const library = view?.library || null;
     const operations = currentOperations(view);
-    // Show every active operation, with foreground work first. Maintenance
-    // can run alongside a scheduled pass and may have no schedule row.
-    const foreground = operations.filter(operation => operation.priority !== 'background');
-    const shown = [...foreground, ...operations.filter(operation => operation.priority === 'background')];
+    // Oldest first, so new work joins the end and child stages do not move
+    // their parent's row. IDs break ties consistently across snapshots;
+    // operations without a known start follow those with one.
+    const shown = operations.slice().sort((a, b) => operationStartTime(a) - operationStartTime(b) || a.id.localeCompare(b.id));
     const common = {lines: shown.map(operation => operationLine(operation, now)), attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
       return {available: false, title: PANEL_TITLE, library: view?.service?.name ? {name: view.service.name, drive: '', path: ''} : null, ...common, stateLabel: view?.service?.stateLabel || null,
@@ -361,8 +365,7 @@
   }
 
   // The Load row (docs/background-work.md §10): CPU, GPU, memory and disk in
-  // one row (in the app, every Pharos process on this Mac), with the
-  // server's line and each process's in the tooltip. CPU is % of one core,
+  // one row (in the app, every Pharos process on this Mac). CPU is % of one core,
   // as Activity Monitor shows it; I/O is what the processes read and write
   // per second, and Storage what the library keeps on its drive (from the
   // last drive check). A figure not measured yet is a dash, and I/O stays
@@ -381,12 +384,14 @@
     if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
     metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
     if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
-    const processes = (Array.isArray(resources.processes) ? resources.processes : []).map(process => process.text).filter(Boolean);
-    const partial = [resources.cpu_partial ? 'CPU' : '', resources.disk_partial ? 'I/O' : ''].filter(Boolean);
-    return {metrics, tooltip: [resources.label || '', partial.length ? `${partial.join(' and ')} omit processes without a rate and may temporarily undercount usage.` : '',
-      gpu ? `GPU: GPU time from these Pharos processes and their subprocesses, as a percentage of elapsed time (capped at 100%). ${gpu.partial ? 'Some clients need another sample; the measured portion may undercount usage. ' : ''}${Number.isFinite(gpu.utilization_percent) ? '' : 'Waiting for two samples or supported process counters. '}Sampled at most once every 5 seconds.` : '',
-      sizesStale ? 'Storage and WAL were last reported before the service stopped answering.' : 'Storage is the last drive measurement; WAL is the current catalog log size.',
-      ...processes].filter(Boolean).join('\n')};
+    for (const metric of metrics) {
+      const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial : metric.id === 'io' ? resources.disk_partial : false;
+      if (partial && metric.value !== '—') {
+        metric.value = '≥' + metric.value;
+        metric.warning = 'Some processes or clients are still waiting for another sample; this reading may undercount usage.';
+      }
+    }
+    return {metrics};
   }
 
   function attentionModel(item) {
@@ -739,12 +744,12 @@
     for (const metric of load.metrics) {
       const cell = node('span');
       cell.dataset.key = `load:${metric.id}`;
+      if (metric.warning) cell.title = metric.warning;
       const label = node('span');
       label.append(svgIcon(metric.icon || metric.id), metric.label);
       cell.append(label, node('b', '', metric.value));
       row.append(cell);
     }
-    if (load.tooltip) row.title = load.tooltip;
     return row;
   }
 

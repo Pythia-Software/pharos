@@ -53,7 +53,7 @@ The audit reviewed 178 disclosure/expansion source sites, including 41 previousl
 | Surface | Portable state |
 |---|---|
 | Layout settings | `menuBarPreferences`, `headerSettings`, `quickStatsSettings` |
-| Capture/index settings | `sync:separate`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
+| Capture/index settings | `sync:history`, `sync:sources`, `sync:repairs`, `sync:diagnostics`, `sync:forecast:<run ID>` |
 | Background schedule items | `background:<item ID>`; several rows may open together |
 | Connected cloud schedules | `cloud:schedule:<destination ID>`; IDs survive renaming and reordering |
 | Library health and app location | `library:drive-health`, `library:application` |
@@ -86,6 +86,8 @@ Original timing, zoom, idle compression and retained records remain unchanged.
 Caller-source filtering preserves each run's original portion of the message.
 
 ## Agent interface
+
+On work pages, **Hierarchy & usage** uses `delegation_scope=self|all` for both its visible metrics and sorting (`all`, or **Self + children**, is the default). The selection survives returning from a ranking to the hierarchy. Each session's **Timeline** button sets `explorer=timeline`, `delegation_session`, `delegation_start`/`delegation_end` to that session's own evidence span, and `delegation_page` to its hierarchy page. It opens `disclosures["delegation-labels:<session ID>:session"]` and resets deeper event disclosures for that session, showing one event level. Session names continue to open the conversation reader.
 
 Ask Pharos uses the existing MCP CLI-style interface:
 

@@ -40,7 +40,7 @@ export function CardVisualization({ preview }: { preview: QueryPreview }) {
       : preview.metrics ? <CompactMetric preview={preview} />
       : preview.insights ? <span className="query-findings">
       <span className="query-finding-heading">{preview.headline}</span>
-      {preview.insights.map((item, i) => <span className="query-finding" key={i} data-chart-tooltip={`${item.label}\n${item.value}${item.context ? `\n${item.context}` : ""}`} title="">
+      {preview.insights.map((item, i) => <span className="query-finding" key={i}>
         <span className="query-finding-label">{item.label}</span><strong>{item.value}</strong>
         {item.context ? <small>{item.context}</small> : null}
       </span>)}

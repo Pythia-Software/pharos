@@ -1,7 +1,9 @@
+import {peopleLabelBreakdowns} from "./people-message-labels";
 import type { AnalysisCatalog } from "./dashboard-analysis-model";
 
 const number = { kind: "number", decimals: 0 } as const;
 const breakdowns = {
+  ...peopleLabelBreakdowns("conversation_activity"),
   provider: { label: "Top-level provider", fields: ["root_provider"] },
   model_family: { label: "Top-level model", fields: ["root_model_family"] },
   provider_model: { label: "Top-level provider + model", fields: ["root_provider", "root_model_family"] },

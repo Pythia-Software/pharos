@@ -1,3 +1,4 @@
+import {peopleMessageLabelCatalog} from "./people-message-labels";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type FieldSchema, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogFor, analysisCatalogs } from "./analysis-catalogs";
 import { isTrendView, barsShown, canonicalState, normalizeAnalysis, slicesShown, validAnalysisState, type AnalysisCatalog, type AnalysisState } from "./dashboard-analysis-model";
@@ -76,7 +77,8 @@ export function readDashboardCard(address: string, now = new Date()) {
   if (url.origin !== location.origin || url.pathname !== "/analyze" || mode !== "dashboards" || !catalog || !Object.hasOwn(usageTopics, url.searchParams.get("analyze_topic") ?? "")) throw new Error("This dashboard card is unavailable.");
   const opened = readDashboardLink(url.searchParams, dashboardDefaults[topic], state => validAnalysisState(catalog, state), catalog.time, undefined, now);
   if (opened.error) throw new Error(opened.error);
-  return { topic, dataset: usageTopicDatasets[topic], state: normalizeAnalysis(catalog, opened.view), where: opened.where, params: url.searchParams };
+  const resolved=peopleMessageLabelCatalog(catalog,opened.view);
+  return { topic, dataset: resolved.dataset as UsageDataset, state: normalizeAnalysis(resolved, opened.view), where: opened.where, params: url.searchParams };
 }
 
 export function dashboardCardTitle(catalog: AnalysisCatalog, state: AnalysisState): string {
@@ -130,7 +132,7 @@ export function dashboardCardMetadata(address: string, target: DashboardCardTarg
     return dashboardCardCopy(ribbonCardTitle(settings), [ribbonCardWindow(settings), ribbonCardDescription(settings)]);
   }
   const { topic, state, params, where } = readDashboardCard(address);
-  const catalog = topic === "parallelism" ? analysisCatalogFor(topic, { parallelism: dashboardCardRibbon(address).counting })! : analysisCatalogs[topic]!;
+  const catalog = topic === "parallelism" ? analysisCatalogFor(topic, { parallelism: dashboardCardRibbon(address).counting })! : (analysisCatalogFor(topic,{},state) ?? analysisCatalogs[topic])!;
   if (isHabitsCardTarget(target)) {
     const view = readHabitsCardView(params);
     // These sections read /api/habits, which does not use analyze_filters.
@@ -181,7 +183,7 @@ export function dashboardCardWindow(address: string, target: DashboardCardTarget
 export function dashboardCardGroups(address: string, target: DashboardCardTarget = "chart"): CardGroups | undefined {
   if (target !== "chart") return;
   const opened = readDashboardCard(address), { topic } = opened;
-  const catalog = topic === "parallelism" ? analysisCatalogFor(topic, { parallelism: dashboardCardRibbon(address).counting })! : analysisCatalogs[topic]!;
+  const catalog = topic === "parallelism" ? analysisCatalogFor(topic, { parallelism: dashboardCardRibbon(address).counting })! : (analysisCatalogFor(topic,{},opened.state) ?? analysisCatalogs[topic])!;
   const state = normalizeAnalysis(catalog, opened.state), split = catalog.breakdowns[state.split];
   if (!split || !isTrendView(state.view) && !["compare", "distribution"].includes(state.view)) return;
   if (isTrendView(state.view) && analysisCatalogs[topic]!.trend.allSeries) return;

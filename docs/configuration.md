@@ -419,13 +419,21 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `~/.config/claude/projects`, and any `~/.claude*/projects` (for example `~/.claude-work`) that holds transcripts |
 | Codex | `$CODEX_HOME` and `~/.codex`, when they have `sessions/` or `archived_sessions/` |
-| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations; each is its own source of kind `antigravity` |
+| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations except `~/.gemini/antigravity-backup`, a copy of an app's conversations; each is its own source of kind `antigravity` |
 | Conductor | `~/Library/Application Support/com.conductor.app`, when a database at its top level has session and message tables (only table names are read) |
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
-| ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
+| Copilot CLI | `~/.copilot`, or `COPILOT_HOME`, when it has a `session-state` folder; each `session-state/<id>/events.jsonl` (or an older release's `session-state/<id>.jsonl`) is a session |
+| OpenCode | `~/.local/share/opencode`, or `$XDG_DATA_HOME/opencode`; each session in its `opencode*.db` databases is a session |
+| Cline | `~/.cline/data`, `CLINE_DATA_DIR`, or `$CLINE_DIR/data`, when it has a `sessions` folder; each `sessions/<id>/<id>.messages.json` is a session |
+| VS Code Copilot | the `User` folder of VS Code, VS Code Insiders, VSCodium or Positron under `~/Library/Application Support`; each chat session (`workspaceStorage/<hash>/chatSessions/<id>.jsonl`, an older release's `.json`, or a window without a folder's in `globalStorage/emptyWindowChatSessions`) is a session |
+| Cursor | `~/Library/Application Support/Cursor/User`; each composer with a message in `globalStorage/state.vscdb` is a session |
+| Cursor CLI | `~/.cursor`, when it has a chat (`chats/<hash>/<chat>/store.db`); each chat is a session |
+| Zed | `~/Library/Application Support/Zed`, when `threads/threads.db` holds a thread; each thread of Zed's agent is a session |
+| ChatGPT | nothing on disk: export your data from ChatGPT and add a `chatgpt` source for the downloaded ZIP, the folder it unzips to, or one of its conversation files |
+| Claude.ai | nothing on disk: export your data from Claude.ai and add a `claude-ai` source for the downloaded ZIP, its `conversations.json`, or the folder holding it |
 
 The app and its service do not inherit the shell's environment, so Pharos also
-reads `CLAUDE_CONFIG_DIR` and `CODEX_HOME` from the login shell (`$SHELL -l -i -c`,
+reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR` and `CLINE_DIR` from the login shell (`$SHELL -l -i -c`,
 two-second limit, cached for ten minutes). This runs the shell's startup files;
 set `PHAROS_PROBE_SHELL=0` in the service's environment to skip it.
 
@@ -785,11 +793,20 @@ upload permissions keep their existing behavior.
 | Kind | Captured |
 | --- | --- |
 | `claude` | every `*.jsonl` under the path, including `<session>/subagents/**`, and project `sessions-index.json` title metadata |
-| `codex` | `*.jsonl` under `sessions/` and `archived_sessions/`, `rollout*` files, `session_index.jsonl` names, and snapshots of state databases with `threads.name` |
+| `codex` | `*.jsonl` and `*.jsonl.zst` under `sessions/` and `archived_sessions/`, `rollout*` files, `session_index.jsonl` names, and snapshots of state databases with `threads.name`. Codex compresses a rollout idle for a week to `.jsonl.zst` and deletes the plain file; capture copies the compressed file as it is, and while both forms exist only the one the index reads: the newer, or the plain one when they are as new. A compressed rollout keeps the plain file's identity (its path, the size its frame declares, and its mtime), so compression alone re-parses nothing |
 | `antigravity` | each conversation's `brain/<id>/.system_generated/logs/transcript_full.jsonl` (or `transcript.jsonl` when that is all there is), `annotations/*.pbtxt` titles, and snapshots of `conversation_summaries.db` and of each conversation's `conversations/<id>.db` (its model requests and token usage) |
 | `conductor` | a snapshot of each SQLite database that has session and message tables (not, for example, `cache.db`) |
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |
-| `canonical`, `tl1-export`, `chatgpt-export` | the export file, or the directory's `*.json` (`conversations.json` for ChatGPT) |
+| `canonical`, `tl1-export` | the export file, or the directory's `*.json` |
+| `chatgpt`, `chatgpt-export` | the export's ZIP whole, or its conversation files: the numbered `conversations-NNN.json` newer exports are split into, else `conversations.json`. Not the account files or images beside them |
+| `claude-ai` | the export's ZIP or `conversations.json`, whole |
+| `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
+| `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so a snapshot is a copy of those tables, row by row, and nothing else is ever written to the capture, even by one that stops part way. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
+| `cline` | each session's `<id>.json` and `<id>.messages.json` under `sessions`; not its compacted context (`<id>.compaction.json`), nor Cline's settings (which hold provider credentials), index database or checkpoints |
+| `vscode-copilot` | each chat session's file under `workspaceStorage/<hash>/chatSessions` or `globalStorage/emptyWindowChatSessions`, and its window's `workspace.json`; not a session's older `.json` beside its journal, nor the rest of the user folder: settings, `state.vscdb` databases and extension storage, which can hold other extensions' secrets |
+| `cursor` | a snapshot of `globalStorage/state.vscdb` and of each window's `state.vscdb`, and each window's `workspace.json`. A snapshot is a copy, row by row, of only the composers, their messages and headers, and a window's list of its composers, with each composer's encryption keys and encrypted state left out: Cursor's sign-in tokens (`cursorAuth/*`), settings and every other row are never written to the capture, even by one that stops part way. No rows are copied before indexing, even with `sqlite_record_capture`, since only a snapshot leaves them out; rows that option exports come from the snapshot. A composer deleted in Cursor before its last capture was indexed is indexed from an older snapshot that holds it |
+| `cursor-cli` | a snapshot of each chat's `store.db` under `chats`, and its `meta.json`. A snapshot is a copy, row by row, of the chat's blobs and of only the metadata Pharos reads (its ID, latest root, name, start, mode and model), so never its encryption key (`blobEncryptionKey`); nothing else is ever written to the capture, even by one that stops part way, and no rows are copied before indexing. Not the rest of `~/.cursor`: the CLI's sign-in (`cli-config.json`), settings, projects and extensions. A chat deleted before its last capture was indexed is indexed from the capture that holds it |
+| `zed` | a snapshot of `threads/threads.db` holding only its `threads` table, copied row by row, so tables a later release adds are left out; not the rest of Zed's data folder: its settings, extensions and other databases. With `sqlite_record_capture`, rows are also exported from the threads table before indexing. A thread deleted in Zed before its last capture was indexed is indexed from an older snapshot, with the rest of its group |
 
 **Incremental and interruption-safe.** A file whose size and mtime match the
 manifest, and whose captured copy is still intact, is skipped. Anything else is
@@ -924,7 +941,7 @@ conversations (a session with its subagents) that changed since they were last
 indexed; `total_conversations` is that count and `done_conversations` how many
 the run has handled. `progress` (0 to 1, `null` while counting or with nothing
 to measure) is what the progress bar shows: conversations handled, with each
-source that cannot be counted (a whole-file kind such as TL1, ChatGPT or a
+source that cannot be counted (a whole-file kind such as TL1, ChatGPT, Claude.ai or a
 canonical export, or a capture that will not open) as one step of its own, so
 it does not take the count from the others. `hosts` follows: each
 captured host's `id`, `label`, `user`, `current` (this Mac), and `sources[]` with
@@ -1016,7 +1033,7 @@ a freshly captured 8.7 GB database with 1.7 million messages, against 7 minutes
 to parse every session (15 with the Git lookups a live sync makes). The
 per-record digest still decides whether anything is written, and a capture
 older than what that Mac already indexed is not even parsed where its part state
-says so. Canonical, ChatGPT and TL1 sources are still parsed whole when their
+says so. Canonical, ChatGPT, Claude.ai and TL1 sources are still parsed whole when their
 fingerprint changes. Part and copy versions raised the catalog schema version to
 6: a build without them would sync around that state, so older builds refuse
 the catalog. The tool ledger, message senders, human authorship, the TL1

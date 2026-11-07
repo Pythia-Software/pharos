@@ -220,6 +220,9 @@ CREATE TABLE IF NOT EXISTS messages (
   kind TEXT NOT NULL DEFAULT 'message',
   model TEXT,
   effort TEXT,
+  speed TEXT NOT NULL DEFAULT 'standard',
+  service_tier TEXT,
+  speed_source TEXT NOT NULL DEFAULT 'assumed_standard',
   text TEXT NOT NULL,
   raw_text TEXT,
   source_order INTEGER,
@@ -412,6 +415,19 @@ CREATE TABLE IF NOT EXISTS usage_attribution_state (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   version TEXT NOT NULL
 );
+-- Each Claude Code conversation's replies, by account and message ID (with the
+-- request ID for a message ID not Anthropic's), with the conversation its records of each name as counting it (copy_of,
+-- '' for its own) and the most tokens one reports. Claude Code copies a reply
+-- into a resumed or forked session; of the conversations holding one, the
+-- fullest record counts, else the first to start (claude_usage_copies.go).
+CREATE TABLE IF NOT EXISTS claude_usage_copies (
+  usage_key TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  copy_of TEXT NOT NULL DEFAULT '',
+  tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(usage_key, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS claude_usage_copies_conversation_idx ON claude_usage_copies(conversation_id);
 
 -- API price history. Rows are imported from the checked-in pricing file
 -- (pricing/cost_changes.json); only 'confirmed' rows are used for cost.
@@ -475,6 +491,9 @@ CREATE TABLE IF NOT EXISTS model_requests (
   requested_at TEXT,
   model TEXT,
   effort TEXT,
+  speed TEXT NOT NULL DEFAULT 'standard',
+  service_tier TEXT,
+  speed_source TEXT NOT NULL DEFAULT 'assumed_standard',
   input_tokens INTEGER NOT NULL DEFAULT 0,
   uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,

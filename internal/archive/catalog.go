@@ -280,9 +280,15 @@ func (c *Catalog) Initialize() error {
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
 		{"messages", "model", "ALTER TABLE messages ADD COLUMN model TEXT"},
 		{"messages", "effort", "ALTER TABLE messages ADD COLUMN effort TEXT"},
+		{"messages", "speed", "ALTER TABLE messages ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'"},
+		{"messages", "service_tier", "ALTER TABLE messages ADD COLUMN service_tier TEXT"},
+		{"messages", "speed_source", "ALTER TABLE messages ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'"},
 		{"conversations", "effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"},
 		{"agent_sessions", "effort", "ALTER TABLE agent_sessions ADD COLUMN effort TEXT"},
 		{"model_requests", "effort", "ALTER TABLE model_requests ADD COLUMN effort TEXT"},
+		{"model_requests", "speed", "ALTER TABLE model_requests ADD COLUMN speed TEXT NOT NULL DEFAULT 'standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "service_tier", "ALTER TABLE model_requests ADD COLUMN service_tier TEXT; DROP INDEX IF EXISTS model_requests_timing_idx"},
+		{"model_requests", "speed_source", "ALTER TABLE model_requests ADD COLUMN speed_source TEXT NOT NULL DEFAULT 'assumed_standard'; DROP INDEX IF EXISTS model_requests_timing_idx"},
 		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
@@ -307,6 +313,7 @@ func (c *Catalog) Initialize() error {
 		{"conversations", "harness_version_first", "ALTER TABLE conversations ADD COLUMN harness_version_first TEXT"},
 		{"conversations", "harness_version_last", "ALTER TABLE conversations ADD COLUMN harness_version_last TEXT"},
 		{"conversations", "harness_version_source", "ALTER TABLE conversations ADD COLUMN harness_version_source TEXT"},
+		{"conversations", "extractor", "ALTER TABLE conversations ADD COLUMN extractor TEXT"},
 		{"workspaces", "reclamation_authority", "ALTER TABLE workspaces ADD COLUMN reclamation_authority INTEGER NOT NULL DEFAULT 0"},
 		{"workspaces", "main_merge_commit", "ALTER TABLE workspaces ADD COLUMN main_merge_commit TEXT"},
 		{"workspaces", "main_merge_title", "ALTER TABLE workspaces ADD COLUMN main_merge_title TEXT"},
@@ -343,6 +350,13 @@ func (c *Catalog) Initialize() error {
 			}
 		}
 	}
+	// Conductor stored its extractor as its conversations' coverage before
+	// they had an extractor of their own.
+	if _, err := c.DB.Exec(`UPDATE conversations SET extractor=coverage,coverage='complete'
+		WHERE coverage LIKE ? AND NOT EXISTS(SELECT 1 FROM meta WHERE key='conversation_extractor_version');
+		INSERT OR IGNORE INTO meta(key,value) VALUES('conversation_extractor_version','1')`, legacyCoveragePrefix+"%"); err != nil {
+		return err
+	}
 	if err := c.ensureQueryFactTriggers(); err != nil {
 		return err
 	}
@@ -358,7 +372,7 @@ func (c *Catalog) Initialize() error {
 		// Cover the timing projection so request reads never visit large
 		// conversation bodies or sort the entire ledger's window partitions.
 		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
-		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
 		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
 		// Ask Pharos's compaction signal reads only requests after a
 		// compaction, a few in a thousand.
@@ -394,6 +408,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureRequestTimings(); err != nil {
 		return fmt.Errorf("initialize request timings: %w", err)
+	}
+	if err := c.ensureFastTiers(); err != nil {
+		return fmt.Errorf("apply fast service tiers: %w", err)
 	}
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
@@ -1282,20 +1299,12 @@ func suppressMirrorRows(rows, links []map[string]any) []map[string]any {
 		}
 		groups[root] = append(groups[root], byID[id])
 	}
-	priority := map[string]int{"tl1": 0, "tl1-export": 0, "codex": 1, "claude": 1, "chatgpt": 1, "antigravity": 1, "conductor": 9}
 	output := []map[string]any{}
 	for _, root := range roots {
 		group := groups[root]
 		chosen := group[0]
 		for _, candidate := range group[1:] {
-			cp, ok := priority[firstString(candidate["source_kind"])]
-			if !ok {
-				cp = 5
-			}
-			bp, ok := priority[firstString(chosen["source_kind"])]
-			if !ok {
-				bp = 5
-			}
+			cp, bp := mirrorRank(firstString(candidate["source_kind"])), mirrorRank(firstString(chosen["source_kind"]))
 			if cp < bp || cp == bp && firstString(candidate["activity_at"]) > firstString(chosen["activity_at"]) {
 				chosen = candidate
 			}

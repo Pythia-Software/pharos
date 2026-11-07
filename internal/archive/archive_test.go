@@ -176,6 +176,51 @@ func TestIngestSkipsUnchangedRecordsWhenSourceFingerprintChanges(t *testing.T) {
 	}
 }
 
+// Conductor once stored its extractor as its conversations' coverage. The
+// upgrade moves it, and a saved catalog recovered later is read alike.
+func TestConductorExtractorLeavesCoverage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','conductor','local','s','Session','2026-09-23T00:00:00Z');
+		INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage) VALUES('old','w','codex','local','old','conductor-v12'),('partial','w','codex','local','partial','partial');
+		DELETE FROM meta WHERE key='conversation_extractor_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(catalog.DB, "SELECT id,coverage,COALESCE(extractor,'') extractor FROM conversations ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonText(rows); got != `[{"coverage":"complete","extractor":"conductor-v12","id":"old"},{"coverage":"partial","extractor":"","id":"partial"}]` {
+		t.Fatal(got)
+	}
+	// A record in the old form, from a recovery envelope saved before, is
+	// stored in the new one.
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := ConversationRecord{NativeID: "envelope", Provider: "codex", Account: "local", Coverage: "conductor-v12"}
+	if _, _, err := ingestWorkspace(tx, WorkspaceRecord{SourceID: "s2", SourceKind: "conductor", Account: "local", Title: "Saved", Conversations: []ConversationRecord{legacy}}, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var coverage, extractor string
+	if err := catalog.DB.QueryRow("SELECT coverage,extractor FROM conversations WHERE native_id='envelope'").Scan(&coverage, &extractor); err != nil || coverage != "complete" || extractor != "conductor-v12" {
+		t.Fatal(coverage, extractor, err)
+	}
+	// Delivery checkpoints taken of the old form still match the new one.
+	current := legacy
+	current.Coverage, current.Extractor = "complete", "conductor-v12"
+	if conversationDeliveryDigest("w", current) != conversationDeliveryDigest("w", legacy) {
+		t.Fatal("a checkpoint of the old form no longer matches")
+	}
+}
+
 func TestLegacyConductorResumeChecksActivityTime(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	adapter, err := MakeAdapter(SourceConfig{Name: "conductor", Kind: "conductor", Path: t.TempDir(), Account: "local"})
@@ -184,7 +229,7 @@ func TestLegacyConductorResumeChecksActivityTime(t *testing.T) {
 	}
 	record := WorkspaceRecord{SourceID: "session", SourceKind: "conductor", Account: "local", Title: "Session",
 		ActivityAt: "2026-09-20T00:00:00Z", Conversations: []ConversationRecord{{
-			NativeID: "thread", Provider: "codex", Account: "local", Coverage: conductorExtractor,
+			NativeID: "thread", Provider: "codex", Account: "local", Extractor: conductorExtractor,
 			Messages: []MessageRecord{{NativeID: "one", Role: "user", Kind: "message", Text: "hello", Selected: true}},
 		}},
 	}
@@ -388,7 +433,7 @@ func TestNativeReasoningRetention(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "exec.jsonl")
 	writeSourceFile(t, path, "{\"type\":\"thread.started\",\"thread_id\":\"exec\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"thought\",\"type\":\"reasoning\",\"text\":\"Now I see\"}}\n")
-	exec, ok, err := parseCodexExec(path, path)
+	exec, ok, err := sourceFiles{}.parseCodexExec(path, path)
 	if err != nil || !ok || len(exec.Messages) != 1 || exec.Messages[0].Kind != "reasoning" || exec.Messages[0].ReasoningFormat != "summary" {
 		t.Fatalf("Codex exec: %+v %v %v", exec.Messages, ok, err)
 	}
@@ -1311,9 +1356,11 @@ func TestAppCSPAllowsOnlyLocalBlobFormulaWorkers(t *testing.T) {
 	}
 }
 
-func TestConductorSemanticEventsRepositoryAndPR(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	root := t.TempDir()
+// conductorSemanticFixture writes a Conductor database below root: an archived
+// workspace on a branch of a repository, whose Claude session delegated to a
+// subagent, edited a file, opened a PR and reported its usage.
+func conductorSemanticFixture(t *testing.T, root string) {
+	t.Helper()
 	repository := filepath.Join(root, "repo")
 	worktree := filepath.Join(repository, ".conductor", "kiev")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
@@ -1347,6 +1394,12 @@ CREATE TABLE session_messages (id TEXT PRIMARY KEY,session_id TEXT,role TEXT,con
 		}
 	}
 	db.Close()
+}
+
+func TestConductorSemanticEventsRepositoryAndPR(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	conductorSemanticFixture(t, root)
 	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: root, Account: "local", Enabled: true}
 	adapter, err := MakeAdapter(source)
 	if err != nil {

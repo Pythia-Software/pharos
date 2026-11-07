@@ -1,0 +1,1445 @@
+{
+  "capabilities": [
+    {
+      "detail": "The folder the agent worked in.",
+      "key": "cwd",
+      "label": "Folder"
+    },
+    {
+      "detail": "The branch it worked on.",
+      "key": "git_branch",
+      "label": "Git branch"
+    },
+    {
+      "detail": "The model that replied.",
+      "key": "model",
+      "label": "Model"
+    },
+    {
+      "detail": "The reasoning effort chosen.",
+      "key": "effort",
+      "label": "Effort"
+    },
+    {
+      "detail": "Whether a request ran in fast mode. Without it, it counts as standard.",
+      "key": "speed",
+      "label": "Speed"
+    },
+    {
+      "detail": "The tokens each request used.",
+      "key": "message_tokens",
+      "label": "Token usage"
+    },
+    {
+      "detail": "The tools the agent called, with their input.",
+      "key": "tool_calls",
+      "label": "Tool calls"
+    },
+    {
+      "detail": "What each tool returned.",
+      "key": "tool_results",
+      "label": "Tool results"
+    },
+    {
+      "detail": "The model's reasoning.",
+      "key": "reasoning",
+      "label": "Thinking"
+    },
+    {
+      "detail": "When each message was sent.",
+      "key": "timestamps",
+      "label": "Message times"
+    },
+    {
+      "detail": "Which conversations an agent started.",
+      "key": "subagents",
+      "label": "Subagents"
+    },
+    {
+      "detail": "A name the tool gave the conversation.",
+      "key": "title",
+      "label": "Title"
+    },
+    {
+      "detail": "The version of the tool.",
+      "key": "harness_version",
+      "label": "Tool version"
+    },
+    {
+      "detail": "A cost the tool reports. Without one, Pharos prices the tokens.",
+      "key": "cost",
+      "label": "Reported cost"
+    }
+  ],
+  "providers": [
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "supported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the transcript records it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "When the transcript records the request's speed or service tier.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "support": "supported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "support": "supported"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "supported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When Claude Code named the session.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "supported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Claude Code",
+      "kind": "claude",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "supported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "From releases that record it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "From releases that record the turn's service tier.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "support": "supported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "A summary, or only that it reasoned when the reasoning is encrypted.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "From releases that record which session started another.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When Codex named the session.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "supported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Codex",
+      "kind": "codex",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When Conductor stores it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When Conductor stores it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "When Conductor stores it.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "When Conductor stores it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "support": "supported"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "When Conductor stores it.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "Recorded by the Claude Code or Codex session it ran.",
+          "support": "unsupported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When Conductor stores it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "When the Claude Code or Codex session it ran is also a source.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Conductor",
+      "kind": "conductor",
+      "setup": true
+    },
+    {
+      "automatic": false,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "The repository's folder.",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When the run records it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "supported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "When the run records it.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Per request for Claude Code runs, per turn for Codex.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "When the run records it.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "When the run records it.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "Not in Codex exec runs.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "Codex runs that record which session started another.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "support": "supported"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "Claude Code runs only.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "note": "From TL1's run summary.",
+          "support": "varies"
+        }
+      ],
+      "display_name": "TL1",
+      "kind": "tl1",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the conversation records it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the conversation records it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the conversation records it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "When the conversation's database is present.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "Only how many tokens it spent thinking.",
+          "support": "unsupported"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "supported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the conversation records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "The installed app's version, seen on this Mac.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Antigravity",
+      "kind": "antigravity",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Older releases record only the session's total.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "A summary for OpenAI models, or only that it reasoned.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "supported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Copilot CLI",
+      "kind": "copilot",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "unsupported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "The tier an OpenAI reply reports. A fast mode chosen as a model of its own is not told apart.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "support": "supported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "For calls that finished.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "support": "supported"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "supported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When OpenCode named the session.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "supported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "note": "The session's total.",
+          "support": "varies"
+        }
+      ],
+      "display_name": "OpenCode",
+      "kind": "opencode",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "supported"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "unsupported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "Cline has no fast mode.",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "support": "supported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "Redacted thinking records only that it reasoned.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "A teammate's transcripts aren't read.",
+          "support": "unsupported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "When the session records it.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "note": "The session's total.",
+          "support": "varies"
+        }
+      ],
+      "display_name": "Cline",
+      "kind": "cline",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "The window's folder.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "Auto is known once it replied.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "unsupported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Some releases record only the last round's input.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "support": "supported"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "Per request, not per message.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "supported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the chat was renamed.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "The Copilot Chat extension's version.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "VS Code Copilot",
+      "kind": "vscode-copilot",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "unsupported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "The chat's fast mode setting now, which stands for all of its requests.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Before Cursor 3. Cursor 3 records only the size of the context.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "For calls that finished.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "Some messages are given the time of the one before.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "supported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "unsupported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Cursor",
+      "kind": "cursor",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "unsupported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "Fast mode is kept in the CLI's settings, which Pharos does not read.",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Only the size of the context.",
+          "support": "unsupported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "Encrypted: only that it reasoned.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "Prompts only; replies are placed after them.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "unsupported"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the chat records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "unsupported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Cursor CLI",
+      "kind": "cursor-cli",
+      "setup": true
+    },
+    {
+      "automatic": true,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the thread records it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "unsupported"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the thread records it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the thread records it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "The thread's fast mode setting now, which stands for all of its requests.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Each turn's last request.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "Or only that it was redacted.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "Every message is given its thread's start.",
+          "support": "unsupported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "When the thread records it.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the thread records it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "unsupported"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Zed",
+      "kind": "zed",
+      "setup": true
+    },
+    {
+      "automatic": false,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "note": "When the export holds it.",
+          "support": "varies"
+        }
+      ],
+      "display_name": "Canonical export",
+      "kind": "canonical",
+      "setup": false
+    },
+    {
+      "automatic": false,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "note": "When the export holds it.",
+          "support": "varies"
+        }
+      ],
+      "display_name": "TL1 export",
+      "kind": "tl1-export",
+      "setup": false
+    },
+    {
+      "automatic": false,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "not-applicable"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "not-applicable"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "support": "supported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "note": "When the export records the tier.",
+          "support": "varies"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Exports have no token counts.",
+          "support": "unsupported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "support": "supported"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "support": "supported"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "Or only how long it thought.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "not-applicable"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "not-applicable"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "ChatGPT",
+      "kind": "chatgpt",
+      "setup": false
+    },
+    {
+      "automatic": false,
+      "capabilities": [
+        {
+          "key": "cwd",
+          "label": "Folder",
+          "support": "not-applicable"
+        },
+        {
+          "key": "git_branch",
+          "label": "Git branch",
+          "support": "not-applicable"
+        },
+        {
+          "key": "model",
+          "label": "Model",
+          "note": "The export names no model.",
+          "support": "unsupported"
+        },
+        {
+          "key": "effort",
+          "label": "Effort",
+          "support": "unsupported"
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "support": "unsupported"
+        },
+        {
+          "key": "message_tokens",
+          "label": "Token usage",
+          "note": "Exports have no token counts.",
+          "support": "unsupported"
+        },
+        {
+          "key": "tool_calls",
+          "label": "Tool calls",
+          "note": "Not in older exports, which flatten each message to text.",
+          "support": "varies"
+        },
+        {
+          "key": "tool_results",
+          "label": "Tool results",
+          "note": "Not in older exports, which flatten each message to text.",
+          "support": "varies"
+        },
+        {
+          "key": "reasoning",
+          "label": "Thinking",
+          "note": "A summary, when the export holds one.",
+          "support": "varies"
+        },
+        {
+          "key": "timestamps",
+          "label": "Message times",
+          "support": "supported"
+        },
+        {
+          "key": "subagents",
+          "label": "Subagents",
+          "support": "not-applicable"
+        },
+        {
+          "key": "title",
+          "label": "Title",
+          "note": "When the export holds it.",
+          "support": "varies"
+        },
+        {
+          "key": "harness_version",
+          "label": "Tool version",
+          "support": "not-applicable"
+        },
+        {
+          "key": "cost",
+          "label": "Reported cost",
+          "support": "unsupported"
+        }
+      ],
+      "display_name": "Claude.ai",
+      "kind": "claude-ai",
+      "setup": false
+    }
+  ]
+}

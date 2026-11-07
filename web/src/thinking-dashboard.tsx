@@ -513,16 +513,16 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           ]}
           onChange={(effort) => change({ effort })}
         />
+        <ChartSelect
+          label="Breakdown"
+          value={!detail && state.groupBy === "none" ? "model" : state.groupBy}
+          options={thinkingBreakdowns.filter(([key]) => detail || key !== "none").map(([a, b]) => [a, b])}
+          onChange={(groupBy) =>
+            change({ groupBy: groupBy as ThinkingState["groupBy"] })
+          }
+        />
         {detail ? (
           <>
-            <ChartSelect
-              label="Breakdown"
-              value={state.groupBy}
-              options={thinkingBreakdowns.map(([a, b]) => [a, b])}
-              onChange={(groupBy) =>
-                change({ groupBy: groupBy as ThinkingState["groupBy"] })
-              }
-            />
             <ChartSelect
               label="Order by"
               disabled={fixed}
@@ -680,6 +680,11 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               : ""}
             .
           </p>
+          {state.groupBy.includes("speed") ? (
+            <p className="usage-dashboard-note">
+              Speed uses recorded settings; requests without a fast or priority marker count as Standard.
+            </p>
+          ) : null}
           {detail ? (
             <>
               <div className="thinking-card-title">
@@ -914,6 +919,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               <div className="thinking-overview-pair">
                 <ThinkingCDF
                   groups={data.groups}
+                  groupBy={state.groupBy === "none" ? "model" : state.groupBy}
                   title={thinkingCardTitle("thinking-waits", state)}
                   action={<CreateDashboardCard target="thinking-waits" />}
                 />

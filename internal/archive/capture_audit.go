@@ -2,8 +2,34 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 )
+
+// Bypass derivation fingerprints only for a freshly confirmed mismatch. Keep
+// copy authority and evidence-version guards, including for historical copies;
+// repair must never promote older evidence or discard another Mac's messages.
+func (c *Catalog) reindexAuditRecord(ctx context.Context, unit syncUnit, record WorkspaceRecord) (string, error) {
+	if err := c.queries.wait(ctx); err != nil {
+		return "", err
+	}
+	var id string
+	err := c.writeTransaction(ctx, "reindex verified mismatch", func(tx *sql.Tx) error {
+		if _, _, err := ingestCopyModeContext(ctx, tx, record, false, unit.hostID(), unit.Source.Name, true, true, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate}); err != nil {
+			return err
+		}
+		var err error
+		id, err = storedWorkspaceID(tx, record)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) VALUES(?)", id); err != nil {
+			return err
+		}
+		return markSyncDeferred(tx)
+	})
+	return id, err
+}
 
 // A full reference comparison deliberately accepts corrections at the same
 // source version. Its isolated authority must not hide that difference. The

@@ -425,13 +425,19 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 		}
 		return nil
 	}
+	workers := labelerPreparationWorkers(labels, opts.Limit, false)
+	builders := make([]*labelsItemBuilder, workers)
 	pipeline := agentEventsPipeline{
-		opts: opts, stats: stats, progress: progress, status: status,
-		build: func(job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+		workers: workers,
+		opts:    opts, stats: stats, progress: progress, status: status,
+		build: func(ctx context.Context, worker int, job *agentEventsConversation) (conversation *agentEventsConversation, err error) {
+			if builders[worker] == nil {
+				builders[worker] = builder.fork(ctx)
+			}
 			// IO priority is per thread, so each pipeline goroutine applies
 			// the operation's policy to its own database work.
 			opFrom(ctx).RunIO(func() {
-				conversation, err = c.agentEventsConversation(ctx, builder, verifier, job, opts.Since)
+				conversation, err = c.agentEventsConversation(ctx, builders[worker], verifier, job, opts.Since)
 			})
 			return conversation, err
 		},
@@ -820,6 +826,13 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
 	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
+	if err == nil {
+		// Fixes group these events (fixes.go); a rebuild is a no-op when
+		// nothing changed, and spaced out while events keep arriving.
+		if err := s.Catalog.refreshFixesSoon(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
+		}
+	}
 	switch {
 	case errors.Is(err, errAgentEventsRunning):
 		return errStageContinues
@@ -856,6 +869,11 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 			}
 		}()
 		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr, progressBase: stats.progress})
+		if err == nil {
+			if err := s.Catalog.refreshFixes(ctx, false); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
+			}
+		}
 		switch {
 		case errors.Is(err, labelrt.ErrWorkersUnavailable), unplugged.Load():
 			op.legacyOutcome("interrupted", nil)

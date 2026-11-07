@@ -278,7 +278,7 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 		}
 	}
 	if err == nil {
-		err = out.Sync()
+		err = syncToDrive(out)
 	}
 	if e := out.Close(); err == nil {
 		err = e
@@ -308,13 +308,20 @@ func copyVerified(ctx context.Context, source, target string) (transferFile, err
 	return transferFile{SHA256: digest, Size: size}, nil
 }
 
-func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
-	files := []transferFile{}
-	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
-		return files, nil
+// Discovery and copying share the evidence boundary. A preflight must never
+// overlook a file that transfer would preserve, or mistake locks for history.
+func walkRetainedTree(ctx context.Context, source string, skipImports bool, visit func(string, fs.DirEntry) error) error {
+	if source == "" {
+		return nil
 	}
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -338,6 +345,13 @@ func retainedTree(ctx context.Context, source, target, label string, skipImports
 		if entry.Name() == ".delivered.json" || entry.Name() == "indexed.json" || strings.HasSuffix(entry.Name(), ".lock") || strings.HasSuffix(entry.Name(), ".partial") || strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			return nil
 		}
+		return visit(path, entry)
+	})
+}
+
+func retainedTree(ctx context.Context, source, target, label string, skipImports bool) ([]transferFile, error) {
+	files := []transferFile{}
+	err := walkRetainedTree(ctx, source, skipImports, func(path string, _ fs.DirEntry) error {
 		rel, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
@@ -382,36 +396,52 @@ func sanitizeHistory(ctx context.Context, path string) error {
 	if _, err = db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
 		return err
 	}
+	// A snapshot carries hundreds of derived schema objects. Drop them in
+	// one transaction instead of creating and committing a rollback journal
+	// for each object, including when the retained history is only a few rows.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, row := range rows {
 		kind, name := firstString(row["type"]), firstString(row["name"])
 		if kind == "table" {
 			continue
 		}
-		if _, err = db.Exec("DROP " + strings.ToUpper(kind) + " IF EXISTS " + quotedIdentifier(name)); err != nil {
+		if _, err = tx.ExecContext(ctx, "DROP "+strings.ToUpper(kind)+" IF EXISTS "+quotedIdentifier(name)); err != nil {
 			return err
 		}
 	}
 	// Drop virtual tables before their automatically managed shadow tables.
 	for _, row := range rows {
 		if strings.HasPrefix(strings.ToUpper(firstString(row["sql"])), "CREATE VIRTUAL TABLE") {
-			if _, err = db.Exec("DROP TABLE IF EXISTS " + quotedIdentifier(firstString(row["name"]))); err != nil {
+			if _, err = tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+quotedIdentifier(firstString(row["name"]))); err != nil {
 				return err
 			}
 		}
 	}
-	remaining, err := queryMaps(db, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	remaining, err := queryMapsContext(ctx, tx, `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
 	if err != nil {
 		return err
 	}
 	for _, row := range remaining {
 		name := firstString(row["name"])
 		if !keep[name] {
-			if _, err = db.Exec("DROP TABLE " + quotedIdentifier(name)); err != nil {
+			if _, err = tx.ExecContext(ctx, "DROP TABLE "+quotedIdentifier(name)); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err = db.Exec(`DELETE FROM meta WHERE key<>'schema_version'; VACUUM`); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM meta WHERE key<>'schema_version'`); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	// VACUUM cannot run inside the transaction. It removes freed pages that
+	// may still contain the private state removed above.
+	if _, err = db.ExecContext(ctx, "VACUUM"); err != nil {
 		return err
 	}
 	return syncFile(path)
@@ -617,6 +647,11 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 			return err
 		}
 	}
+	// The imported tool ledger rows replace this library's, whose fingerprints
+	// no longer describe them.
+	if _, err = tx.ExecContext(ctx, "DELETE FROM tool_ledger_inputs WHERE conversation_id IN (SELECT id FROM delivered_conversations)"); err != nil {
+		return err
+	}
 	// Integer row IDs are destination-local. Replace per-workspace metrics only
 	// when the source owns that revision; union-derived totals are rebuilt below.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM metrics WHERE workspace_id IN (SELECT id FROM delivered_workspaces);
@@ -760,6 +795,43 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	for _, row := range rows {
 		if err = rederiveWorkspace(tx, firstString(row["id"]), merged); err != nil {
 			return fmt.Errorf("rebuild imported workspace: %w", err)
+		}
+	}
+	// Replies the other library counted may be copies of this one's, and the
+	// reverse (claude_usage_copies.go).
+	for _, row := range rows {
+		workspaceID := firstString(row["id"])
+		var kind string
+		if err = tx.QueryRowContext(ctx, "SELECT source_kind FROM workspaces WHERE id=?", workspaceID).Scan(&kind); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var claude bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversations WHERE workspace_id=? AND provider='claude')", workspaceID).Scan(&claude); err != nil {
+			return err
+		}
+		if !claude {
+			continue
+		}
+		conversations, ids, err := storedWorkspaceConversations(ctx, tx, workspaceID)
+		if err != nil {
+			return err
+		}
+		if kind == "claude" {
+			if err = repairClaudeUsageCopies(ctx, tx, workspaceID, conversations, ids); err != nil {
+				return fmt.Errorf("settle imported Claude usage: %w", err)
+			}
+			continue
+		}
+		// Another library's TL1 runs may be stored without the advisor
+		// records their replies hold.
+		changed, err := backfillClaudeAdvisorUsage(tx, conversations, ids)
+		if err != nil {
+			return err
+		}
+		if len(changed) > 0 {
+			if err = rebuildWorkspaceUsage(tx, workspaceID, conversations, ids, changed); err != nil {
+				return err
+			}
 		}
 	}
 	messages, err := queryMaps(tx, "SELECT id FROM incoming_messages")
@@ -1125,7 +1197,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
 	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
-	"safety_state", "safety_cart", "safety_handoffs",
+	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
 func cleanupDeliveredHistory(ctx context.Context, source Config, receipt libraryTransferReceipt) error {
