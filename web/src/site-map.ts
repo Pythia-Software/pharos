@@ -646,7 +646,10 @@ export function buildSiteMap(inputs: SiteInputs) {
   // host_params: the parameters the page's table keeps as host query state
   // (host-query-state.ts). The app's query tokens carry that state, mirrored
   // in these parameters; a link's token may carry it only as they say it.
-  const whereOption = (param: string, dataset: string, hostParams?: string[]): Option => ({ name: "filters", param, kind: "where", description: `Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.`, ...(hostParams ? { host_params: hostParams } : {}) });
+  const whereOption = (param: string, dataset: string, hostParams?: string[], lead = ""): Option => ({ name: "filters", param, kind: "where", description: `${lead}Where terms on ${dataset}'s filterable fields (datasets.${dataset}.fields), encoded with encodeQuery as a where-only query. Browse <node>/filters/<field> for one field.`, ...(hostParams ? { host_params: hostParams } : {}) });
+  // A catalog dashboard's filters other than its range are its population.
+  const populationLead = (topic: UsageTopic) => analysisCatalogs[topic]?.population
+    ? "The population every view, breakdown and panel counts, shown as Population chips. Leave a breakdown value out with {any: [{field, op: \"!=\", value}, {field, op: \"is_null\"}]}, or count only it with {field, op: \"=\", value}, as the legend does. " : "";
 
   for (const section of siteSections) {
     const title = inputs.titles[section.route === "/" ? "" : section.path] ?? (section.path === "work" ? "Workspace" : sectionTitle(section.path)) ?? fail(`no title for ${section.path}`);
@@ -701,7 +704,7 @@ export function buildSiteMap(inputs: SiteInputs) {
         ...topic === "carbon" ? { settings: "Carbon assumptions can be carried as view.carbon; saving defaults is separate." } : topic === "parallelism" ? { settings: "Ribbon and source-query counting assumptions travel as view.parallelism; the Provider and Model breakdowns require Count by Conversations.", ribbon: { param: "analyze_parallelism", ...ribbonTemplate() } } : {},
         options: [
           { name: "chart", param: "analyze_chart", kind: "dashboard_chart", description: `The chart: dashboards.${topic}.views lists each view's options and valid combinations.` },
-          whereOption("analyze_filters", usageTopicDatasets[topic]),
+          whereOption("analyze_filters", usageTopicDatasets[topic], undefined, populationLead(topic)),
           windowOption("analyze_filters", dashboardWindows, "The dashboard's range: window_terms appended to the filters, or no terms for all time. analyze_days repeats the selected elapsed-day window."),
         ] });
       const query = child({ path: "analyze/query", title: "Query", description: pageDescriptions["analyze/query"], route: "/analyze", fixed: { analyze_mode: "query" }, children: [] });

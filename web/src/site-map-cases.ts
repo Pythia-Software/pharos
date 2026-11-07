@@ -128,6 +128,18 @@ export function motivatingExample(map: SiteMap) {
   return { name: "Anthropic Opus-class tokens per day, 7-day trailing average, by model", page: "analyze/tokens", topic: "tokens" as const, view: "trend", chart, filters, days: 30, verdict: chartVerdict("tokens", chart), url, decoded: decoded(url) };
 }
 
+// A partial population, as the legend writes it: Session Shape's length
+// bands as shares, with Antigravity CLI sessions left out (an exclusion keeps
+// sessions with no harness) and only root agents counted. site_link takes the
+// same terms as filters; the dashboard shows them as Population chips.
+export function populationExample(map: SiteMap) {
+  const info = map.analyze.dashboards.session_shape.views.compare;
+  const chart = canonicalChart(info.defaults, { view: "compare", metric: "sessions", split: "length_band", compareAs: "share" });
+  const filters = [{ any: [where("harness", "!=", "antigravity-cli"), where("harness", "is_null")] as WhereClause[] }, where("agent_kind", "=", "root")];
+  const url = dashboardURL("session_shape", chart, filters, 30);
+  return { name: "Session length mix without Antigravity CLI, root agents only", page: "analyze/session_shape", topic: "session_shape" as const, view: "compare", chart, filters, days: 30, verdict: chartVerdict("session_shape", chart), url, decoded: decoded(url) };
+}
+
 // Every card at one window, and at every window the first card of each way
 // a card's link takes its window: the page kind it opens, Parallelism's
 // ribbon, a chart that follows the window, its own filters or none, window
@@ -229,7 +241,7 @@ export function buildSiteMapCases(map: SiteMap) {
     if (readChart(facts, kept).renamed) throw new Error(`site map cases: ${item.topic} ${json(kept)} keeps an older name`);
   }
   // Canonical charts are valid, never merely coercible.
-  const canonical = [...charts.filter(item => item.url).map(item => [item.topic, item.chart] as const), ["tokens", motivatingExample(map).chart] as const,
+  const canonical = [...charts.filter(item => item.url).map(item => [item.topic, item.chart] as const), ["tokens", motivatingExample(map).chart] as const, ["session_shape", populationExample(map).chart] as const,
     ...map.cards.items.filter(card => card.state).map(card => [card.page.split("/")[1], card.state!] as const),
     ...Object.entries(map.analyze.dashboards).flatMap(([topic, facts]) => Object.values(facts.views).map(view => [topic, view.defaults] as const))];
   for (const [topic, chart] of canonical) if (chartVerdict(topic as UsageTopic, chart) !== "valid") throw new Error(`site map cases: canonical ${topic} ${json(chart)} is not valid`);
@@ -237,6 +249,7 @@ export function buildSiteMapCases(map: SiteMap) {
     version: map.version,
     about: "Cases for the site map, from web/src/site-map-cases.ts. analyze: by topic, charts with the page's verdict (valid; coercible: opens but draws other settings; invalid: rejected). Partial charts are merged over the topic's merge_defaults, as the page does. Some valid charts carry their link. cards: every card at one window, and some at every window. nodes: a link per page with the state its reader reads. decoded: each query token's state.",
     example: motivatingExample(map),
+    population: populationExample(map),
     // By topic; a chart names its view, or takes the topic's.
     analyze: Object.fromEntries(Object.keys(analysisCatalogs).map(topic => [topic, charts.filter(item => item.topic === topic).map(({ topic: _topic, view: _view, partial: _partial, ...item }) => item)])),
     cards: cardCases(map),

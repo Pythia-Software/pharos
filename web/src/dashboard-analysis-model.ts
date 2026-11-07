@@ -146,6 +146,9 @@ export type AnalysisCatalog = {
   // (the tools rollup counts whole days).
   rangeNote?: string;
   scatter: [string, string];
+  // Whether the controls show the population (the filters other than the
+  // range) and the legend can change it (dashboard-population.ts).
+  population?: boolean;
 };
 
 export const rollingOps = ["mean", "sum"] as const;

@@ -656,6 +656,7 @@ generator writes it.
 | Key | Contents |
 |---|---|
 | `example` | The motivating example, with its canonical URL |
+| `population` | A partial dashboard population as the legend writes it (an exclusion and an inclusion), with its canonical URL |
 | `analyze` | By topic: a spread of each view's complete charts, plus partial charts (one option at each of its values, and each view's defaults less one key), invalid ones, and charts the page writes itself (`written`: each view switch's saved state, and each card's own chart). Each has the page's verdict. Some valid ones carry filters using several operators, a window, and the link |
 | `cards` | A sample of card links. The generator itself checks every card at every window against `cardDestination`; the fixture carries a sample for Go: every card at its first default window. Every window for the first card of each way a link takes its window: the page kind, Parallelism's ribbon, a chart that follows the window, filters or none, window terms on another field, a cover, the local calendar, and no window |
 | `nodes` | A link per page, with the state the page's reader reads from it |
