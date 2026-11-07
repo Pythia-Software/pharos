@@ -56,9 +56,15 @@ export const agentEventFixKinds: Record<string, { kind: string; label: string }>
   obstacle: { kind: "obstacle", label: "recurring obstacles" },
 };
 // Fixes links for a population: one kind's when it names one, else all.
+// Kinds the population leaves out (family != kind), or whose group it does
+// not keep (family_group = another group), get no link.
 export function agentEventFixLinks(where: WhereTerm[]): { href: string; label: string }[] {
-  const kinds = where.flatMap(term => "field" in term && term.field === "family" && term.op === "=" ? [term.value] : []);
-  const chosen = kinds.length ? kinds.filter(kind => agentEventFixKinds[kind]) : Object.keys(agentEventFixKinds);
+  const terms = where.flatMap(term => "field" in term ? [term] : []);
+  const values = (field: string, op: string) => terms.filter(term => term.field === field && term.op === op).map(term => String(term.value));
+  const kinds = values("family", "="), dropped = new Set(values("family", "!=")), groups = values("family_group", "=");
+  const group = new Map(agentEventKinds.map(kind => [kind.key, kind.group]));
+  const chosen = (kinds.length ? kinds.filter(kind => agentEventFixKinds[kind]) : Object.keys(agentEventFixKinds))
+    .filter(kind => !dropped.has(kind) && (!groups.length || groups.includes(group.get(kind) ?? "")));
   return chosen.map(kind => ({ href: `/findings?${new URLSearchParams({ optimize_area: "fixes", fixes_kind: agentEventFixKinds[kind].kind })}`, label: agentEventFixKinds[kind].label }));
 }
 export const agentEventLengthOrder = Object.keys(lengthLabels);
@@ -79,7 +85,7 @@ const narrates = "Thinking narrates far more than a reply does, and nearly all t
 const byModel = `Models differ in how much they narrate, in whether their thinking is recorded at all, and in the work they were given, so a model's rate describes what it wrote on its tasks, not how well it worked. ${narrates}`;
 
 export const agentEventRatesCatalog: AnalysisCatalog = {
-  dataset: "agent_event_rates", views: ["trend", "compare"], time: { first: "occurred_at", last: "occurred_at" }, measures,
+  dataset: "agent_event_rates", views: ["trend", "compare", "distribution"], time: { first: "occurred_at", last: "occurred_at" }, measures,
   breakdowns: {
     friction: { label: "Friction kind", fields: ["family"], order: kindsOf("Friction"), where: inGroup("Friction"),
       note: `Friction is what got in an agent's way: obstacles, environment problems, out-of-date docs, failures that were already there, missing tools, unclear instructions, getting stuck and giving up. Each rate is over every message read. ${scripted}` },
@@ -119,7 +125,17 @@ export const agentEventRatesCatalog: AnalysisCatalog = {
   },
   records: { label: "Message read × kind", plural: "Messages read × kinds",
     note: "One record is one agent message the events pass read, once for each kind of event, with that kind's events in it (usually none). Rates divide by distinct messages, turns or conversations, so each counts once whichever kinds are chosen." },
-  units: {},
+  // A conversation's events: its distribution shows whether a rate rests on
+  // many conversations or on one that carried it. Its repository, provider,
+  // harness and role are its own; a kind is a filter, not a breakdown.
+  units: {
+    conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: [{ field: "conversation_id", op: "is_not_null", value: "" }],
+      breakdowns: { repository_name: ["repository_name"], provider: ["provider"], harness: ["harness"], agent_role: ["agent_role"] },
+      note: "A conversation is one recorded agent transcript the events pass read; a delegated subagent is a conversation of its own. Its events count the kinds the population keeps." },
+  },
+  // Kind group, kind, repository and the rest as chips beside Range; the
+  // legend's Count only and Leave out write them.
+  population: true,
   // A compare's minimum counts messages read, not message × kind records.
   samples: { unit: "messages read", label: "Messages read", distinct: "message_id" },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",

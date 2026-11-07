@@ -8,7 +8,10 @@ thinking, with what it was about and what the agent did about it, linked to the 
 It is a preview. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it on for a library: it lists the
 pages in Analyze and starts the pass that finds events on this Mac (below). `agent_events_enabled = true` in the
 library's configuration does both too, and locks the switch on; `/assets/preferences.js` tells the page so
-(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way.
+(`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way. The **Agent Events**
+dashboard (Analyze → Dashboards → Agents) and its four cards are listed whether or not the preview is on, as Fixes
+is: until the pass has read messages they say so and point to Settings → Background Processing. The lab's Agent
+Experience dashboard and the raw event tables wait on the switch (`agent-events-flag.ts`).
 
 ## How events are found
 
@@ -83,6 +86,17 @@ than the work (reply or thinking, model, provider, harness, main agent or subage
 narrates far more than a reply, nearly all thinking read is from Claude models, and a subagent's messages read are
 mostly thinking.
 
+The dashboard uses the shared population controls (`population: true`, [dashboard
+analysis](dashboard-analysis.md#population)): its filters, such as a kind group, a kind, a repository or who
+prompted, are chips beside Range, removable one by one, with Edit for any other term; a trend legend entry's menu
+counts only that kind or leaves it out, and a kind's entry sits under its group, whose chip selects the group's
+kinds. Distribution counts each **conversation**: its events under the population, as a histogram or, by
+repository, provider, harness or role, as box plots. It shows whether a bar rests on many conversations or one:
+over two weeks the top 10% of conversations held about half of the friction without plain obstacles, and one
+conversation held 14 of grady.dev's 21 environment-friction events. Query Table draws unit histograms in even
+steps, so the long tail crowds the first bar on a log axis; Session Shape's fine bins need a per-record value,
+which a conversation's total is not.
+
 The friction and unseen-choice breakdowns, and the cards, leave out scripted runs: turns whose `prompted_by` is
 `automated` or `none` (a corpus generator, an SDK script). They were 37% of the messages read over two weeks, with
 rates of their own; Who prompted still shows them. The unseen-choice breakdown and card count replies only: in
@@ -91,10 +105,12 @@ thinking the same kinds mostly narrate ordinary steps, at about three times the 
 Four cards (`web/src/agent-event-card-recipes.ts`) open the dashboard at their views, each about something in the
 person's repositories they can change or review: where agents hit friction (repository × friction kind, without plain
 obstacles), docs agents found out of date, failures agents stepped around, and choices agents made without asking
-(replies). They appear in the Card Library only while the preview is on. Cards on thinking against replies, models, who prompted, prompt length and
+(replies). Cards on thinking against replies, models, who prompted, prompt length and
 subagents were dropped: each difference came mostly from how much text a source narrates or from turn size, not from
 anything the person controls. Intervals for small groups wait on Query Table
-([handoff](handoffs/query-table-rate-intervals.md)).
+([handoff](handoffs/query-table-rate-intervals.md)), as does colouring a repository × kind bar by its kind
+([handoff](handoffs/query-table-tuple-colors.md)): Query Table colours a two-field bar by the whole pair, so the same
+kind takes a different colour on each repository's row.
 
 ### In the reader
 
