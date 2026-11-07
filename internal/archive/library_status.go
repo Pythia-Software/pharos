@@ -159,7 +159,7 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		}
 		meter.model = "analysis-v1:tools"
 		meter.report(activityWork{Phase: "refreshing tools"})
-		// Rebuild the Tools rollup now rather than on the next page view.
+		// Rebuild tool summaries now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 			failure = errors.Join(failure, err)
@@ -382,10 +382,10 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 		}
 	}
 	if tools := s.Catalog.toolLedgerProgress(); tools.running && !s.Catalog.upgradeRunning() {
-		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the Tools ledger",
-			ID: "tools", Work: &activityWork{Phase: "Building the Tools ledger", Unit: "conversation", Done: float64(tools.done), Total: float64(tools.total)},
+		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the tool index",
+			ID: "tools", Work: &activityWork{Phase: "Building the tool index", Unit: "conversation", Done: float64(tools.done), Total: float64(tools.total)},
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),
-			Writes: true, OnEject: "Stops between conversations; building the ledger again resumes it."})
+			Writes: true, OnEject: "Stops between conversations; building the tool index again resumes it."})
 	}
 	// Coordinated analyses report through their run's step progress. Keep
 	// standalone analyses visible when no run is reporting that work.

@@ -169,6 +169,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     if (item.dashboard) try { dashboardWindow = dashboardCardWindow(item.url, item.dashboardTarget); dashboardPresentation = dashboardCardPresentation(item.url, item.dashboardTarget, item.maxGroups); } catch { /* The preview reports the invalid definition. */ }
     return { spec, recipe, card: {
       title: item.title, description: item.description ?? "A saved view of your work.", actionLabel: item.action ?? recipe?.action, url: item.url,
+      readinessSource: item.dashboard ? undefined : spec,
       windowLabel: item.dashboard ? dashboardWindow : recipe?.period ? suggestionWindowLabel(recipe) : spec?.window ? suggestionWindowLabel({ window: spec.window, dataset: spec.dataset }) : timeWindowValue(spec) === "all" ? "All time" : "Saved",
       category: item.category ?? dashboardPresentation?.category ?? recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query),
       loadingSpec: dashboardPresentation?.loading ?? (spec ? (() => {

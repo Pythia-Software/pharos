@@ -16,7 +16,7 @@ export const queryCategories = {
   skills: { label: "Skills", tone: "var(--gold)" },
   tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
   delegation: { label: "Delegation", tone: "var(--heat-2)" },
-  views: { label: "Work Views", tone: "var(--muted)" },
+  views: { label: "Workspace Views", tone: "var(--muted)" },
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
   sessions: { label: "Session Shape", tone: "color-mix(in srgb,var(--sea) 55%,var(--muted))" },
   carbon: { label: "Carbon", tone: "var(--sea)" },

@@ -70,13 +70,13 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   navBar.className = "workspace-nav-bar";
   const libraryBack = page.querySelector<HTMLElement>("#back");
   const fullOverview = button("Workspace overview", "Open workspace overview");
-  const close = sidebarButton("Hide workspace sessions");
+  const close = sidebarButton("Hide agent sessions");
   fullOverview.onclick = props.onOverview;
   navBar.append(fullOverview, close);
   if (libraryBack) overviewContent.append(libraryBack);
   overviewContent.append(...props.overview);
   overview.append(navBar, overviewContent);
-  const divider = button("", "Resize workspace sessions sidebar");
+  const divider = button("", "Resize agent sessions sidebar");
   divider.className = "workspace-divider";divider.dataset.viewField="sidebar_width";
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-orientation", "vertical");
@@ -84,9 +84,9 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   const viewer = document.createElement("section");
   viewer.className = "workspace-reader";
   viewer.setAttribute("aria-label", "Conversation viewer");
-  const sessions = sidebarButton("Show workspace sessions");
+  const sessions = sidebarButton("Show agent sessions");
   sessions.setAttribute("aria-expanded", "false");
-  const backdrop = button("", "Close workspace sessions");
+  const backdrop = button("", "Close agent sessions");
   backdrop.className = "workspace-nav-backdrop";
   reader.classList.add("workspace-reader-content");
   viewer.append(sessions, reader);
@@ -128,7 +128,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     if (split && mobile.matches && sheet) {
       overview.setAttribute("role", "dialog");
       overview.setAttribute("aria-modal", "true");
-      overview.setAttribute("aria-label", "Workspace sessions");
+      overview.setAttribute("aria-label", "Agent sessions");
     } else {
       overview.removeAttribute("role");
       overview.removeAttribute("aria-modal");

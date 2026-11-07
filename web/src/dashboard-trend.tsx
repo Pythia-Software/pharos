@@ -1,3 +1,4 @@
+import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
@@ -91,6 +92,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     : "No earlier point has a value, so there is no norm yet.");
   const bounds = timeBounds(where, catalog.time);
   const population = usePopulation(catalog, schema, where);
+  const outputEmpty=!result.loading&&!result.error&&result.results.every(entry=>!entry.buckets.length);
   const title = analysisCardCopy(catalog, view, where, schema).title;
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
@@ -104,7 +106,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     if (view.selection?.values.length) set({ selection: { values: [], excluded: false } });
   } : undefined;
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-    <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
+    <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><StackedColumns title={title} controls={controls} action={<><DataReadinessIndicator id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty} updatedAt={result.updatedAt} />{onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : null}</>} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
       rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={view.view === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
       reference={built.norm === undefined ? undefined : { value: built.norm, label: "Norm" }}
@@ -114,6 +116,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {measure.populationShare && measure.note ? <p className="usage-dashboard-note">{measure.note}</p> : null}
+    </DataReadinessEmpty>
     {children}
     {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
   </section>;

@@ -1,6 +1,9 @@
 package archive
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 const (
 	inferenceFast        = "fast"
@@ -17,6 +20,32 @@ type inferenceSpeed struct {
 	Speed, ServiceTier, Source string
 	tierRecorded               bool
 	speedRecorded              bool // includes null/unknown resets, which have no speed source
+}
+
+// fastTiers are the service tiers that buy faster inference: OpenAI's
+// priority processing (requested as "fast") and its Ultrafast Processing.
+// Every other tier (default, auto, flex, scale, standard) is standard.
+var fastTiers = []string{"priority", "fast", "ultrafast"}
+
+// fastTier says whether tier, trimmed and lowercased, is a fast one.
+func fastTier(tier string) bool {
+	return slices.Contains(fastTiers, tier)
+}
+
+// ensureFastTiers marks for a ledger rebuild the conversations whose stored
+// requests took their speed from a tier that fastTiers now judges otherwise,
+// once per change to the list. The rebuild re-derives their messages and
+// requests (BackfillToolLedger), and the timings follow from the requests.
+// Only those conversations are rebuilt, not the whole ledger.
+func (c *Catalog) ensureFastTiers() error {
+	policy := strings.Join(fastTiers, ",")
+	tiers := "'" + strings.Join(fastTiers, "','") + "'"
+	_, err := c.DB.Exec(`UPDATE tool_ledger_state SET version='stale-fast-tiers'
+ WHERE COALESCE((SELECT value FROM meta WHERE key='fast_service_tiers'),'')<>?1
+ AND conversation_id IN (SELECT conversation_id FROM model_requests
+  WHERE speed_source='`+speedFromTier+`' AND (speed='`+inferenceFast+`')<>(COALESCE(service_tier,'') IN (`+tiers+`)));
+ INSERT INTO meta(key,value) VALUES('fast_service_tiers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, policy)
+	return err
 }
 
 func standardInference() inferenceSpeed {
@@ -44,7 +73,7 @@ func inferenceSetting(value map[string]any) (inferenceSpeed, bool) {
 				if result.ServiceTier != "" {
 					result.Source = speedFromTier
 				}
-				if result.ServiceTier == "priority" || result.ServiceTier == "fast" {
+				if fastTier(result.ServiceTier) {
 					result.Speed = inferenceFast
 				}
 				tierFound = true
@@ -86,7 +115,7 @@ func mergeInference(previous, update inferenceSpeed) inferenceSpeed {
 		if previous.ServiceTier != "" {
 			previous.Source = speedFromTier
 		}
-		if previous.ServiceTier == "priority" || previous.ServiceTier == "fast" {
+		if fastTier(previous.ServiceTier) {
 			previous.Speed = inferenceFast
 		}
 	}
@@ -99,8 +128,16 @@ func messageInference(message MessageRecord) (inferenceSpeed, bool) {
 	result, recorded := standardInference(), false
 	if message.SpeedSource != "" || message.Speed != "" || message.ServiceTier != "" {
 		result = inferenceSpeed{Speed: inferenceStandard, ServiceTier: strings.ToLower(strings.TrimSpace(message.ServiceTier)), Source: message.SpeedSource, tierRecorded: message.ServiceTier != ""}
-		if strings.EqualFold(message.Speed, "fast") || (message.Speed == "" && result.ServiceTier == "priority") {
+		if strings.EqualFold(message.Speed, "fast") || (message.Speed == "" && fastTier(result.ServiceTier)) {
 			result.Speed = inferenceFast
+		}
+		if message.SpeedSource == speedFromTier && result.ServiceTier != "" {
+			// A speed taken from the tier follows the current policy, so a
+			// replay of stored messages applies a change to fastTiers.
+			result.Speed = inferenceStandard
+			if fastTier(result.ServiceTier) {
+				result.Speed = inferenceFast
+			}
 		}
 		switch result.Source {
 		case speedFromField, speedFromTier, speedAssumedStandard:

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Try examples of how Pharos explains missing or older data.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="analysis-readiness.css?v=4">
+  <title>Pharos · Data update examples</title>
+</head>
+<body>
+  <div class="prototype-strip"><span class="prototype-dot"></span><strong>Design preview</strong><span>Example data and updates.</span><button type="button" id="theme-toggle" aria-label="Switch to dark theme">Dark theme</button></div>
+  <header class="mast">
+    <div class="brand"><svg viewBox="0 0 48 48" aria-hidden="true"><polygon points="20.5,10 20.5,13.4 47,21 47,2.4" fill="#dcb466" opacity=".42"/><polygon points="10.4,45 25.6,45 24.1,29.2 11.9,29.2" fill="#eadcbc"/><rect x="15.9" y="39.4" width="4.2" height="5.6" rx="2.1" fill="#203f31"/><rect x="10.8" y="27.4" width="14.4" height="2.4" rx=".8" fill="#dcb466"/><polygon points="13,27.6 23,27.6 22.2,20.4 13.8,20.4" fill="#eadcbc"/><rect x="13.2" y="18.9" width="9.6" height="2.1" rx=".7" fill="#dcb466"/><rect x="15.4" y="15.2" width="5.2" height="4" fill="#eadcbc"/><rect x="15.2" y="9.2" width="5.6" height="5.4" rx=".9" fill="#dcb466"/><path d="M14.6 9.7Q14.9 5.9 18 5.3Q21.1 5.9 21.4 9.7Z" fill="#eadcbc"/></svg><div>Pharos<small>A LIBRARY OF YOUR WORK</small></div></div>
+    <div class="mast-location"><span class="library-dot"></span>My library <span class="mast-muted">/</span> <span class="mast-muted">This Mac</span></div>
+    <div id="page-freshness" class="page-freshness"></div>
+  </header>
+
+  <div class="workspace">
+    <aside class="rail" aria-label="Prototype examples">
+      <div class="rail-label">TRY THESE VIEWS</div>
+      <nav id="surfaces">
+        <button type="button" data-surface="banner" aria-current="page"><span class="nav-glyph" aria-hidden="true">▤</span><span>Analysis page<small>Chart or table</small></span></button>
+        <button type="button" data-surface="empty"><span class="nav-glyph" aria-hidden="true">◌</span><span>Empty state<small>First analysis</small></span></button>
+        <button type="button" data-surface="card"><span class="nav-glyph" aria-hidden="true">▦</span><span>Dashboard cards<small>Within a dashboard</small></span></button>
+      </nav>
+      <div class="rail-actions"><a href="#map-all">Processing map <span aria-hidden="true">↗</span></a><a href="#settings">Settings <span aria-hidden="true">↗</span></a></div><div class="rail-bottom"><span class="rail-mini-mark">03</span><p>A window onto<br>moving data.</p><small>Check the top bar for the whole page, or an icon for one result.</small></div>
+    </aside>
+
+    <main>
+      <div class="review-bar"><div><span class="review-label">TRY A STATE</span><label for="scenario">Update example</label><select id="scenario" data-scenario-control>
+        <option value="minutes">A few minutes behind</option><option value="hours">A few hours behind</option><option value="days">A few days behind</option><option value="clear">Up to date</option><option value="unknown">Update status unavailable</option><option value="paused">Automatic updates paused</option><option value="busy">Waiting for 10 quiet minutes</option><option value="cpu">Processor busy</option><option value="gpu">Graphics processor busy</option><option value="running">Update in progress</option><option value="failed">Last update failed</option><option value="rendered-old">New results ready; old results still shown</option><option value="unavailable">Update request fails</option>
+      </select></div><button type="button" id="reset" class="quiet-button">Reset example <span aria-hidden="true">↺</span></button></div>
+      <div id="screen"></div>
+      <footer class="review-foot"><span>DATA UPDATES · DESIGN PREVIEW</span><p>Example time: 10:24 AM. Change the view to see the page’s update status change. All activity and capacity numbers are examples.</p></footer>
+    </main>
+  </div>
+
+  <dialog id="processing-dialog" aria-labelledby="processing-title" aria-describedby="processing-description">
+    <div class="dialog-heading"><div id="dialog-heading-content"></div><button type="button" class="icon-button close-dialog" aria-label="Close update details" data-action="close">×</button></div>
+    <div id="dialog-review-controls" class="dialog-review-controls"></div>
+    <div id="dialog-content" class="dialog-content"></div>
+    <div id="dialog-footer" class="dialog-footer"></div>
+  </dialog>
+  <div class="sr-only" id="announcer" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script src="analysis-readiness-model.js?v=4"></script>
+  <script src="analysis-readiness.js?v=4"></script>
+</body>
+</html>

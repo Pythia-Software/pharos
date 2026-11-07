@@ -322,6 +322,8 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
+	"/assets/data-guide.js":        {"data-guide.js", "text/javascript; charset=utf-8"},
+	"/assets/data-guide.css":       {"data-guide.css", "text/css; charset=utf-8"},
 	"/assets/query-tables.js":      {"query-tables.js", "text/javascript; charset=utf-8"},
 	"/assets/query-tables.css":     {"query-tables.css", "text/css; charset=utf-8"},
 	"/assets/onboarding.js":        {"onboarding.js", "text/javascript; charset=utf-8"},
@@ -350,6 +352,17 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/page-errors.js":       {"page-errors.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.js":   {"managed-library.js", "text/javascript; charset=utf-8"},
 	"/assets/managed-library.css":  {"managed-library.css", "text/css; charset=utf-8"},
+
+	// Application icons shown in the Data Guide.
+	"/assets/data-guide-apps/calculator.png": {"data-guide-apps/calculator.png", "image/png"},
+	"/assets/data-guide-apps/chatgpt.png":    {"data-guide-apps/chatgpt.png", "image/png"},
+	"/assets/data-guide-apps/claude.png":     {"data-guide-apps/claude.png", "image/png"},
+	"/assets/data-guide-apps/codex.png":      {"data-guide-apps/codex.png", "image/png"},
+	"/assets/data-guide-apps/conductor.png":  {"data-guide-apps/conductor.png", "image/png"},
+	"/assets/data-guide-apps/cursor.png":     {"data-guide-apps/cursor.png", "image/png"},
+	"/assets/data-guide-apps/notes.png":      {"data-guide-apps/notes.png", "image/png"},
+	"/assets/data-guide-apps/safari.png":     {"data-guide-apps/safari.png", "image/png"},
+	"/assets/data-guide-apps/vscode.png":     {"data-guide-apps/vscode.png", "image/png"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -368,6 +381,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeEmbeddedAsset(w, asset.name, asset.contentType)
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
+	case path == "/api/providers":
+		writeJSON(w, map[string]any{"providers": providerInfos(), "capabilities": contentCapabilityList}, http.StatusOK)
 	case path == "/api/probe/tools":
 		home, _ := os.UserHomeDir()
 		writeJSON(w, map[string]any{"tools": probeTools(home, s.Config())}, http.StatusOK)
@@ -775,15 +790,15 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// in the background; progress is reported by /api/tools/status. A
 		// release stops it between conversations; the next build resumes.
 		started := s.start(OperationSpec{Kind: "tools.ledger.build", Trigger: triggerUser}, func(ctx context.Context, op *Op) error {
-			op.Plan(StepPlan{Name: "Build the Tools ledger", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild the Tools rollup", Total: -1})
-			op.Step("Build the Tools ledger", "conversation", -1)
+			op.Plan(StepPlan{Name: "Build the tool index", Unit: "conversation", Total: -1}, StepPlan{Name: "Rebuild tool summaries", Total: -1})
+			op.Step("Build the tool index", "conversation", -1)
 			_, err := s.Catalog.BackfillToolLedger(ctx, func(done, total int) {
-				op.progress("Build the Tools ledger", "", "conversation", float64(done), float64(total), total > 0)
+				op.progress("Build the tool index", "", "conversation", float64(done), float64(total), total > 0)
 			})
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Tool ledger build: %v\n", err)
 			}
-			op.Step("Rebuild the Tools rollup", "", -1)
+			op.Step("Rebuild tool summaries", "", -1)
 			rollup := s.Catalog.ensureToolRollup(ctx)
 			if rollup != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", rollup)
@@ -840,6 +855,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"enabled": enabled}, http.StatusOK)
 	case path == "/api/probe/accept":
 		s.acceptProbe(w, body)
+	case path == "/api/sources/import":
+		s.importSource(w, body)
 	case path == "/api/probe":
 		s.probeSelected(w, body)
 	case path == "/api/sources/sync":
@@ -859,6 +876,17 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.syncSources(w, []SourceConfig{source})
+	case strings.HasPrefix(path, "/api/sources/") && strings.HasSuffix(path, "/remove"):
+		name, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(path, "/api/sources/"), "/remove"))
+		name = strings.TrimSuffix(name, "/")
+		var request probeRequestError
+		if err := s.removeSource(name); errors.As(err, &request) {
+			writeError(w, err, http.StatusBadRequest)
+		} else if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+		} else {
+			writeJSON(w, map[string]any{"ok": true, "source": name, "removed": true}, http.StatusOK)
+		}
 	case strings.HasPrefix(path, "/api/sources/") && strings.HasSuffix(path, "/enabled"):
 		name, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(path, "/api/sources/"), "/enabled"))
 		name = strings.TrimSuffix(name, "/")
@@ -971,6 +999,28 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 	return nil
 }
 
+// removeSource deletes one of this Mac's sources from its host file, then
+// reloads the sources, so a same-named source in library.toml that it
+// replaced applies again. What was captured and indexed from it stays in
+// the library.
+func (s *Server) removeSource(name string) error {
+	config := s.Config()
+	index := slices.IndexFunc(config.Sources, func(source SourceConfig) bool { return source.Name == name })
+	if index < 0 {
+		return probeRequestError{fmt.Errorf("configured source not found: %s", name)}
+	}
+	if file := config.Sources[index].File; file == "" || file != hostConfigPath(config) {
+		return probeRequestError{fmt.Errorf("%s is set up for every Mac in %s; remove it there", name, defaultString(file, config.Path))}
+	}
+	hostFileMu.Lock()
+	err := RemoveSource(config.Sources[index].File, name)
+	hostFileMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.reloadSources()
+}
+
 func (s *Server) sourceInventory() (map[string]any, error) {
 	var ingestedDocuments, totalConversations int
 	if err := s.Catalog.reader().QueryRow(`SELECT
@@ -993,6 +1043,16 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		return nil, err
 	}
 	config := s.Config()
+	// A host source replaces a same-named one in library.toml, which applies
+	// again when the host source is removed.
+	shared := map[string]SourceConfig{}
+	if config.Library && config.Path != "" {
+		if sources, err := readSourceBlocks(config.Path, filepath.Dir(config.Path)); err == nil {
+			for _, source := range sources {
+				shared[source.Name] = source
+			}
+		}
+	}
 	items := []map[string]any{}
 	enabled := 0
 	for _, source := range config.Sources {
@@ -1019,7 +1079,22 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 		}
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
 		item["preservation_mode"] = preservationMode(source)
+		// Only this Mac's own sources can be removed from Settings.
+		item["scope"] = "library"
+		if source.File != "" && source.File == hostConfigPath(config) {
+			item["scope"] = "host"
+			if replaced, ok := shared[source.Name]; ok {
+				item["replaces"] = map[string]any{"path": nilIfEmpty(replaced.Path), "enabled": replaced.Enabled}
+			}
+		}
+		if spec, ok := providerFor(source.Kind); ok {
+			item["tool"] = spec.DisplayName
+			item["not_recorded"], item["sometimes_recorded"] = spec.contentLimits()
+		}
 		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)
+		if reads := sqliteFallbackReads(source.Path); len(reads) > 0 {
+			item["sqlite_reads"] = reads
+		}
 		items = append(items, item)
 		if source.Enabled {
 			enabled++

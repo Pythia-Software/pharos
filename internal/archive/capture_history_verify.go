@@ -99,7 +99,7 @@ func historyViewAdapter(ctx context.Context, root string, u historyUnit) (Adapte
 	view := newCaptureView(m.Host, dir, m)
 	view.noLocalLookups = true
 	view.evidenceRevision = filepath.Base(filepath.Dir(u.Path))
-	path, ok := view.captured(m.Source.Path)
+	path, ok := view.capturedSource(m.Source)
 	if !ok {
 		return nil, errors.New("unmapped history source root")
 	}

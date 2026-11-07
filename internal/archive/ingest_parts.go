@@ -26,6 +26,10 @@ type sourcePart struct {
 	version int64
 	// signal digests anything else the part's record is built from.
 	signal string
+	// metadata marks a part read only for the record's name and place, such
+	// as Copilot's workspace.yaml: a newer copy of it must not make an older
+	// copy of the conversation look newer (retainedRecordIdentity).
+	metadata bool
 }
 
 // partialAdapter can parse only the parts of a source that changed.

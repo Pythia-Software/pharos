@@ -1,3 +1,4 @@
+import { DataReadinessIndicator } from "./data-readiness";
 import { formatUSD } from "./currency";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
@@ -753,7 +754,7 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
   return <div className="findings-detail-grid">
     <section className="findings-panel findings-chart-panel" aria-labelledby="findingsChartTitle">
       {chart ? <>
-        <div className="findings-panel-head"><h2 id="findingsChartTitle"><Text text={chart.title} />, by week</h2></div>
+        <div className="findings-panel-head"><h2 id="findingsChartTitle"><Text text={chart.title} />, by week <DataReadinessIndicator id="findings:weekly" title={chart.title} dataset="findings" /></h2></div>
         <WeeklyChart chart={chart} unit={unit} copiedLabel="Prompt copied" />
         {caption ? <p className="findings-caption">{caption}</p> : null}
         <WeeksTable chart={chart} unit={unit} />
@@ -1048,8 +1049,8 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
   const showCart = route.list !== "wins";
   return <div className="findings-page">
     <div className="view-heading findings-heading">
-      <div><h1>Efficiency</h1>
-        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or a harness setting can fix. Each is measured before and after you hand it to an agent.</p>
+      <div><h1>Efficiency <DataReadinessIndicator id="findings:overview" title="Efficiency" dataset="findings" query={route} /></h1>
+        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or an agent app setting can fix. Each is measured before and after you hand it to an agent.</p>
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
     </div>

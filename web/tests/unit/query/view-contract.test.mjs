@@ -1,3 +1,4 @@
+import {dataEntities,dataEntityGroups,dataSources,describeDataSource,resolveGuideEntity} from '../../../src/data-taxonomy-model';
 import searchCases from '../../../../testdata/search-draft-cases.json';
 import timelineVisibilityCases from '../../../../testdata/timeline-visibility-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
@@ -436,4 +437,22 @@ test('a linked Findings rank applies without saving; a manual choice saves the d
  assert.deepEqual(findingsRank('','tokens'),{rank:'tokens'},'an unlinked view shows the saved default');
  assert.deepEqual(findingsRank('',undefined),{rank:'usd'});
  assert.deepEqual(findingsRank('minutes','usd','tokens'),{rank:'tokens',save:{rank:'tokens'}});
+});
+
+
+test('every guide term and dataset round-trips through the shared view contract',()=>{
+ const grouped=dataEntityGroups.flatMap(group=>group.entities);
+ assert.equal(new Set(grouped).size,grouped.length);
+ assert.deepEqual([...grouped].sort(),Object.keys(dataEntities).sort());
+ for(const term of grouped)assert.equal(parseViewValue(viewFields.guide_entity,encodeViewValue(viewFields.guide_entity,term)),term);
+ for(const [dataset,source]of Object.entries(dataSources)){
+  assert.ok(dataEntities[source.entity],dataset);
+  assert.equal(parseViewValue(viewFields.guide_dataset,encodeViewValue(viewFields.guide_dataset,dataset)),dataset);
+ }
+ for(const [oldTerm,noun]of [['datasets','conversations'],['labels','messages'],['findings','conversations'],['model_requests','tokens'],['execution_machines','machines']]){
+  const linked=parseViewValue(viewFields.guide_entity,oldTerm);
+  assert.equal(resolveGuideEntity(linked),noun,'older guide links still open the related history');
+ }
+ assert.equal(describeDataSource('parallelism','workspace').entity,'workspaces');
+ assert.equal(describeDataSource('parallelism','agent').entity,'conversations');
 });

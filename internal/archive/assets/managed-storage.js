@@ -6,7 +6,7 @@
   const scope = window.pharosManagedSession;
   if (!scope) return;
   const stored = window.pharosPreferenceValues;
-  if (!stored) throw new Error('Could not load this library’s saved UI session. Reconnect before editing.');
+  if (!stored) throw new Error('Could not load this library’s saved view settings. Reconnect before editing.');
   const raw = window.localStorage;
   const names = new Set(['pharos-ui-feedback-v1', 'pharos-ui-feedback-draft-v1',
     'pharos-ui-feedback-layout-v1', 'pharos-feedback-enabled', 'pharos-history-v1', 'pharos-nav-open']);
@@ -16,7 +16,7 @@
       ? [[key.slice(scope.preferences.length), value]] : []));
   let pending = new Map(), saving = null, timer;
   const warn = error => {
-    console.warn('Could not save this library’s UI session:', error);
+    console.warn('Could not save this library’s view settings:', error);
     window.dispatchEvent(new CustomEvent('pharos:session-save-error', {detail: String(error)}));
   };
   async function flush() {
@@ -34,7 +34,7 @@
       const body = JSON.stringify({set, delete: remove});
       const response = await fetch('/api/preferences', {method: 'POST',
         headers: {'Content-Type': 'application/json'}, body, keepalive: body.length < 60000});
-      if (!response.ok) throw new Error('Session save failed (HTTP ' + response.status + '). Keep Pharos open and retry.');
+      if (!response.ok) throw new Error('Saving view settings failed (HTTP ' + response.status + '). Keep Pharos open and retry.');
       for (const key of batch.keys()) raw.removeItem(scope.legacy + key);
     })();
     try { await saving; }

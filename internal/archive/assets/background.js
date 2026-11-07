@@ -443,6 +443,7 @@
   function renderItem(item, model) {
     const entry = node('div', 'bg-item');
     entry.dataset.item = item.id;
+    entry.id = 'background-' + item.id;
     if (item.id && item.state !== 'disabled') {
       entry.draggable = true;
       entry.ondragstart = event => {

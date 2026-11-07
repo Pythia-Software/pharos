@@ -45,7 +45,7 @@ func (a *tl1Adapter) installations() ([]tl1Installation, error) {
 	if a.view != nil {
 		return a.capturedInstallations(), nil
 	}
-	rows, err := tl1RegistryRows(a.config.Path, os.ReadFile)
+	rows, err := tl1RegistryRows(a.config.Path, a.files().ReadFile)
 	if err != nil {
 		return nil, err
 	}
@@ -56,9 +56,9 @@ func (a *tl1Adapter) installations() ([]tl1Installation, error) {
 		if database == "" || configPath == "" || repository == "" {
 			continue
 		}
-		dbInfo, dbErr := os.Stat(database)
-		configInfo, configErr := os.Stat(configPath)
-		repoInfo, repoErr := os.Stat(repository)
+		dbInfo, dbErr := a.files().Stat(database)
+		configInfo, configErr := a.files().Stat(configPath)
+		repoInfo, repoErr := a.files().Stat(repository)
 		if ephemeralTL1(a.config.Path, repository) || dbErr != nil || configErr != nil || repoErr != nil || !dbInfo.Mode().IsRegular() || !configInfo.Mode().IsRegular() || !repoInfo.IsDir() {
 			continue
 		}
@@ -183,7 +183,7 @@ func (a *tl1Adapter) capturedInstallations() []tl1Installation {
 		if seen[key] || installation.CapturedDB == "" || ephemeralTL1(a.view.manifest.Source.Path, installation.CodeRepo) {
 			continue
 		}
-		if info, err := os.Stat(database); err != nil || !info.Mode().IsRegular() {
+		if info, err := a.files().Stat(database); err != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		seen[key] = true
@@ -277,7 +277,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 		collect(installation.Database)
 		collect(installation.Database + "-wal")
 		if installation.Transcripts != "" {
-			_ = filepath.WalkDir(installation.Transcripts, func(path string, entry os.DirEntry, e error) error {
+			_ = a.files().WalkDir(installation.Transcripts, func(path string, entry os.DirEntry, e error) error {
 				if e == nil && !entry.IsDir() && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
 					collect(path)
 				}
@@ -336,11 +336,7 @@ func (a *tl1Adapter) readsEveryIndex(string) bool { return true }
 
 func (a *tl1Adapter) database(installation tl1Installation, emit func(WorkspaceRecord) error) (tl1Snapshot, error) {
 	snapshot := tl1Snapshot{Installation: a.recorded(installation), Account: a.config.Account}
-	readable, err := a.files().Database(installation.Database)
-	if err != nil {
-		return snapshot, err
-	}
-	db, err := openReadOnlySQLite(readable)
+	db, err := a.files().SQLite(installation.Database)
 	if err != nil {
 		return snapshot, err
 	}
@@ -571,7 +567,7 @@ func (a *tl1Adapter) transcriptFiles(installation tl1Installation, taskID string
 	if installation.Transcripts == "" {
 		return nil
 	}
-	entries, err := os.ReadDir(filepath.Join(installation.Transcripts, taskID))
+	entries, err := a.files().ReadDir(filepath.Join(installation.Transcripts, taskID))
 	if err != nil {
 		return nil
 	}
@@ -767,8 +763,6 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 
 // codexExecTranscript reports whether path holds `codex exec --json` events
 // (thread.started/item.completed/turn.completed) rather than a rollout file.
-func codexExecTranscript(path string) bool { return sourceFiles{}.codexExecTranscript(path) }
-
 func (s sourceFiles) codexExecTranscript(path string) bool {
 	file, err := s.Open(path)
 	if err != nil {
@@ -788,9 +782,6 @@ func (s sourceFiles) codexExecTranscript(path string) bool {
 // Codex attempts. Only completed items are kept; turn.completed usage feeds
 // token accounting through its raw event. origin is the path the file stands
 // for (see baseAdapter.original), which its origin and evidence locators name.
-func parseCodexExec(path, origin string, initialEffort ...string) (ConversationRecord, bool, error) {
-	return sourceFiles{}.parseCodexExec(path, origin, initialEffort...)
-}
 
 // parseCodexExec reads through the capture view, as jsonlAdapter.parseFile.
 func (s sourceFiles) parseCodexExec(path, origin string, initialEffort ...string) (ConversationRecord, bool, error) {

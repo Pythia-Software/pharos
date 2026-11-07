@@ -60,11 +60,11 @@ test("switching grouped presets keeps the original source and drops old HAVING a
 });
 
 test("work identity and unknown effort remain separate", () => {
-  assert.equal(run("Work").total, 2, "Identical titles must not merge workspaces");
+  assert.equal(run("Workspace").total, 2, "Identical titles must not merge workspaces");
   assert.equal(run("Model + effort").total, 2);
   assert.ok(run("Model + effort").rows.some(row => row.effort === null));
-  assert.equal(run("Work").rows[0].usage_work_title,"Same title");
-  assert.equal(preset("Work").grouping.representative,null,"A workspace title is constant across its facts; no representative scan is needed");
+  assert.equal(run("Workspace").rows[0].usage_work_title,"Same title");
+  assert.equal(preset("Workspace").grouping.representative,null,"A workspace title is constant across its facts; no representative scan is needed");
 });
 
 test("price differences use matched price pairs and preserve unpriced usage", () => {
@@ -83,11 +83,11 @@ test("preset highlighting follows manual edits but ignores result presentation a
 });
 
 test("the Work preset links each title to its work and keeps link columns out of server requests", () => {
-  const query = applyUsageTablePreset(EMPTY_QUERY, preset("Work"));
+  const query = applyUsageTablePreset(EMPTY_QUERY, preset("Workspace"));
   const link = query.grouping.summaries.find(column => column.op === "link");
   assert.equal(query.select[0].field, link.id);
   assert.deepEqual(link.link, { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } });
   assert.deepEqual(decodeQueryStrict(encodeQuery(query)).grouping.summaries, query.grouping.summaries);
-  assert.equal(usageTablePresetMatches(query, preset("Work")), true);
+  assert.equal(usageTablePresetMatches(query, preset("Workspace")), true);
   assert.equal(usageTablePresetMatches(query, preset("Repositories")), false);
 });
