@@ -1,0 +1,543 @@
+{
+  "baseline_commit": "cb2ee633ff2c2afd789dd0cd981c8033731bea77",
+  "catalog_compatibility_floor": 23,
+  "interactive_reads": "Outside background admission; existing query admission remains authoritative. Structural writes initiated by reads use the classified domain owner.",
+  "tasks": [
+    {
+      "kind": "index.changes.automatic",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "index.changes.manual",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "background.update",
+      "execution_class": "coordinator",
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    {
+      "kind": "background.capture",
+      "execution_class": "coordinator",
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    {
+      "kind": "capture.this-mac",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "capture.cli",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "index.captures",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "library.update",
+      "execution_class": "coordinator",
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    {
+      "kind": "library.rebuild",
+      "execution_class": "coordinator",
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    {
+      "kind": "index.verify",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "index.sources.legacy",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "ingest.cli",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "host.add",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "capture.history-backfill",
+      "execution_class": "source",
+      "scope": "source/evidence group",
+      "boundary": "existing capture/provider transaction",
+      "inputs": "accepted source evidence and recovery checkpoints",
+      "accepted_quality": "accepted evidence / committed indexed inputs / audit outcome"
+    },
+    {
+      "kind": "analysis.chain",
+      "execution_class": "coordinator",
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    {
+      "kind": "analysis.github",
+      "execution_class": "global",
+      "scope": "library",
+      "boundary": "existing coarse pass with safe writes",
+      "inputs": "complete required relational context",
+      "accepted_quality": "complete domain generation; estimates separate from refinement"
+    },
+    {
+      "kind": "analysis.identities",
+      "execution_class": "global",
+      "scope": "library",
+      "boundary": "existing coarse pass with safe writes",
+      "inputs": "complete required relational context",
+      "accepted_quality": "complete domain generation; estimates separate from refinement"
+    },
+    {
+      "kind": "analysis.git",
+      "execution_class": "partition",
+      "scope": "workspace/repository",
+      "boundary": "existing domain partition and publication",
+      "inputs": "identity/origin/committed workspace context",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "analysis.tools",
+      "execution_class": "partition",
+      "scope": "workspace/repository",
+      "boundary": "existing domain partition and publication",
+      "inputs": "identity/origin/committed workspace context",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "analysis.authorship",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "analysis.authorship.refine",
+      "execution_class": "global",
+      "scope": "library",
+      "boundary": "existing coarse pass with safe writes",
+      "inputs": "complete required relational context",
+      "accepted_quality": "complete domain generation; estimates separate from refinement"
+    },
+    {
+      "kind": "analysis.labels",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "analysis.agent_events",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "analysis.findings",
+      "execution_class": "global",
+      "scope": "library",
+      "boundary": "existing coarse pass with safe writes",
+      "inputs": "complete required relational context",
+      "accepted_quality": "complete domain generation; estimates separate from refinement"
+    },
+    {
+      "kind": "analysis.refresh",
+      "execution_class": "coordinator",
+      "scope": "plan",
+      "boundary": "child boundary",
+      "inputs": "child scopes",
+      "accepted_quality": "child accepted qualities"
+    },
+    {
+      "kind": "maintenance.library-view",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "maintenance.previews",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "maintenance.parallelism",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "maintenance.cache-warm",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.search.substring",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.search.tool-output",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.search.text",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.search.tools",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.search.query",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.labels.query",
+      "execution_class": "population",
+      "scope": "conversation",
+      "boundary": "whole conversation / bounded dirty batch",
+      "inputs": "committed conversation inputs and domain revisions",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "maintenance.upgrade-count",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.checkpoint",
+      "execution_class": "essential",
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    },
+    {
+      "kind": "maintenance.origins",
+      "execution_class": "global",
+      "scope": "library",
+      "boundary": "existing coarse pass with safe writes",
+      "inputs": "complete required relational context",
+      "accepted_quality": "complete domain generation; estimates separate from refinement"
+    },
+    {
+      "kind": "maintenance.mcp-history",
+      "execution_class": "essential",
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    },
+    {
+      "kind": "ask.save",
+      "execution_class": "essential",
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    },
+    {
+      "kind": "ask.suggestions",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "ask.models",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "maintenance.capture-compress",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "drive.measure",
+      "execution_class": "maintenance",
+      "scope": "domain index/cache",
+      "boundary": "existing bounded cursor or file",
+      "inputs": "domain version and current source generation",
+      "accepted_quality": "domain readiness marker"
+    },
+    {
+      "kind": "catalog.initialize",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.upgrade",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "catalog.repair",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "repositories.merge",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "analysis.agent_events.import",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "tools.ledger.build",
+      "execution_class": "partition",
+      "scope": "workspace/repository",
+      "boundary": "existing domain partition and publication",
+      "inputs": "identity/origin/committed workspace context",
+      "accepted_quality": "domain stored outputs"
+    },
+    {
+      "kind": "backup.local",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "cloud.connect",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "cloud.upload",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "cloud.verify",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "cloud.reconcile",
+      "execution_class": "essential",
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    },
+    {
+      "kind": "cloud.restore",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.transfer",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.recover",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.compact",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.deliver",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.deliver.capture",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.adopt",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "library.create",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "service.start",
+      "execution_class": "essential",
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    },
+    {
+      "kind": "library.release",
+      "execution_class": "essential",
+      "scope": "service/library",
+      "boundary": "short persistence/finalization boundary",
+      "inputs": "durability and request ownership",
+      "accepted_quality": "durably committed state"
+    },
+    {
+      "kind": "labels.fetch",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    },
+    {
+      "kind": "app.update",
+      "execution_class": "specialized",
+      "scope": "protocol-defined",
+      "boundary": "existing locks / recovery protocol",
+      "inputs": "protocol-owned preconditions",
+      "accepted_quality": "protocol-owned completion"
+    }
+  ]
+}
