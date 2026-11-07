@@ -58,6 +58,14 @@ func Run(arguments []string) error {
 	if command == "cloud-restore" {
 		return runCloudRestoreCLI(args)
 	}
+	// Capture export reads a capture root and writes an outbox it is given:
+	// it never loads a configuration or opens a library or catalog.
+	if command == "capture-export" {
+		return runCaptureExportCLI(args)
+	}
+	if command == "capture-export-verify" {
+		return runCaptureExportVerifyCLI(args)
+	}
 	// Labeling never opens the catalog through OpenCatalog: prepare reads a
 	// read-only snapshot, and plan and status read only a dataset.
 	if command == "labeling" {
@@ -538,7 +546,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {
