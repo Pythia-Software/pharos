@@ -7,30 +7,38 @@ import { assets, loadClassicScript } from "./helpers/classic-script.mjs";
 import { safeURL, boundedLog, changeTags, pendingSubmission, normalizeEntry } from "../../src/uifeedback/model.ts";
 import { annotationForUpload, createAskFeedbackSender, feedbackReceipt, restoreReview } from "../../src/uifeedback/pharos-model.ts";
 
-test('report copy waits for native success, clears stale notices and restores copy state', async () => {
+test('report copy runs once while pending, settles before reporting and allows a retry', async () => {
   const source=readFileSync(join(assets,'../../../web/src/uifeedback/inbox.tsx'),'utf8');
   const copySource=source.slice(source.indexOf('  async function copyReport()'),source.indexOf('\n  async function mutate('));
   for(const outcome of ['native','native-failure','browser-denial']){
-    const transfer=Promise.withResolvers(),writes=[];let browserCalls=0;
+    const transfers=[],writes=[];let browserCalls=0;
+    const transfer=()=>{const pending=Promise.withResolvers();transfers.push(pending);return pending.promise;};
     const window=loadClassicScript('host-services.js',{
-      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer.promise;}}}}}),
-      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer.promise:Promise.reject(Error('Browser denied'));}}},
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer();}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer():Promise.reject(Error('Browser denied'));}}},
     }).window;
     const detail={id:'report',comment:'A report\nwith source text',annotations:[]};
-    let copying=false,notice='Previous success',error='Previous failure';
+    // The guard is a ref, so presses before React re-renders see it too.
+    const copyPending={current:false};let copying=false,notice='Previous success',error='Previous failure';
     const copy=vm.runInNewContext(copySource+';copyReport',{
-      window,detail,get copying(){return copying;},setCopying:value=>{copying=value;},setNotice:value=>{notice=value;},setError:value=>{error=value;},
+      window,detail,copyPending,setCopying:value=>{copying=value;},setNotice:value=>{notice=value;},setError:value=>{error=value;},
     });
-    const pending=copy();
-    assert.equal(copying,true);assert.equal(notice,'');assert.equal(error,'');
-    await copy();assert.equal(writes.length+browserCalls,1);
-    if(outcome==='native')transfer.resolve(true);else transfer.reject(Error('Copy denied'));
-    await pending;
-    assert.equal(copying,false);
-    if(outcome==='native'){assert.ok(notice);assert.equal(error,'');}
-    else {assert.equal(notice,'');assert.match(error,/could not copy/i);}
-    assert.deepEqual(writes,outcome==='browser-denial'?[]:[JSON.stringify(detail,null,2)]);
-    assert.equal(browserCalls,outcome==='browser-denial'?1:0);
+    // The first attempt settles with the outcome; a retry then succeeds.
+    for(const succeed of outcome==='native'?[true]:[false,true]){
+      const started=transfers.length;
+      const pending=copy();
+      assert.equal(copying,true);assert.equal(notice,'');assert.equal(error,'');
+      await copy();await copy();
+      assert.equal(transfers.length,started+1,'repeat presses while pending do not start another write');
+      if(succeed)transfers.at(-1).resolve(true);else transfers.at(-1).reject(Error('Copy denied'));
+      await pending;
+      assert.equal(copying,false);assert.equal(copyPending.current,false);
+      if(succeed){assert.ok(notice);assert.equal(error,'');}
+      else {assert.equal(notice,'');assert.match(error,/could not copy/i);}
+    }
+    const attempts=outcome==='native'?1:2;
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:Array(attempts).fill(JSON.stringify(detail,null,2)));
+    assert.equal(browserCalls,outcome==='browser-denial'?attempts:0);
   }
 });
 
