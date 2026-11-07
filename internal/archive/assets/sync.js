@@ -4,6 +4,7 @@
   let busy = false;
   let timer = null;
   let activeRun = null;
+  let verificationRun = null;
   let runningIds = new Set();
   let openIssues = [];
   const node = (tag, text, className = '') => {
@@ -98,7 +99,7 @@
     .sync-separate>summary{cursor:pointer;font-size:var(--fs-sm);color:var(--muted)}
     #syncDashboard fieldset{border:0;padding:0;margin:14px 0 0}
     #syncDashboard legend{font-size:var(--fs-sm);color:var(--muted);margin-bottom:8px}
-    .sync-warning{border:1px solid var(--warn);padding:14px;border-radius:6px}
+    .sync-warning{border:1px solid var(--warn);padding:14px;border-radius:6px;overflow-wrap:anywhere}
     .sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}
     .sync-dialog::backdrop{background:#0008}
     .header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}
@@ -140,6 +141,13 @@
     document.body.append(dialog);
     dialog.showModal();
   }
+
+  const verify = (repair, sources) => call('/api/sync/verify', {all: true, repair, sources});
+  const verificationSummary = run => {
+    const v = run?.verification;
+    if (!v) return '';
+    return `Verification ${run.state === 'running' ? 'in progress' : run.state === 'interrupted' ? 'stopped' : run.state === 'failed' ? 'failed' : 'finished'}: ${number(v.checked)} inputs checked · ${number(v.passed)} passed · ${number(v.reindexed || 0)} reindexed · ${number(v.mismatch)} still mismatch · ${number(v.deferred)} deferred · ${number(v.errors)} errors.`;
+  };
 
   // Whether a run among `followed` (the ids running at the last poll) has
   // since finished having indexed something. A run that has left the list
@@ -200,10 +208,12 @@
     for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
     // The schedule (Background Processing) is background.js's, at the top.
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
-    repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
+    repairs.append(node('p', 'Verify all & repair mismatches checks every available input, reindexes only confirmed mismatches, then verifies them again. Inputs that pass stay untouched. Full verification can take a long time and can be stopped.', 'muted'));
     const actions = node('div', '', 'sync-actions');
-    actions.append(button('Full recapture & reindex…', () => recovery('full')), button('Reindex from stored messages…', () => recovery('retained')), button('Verify all retained inputs', () => call('/api/sync/verify', {all: true})));
+    actions.append(button('Verify all & repair mismatches', () => verify(true)), button('Verify all retained inputs', () => verify(false)), button('Full recapture & reindex…', () => recovery('full')), button('Reindex from stored messages…', () => recovery('retained')));
+    for (const action of actions.children) action.disabled = Boolean(status.busy);
     repairs.append(actions);
+    if (verificationRun?.verification) dashboard.append(node('p', verificationSummary(verificationRun), 'sync-verification-summary'));
     for (const job of status.recovery_jobs || []) {
       const line = node('p', `${job.mode} repair: ${job.state} · last progress ${when(job.updated_at)}${job.error ? ` · ${job.error}` : ''}`);
       const resume = button('Resume repair', () => recovery(job.mode, undefined, job.id));
@@ -222,13 +232,17 @@
     dashboard.append(repairs);
     for (const issue of status.issues || []) {
       const warning = node('div', '', 'sync-warning');
-      warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), button('View details / copy diagnostics', async () => {
+      warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), node('p', 'Verify this source again to check whether the mismatch still exists. Repair reindexes only inputs that still mismatch and clears each warning after verification passes.'));
+      const issueActions = node('div', '', 'sync-actions');
+      issueActions.append(button('Verify this source again', () => verify(false, [issue.source_name])), button('Verify & repair this source', () => verify(true, [issue.source_name])), button('View details / copy diagnostics', async () => {
         const data = await call('/api/sync/issues');
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
         dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), button('Copy diagnostics', () => navigator.clipboard.writeText(JSON.stringify(details, null, 2))), button('Close', () => dialog.close()));
         dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
       }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
+      for (const action of issueActions.children) action.disabled = Boolean(status.busy);
+      warning.append(issueActions);
       dashboard.prepend(warning);
     }
     if (focused) [...dashboard.querySelectorAll('[data-sync-focus]')].find(element => element.dataset.syncFocus === focused)?.focus({preventScroll: true});
@@ -239,6 +253,7 @@
     busy = true;
     try {
       const activity = await call('/api/activity');
+      verificationRun = (activity.runs || []).find(run => run.kind === 'verification') || verificationRun;
       renderHeader(activity);
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
@@ -268,6 +283,6 @@
   window.addEventListener('pharos:route', () => refresh());
   window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
-    finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};
+    finishedRunsChanged, runningRun, preservationState, verificationSummary, format: {seconds, memory, when, number, percent}};
   refresh();
 })();
