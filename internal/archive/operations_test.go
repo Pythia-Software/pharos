@@ -110,6 +110,36 @@ func TestOperationLifecycleFollowsTheContract(t *testing.T) {
 	}
 }
 
+func TestOperationSkippedResourcesAndSharedReferencesStayFinite(t *testing.T) {
+	clock := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	reg := newOpRegistry("service")
+	reg.now = func() time.Time { return clock }
+	reg.telemetry, reg.resourceLedger = true, newTaskResourceLedger(20, 200)
+	_, op := reg.begin(t.Context(), OperationSpec{Kind: "analysis.labels", Variant: "batch"})
+	if op.resources.identity.Batch != string(op.ID()) {
+		t.Fatal("the profile lost its batch identity")
+	}
+	for range 100 {
+		op.linkWork(newOpID())
+	}
+	if view := op.view(); len(view.SharedWork) != 64 || view.SharedWorkOmitted != 36 {
+		t.Fatalf("unbounded shared references: %d + %d", len(view.SharedWork), view.SharedWorkOmitted)
+	}
+	clock = clock.Add(3 * time.Second)
+	op.Skip("nothing-to-do")
+	clock = clock.Add(time.Hour)
+	op.linkWork(newOpID())
+	op.setNeededBy([]OpID{newOpID()})
+	op.Finish(nil)
+	view := op.view()
+	if view.Resources.Time["elapsed"].Value == nil || *view.Resources.Time["elapsed"].Value != 3 || len(view.SharedWork) != 64 || len(view.NeededBy) != 0 {
+		t.Fatalf("a terminal operation continued accounting: %+v", view.Resources)
+	}
+	if summaries := reg.resourceLedger.export("analysis.labels", clock).Tasks; len(summaries) != 1 || summaries[0].State != opSkipped {
+		t.Fatalf("skip did not finalize its resource record once: %+v", summaries)
+	}
+}
+
 // An invalid transition or an unknown kind fails a test; in production it is
 // logged, the old state is kept, and the unknown kind records as unknown.
 func TestOperationProgrammingErrorsAreLoggedInProduction(t *testing.T) {
@@ -368,5 +398,72 @@ func TestCloudReconcilePassIsForgottenWhenNothingChanged(t *testing.T) {
 	}
 	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool { return view.Spec.Kind == "cloud.reconcile" && view.State == opSucceeded }) {
 		t.Fatalf("a tick that recorded a lost run left no operation: %+v", server.ops.views())
+	}
+}
+
+// Shared execution uses an independent live root. Retention also defends
+// against a legacy caller finishing a parent before its child has drained.
+func TestOperationRetentionKeepsActiveDescendants(t *testing.T) {
+	reg := newOpRegistry("service")
+	at := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return at }
+	reg.keepEnded = time.Minute
+	_, requester := reg.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, child := requester.Child(OperationSpec{Kind: "analysis.labels"})
+	requester.Finish(context.Canceled)
+	at = at.Add(2 * time.Hour)
+	// Force the count and age pruning paths, including unwritten-journal caps.
+	for range 205 {
+		_, other := reg.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+		other.Finish(nil)
+	}
+	reg.mu.Lock()
+	reg.pruneLocked()
+	reg.mu.Unlock()
+	if reg.find(requester.id) == nil || reg.find(child.id) == nil {
+		t.Fatal("retention forgot active descendant")
+	}
+	views := reg.views()
+	byID := map[OpID]opView{}
+	for _, view := range views {
+		byID[view.ID] = view
+	}
+	root := requester.view()
+	if !root.ActiveDescendants {
+		t.Fatal("terminal root did not disclose its active child")
+	}
+	entry := operationEntry(root, byID, at)
+	if len(entry["children"].([]map[string]any)) != 1 {
+		t.Fatal("activity hid active descendant")
+	}
+	child.Finish(nil)
+	reg.mu.Lock()
+	reg.pruneLocked()
+	reg.mu.Unlock()
+	if reg.find(requester.id) != nil || reg.find(child.id) != nil {
+		t.Fatal("drained tree did not retire")
+	}
+}
+
+func TestOperationBatchChildrenStayBounded(t *testing.T) {
+	reg := newOpRegistry("service")
+	override(t, &maxEndedChildren, 4)
+	_, root := reg.begin(context.Background(), OperationSpec{Kind: "analysis.labels"})
+	_, active := root.Child(OperationSpec{Kind: "analysis.labels"})
+	for range 20 {
+		_, child := root.Child(OperationSpec{Kind: "analysis.labels"})
+		child.Finish(nil)
+	}
+	reg.mu.Lock()
+	reg.pruneLocked()
+	reg.mu.Unlock()
+	if reg.find(active.id) == nil {
+		t.Fatal("batch pruning lost an active worker")
+	}
+	if len(reg.views()) > 6 {
+		t.Fatal("long-lived execution accumulated every ended batch")
+	}
+	if len(root.view().Children) > 5 {
+		t.Fatal("root retained unbounded batch references")
 	}
 }

@@ -38,6 +38,10 @@ type cliOperations struct {
 	leaseStale atomic.Bool
 	// leaseWrites counts lease rewrites, for tests.
 	leaseWrites atomic.Int64
+	// authority is the process's CPU authority under the scheduled engine
+	// (cliWorkAuthority), which the command's leaves admit from; nil under
+	// classic, and for leases taken without a configuration.
+	authority *workAuthority
 }
 
 // cliFinalBudget bounds the final journal round at exit.
@@ -53,7 +57,15 @@ func beginCLIOperations(config Config, catalog *Catalog, command string, kinds .
 	if catalog != nil {
 		dir = dirs[0]
 	}
-	return beginCLIOperationsIn([]string{dir}, nil, catalog, command, kinds...)
+	ops, err := beginCLIOperationsIn([]string{dir}, nil, catalog, command, kinds...)
+	if err == nil {
+		ops.authority = cliWorkAuthority(config)
+		if ops.authority != nil {
+			ops.reg.telemetry = true
+			ops.reg.resourceLedger = newTaskResourceLedger(20, 200)
+		}
+	}
+	return ops, err
 }
 
 // beginCLIOperationsIn takes command's lease in each of dirs, naming the
@@ -260,7 +272,7 @@ func (ops *cliOperations) run(spec OperationSpec, work func(ctx context.Context,
 		spec.Trigger = triggerCLI
 	}
 	defer ops.close()
-	ctx, op := ops.begin(context.Background(), spec)
+	ctx, op := ops.begin(withWorkAuthority(context.Background(), ops.authority), spec)
 	func() {
 		defer func() {
 			if value := recover(); value != nil {
@@ -298,7 +310,8 @@ func runLeasedCatalog(config Config, command string, spec OperationSpec, open fu
 	if err != nil {
 		return err
 	}
-	ctx, op := ops.begin(context.Background(), spec)
+	ops.authority = cliWorkAuthority(config)
+	ctx, op := ops.begin(withWorkAuthority(context.Background(), ops.authority), spec)
 	initialize := op
 	if !read {
 		_, initialize = op.Child(OperationSpec{Kind: "catalog.initialize", Trigger: triggerCLI})

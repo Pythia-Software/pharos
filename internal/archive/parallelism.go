@@ -235,8 +235,15 @@ func parallelismPeriod(now time.Time) (start, end time.Time, cutoff string) {
 const parallelismDirtySQL = `SELECT d.conversation_id,d.revision,c.id IS NOT NULL AND (c.ended_at IS NULL OR c.ended_at>=?) needed
  FROM parallelism_dirty d LEFT JOIN conversations c ON c.id=d.conversation_id`
 
-func deriveParallelismBatch(ctx context.Context, q queryer, cutoff string, limit int) ([]parallelismDerived, error) {
-	dirty, err := queryMapsContext(ctx, q, parallelismDirtySQL+" LIMIT ?", cutoff, limit)
+// deriveParallelismBatch derives up to limit dirty conversations' activity.
+// A nil members list reads the whole queue; a non-nil one only those
+// conversations (an empty list reads nothing).
+func deriveParallelismBatch(ctx context.Context, q queryer, cutoff string, limit int, members []string) ([]parallelismDerived, error) {
+	query, args := parallelismDirtySQL+" LIMIT ?", []any{cutoff, limit}
+	if members != nil {
+		query, args = parallelismDirtySQL+" WHERE d.conversation_id IN (SELECT value FROM json_each(?)) ORDER BY d.conversation_id LIMIT ?", []any{cutoff, jsonText(members), limit}
+	}
+	dirty, err := queryMapsContext(ctx, q, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +309,7 @@ func (c *Catalog) refreshParallelism(ctx context.Context, limit int, wait bool) 
 		}
 		completed := maintenanceBatch(ctx, tx, "Measuring parallel work", "conversation", pending,
 			"SELECT count(*) FROM parallelism_dirty")
-		batch, err := deriveParallelismBatch(ctx, tx, cutoff, min(limit-done, parallelismBatch))
+		batch, err := deriveParallelismBatch(ctx, tx, cutoff, min(limit-done, parallelismBatch), nil)
 		_ = tx.Rollback()
 		if err != nil || len(batch) == 0 {
 			return done, err
@@ -326,7 +333,7 @@ func (c *Catalog) parallelismActivities(ctx context.Context, cutoff string) (map
 		return nil, err
 	}
 	defer tx.Rollback()
-	dirty, err := deriveParallelismBatch(ctx, tx, cutoff, -1)
+	dirty, err := deriveParallelismBatch(ctx, tx, cutoff, -1, nil)
 	if err != nil {
 		return nil, err
 	}

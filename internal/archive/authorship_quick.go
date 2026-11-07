@@ -154,15 +154,38 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 	if recent {
 		predicate, order = "sent_at>=?", "sent_at DESC,message_id"
 	}
+	n, _, err := c.quickAuthorshipRows(ctx, representative, `SELECT message_id,revision FROM authorship_pending WHERE `+predicate+` ORDER BY `+order+` LIMIT ?`, cutoff, limit)
+	return n, err
+}
+
+// quickAuthorshipSelected is quickAuthorshipBatch over the pending messages
+// of the given conversations, the most recently sent first. A message whose
+// row is gone cannot be attributed to a conversation; it stays for the
+// library-wide lanes.
+func (c *Catalog) quickAuthorshipSelected(ctx context.Context, representative map[string]string, conversations []string, limit int) (int, map[string]bool, error) {
+	return c.quickAuthorshipRows(ctx, representative, `SELECT p.message_id,p.revision FROM messages m JOIN authorship_pending p ON p.message_id=m.id
+  WHERE m.conversation_id IN (SELECT value FROM json_each(?)) ORDER BY p.sent_at DESC,p.message_id LIMIT ?`, jsonText(conversations), limit)
+}
+
+// quickAuthorshipRows estimates the pending rows source selects (message_id,
+// revision) and reports how many it read and their conversations. The batch
+// is stored only if none of their revisions changed meanwhile.
+func (c *Catalog) quickAuthorshipRows(ctx context.Context, representative map[string]string, source string, args ...any) (int, map[string]bool, error) {
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT p.message_id,p.revision,m.conversation_id,c.workspace_id,m.text,m.created_at,m.sender,m.role,m.kind,
   w.source_kind,c.harness,c.parent_id,s.source_hash,s.version,s.disposition,
   (SELECT l.parent_id FROM conversation_launches l WHERE l.child_id=c.id) launch_parent,
   (SELECT l.program FROM conversation_launches l WHERE l.child_id=c.id) launch_program
-  FROM (SELECT message_id,revision FROM authorship_pending WHERE `+predicate+` ORDER BY `+order+` LIMIT ?) p
+  FROM (`+source+`) p
   LEFT JOIN messages m ON m.id=p.message_id LEFT JOIN conversations c ON c.id=m.conversation_id
-  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN authorship_message_state s ON s.message_id=p.message_id`, cutoff, limit)
+  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN authorship_message_state s ON s.message_id=p.message_id`, args...)
 	if err != nil || len(rows) == 0 {
-		return 0, err
+		return 0, nil, err
+	}
+	read := map[string]bool{}
+	for _, row := range rows {
+		if id := asString(row["conversation_id"]); id != "" {
+			read[id] = true
+		}
 	}
 	inputs := []authorInput{}
 	ids := []string{}
@@ -217,35 +240,35 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 	}
 	templates, err := queryMapsContext(ctx, c.reader(), `SELECT key,sessions_json,days_json FROM authorship_templates WHERE key IN (SELECT value FROM json_each(?))`, jsonText(keys))
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for _, row := range templates {
 		use := &templateUse{}
 		if err := json.Unmarshal([]byte(asString(row["sessions_json"])), &use.sessions); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		if err := json.Unmarshal([]byte(asString(row["days_json"])), &use.days); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		classifier.templates[asString(row["key"])] = use
 	}
 	if len(inputs) > 0 {
 		classifier.questions, err = c.loadAuthorshipQuestionsBefore(ctx, sortedNameIDs(conversations), inputs[len(inputs)-1].SentAt)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
 	results := []authorResult{}
 	reportWork(ctx, "estimating your writing", "message", 0, len(inputs))
 	for i, input := range inputs {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		// Indexed lookup keeps typing-speed checks local to this conversation.
 		var previous string
 		err := c.reader().QueryRowContext(ctx, `SELECT created_at FROM messages WHERE conversation_id=? AND role='user' AND kind='message' AND created_at<? ORDER BY created_at DESC LIMIT 1`, input.ConversationID, formatTime(input.SentAt)).Scan(&previous)
 		if err != nil && err != sql.ErrNoRows {
-			return 0, err
+			return 0, nil, err
 		}
 		if at, ok := parseTime(previous); ok {
 			classifier.lastUserSent[input.ConversationID] = at
@@ -259,7 +282,7 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 	}
 	plan, err := c.planAuthorshipScopeMode(ctx, results, nil, nil, ids)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	err = c.writeTransaction(ctx, "save writing estimates", func(tx *sql.Tx) error {
 		// Check every token before writing: a source edit during classification
@@ -300,7 +323,7 @@ func (c *Catalog) quickAuthorshipBatch(ctx context.Context, representative map[s
 		}
 		return nil
 	})
-	return len(rows), err
+	return len(rows), read, err
 }
 
 // RefineAuthorship explicitly forces the complete historical classifier.

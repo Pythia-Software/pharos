@@ -1,0 +1,204 @@
+package archive
+
+import (
+	"context"
+	"encoding/json"
+	"runtime/pprof"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	labelrt "github.com/gbdubs/pharos/internal/labeler"
+)
+
+// The manager's shared warm worker is attributed only during verified
+// exclusive leases, including overlap with a caller without task telemetry.
+func TestTaskResourcesTrackActualLabelerOwnership(t *testing.T) {
+	c, _ := testCatalog(t)
+	c.ops = newOpRegistry("service")
+	c.ops.telemetry = true
+	settings := labelsTestSettings(t, "ok")
+	model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := labelrt.RunnerConfig{Worker: settings.Worker, Workers: 1, Threads: 1}
+	resources := newTaskResources(taskIdentity{Kind: "analysis.labels", ID: "first"}, time.Now)
+	runner, release, err := c.labelerRunner(withTaskResources(t.Context(), resources), settings, model, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	other, releaseOther, err := c.labelerRunner(t.Context(), settings, model, cfg)
+	if err != nil || other != runner {
+		t.Fatalf("a shared warm runner: %v", err)
+	}
+	releaseOther()
+	release()
+	if len(resources.helpers) == 0 || resources.helpers[0].Exclusive {
+		t.Fatal("overlapping use was attributed exclusively")
+	}
+	exclusive := newTaskResources(taskIdentity{Kind: "analysis.labels", ID: "second"}, time.Now)
+	warm, releaseWarm, err := c.labelerRunner(withTaskResources(t.Context(), exclusive), settings, model, cfg)
+	if err != nil || warm != runner {
+		t.Fatalf("a worker changed at an ordinary batch boundary: %v", err)
+	}
+	releaseWarm()
+	if len(exclusive.helpers) == 0 || !exclusive.helpers[0].Exclusive || len(c.labelerUses) != 0 {
+		t.Fatal("the next exclusive lease lost attribution or retained ownership")
+	}
+}
+
+// A task's record (docs/work-resource-accounting.md): the grant is kept apart
+// from usage, Go process CPU and memory stay shared rather than guessed, and
+// a helper's CPU is measured only over an exclusive ownership interval.
+func TestTaskResourcesKeepBasisAndAllocationApart(t *testing.T) {
+	clock := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	// A task on a path that opens no active span (a backup, a parent
+	// execution) has unmeasured active time, never a measured zero.
+	untracked := newTaskResources(taskIdentity{Kind: "backup", ID: "op0"}, now)
+	clock = clock.Add(time.Hour)
+	if active := untracked.view(clock).Time["active"]; active.Value != nil || active.Basis != basisUnavailable || active.Unit != "seconds" {
+		t.Fatalf("active time without spans is unknown: %+v", active)
+	}
+	r := newTaskResources(taskIdentity{Kind: "analysis.labels", ID: "op1", Batch: "b1"}, now)
+	ctx := withTaskResources(context.Background(), r)
+	if taskResourcesFrom(ctx) != r || taskResourcesFrom(context.Background()) != nil {
+		t.Fatal("the record follows ctx")
+	}
+	var missing *taskResources
+	missing.addRead(1)
+	missing.activeSpan()()
+	missing.holdBuffer(10)()
+	missing.helperStart(1, "x", true).end()
+
+	done := r.waitSpan(waitCapacity)
+	clock = clock.Add(3 * time.Second)
+	done()
+	done()
+	// Two concurrent admissions: 3 + 1 slots for five seconds, then 3 for
+	// five more, is 35 slot-seconds and a peak of four.
+	releaseThree := r.allocate(taskAllocation{CPUSlots: 3, GPU: 1})
+	releaseOne := r.allocate(taskAllocation{CPUSlots: 1})
+	outer := r.activeSpan()
+	inner := r.activeSpan()
+	clock = clock.Add(5 * time.Second)
+	if live := r.view(clock).Allocation.Current; live == nil || live.CPUSlots != 4 || live.GPU != 1 {
+		t.Fatalf("open grants add up: %+v", live)
+	}
+	releaseOne()
+	releaseOne()
+	inner()
+	clock = clock.Add(5 * time.Second)
+	outer()
+	releaseThree()
+	r.release()
+	clock = clock.Add(2 * time.Second)
+	r.progress("labels", "message", 40, 100)
+	r.progress("labels", "message", 30, 100)
+	r.addRead(1000)
+	r.addWritten(200)
+	free := r.holdBuffer(64)
+	r.holdBuffer(32)()
+	free()
+
+	usage := map[int]processUsage{77: {CPUSeconds: 10, Footprint: 500e6, Started: 9}}
+	read := func(pid int) (processUsage, error) {
+		value, ok := usage[pid]
+		if !ok {
+			return processUsage{}, syscall.ESRCH
+		}
+		return value, nil
+	}
+	helper := r.helperStartWith(77, "labeler", true, read)
+	usage[77] = processUsage{CPUSeconds: 12.5, Footprint: 600e6, Started: 9}
+	helper.end()
+	helper.end()
+	sharedHelper := r.helperStartWith(77, "labeler", true, read)
+	sharedHelper.shared()
+	sharedHelper.end()
+
+	view := r.view(clock)
+	if got := *view.Time["active"].Value; got != 10 {
+		t.Fatalf("overlapping spans count wall time once: %v", got)
+	}
+	if got := *view.Allocation.SlotSeconds.Value; got != 35 || view.Allocation.SlotSeconds.Basis != basisAllocated || view.Allocation.Current != nil || view.Allocation.PeakSlots != 4 {
+		t.Fatalf("slot-seconds are a grant, not use: %+v", view.Allocation)
+	}
+	if got := view.Waits[waitCapacity]; got.Value == nil || *got.Value != 3 {
+		t.Fatalf("capacity wait: %+v", view.Waits)
+	}
+	if view.Work["labels"].Done != 40 {
+		t.Fatalf("progress is cumulative: %+v", view.Work)
+	}
+	if *view.IO["logical_read_bytes"].Value != 1000 || view.IO["logical_read_bytes"].Basis != basisCounted {
+		t.Fatalf("logical IO is counted: %+v", view.IO)
+	}
+	if *view.Memory["owned_buffers_peak_bytes"].Value != 96 || *view.Memory["owned_buffers_bytes"].Value != 0 {
+		t.Fatalf("owned buffers: %+v", view.Memory)
+	}
+	if process := view.Memory["process"]; process.Value != nil || process.Basis != basisShared {
+		t.Fatalf("process memory is shared, not this task's: %+v", process)
+	}
+	if goCPU := view.CPU["go_process"]; goCPU.Value != nil || goCPU.Basis != basisShared {
+		t.Fatalf("Go CPU is shared: %+v", goCPU)
+	}
+	if helpers := view.CPU["helpers"]; helpers.Value == nil || *helpers.Value != 2.5 || helpers.Basis != basisMeasured || !strings.Contains(helpers.Coverage, "lower bound") {
+		t.Fatalf("exclusive helper CPU is measured; a shared interval makes it a lower bound: %+v", helpers)
+	}
+	if len(view.Helpers) != 2 || view.Helpers[1].CPU.Basis != basisShared {
+		t.Fatalf("each interval is listed with its basis: %+v", view.Helpers)
+	}
+	if gpu := view.GPU["time"]; gpu.Value != nil || gpu.Basis != basisUnavailable {
+		t.Fatalf("no GPU evidence is unavailable, not zero: %+v", gpu)
+	}
+
+	// A replaced helper is unavailable, never a negative or foreign delta.
+	replaced := r.helperStartWith(77, "labeler", true, read)
+	usage[77] = processUsage{CPUSeconds: 1, Started: 10}
+	replaced.end()
+	if last := r.view(clock).Helpers[2]; last.CPU.Value != nil || last.CPU.Basis != basisUnavailable {
+		t.Fatalf("replaced helper: %+v", last)
+	}
+
+	final := r.finish(opSucceeded, nil, "")
+	clock = clock.Add(time.Hour)
+	if again := r.view(clock); *again.Time["elapsed"].Value != *final.Time["elapsed"].Value || again.EndedAt == "" {
+		t.Fatalf("a finished record stops its clock: %+v", again.Time)
+	}
+	compact := final.compact()
+	data, err := json.Marshal(compact)
+	if err != nil || !strings.Contains(string(data), `"basis":"shared"`) || strings.Contains(string(data), "null") {
+		t.Fatalf("the journal record keeps bases and drops nulls: %s %v", data, err)
+	}
+}
+
+// The ledger keeps a bounded number of finished summaries per kind and in
+// all, and exports them with the basis vocabulary.
+func TestTaskResourceLedgerBounds(t *testing.T) {
+	ledger := newTaskResourceLedger(2, 3)
+	for i, kind := range []string{"a", "a", "a", "b", "b"} {
+		ledger.record(taskResourceView{Version: 1, Task: taskIdentity{Kind: kind, ID: string(rune('0' + i))}})
+	}
+	ledger.record(taskResourceView{})
+	all := ledger.export("", time.Now())
+	if len(all.Tasks) != 3 || all.Tasks[0].Task.ID != "2" || all.Tasks[2].Task.ID != "4" || all.Bases[basisShared] == "" {
+		t.Fatalf("bounded per kind and in total, newest last: %+v", all.Tasks)
+	}
+	if only := ledger.export("a", time.Now()); len(only.Tasks) != 1 || only.Kind != "a" {
+		t.Fatalf("one kind: %+v", only.Tasks)
+	}
+}
+
+// Profile labels name the task; empty fields are left out.
+func TestTaskProfileLabels(t *testing.T) {
+	got := map[string]string{}
+	pprof.Do(context.Background(), taskProfileLabels(taskIdentity{Kind: "analysis.labels", ID: "op1"}), func(ctx context.Context) {
+		pprof.ForLabels(ctx, func(key, value string) bool { got[key] = value; return true })
+	})
+	if len(got) != 2 || got["op_kind"] != "analysis.labels" || got["op_id"] != "op1" {
+		t.Fatalf("labels: %v", got)
+	}
+}

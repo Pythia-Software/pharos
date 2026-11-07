@@ -15,6 +15,17 @@ import (
 	"time"
 )
 
+// backgroundExplicitKey marks a background pass someone asked for (Run now).
+type backgroundExplicitKey struct{}
+
+func withBackgroundExplicit(ctx context.Context, explicit bool) context.Context {
+	return context.WithValue(ctx, backgroundExplicitKey{}, explicit)
+}
+func backgroundExplicit(ctx context.Context) bool {
+	explicit, _ := ctx.Value(backgroundExplicitKey{}).(bool)
+	return explicit
+}
+
 // Background Processing (docs/background-work.md §11). Every kind of derived
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
@@ -1102,6 +1113,9 @@ func backgroundSteps(ids []string) []StepPlan {
 // pass. It reports whether any item succeeded (and so may have changed
 // what pages show).
 func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence string, ids []string, plans []itemPlan) (succeeded bool, failure error) {
+	// Under population execution, Run now is explicit demand; a scheduled
+	// pass is ordinary live demand. Neither makes history foreground.
+	ctx = withBackgroundExplicit(ctx, cadence == "requested")
 	record := func(id string, started time.Time, err error) {
 		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
 		succeeded = succeeded || err == nil

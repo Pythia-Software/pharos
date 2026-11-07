@@ -28,7 +28,11 @@ import (
 // Disk is the change in bytes the process read and wrote over the same
 // wall time (its own: the kernel keeps no count for exited children).
 // Attribution stops at the process: which operation used the CPU is not
-// measured.
+// measured here (work_resources.go records what a task can honestly claim).
+//
+// Under the scheduled engine one owner per process tree also runs a history
+// collector (resources_history.go) on this same sampler. While it runs,
+// snapshots reuse its latest readings instead of sampling again.
 
 // resourceSampleInterval is the least time between two readings of one
 // process; a snapshot computed sooner reuses the last reading.
@@ -82,6 +86,25 @@ type resourceSampler struct {
 	byPID map[int]*resourceTrack
 	// reads counts system calls, for tests.
 	reads int
+	// staleGap overrides resourceStaleGap while a history collector reads
+	// at its idle cadence (0: resourceStaleGap).
+	staleGap time.Duration
+	// history is the collector sharing this sampler, if one was made.
+	history *resourceHistory
+}
+
+// gap is the longest interval that still gives a rate. Callers hold r.mu.
+func (r *resourceSampler) gap() time.Duration {
+	if r.staleGap > 0 {
+		return r.staleGap
+	}
+	return resourceStaleGap
+}
+
+func (r *resourceSampler) setStaleGap(gap time.Duration) {
+	r.mu.Lock()
+	r.staleGap = gap
+	r.mu.Unlock()
 }
 
 type resourceTrack struct {
@@ -118,10 +141,12 @@ type resourceReading struct {
 	// Text is the server's line for the process ("Library service · 12% of
 	// one core · 340 MB").
 	Text string `json:"text"`
-	// exact values, before rounding for the document.
+	// exact values, before rounding for the document; started identifies
+	// the process across PID reuse (0: unknown).
 	cpu, disk *float64
 	memory    uint64
 	at        time.Time
+	started   uint64
 }
 
 // resourceSummary is a snapshot's resources: the totals of its processes,
@@ -206,7 +231,7 @@ func (r *resourceSampler) sampleWithTable(processes []resourceProcess, table []p
 				}
 			case track == nil || track.err != nil || track.usage.Started != usage.Started:
 				track = &resourceTrack{at: now, usage: usage}
-			case now.Sub(track.at) > resourceStaleGap:
+			case now.Sub(track.at) > r.gap():
 				// An average over a long gap is not the current load.
 				track = &resourceTrack{at: now, usage: usage}
 			default:
@@ -245,7 +270,7 @@ func (r *resourceSampler) sampleWithTable(processes []resourceProcess, table []p
 			continue
 		}
 		reading := resourceReading{PID: process.PID, Role: process.Role, Library: process.Library, Basis: r.basis,
-			cpu: track.percent, disk: track.disk, memory: track.usage.Footprint, at: track.at}
+			cpu: track.percent, disk: track.disk, memory: track.usage.Footprint, at: track.at, started: track.usage.Started}
 		reading.CPUPercent, reading.MemoryBytes, reading.SampledAt = roundedPercent(track.percent), roundedBytes(track.usage.Footprint), formatTime(track.at)
 		reading.DiskBytesPerSecond = roundedRate(track.disk)
 		reading.Text = strings.Join(slices.DeleteFunc([]string{resourceRoleLabel(process), loadWords(track.percent, track.usage.Footprint)}, func(s string) bool { return s == "" }), " · ")
@@ -436,6 +461,8 @@ func resourceRoleLabel(process resourceProcess) string {
 	switch {
 	case process.Role == "broker":
 		return "Pharos app"
+	case process.Role == "native-app":
+		return "Pharos (Mac app)"
 	case process.Role == "service" && process.LibraryName != "":
 		return "Library service (" + process.LibraryName + ")"
 	case process.Role == "service":
@@ -494,10 +521,24 @@ func compactBytes(value uint64) string {
 // their PID is read from the lease file while its lock is held). Leases of
 // another Mac's processes (a library on a shared drive) are not this Mac's
 // to read.
+//
+// While a history collector runs on this service's sampler, its latest
+// summary is the snapshot's, so the two never read the processes twice.
 func (s *Server) serviceResources() *resourceSummary {
+	if s.resourceBrokerOwned {
+		return nil
+	}
+	if latest, ok := s.resources.history.latest(""); ok {
+		return latest
+	}
+	return withProcessGPU(summarizeResources("Pharos", s.resources.sample(s.serviceResourceProcesses())))
+}
+
+// serviceResourceProcesses are the roots a service samples: itself and its
+// library's live leases on this Mac.
+func (s *Server) serviceResourceProcesses() []resourceProcess {
 	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
-	processes = append(processes, leaseProcesses(s.leases.probe(false), "", "")...)
-	return withProcessGPU(summarizeResources("Pharos", s.resources.sample(processes)))
+	return append(processes, leaseProcesses(s.leases.probe(false), "", "")...)
 }
 
 // leaseProcesses are the live leases' processes on this Mac.

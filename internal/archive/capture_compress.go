@@ -55,7 +55,9 @@ var (
 	// captureCompressDelay after the service starts.
 	captureCompressInterval = 15 * time.Minute
 	captureCompressDelay    = 2 * time.Minute
-	// captureCompressThreads bounds the encoder's goroutines.
+	// captureCompressThreads bounds the encoder's goroutines: the most one
+	// encoding asks for. Under the scheduled engine it gets what its CPU
+	// admission grants, at least one.
 	captureCompressThreads = 4
 	// captureCompressAttempts is how many failed verifications of one
 	// generation a pass tolerates before it stops trying.
@@ -91,6 +93,9 @@ func compressCaptures(ctx context.Context, config Config, catalog *Catalog, done
 	if config.CaptureRoot == "" {
 		return nil
 	}
+	// Each encoding admits its own CPU (compressEntry), from the authority
+	// that answers here: the catalog's service when it has none of its own.
+	ctx = withWorkAuthority(ctx, workAuthorityFor(ctx, catalog))
 	sweepAbandonedLeases(config.CaptureRoot)
 	if config.PendingCapture {
 		return nil
@@ -558,6 +563,14 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if !original.Mode().IsRegular() || original.Size() != generation.Size {
 		return 0, nil // not what the manifest says; validation reports that
 	}
+	// Encoding and verification are the CPU leaf: admitted before the lease,
+	// released (the encoder's goroutines joined by its Close) before the
+	// capture lock, so a pass never holds slots while a capture runs.
+	grant, err := acquireWorkCPU(ctx, nil, 1, captureCompressThreads)
+	if err != nil {
+		return 0, err
+	}
+	defer grant.Release()
 	lease, leaseLock, err := lockedLease(target.Dir)
 	if err != nil {
 		return 0, err
@@ -576,13 +589,14 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 		return abandon(err)
 	}
 	writer := &spaceCheckedWriter{w: out, dir: target.Dir}
-	encoder, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(captureCompressLevel)), zstd.WithEncoderConcurrency(captureCompressThreads))
+	encoder, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(captureCompressLevel)), zstd.WithEncoderConcurrency(grant.Allocation.CPUs))
 	if err != nil {
 		out.Close()
 		return abandon(err)
 	}
 	digest := sha256.New()
 	n, err := io.Copy(encoder, io.TeeReader(&recordCountReader{r: source, ctx: ctx}, digest))
+	taskResourcesFrom(ctx).addRead(n)
 	if err == nil {
 		err = fault("compress-encode")
 	}
@@ -619,10 +633,15 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if err != nil {
 		return abandon(err)
 	}
+	taskResourcesFrom(ctx).addWritten(stored.Size())
+	taskResourcesFrom(ctx).addTemporary(stored.Size())
 	if stored.Size() >= generation.Size {
 		return abandon(fmt.Errorf("%w: %s", errCompressIncompressible, rel))
 	}
 	verified, size, err := capturedSHA256(ctx, encoded, captureEncodingZstd)
+	if err == nil {
+		taskResourcesFrom(ctx).addRead(stored.Size())
+	}
 	if err != nil && ctx.Err() == nil {
 		err = fmt.Errorf("%w: %s: %v", errCompressVerify, rel, err)
 	}
@@ -632,6 +651,7 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 	if err != nil {
 		return abandon(err)
 	}
+	grant.Release()
 
 	// A running capture holds the lock for its whole run: wait for it rather
 	// than discard the encoding.

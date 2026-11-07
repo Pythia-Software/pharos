@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -74,6 +75,10 @@ type Config struct {
 	// AgentEvents configures the agent events pass (docs/agent-events.md);
 	// it runs on the labeler's worker and budget.
 	AgentEvents AgentEventSettings
+	// WorkEngine is the process-start comparison choice. BackgroundCPUs is
+	// cooperative worker capacity for this process, not a machine-wide cap.
+	WorkEngine     string
+	BackgroundCPUs int
 }
 
 func defaultConfig(path string) Config {
@@ -86,6 +91,7 @@ func defaultConfig(path string) Config {
 		UpcomingDays: 23, EligibleDays: 30, SnoozeDays: 14, StagingCapBytes: 2_000_000_000,
 		CPUIDLECeiling: .35, IOMBPSCeiling: 25, YieldPollSeconds: 2,
 		CaptureRoot: filepath.Join(root, "captures"), CaptureGenerations: 1, CaptureCompressAfterDays: 14,
+		WorkEngine: "classic", BackgroundCPUs: runtime.NumCPU(),
 	}
 }
 
@@ -208,6 +214,24 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.Labels = labelerSettingsFrom(root, base)
 	config.AgentEvents = agentEventSettingsFrom(root, base)
 	config.Labels = config.AgentEvents.withPeer(config.Labels)
+	config.WorkEngine = stringValue(root, "work_engine", "classic")
+	if value := os.Getenv("PHAROS_WORK_ENGINE"); value != "" {
+		config.WorkEngine = value
+	}
+	if config.WorkEngine != "classic" && config.WorkEngine != "scheduled" {
+		return config, fmt.Errorf("work_engine must be classic or scheduled")
+	}
+	config.BackgroundCPUs = intValue(root, "background_cpu_slots", runtime.NumCPU())
+	if value := os.Getenv("PHAROS_BACKGROUND_CPUS"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return config, fmt.Errorf("PHAROS_BACKGROUND_CPUS must be a whole number")
+		}
+		config.BackgroundCPUs = parsed
+	}
+	if config.BackgroundCPUs < 1 || config.BackgroundCPUs > runtime.NumCPU() {
+		return config, fmt.Errorf("background_cpu_slots must be between 1 and %d", runtime.NumCPU())
+	}
 	for index := range config.Sources {
 		config.Sources[index].File = path
 	}

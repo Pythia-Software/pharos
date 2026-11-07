@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime/debug"
+	"runtime/pprof"
 	"time"
 )
 
@@ -44,7 +45,12 @@ func runOperation(op *Op, work func(ctx context.Context, op *Op) error) {
 		}
 	}()
 	var err error
-	op.RunIO(func() { err = work(op.Context(), op) })
+	invoke := func(ctx context.Context) { op.RunIO(func() { err = work(ctx, op) }) }
+	if op != nil && op.resources != nil {
+		pprof.Do(op.Context(), taskProfileLabels(op.resources.identity), invoke)
+	} else {
+		invoke(op.Context())
+	}
 	op.Finish(err)
 }
 
@@ -57,7 +63,7 @@ func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context
 // daemonNames lists the service's loops that are daemons, not operations
 // (§3.4): they hold nothing and are never shown, and each pass that does real
 // work starts an operation. The unregistered-work test accounts for them.
-var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes", "maintainMessageLabelFacts", "maintainFingerprintImages", "maintainFingerprintImagesSecondary",
+var daemonNames = []string{"workExecutor", "resourceHistory", "maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes", "maintainMessageLabelFacts", "maintainFingerprintImages", "maintainFingerprintImagesSecondary",
 	"keepWALSmall", "automaticLoop", "backgroundLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags", "compressCaptures"}
 
 // daemon runs a registered daemon loop in the background.

@@ -285,7 +285,11 @@ func messageLabelFactsSource(selector string, ledger bool) sqlDataset {
 	return live
 }
 
-func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int) (build messageLabelFactsBuild, err error) {
+// prepareMessageLabelFacts stages the next dirty conversations' facts within
+// a message budget. A nil members list takes them from the whole queue in
+// conversation order; a non-nil one only those conversations, and never
+// reports the facts ready (an empty selection is not the whole queue).
+func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int, members []string) (build messageLabelFactsBuild, err error) {
 	if err = tx.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&build.generation); err != nil {
 		return build, err
 	}
@@ -296,20 +300,27 @@ func prepareMessageLabelFacts(ctx context.Context, tx *sql.Tx, messages int) (bu
 			return build, err
 		}
 	}
+	selected, args := "", []any{messageLabelFactsBatch, max(1, messages)}
+	if members != nil {
+		selected, args = " WHERE conversation_id IN (SELECT value FROM json_each(?))", []any{jsonText(members), messageLabelFactsBatch, max(1, messages)}
+	}
 	if _, err = tx.ExecContext(ctx, `CREATE TEMP TABLE message_label_batch(conversation_id TEXT PRIMARY KEY) WITHOUT ROWID;
  INSERT INTO message_label_batch
  WITH candidates AS MATERIALIZED (
  SELECT conversation_id,(SELECT count(*) FROM messages m INDEXED BY messages_label_conversation_idx
  WHERE m.conversation_id=dirty.conversation_id AND `+messageLabelMessagePredicate+`) messages
- FROM message_label_facts_dirty dirty ORDER BY conversation_id LIMIT ?
+ FROM message_label_facts_dirty dirty`+selected+` ORDER BY conversation_id LIMIT ?
  ), budget AS (
  SELECT conversation_id,COALESCE(sum(messages) OVER (ORDER BY conversation_id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) previous
  FROM candidates
- ) SELECT conversation_id FROM budget WHERE previous<?`, messageLabelFactsBatch, max(1, messages)); err != nil {
+ ) SELECT conversation_id FROM budget WHERE previous<?`, args...); err != nil {
 		return build, err
 	}
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM message_label_batch").Scan(&build.conversations); err != nil {
 		return build, err
+	}
+	if build.conversations == 0 && members != nil {
+		return build, nil
 	}
 	if build.conversations == 0 {
 		var version string
@@ -415,6 +426,12 @@ func (c *Catalog) refreshMessageLabelFacts(ctx context.Context) (int, error) {
 }
 
 func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages int) (int, messageLabelFactsTiming, error) {
+	return c.refreshMessageLabelFactsOf(ctx, messages, nil)
+}
+
+// refreshMessageLabelFactsOf is refreshMessageLabelFactsBudget over members
+// (nil: the whole queue; see prepareMessageLabelFacts).
+func (c *Catalog) refreshMessageLabelFactsOf(ctx context.Context, messages int, members []string) (int, messageLabelFactsTiming, error) {
 	var timing messageLabelFactsTiming
 	conn, err := c.DB.Conn(ctx)
 	if err != nil {
@@ -434,14 +451,14 @@ func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages i
 		if err != nil {
 			return 0, timing, err
 		}
-		build, err := prepareMessageLabelFacts(ctx, read, messages)
+		build, err := prepareMessageLabelFacts(ctx, read, messages, members)
 		if err != nil {
 			_ = read.Rollback()
 			return 0, timing, err
 		}
 		err = read.Commit()
 		timing.prepare += time.Since(started)
-		if err != nil || build.conversations == 0 && build.ready {
+		if err != nil || build.conversations == 0 && (build.ready || members != nil) {
 			return 0, timing, err
 		}
 		started = time.Now()
@@ -457,10 +474,12 @@ func (c *Catalog) refreshMessageLabelFactsBudget(ctx context.Context, messages i
 			// Sustained source writes must not starve maintenance. After two
 			// stale snapshots, prepare this bounded batch under the writer.
 			if err == nil && generation != build.generation {
-				build, err = prepareMessageLabelFacts(ctx, tx, messages)
+				build, err = prepareMessageLabelFacts(ctx, tx, messages, members)
 			}
 		}
-		if err == nil {
+		// A selection another writer already published leaves nothing to
+		// store, and is no claim about the whole queue.
+		if err == nil && (members == nil || build.conversations > 0) {
 			err = publishMessageLabelFacts(ctx, tx, build, &timing)
 		}
 		if errors.Is(err, errMessageLabelFactsStale) {

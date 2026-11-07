@@ -112,6 +112,12 @@ func TestManagerSharesOneBudgetAcrossModels(t *testing.T) {
 	if _, memory, runners := manager.Usage(); runners != 1 || memory != 1600 {
 		t.Fatalf("%d runners, %d MB", runners, memory)
 	}
+	manager.Kill(b)
+	for _, slot := range b.pool.slots {
+		if slot.worker != nil && slot.worker.cmd.ProcessState == nil {
+			t.Fatal("Kill returned before the native worker was reaped")
+		}
+	}
 }
 
 // A smaller budget (on battery) stops idle runners over it and holds the
@@ -148,6 +154,30 @@ func TestManagerSetBudget(t *testing.T) {
 	manager.SetBudget(Budget{Threads: 4})
 	if got := manager.Budget(); got.Threads != 4 {
 		t.Fatalf("budget %+v", got)
+	}
+	active, releaseActive, err := manager.Runner(t.Context(), model, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Retire()
+	if _, _, runners := manager.Usage(); runners != 1 {
+		t.Fatal("a deliberate change stopped a runner still in use")
+	}
+	if _, _, err := manager.Runner(t.Context(), model, cfg); !errors.Is(err, ErrBudget) {
+		t.Fatalf("a retiring configuration accepted another user: %v", err)
+	}
+	releaseActive()
+	if _, _, runners := manager.Usage(); runners != 0 {
+		t.Fatal("the retiring runner stayed resident after its last release")
+	}
+	fresh, releaseFresh, err := manager.Runner(t.Context(), model, cfg)
+	if err != nil || fresh == active {
+		t.Fatalf("a deliberate change reused the retired configuration: %v", err)
+	}
+	releaseFresh()
+	manager.Retire()
+	if _, _, runners := manager.Usage(); runners != 0 {
+		t.Fatal("idle configurations survived retirement")
 	}
 }
 

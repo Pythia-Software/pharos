@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"path/filepath"
@@ -2297,5 +2298,73 @@ func TestAuthorshipQuickHistoryInterruptionKeepsRecentProgress(t *testing.T) {
 	want, _, _ = reopened.authorshipGenerations()
 	if err := reopened.UpdateAuthorship(t.Context(), want); err != nil || reopened.authorshipQuickPending() {
 		t.Fatalf("history restart: %v", err)
+	}
+}
+
+// A selected step estimates only its conversations' messages, keeps the
+// revision guard, and publishes the estimate generation only once the whole
+// queue is empty.
+func TestAuthorshipEstimatesForSelectedConversations(t *testing.T) {
+	c, _ := testCatalog(t)
+	c.now = func() time.Time { return authorAt(60) }
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('recent','w','codex','local','recent'),('history','w','codex','local','history')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
+ ('r1','recent','r1','user','message','Please fix the login form','2026-10-30T12:00:00.000Z','r1'),
+ ('h1','history','h1','user','message','Add a settings page','2026-01-01T12:00:00.000Z','h1')`)
+	execTx(t, c.DB, `DELETE FROM meta WHERE key='authorship_quick_generation'`)
+	want, _, _ := c.authorshipGenerations()
+	pending := func(id string) bool {
+		t.Helper()
+		var n int
+		if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_pending WHERE message_id=?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+	if step, err := c.estimateAuthorshipFor(t.Context(), []string{}, want, 0); err != nil || len(step.Done) != 0 || !pending("r1") {
+		t.Fatalf("an empty selection did work: %+v %v", step, err)
+	}
+	// An edit during estimation keeps the whole batch queued; a one-message
+	// bound leaves it for the next step.
+	edited := false
+	ctx := withWorkProgress(t.Context(), func(work activityWork) {
+		if work.Phase == "estimating your writing" && work.Done == 1 && !edited {
+			edited = true
+			execSQL(t, c.DB, `UPDATE messages SET text='Please fix the signup form' WHERE id='r1'`)
+		}
+	})
+	step, err := c.estimateAuthorshipFor(ctx, []string{"recent"}, want, 1)
+	if err != nil || !edited || !slices.Equal(step.Superseded, []string{"recent"}) || !pending("r1") || countRows(t, c, `SELECT COUNT(*) FROM message_authorship`) != 0 {
+		t.Fatalf("an edit during the step: %+v %v", step, err)
+	}
+	if pending, _ := c.authorshipPendingFor(t.Context(), []string{"recent", "history", "unknown"}); !slices.Equal(pending, []string{"history", "recent"}) {
+		t.Fatalf("pending conversations: %v", pending)
+	}
+	step, err = c.estimateAuthorshipFor(t.Context(), []string{"recent"}, want, 0)
+	if err != nil || !slices.Equal(step.Done, []string{"recent"}) || pending("r1") || !pending("h1") {
+		t.Fatalf("the selected conversation: %+v %v", step, err)
+	}
+	var stored int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM message_authorship WHERE message_id='r1'`).Scan(&stored); err != nil || stored != 1 {
+		t.Fatalf("no estimate stored for the selection: %d %v", stored, err)
+	}
+	// Historical work outside the selection keeps the estimates incomplete.
+	if quick, _ := c.metaValue(t.Context(), "authorship_quick_generation"); quick != "" {
+		t.Fatalf("a selection published the estimate generation %q", quick)
+	}
+	if step, err := c.estimateAuthorshipFor(t.Context(), []string{"history"}, want, 0); err != nil || !slices.Equal(step.Done, []string{"history"}) {
+		t.Fatalf("the historical conversation: %+v %v", step, err)
+	}
+	if quick, _ := c.metaValue(t.Context(), "authorship_quick_generation"); quick != want {
+		t.Fatalf("an empty queue left the estimates unpublished: %q", quick)
+	}
+	// The classifier's lease held elsewhere is a busy step, not a failure.
+	c.authorship.rebuild.Lock()
+	_, err = c.estimateAuthorshipFor(t.Context(), []string{"recent"}, want, 0)
+	c.authorship.rebuild.Unlock()
+	if !errors.Is(err, errWorkDomainBusy) {
+		t.Fatalf("a held lease: %v", err)
 	}
 }

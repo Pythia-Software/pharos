@@ -132,17 +132,24 @@ type opStep struct {
 // transaction. They update memory under the registry's mutex and wake its
 // subscribers and journal writer.
 type Op struct {
-	reg    *opRegistry
-	id     OpID
-	spec   OperationSpec
-	kind   *operationKind
-	parent *Op
-	root   *Op
-	ctx    context.Context
+	reg               *opRegistry
+	id                OpID
+	spec              OperationSpec
+	kind              *operationKind
+	parent            *Op
+	root              *Op
+	ctx               context.Context
+	resources         *taskResources
+	resourceSummary   *taskResourceView
+	neededBy          []OpID
+	sharedWork        []OpID
+	sharedWorkOmitted int
+	workControlled    bool
 
 	// Guarded by reg.mu.
 	state, reason, detail, errText string
 	started, updated, ended        time.Time
+	runningSince                   time.Time
 	plan                           []StepPlan
 	step                           opStep
 	safePoint                      time.Duration
@@ -330,6 +337,11 @@ type opRegistry struct {
 	// (§10). The service and the broker set it; a registry without it leaves
 	// IO policy alone.
 	lowerIO bool
+	// Resource diagnostics are enabled with scheduled execution. They never
+	// establish freshness or add a journal write for a counter update.
+	telemetry       bool
+	resourceHistory *resourceHistory
+	resourceLedger  *taskResourceLedger
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -369,6 +381,16 @@ func (r *opRegistry) changedLocked(op *Op, boundary bool) {
 	}
 	if boundary {
 		r.boundary = true
+		if r.resourceHistory != nil {
+			r.resourceHistory.poke()
+			if op != nil && op.parent == nil && !op.runningSince.IsZero() {
+				event, at := "start", op.runningSince
+				if opTerminal(op.state) {
+					event, at = "end", op.ended
+				}
+				r.resourceHistory.mark(resourceHistoryMarker{At: at, Event: event, ID: string(op.id), Kind: op.spec.Kind, Variant: op.spec.Variant, Priority: op.spec.Priority, Trigger: op.spec.Trigger})
+			}
+		}
 	}
 	for sub := range r.subs {
 		select {
@@ -472,9 +494,21 @@ func (r *opRegistry) register(ctx context.Context, spec OperationSpec, tentative
 		op.spec.Priority = defaultString(kind.Priority, priorityBackground)
 	}
 	op.started = r.clock()
+	if op.state == opRunning {
+		op.runningSince = op.started
+	}
 	op.updated = op.started
 	op.duringRelease = releasing
 	op.ctx = withOp(ctx, op)
+	if r.telemetry {
+		batch := ""
+		if op.spec.Variant == "batch" {
+			batch = string(op.id)
+		}
+		op.resources = newTaskResources(taskIdentity{Kind: op.spec.Kind, ID: string(op.id), Root: string(op.root.id),
+			Batch: batch, Priority: op.spec.Priority, Trigger: op.spec.Trigger}, r.clock)
+		op.ctx = withTaskResources(op.ctx, op.resources)
+	}
 	r.ops[op.id] = op
 	r.pruneLocked()
 	if tentative {
@@ -532,7 +566,10 @@ func (op *Op) discard() {
 func (r *opRegistry) pruneLocked() {
 	ended := []*Op{}
 	for _, op := range r.ops {
-		if op.parent == nil && opTerminal(op.state) {
+		if op.parent == nil {
+			r.pruneChildrenLocked(op)
+		}
+		if op.parent == nil && opTerminal(op.state) && !op.activeDescendantsLocked() {
 			ended = append(ended, op)
 		}
 	}
@@ -557,6 +594,34 @@ func (r *opRegistry) pruneLocked() {
 	}
 }
 
+// Batches can keep an execution root alive for hours. Keep bounded recent
+// child detail while preserving every active descendant and allowing the
+// journal its existing bounded opportunity to write terminal records.
+var maxEndedChildren = 200
+
+func (r *opRegistry) pruneChildrenLocked(op *Op) {
+	if len(op.children) <= maxEndedChildren {
+		return
+	}
+	kept := op.children[:0]
+	for index, child := range op.children {
+		retire := index < len(op.children)-maxEndedChildren && opTerminal(child.state) && !child.activeDescendantsLocked()
+		if retire && r.journaled && child.treeUnwrittenLocked() && len(op.children)-index <= maxUnwrittenOperations {
+			retire = false
+		}
+		if retire {
+			if r.journaled && child.treeUnwrittenLocked() {
+				r.forgotten++
+			}
+			child.forgetLocked()
+		} else {
+			kept = append(kept, child)
+		}
+	}
+	clear(op.children[len(kept):])
+	op.children = kept
+}
+
 // maxUnwrittenOperations caps the ended operations kept for a journal that
 // keeps failing; tests lower it.
 var maxUnwrittenOperations = 2000
@@ -575,6 +640,18 @@ func (op *Op) forgetLocked() {
 	delete(op.reg.ops, op.id)
 }
 
+// An ended requester must never make live work disappear. Shared execution
+// has its own root; this also protects older callers that ended a parent
+// before its workers drained. Call with reg.mu held.
+func (op *Op) activeDescendantsLocked() bool {
+	for _, child := range op.children {
+		if !opTerminal(child.state) || child.activeDescendantsLocked() {
+			return true
+		}
+	}
+	return false
+}
+
 // transitionLocked moves op to state, or records a programming error and
 // keeps the old state.
 func (op *Op) transitionLocked(state string) bool {
@@ -586,6 +663,12 @@ func (op *Op) transitionLocked(state string) bool {
 		return false
 	}
 	op.state = state
+	if state == opRunning && op.runningSince.IsZero() {
+		op.runningSince = op.reg.clock()
+		if op.reg.resourceHistory != nil {
+			op.reg.resourceHistory.poke()
+		}
+	}
 	if opTerminal(state) {
 		op.ended = op.reg.clock()
 		op.safePointKnown = false
@@ -835,6 +918,7 @@ func (op *Op) SkipWith(reason, detail string) {
 	if op.state == opQueued || op.state == opRunning || op.state == opBlocked || op.state == opStopping {
 		op.state, op.reason = opSkipped, reason
 		op.ended = op.reg.clock()
+		op.finishResourcesLocked()
 		if detail != "" {
 			op.detail = detail
 		}
@@ -997,6 +1081,7 @@ func (op *Op) finishLocked(state, reason, text string) {
 	}
 	if state == opSkipped {
 		op.state, op.reason, op.ended = opSkipped, reason, op.reg.clock()
+		op.finishResourcesLocked()
 		return
 	}
 	if op.transitionLocked(state) {
@@ -1004,6 +1089,20 @@ func (op *Op) finishLocked(state, reason, text string) {
 		if state != opBlocked {
 			op.detail = ""
 		}
+		if opTerminal(state) {
+			op.finishResourcesLocked()
+		}
+	}
+}
+
+func (op *Op) finishResourcesLocked() {
+	if op.resources == nil || op.resourceSummary != nil {
+		return
+	}
+	summary := op.resources.finish(op.state, op.reg.resourceHistory, "")
+	op.resourceSummary = &summary
+	if op.reg.resourceLedger != nil && op.spec.Variant != "scheduled" && op.spec.Variant != "population-request" {
+		op.reg.resourceLedger.record(summary)
 	}
 }
 
@@ -1088,27 +1187,34 @@ func (r *opRegistry) markKindStopping(kinds ...string) {
 // opView is a copy of an operation's state, taken under the registry lock,
 // for snapshots, the verdict and the journal.
 type opView struct {
-	ID            OpID
-	Parent        OpID
-	Root          OpID
-	Spec          OperationSpec
-	Kind          *operationKind
-	Process       string
-	Instance      string
-	State         string
-	Reason        string
-	Detail        string
-	Error         string
-	Started       time.Time
-	Updated       time.Time
-	Ended         time.Time
-	Plan          []StepPlan
-	Step          opStep
-	SafePoint     time.Duration
-	SafePointSet  bool
-	Wrote         bool
-	UserStop      bool
-	DuringRelease bool
+	ID                OpID
+	Parent            OpID
+	Root              OpID
+	Spec              OperationSpec
+	Kind              *operationKind
+	Process           string
+	Instance          string
+	State             string
+	Reason            string
+	Detail            string
+	Error             string
+	Started           time.Time
+	RunningSince      time.Time
+	Updated           time.Time
+	Ended             time.Time
+	ActiveDescendants bool
+	Resources         *taskResourceView
+	NeededBy          []OpID
+	SharedWork        []OpID
+	SharedWorkOmitted int
+	WorkControlled    bool
+	Plan              []StepPlan
+	Step              opStep
+	SafePoint         time.Duration
+	SafePointSet      bool
+	Wrote             bool
+	UserStop          bool
+	DuringRelease     bool
 	// Sources are a mirrored index run's sources.
 	Sources  []string
 	Children []OpID
@@ -1129,6 +1235,19 @@ func (op *Op) viewLocked() opView {
 		Reason: op.reason, Detail: op.detail, Error: op.errText, Started: op.started, Updated: op.updated, Ended: op.ended, Plan: slices.Clone(op.plan),
 		Step: op.step, SafePoint: op.safePoint, SafePointSet: op.safePointKnown, Wrote: op.wrote, UserStop: op.userStop,
 		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative, Sources: slices.Clone(op.sources)}
+	if opTerminal(op.state) {
+		view.ActiveDescendants = op.activeDescendantsLocked()
+	}
+	if op.resourceSummary != nil {
+		copy := *op.resourceSummary
+		view.Resources = &copy
+	} else if op.resources != nil {
+		copy := op.resources.view(op.reg.clock())
+		view.Resources = &copy
+	}
+	view.NeededBy, view.SharedWork = slices.Clone(op.neededBy), slices.Clone(op.sharedWork)
+	view.SharedWorkOmitted, view.RunningSince = op.sharedWorkOmitted, op.runningSince
+	view.WorkControlled = op.workControlled
 	if op.parent != nil {
 		view.Parent = op.parent.id
 	}

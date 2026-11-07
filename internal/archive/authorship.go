@@ -199,10 +199,12 @@ func spanRule(span authorSpan) string {
 
 // authorshipState tracks the in-process rebuild.
 type authorshipState struct {
-	rebuild  sync.Mutex
-	mu       sync.Mutex
-	running  bool
-	refining bool
+	workRepresentatives    map[string]string
+	workPreparedGeneration string
+	rebuild                sync.Mutex
+	mu                     sync.Mutex
+	running                bool
+	refining               bool
 	// A bounded first pass must not be repeated by page polling.
 	estimatesAttempted bool
 	lastError          string

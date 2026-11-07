@@ -201,6 +201,7 @@ type managed struct {
 	gpu             int
 	lastUsed        time.Time
 	timer           *time.Timer
+	retired         bool
 }
 
 // NewManager makes a manager; idle is how long an unused runner keeps its
@@ -231,6 +232,9 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 	}
 	key := runnerKey(model, cfg)
 	if entry := m.runners[key]; entry != nil && entry.runner.pool.alive() {
+		if entry.retired {
+			return nil, nil, fmt.Errorf("%w: the previous runner is draining after a deliberate settings change", ErrBudget)
+		}
 		entry.users++
 		if entry.timer != nil {
 			entry.timer.Stop()
@@ -292,7 +296,7 @@ func (m *Manager) releaser(key string, entry *managed) func() {
 			if entry.users > 0 || m.runners[key] != entry {
 				return
 			}
-			if m.idle <= 0 {
+			if m.idle <= 0 || entry.retired {
 				m.dropLocked(key, entry, false)
 				return
 			}
@@ -304,6 +308,21 @@ func (m *Manager) releaser(key string, entry *managed) func() {
 				}
 			})
 		})
+	}
+}
+
+// Retire ends cached configurations after a deliberate allowance/settings
+// change. In-use workers drain before their last release; ordinary transient
+// capacity changes never call this, so batching keeps models warm.
+func (m *Manager) Retire() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, entry := range m.runners {
+		if entry.users == 0 {
+			m.dropLocked(key, entry, false)
+		} else {
+			entry.retired = true
+		}
 	}
 }
 
@@ -332,9 +351,9 @@ func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
 	}
 	if kill || entry.gpu > 0 {
 		entry.runner.pool.Kill()
-		if entry.gpu > 0 {
-			entry.runner.pool.Close()
-		}
+		// A caller may release its CPU grant as soon as Kill returns. Reap
+		// every helper first so no native compute outlives that ownership.
+		entry.runner.pool.Close()
 	} else {
 		go entry.runner.pool.Close()
 	}
