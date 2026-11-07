@@ -322,6 +322,7 @@ func isUIPage(path string) bool {
 
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
+	"/assets/host-services.js":     {"host-services.js", "text/javascript; charset=utf-8"},
 	"/assets/data-guide.js":        {"data-guide.js", "text/javascript; charset=utf-8"},
 	"/assets/data-guide.css":       {"data-guide.css", "text/css; charset=utf-8"},
 	"/assets/query-tables.js":      {"query-tables.js", "text/javascript; charset=utf-8"},

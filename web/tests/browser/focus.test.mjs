@@ -75,6 +75,7 @@ test('Library setup keeps focus in its modal and returns to the choice after can
   const {page, calls, shot} = await open(t, {url:'/app',ready:'#application-setup[open]',api:{
     'GET /api/app/state': {application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
     'POST /api/app/create': {saved:true},
+    'POST /api/app/choose-folder': {path:null},
   }});
   const dialog=page.locator('#application-setup');
   const focused=locator=>locator.evaluate(element=>element===document.activeElement);
@@ -102,6 +103,8 @@ test('Library setup keeps focus in its modal and returns to the choice after can
   await page.getByRole('button',{name:'Done editing library location',exact:true}).click();
   await page.getByRole('button',{name:'Edit library location',exact:true}).click();
   assert.ok(await focused(page.locator('#path')), 'editing the location did not focus its input');
+  await page.locator('#choose-folder').click();
+  await page.waitForFunction(() => document.activeElement === document.querySelector('#choose-folder') && !document.activeElement.disabled);
   await page.locator('#path').fill('/Volumes/Test SSD');
   await page.getByRole('button',{name:'Edit library name',exact:true}).click();
   assert.ok(await focused(page.locator('#name')), 'editing the library name did not focus its input');
@@ -115,7 +118,7 @@ test('Library setup keeps focus in its modal and returns to the choice after can
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   assert.ok(await focused(page.locator('#about-title')));
-  assert.ok(calls.every(call=>call.path==='/api/app/state'), 'setup wrote data before final review');
+  assert.ok(calls.every(call=>['/api/app/state','/api/app/choose-folder'].includes(call.path)), 'setup wrote data before final review');
 });
 
 const settingsLocal={id:'local',name:'Pending history',config:'/Libraries/Pending/library.toml',available:true,connected:true};
@@ -456,7 +459,7 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
     "GET /api/status/stream": eventStream(snapshot),
     "GET /api/status": ({ query }) => query.get("fresh") === "1" ? { ...snapshot, eject: fresh } : snapshot,
   } });
-  await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; } } } }; });
+  await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; return {released: true}; } } } }; });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library);
   await press(page.locator("#pharosDrive"));
   const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
@@ -2537,4 +2540,40 @@ test('Live data updates keep real backlog, existing results and first-build prog
  await details.getByRole('progressbar').first().waitFor();
  await details.getByRole('link',{name:'Update settings',exact:true}).click();
  await page.locator('#background-detail-conversations').waitFor();
+});
+
+for (const startup of [false, true]) test(`Host clipboard fallback restores focus and selection in the ${startup ? 'startup' : 'library'} shell`, {skip}, async t => {
+  const {page} = await open(t, startup ? {url:'/app', ready:'#application-setup[open]', api:{
+    'GET /api/app/state':{selected:'',libraries:[],busy:false},
+  }} : {url:'/settings', ready:'#healthCards .panel'});
+  // Exercise the actual textarea/execCommand path inside each rendered shell.
+  // A selected input in the modal also catches accidental focus escape.
+  const result = await page.evaluate(async startup => {
+    const input = document.createElement('input');
+    input.value = 'keep this selection';
+    document.querySelector(startup ? '#application-setup' : 'main').append(input);
+    input.focus();
+    input.setSelectionRange(2, 8, 'backward');
+    let copied;
+    document.addEventListener('copy', event => {
+      copied = {text:event.target.value, start:event.target.selectionStart, end:event.target.selectionEnd};
+    }, {once:true});
+    Object.defineProperty(navigator, 'clipboard', {configurable:true, value:undefined});
+    await (startup ? window.pharosHost.clipboard.writeText('copied') : window.pharosCopyText('copied'));
+    const result = {focused:document.activeElement === input, start:input.selectionStart, end:input.selectionEnd, direction:input.selectionDirection, copied};
+    input.remove();
+    return result;
+  }, startup);
+  assert.deepEqual(result, {focused:true, start:2, end:8, direction:'backward', copied:{text:'copied', start:0, end:6}});
+});
+
+test('Browser clipboard denial displays copy failure and leaves focus on the copy button', {skip}, async t => {
+  const {page} = await open(t, {url:'/settings', ready:'#healthCards .panel'});
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{writeText:async () => {throw new Error('Clipboard permission denied');}}});
+    document.querySelector('#navigator').classList.add('open');
+  });
+  await press(page.locator('#navigatorCopy'));
+  await page.locator('#feedbackToast.visible').waitFor();
+  assert.ok(await page.locator('#navigatorCopy').evaluate(element => element === document.activeElement));
 });

@@ -465,7 +465,7 @@
   const live = (target, content) => window.pharosLibrary?.updateLiveChildren ? window.pharosLibrary.updateLiveChildren(target, content) : target.replaceChildren(...content.childNodes);
   const chip = () => window.pharosLibrary?.ensureChip?.() || document.getElementById('pharosDrive');
   const anchor = () => window.headerToolAnchor?.(chip()) ?? chip();
-  const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
+  const nativeEjectAvailable = () => window.pharosHost.capabilities.eject.available;
   const toast = message => { if (typeof window.feedbackToast === 'function') window.feedbackToast(message); };
   const storeState = () => window.pharosStatusStore?.current() || null;
 
@@ -610,12 +610,10 @@
   }
 
   async function eject() {
-    const handler = nativeLibrary();
-    if (!handler) return;
     ejectState = {phase: 'ejecting', message: 'Releasing…'};
     render();
     try {
-      await handler.postMessage({action: 'eject'});
+      await window.pharosHost.lifecycle.requestEject();
       ejectState = {phase: 'ejecting', message: 'Ejecting…'};
     } catch (error) {
       ejectState = {phase: 'error', message: error?.message || String(error)};
@@ -627,7 +625,7 @@
     if (!panel) return;
     const state = storeState();
     for (const id of [...stopRequested]) if (!currentOperations(state?.view).some(operation => operation.id === id && operation.state !== 'stopping')) stopRequested.delete(id);
-    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeLibrary()), stopRequested,
+    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeEjectAvailable()), stopRequested,
       unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status: ${state.error.message}`) : null});
     const scrollTop = panel.scrollTop;
     const content = node('div');

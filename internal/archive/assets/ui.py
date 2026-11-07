@@ -361,6 +361,7 @@ APP_HTML = r'''<!doctype html>
     @media(max-width:760px){.health{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:500px){.health{grid-template-columns:1fr}.header-icons{flex:0 1 auto;min-width:0;flex-wrap:wrap;row-gap:6px}.navigator.open{flex-wrap:wrap}.navigator-uri{order:-1;flex-basis:100%}.navigator .navigator-error{order:1;flex-basis:100%}}
   </style>
+  <script src="/assets/host-services.js"></script>
   <script src="/assets/page-errors.js"></script>
   <script src="/assets/currency.js"></script>
   <script src="/assets/preferences.js"></script>
@@ -664,14 +665,7 @@ function feedbackMarkdown(){
   const lines=['# Pharos UI feedback','',`Generated: ${new Date().toISOString()}`,'','Please address each annotation below and verify the result in the rendered UI.',''];
   feedbackAnnotations.forEach((item,index)=>{lines.push(`## Annotation ${index+1}`,'',`- Feedback: ${JSON.stringify(item.note)}`,`- View: ${item.view.title} (\`#${feedbackMarkdownInline(item.view.id)}\`)`,`- Element: ${item.label} (\`<${item.tag}>\`)`,`- Selector: \`${feedbackMarkdownInline(item.selector)}\``,`- Bounds: x=${item.bounds.x}, y=${item.bounds.y}, width=${item.bounds.width}, height=${item.bounds.height}`,`- Viewport: ${item.viewport.width} × ${item.viewport.height} @ ${item.viewport.device_pixel_ratio}x`,`- Source hint: \`${item.source}\``);if(item.text)lines.push(`- Element text: ${JSON.stringify(item.text)}`);if(item.selected_text)lines.push(`- Selected text: ${JSON.stringify(item.selected_text)}`);lines.push(`- Computed styles: \`${feedbackMarkdownInline(JSON.stringify(item.styles))}\``,'')});return lines.join('\n')
 }
-async function copyFeedbackText(text){
-  const nativeClipboard=window.webkit?.messageHandlers?.pharosClipboard;
-  if(nativeClipboard){await nativeClipboard.postMessage(text);return}
-  try{if(!navigator.clipboard?.writeText)throw new Error('Clipboard API unavailable');await navigator.clipboard.writeText(text);return}catch(error){
-    const field=document.createElement('textarea');field.value=text;field.setAttribute('readonly','');field.style.position='fixed';field.style.opacity='0';document.body.append(field);field.focus();field.select();field.setSelectionRange(0,field.value.length);
-    const copied=document.execCommand('copy');field.remove();if(!copied)throw error
-  }
-}
+async function copyFeedbackText(text){return window.pharosHost.clipboard.writeText(text)}
 function clearFeedback(){if(!feedbackAnnotations.length)return;for(const item of feedbackAnnotations)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=[];saveFeedback();feedbackToast('Feedback cleared')}
 async function copyFeedback(){if(!feedbackAnnotations.length||feedbackCopying)return;const count=feedbackAnnotations.length,clearAfterCopy=$('#feedbackClearOnCopy').checked;feedbackCopying=true;updateFeedbackCopyButtons();try{await copyFeedbackText(feedbackMarkdown());if(clearAfterCopy){for(const item of feedbackAnnotations)window.uiFeedback?.removeScreenshot(item.id);feedbackAnnotations=[];saveFeedback()}feedbackToast(`Copied ${count} annotation${count===1?'':'s'}${clearAfterCopy?' and cleared':''}`)}catch{feedbackToast('Could not copy feedback. Check clipboard access and try again.')}finally{feedbackCopying=false;updateFeedbackCopyButtons()}}
 function feedbackToast(message){const toast=$('#feedbackToast');$('#feedbackToastMessage').textContent=message;toast.classList.add('visible');restoreFeedbackLayout();clearTimeout(feedbackToastTimer);feedbackToastTimer=setTimeout(()=>toast.classList.remove('visible'),1800)}

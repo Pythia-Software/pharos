@@ -1543,6 +1543,15 @@
       "reason": "Header overflow is a transient tool picker."
     },
     {
+      "key": "e6bf6a5183099cef:0",
+      "file": "internal/archive/assets/host-services.js",
+      "owner": "textareaCopy",
+      "tag": "textarea",
+      "control": "'textarea'",
+      "contract": "transient",
+      "reason": "Temporary clipboard transfer field for a copy action; removed immediately, with focus and selection restored."
+    },
+    {
       "key": "bd6425e4b2a8db96:0",
       "file": "internal/archive/assets/library.js",
       "owner": "activityLine",
@@ -3130,15 +3139,6 @@
       "control": "'details', 'raw-event'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
-    },
-    {
-      "key": "cc7984b7805a2895:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "copyFeedbackText",
-      "tag": "textarea",
-      "control": "'textarea'",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
       "key": "e7a61eb7b201ccc7:0",

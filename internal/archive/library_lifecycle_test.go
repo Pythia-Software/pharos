@@ -687,6 +687,19 @@ func TestApplicationRemembersLibrarySummaries(t *testing.T) {
 }
 
 func TestApplicationSetupWithoutLibrary(t *testing.T) {
+	t.Run("both shells load shared host services before their callers", func(t *testing.T) {
+		for name, page := range map[string]string{"library": appHTML(), "startup": applicationHTML()} {
+			include := `<script src="/assets/host-services.js"></script>`
+			adapter := strings.Index(page, include)
+			caller := strings.Index(page, `<script src="/assets/onboarding.js"`)
+			if strings.Count(page, include) != 1 || adapter < 0 || caller < adapter {
+				t.Fatalf("%s shell must load shared host services once before callers", name)
+			}
+		}
+		if data, err := assets.ReadFile("assets/host-services.js"); err != nil || len(data) == 0 {
+			t.Fatal("host services are not embedded", err)
+		}
+	})
 	t.Run("switch, open, create and rename move MCP with the selection", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		application := filepath.Join(t.TempDir(), "Pharos.app")
@@ -945,7 +958,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/app", "/assets/query-tables.css", "/assets/ask-pharos.css", "/assets/managed-library.js", "/assets/managed-library.css"} {
+	for _, path := range []string{"/app", "/assets/host-services.js", "/assets/query-tables.css", "/assets/ask-pharos.css", "/assets/managed-library.js", "/assets/managed-library.css"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		m.ServeHTTP(response, request)
