@@ -678,7 +678,7 @@
       && new Date(activity.started_at).getTime() >= new Date(lastIndex.started_at).getTime());
     const updating = activities.filter(activity => ['capture', 'sync', 'index'].includes(activity.kind)
       || activity.label === 'Upgrading the library'
-      || (upgradeState?.running && upgradeState.step === 'tools' && activity.label === 'Building the Tools ledger')
+      || (upgradeState?.running && upgradeState.step === 'tools' && activity.label === 'Building the tool index')
       || (indexFollowUp && (activity === indexFollowUp || activity.label === 'Updating findings')));
     if (!updating.length) return null;
     const capturing = updating.find(activity => activity.kind === 'capture');
@@ -920,7 +920,7 @@
 
     if (recentIndex && !update) {
       const last = node('div', 'pharos-last-index');
-      last.append(node('h3', '', 'Last index this session'));
+      last.append(node('h3', '', 'Last index since Pharos opened'));
       const failed = indexFailed(recentIndex);
       const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed'
         : indexDeferred(recentIndex) ? 'Complete, except sources a capture was using' : 'Complete';
@@ -1037,7 +1037,8 @@
     const captured = index.hosts || [];
     renderHeaderAction();
 
-    grid.querySelectorAll('.source-card.remote').forEach(card => card.remove());
+    grid.querySelectorAll('.source-card.remote,.source-group-heading.remote').forEach(card => card.remove());
+    if (captured.some(host => !host.current && host.sources?.length)) grid.append(node('h3', 'source-group-heading remote', 'Captured from other Macs'));
     for (const host of captured.filter(host => !host.current)) {
       for (const source of host.sources || []) {
         const card = node('article', 'source-card remote'), head = node('div', 'source-card-head'), title = node('div');
@@ -1082,7 +1083,7 @@
     if (!run?.conversations && !parsed && !unchanged && (current || !results.length)) return 'Already up to date; no conversations rewritten';
     const parts = [plural(run?.conversations || 0, 'conversation') + ' written'];
     if (parsed) parts.push(`${plural(parsed, 'source part')} parsed`);
-    if (unchanged) parts.push(`${unchanged.toLocaleString()} unchanged files/sessions skipped`);
+    if (unchanged) parts.push(`${unchanged.toLocaleString()} unchanged history files or conversations skipped`);
     if (current) parts.push(`${plural(current, 'source')} already current`);
     return parts.join(' · ');
   }
@@ -1232,12 +1233,12 @@
     if (!grid || !hostsData) return;
     const current = (hostsData.index.hosts || []).find(host => host.current);
     for (const card of grid.querySelectorAll('.source-card:not(.remote)')) {
-      const name = card.querySelector('h2')?.textContent;
+      const name = card.dataset.source;
       const source = current?.sources.find(item => item.name === name);
       let line = card.querySelector('.pharos-card-capture');
       if (!line) {
         line = node('div', 'pharos-card-capture');
-        card.append(line);
+        card.insertBefore(line, card.querySelector('.source-removal'));
       }
       line.replaceChildren();
       if (!source) {

@@ -32,29 +32,29 @@ type delegationMetricSpec struct {
 }
 
 var delegationMetrics = []delegationMetricSpec{
-	{"start", "First evidence", "date", "Earliest retained timestamp, not a lifecycle start."},
-	{"tokens", "Tokens", "tokens", "Reconciled session usage. Cache is a subset of input; reasoning is a subset of output."},
+	{"start", "First evidence", "date", "Earliest saved timestamp; the agent may have started earlier."},
+	{"tokens", "Tokens", "tokens", "Recorded agent-session usage, with duplicate reports counted once. Cached tokens are part of input; reasoning is part of output."},
 	{"cost", "API cost", "usd", "API-rate estimate on the date of use, not billing. Partial values are lower bounds."},
 	{"calls", "Tool calls", "count", "Distinct retained tool invocations."}, {"errors", "Errors", "count", "Reported tool failures; not the outcome of the agent."},
 	{"events", "Agent events", "count", "Retained agent events at the display probability threshold, attributed through session message membership. Unprocessed messages may contain additional events."},
 	{"files", "Files Edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
 	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
-	{"messages", "Messages", "count", "Retained session message membership."}, {"requests", "Requests", "count", "Distinct retained model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
+	{"messages", "Messages", "count", "Messages recorded in the agent session."}, {"requests", "Model requests", "count", "Distinct recorded model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
-	{"total", "Session spans", "ms", "Sum of session evidence envelopes. Parallel and inactive time accumulate."},
-	{"toolTime", "Tool elapsed", "ms", "Union of call-to-result intervals across included sessions. Does not measure CPU time."},
-	{"toolAgent", "Agent tool time", "ms", "Sum of each session's tool interval union; parallel agents accumulate."},
+	{"total", "Agent session spans", "ms", "Sum of the time from each agent session’s first to last recorded activity. Overlapping sessions and gaps both add to this total."},
+	{"toolTime", "Tool elapsed", "ms", "Clock time covered by tool calls across included agent sessions. Overlap counts once; this does not measure CPU time."},
+	{"toolAgent", "Agent tool time", "ms", "Sum of each agent session’s tool time, counting overlap once within each session. Parallel sessions add to the total."},
 	{"toolSum", "Tool duration sum", "ms", "Sum of recorded call durations; overlapping calls accumulate."},
 	{"wait", "Blocking wait", "ms", "Requires explicit blocking boundaries. Launch acknowledgements and polling are excluded."},
 	{"modelTime", "Model processing", "ms", "Requires measured model start/end boundaries. Inferred timeline backgrounds are excluded."},
 	{"backgroundTime", "Background process", "ms", "Requires process lifecycle boundaries. A background launch is insufficient."},
-	{"episodes", "Evidence episodes", "count", "Clusters of tool/request timestamps and message-envelope endpoints separated by more than 30 minutes; inferred, not completed runs."},
-	{"children", "Children", "count", "Self counts direct ownership children; Self + children counts all distinct descendants."},
-	{"leaves", "Leaves", "count", "Included sessions with no known ownership children."}, {"depth", "Depth", "count", "Maximum ownership depth of included sessions."},
+	{"episodes", "Activity periods", "count", "Groups of tool calls, model requests and first/last message timestamps separated by more than 30 minutes. These are estimated activity periods; they do not establish when an agent finished."},
+	{"children", "Children", "count", "Self counts directly delegated agent sessions; Self + children counts all delegated descendants once."},
+	{"leaves", "Agents without children", "count", "Included agent sessions with no known delegated children."}, {"depth", "Depth", "count", "Greatest number of delegation levels below the main agent among included agent sessions."},
 	{"input", "Input", "tokens", "Input including cached input."}, {"uncached", "Uncached input", "tokens", "Input excluding cache read and creation."},
 	{"cacheRead", "Cache read", "tokens", "Subset of input."}, {"cacheWrite", "Cache creation", "tokens", "Subset of input."},
 	{"output", "Output", "tokens", "Output including reported reasoning."}, {"reasoning", "Reasoning", "tokens", "Subset of output."},
-	{"remainder", "Unallocated usage", "tokens", "Session total beyond retained request usage. Remains at session level."},
+	{"remainder", "Unallocated usage", "tokens", "Agent-session tokens that could not be assigned to individual recorded model requests."},
 }
 
 type delegationReference struct {
@@ -232,7 +232,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		return nil, err
 	}
 	if len(sessions) > 10000 || len(conversations) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-session analysis limit")
+		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
 	s := &delegationSnapshot{ByID: map[string]*delegationNode{}, Aliases: map[string]string{}, Maxima: map[string]map[string]float64{"self": {}, "all": {}}, Density: make([]int, 120), Warnings: []string{}}
 	conv := map[string]map[string]any{}
@@ -269,7 +269,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		raw[firstString(row["id"])] = row
 	}
 	if len(sessions) > 10000 {
-		return nil, fmt.Errorf("workspace exceeds the 10,000-session analysis limit")
+		return nil, fmt.Errorf("workspace exceeds the 10,000-agent-session analysis limit")
 	}
 	external := map[string]*delegationReference{}
 	reference := func(id string) (*delegationReference, error) {
@@ -411,7 +411,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		child.MessageID = firstString(row["delegation_message_id"])
 		child.ParentEvidence = "exact-delegation-handle"
 		if s.Aliases[id] == "" {
-			s.Warnings = append(s.Warnings, "A linked delegation retains independent usage; both source sessions are shown.")
+			s.Warnings = append(s.Warnings, "A linked helper has separate usage in its source; both agent sessions are shown.")
 		}
 	}
 	launches, err := queryMapsContext(ctx, tx, `SELECT l.child_id,l.parent_id,t.call_message_id FROM conversation_launches l JOIN conversations c ON c.id=l.child_id LEFT JOIN tool_calls t ON t.id=l.tool_call_id WHERE c.workspace_id=?`, workspace)

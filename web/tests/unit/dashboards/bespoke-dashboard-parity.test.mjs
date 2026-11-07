@@ -353,7 +353,7 @@ test("parallel-hours, parallel-active-weekday and parallel-weekday: agent hours 
 test("Parallelism names the settings its records carry, warns when they differ, and offers provider and model only under agent counting", () => {
   assert.equal(parallelism.request, undefined, "no built-under filter: the service serves only the saved settings' records");
   const workspace = { counting: "workspace", gap: 60 };
-  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns need agent counting (Count by Sessions)." });
+  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns require Count by Conversations." });
   assert.doesNotMatch(parallelismSettingsNote([{ counting: "agent", gap: 60 }], { counting: "agent", gap: 60 }).note, /need agent counting/);
   // Links are read with the shape, so a Provider link opened under
   // workspace counting draws the default breakdown instead of failing.
@@ -362,7 +362,7 @@ test("Parallelism names the settings its records carry, warns when they differ, 
   assert.equal(validAnalysisState(parallelismAnalysisCatalog("workspace"), provider), false, "the counting-specific catalog alone would reject it");
   assert.equal(normalizeAnalysis(parallelismAnalysisCatalog("workspace"), provider).split, "level_band");
   const stale = parallelismSettingsNote([{ counting: "agent", gap: 15 }], workspace);
-  assert.match(stale.note, /count top-level sessions and join turns across gaps up to 15 minutes/);
+  assert.match(stale.note, /count top-level conversations and join turns across gaps up to 15 minutes/);
   assert.match(stale.warning, /believes the saved settings count workspaces/);
   assert.match(parallelismSettingsNote([], workspace).note, /No records in range/);
   assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.provider, undefined);

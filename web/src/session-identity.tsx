@@ -18,10 +18,9 @@ export function SessionBranches({ depth, branch, root = true, folded = false }: 
   </svg>;
 }
 
-/** The same title, outline and navigation treatment in each session view. */
-export function SessionIdentity({ name, outline, metadata, title, depth, branch, folded, current, openSession, className = "" }: {
+/** The same title and navigation treatment in each session view. */
+export function SessionIdentity({ name, metadata, title, depth, branch, folded, current, openSession, className = "" }: {
   name: string;
-  outline?: string;
   metadata: React.ReactNode;
   title?: string;
   depth: number;
@@ -31,7 +30,7 @@ export function SessionIdentity({ name, outline, metadata, title, depth, branch,
   openSession?: () => void;
   className?: string;
 }) {
-  const content = <><SessionBranches depth={depth} branch={branch} folded={folded} /><strong data-overflow-title="">{name}</strong><small data-overflow-title="">{outline ? <><span className="lt-session-outline">{outline}</span><span aria-hidden="true"> · </span></> : null}{metadata}</small></>;
+  const content = <><SessionBranches depth={depth} branch={branch} folded={folded} /><strong data-overflow-title="">{name}</strong><small data-overflow-title="">{metadata}</small></>;
   const props = { className: `lt-session-identity ${className}${openSession && !current ? " is-interactive" : ""}`, style: { paddingLeft: sessionBranchX(depth) + 16 }, title, "aria-current": current ? "true" as const : undefined };
-  return openSession && !current ? <button {...props} type="button" aria-label={`Open session ${[outline, name].filter(Boolean).join(" · ")}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}>{content}</button> : <span {...props}>{content}</span>;
+  return openSession && !current ? <button {...props} type="button" aria-label={`Open session ${name}`} onClick={event => { event.preventDefault(); event.stopPropagation(); openSession(); }}>{content}</button> : <span {...props}>{content}</span>;
 }

@@ -376,7 +376,7 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 		}
 		var input retainedInput
 		if unit.Source.Kind == "codex" && unit.Source.Options["sqlite_record_capture"] != true {
-			plan, e := planCapture(unit.Source)
+			plan, e := planCapture(ctx, unit.Source)
 			if e != nil {
 				result.Detail = e.Error()
 				return
@@ -443,7 +443,7 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 			manifest := view.manifest
 			// Historical Conductor readers map one superseded database, not
 			// the current source root. Lease exactly that generation.
-			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).captured(manifest.Source.Path)
+			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).capturedSource(manifest.Source)
 			if isConductorSource(unit.Source.Kind) && canonicalRoot != unit.Reader.Config().Path {
 				original := view.original(unit.Reader.Config().Path)
 				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
@@ -531,7 +531,8 @@ func (c *Catalog) auditUnitMode(ctx context.Context, unit syncUnit, runID string
 		err = group.Discover(func(record WorkspaceRecord) error {
 			matches := strings.HasPrefix(unit.ID, "sqlite:")
 			for _, conversation := range record.Conversations {
-				matches = matches || conversation.Origin == unit.ID
+				// A unit of one session group in a database is <database>#<root>.
+				matches = matches || conversation.Origin == unit.ID || conversation.Origin+"#"+record.SourceID == unit.ID
 			}
 			if !matches {
 				return nil
@@ -619,7 +620,11 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 			if separator := strings.LastIndex(original, ":sessions:"); separator >= 0 {
 				original = original[:separator]
 			}
-			path, ok := view.captured(original)
+			lookup := view.captured
+			if isCodexSource(unit.Source.Kind) {
+				lookup = view.capturedRollout
+			}
+			path, ok := lookup(original)
 			if !ok {
 				return "", errAuditUnstable
 			}
@@ -696,7 +701,7 @@ func jsonlAuditDependencies(adapter *jsonlAdapter, paths []string) ([]string, []
 		} else if err != nil && !os.IsNotExist(err) {
 			return nil, nil, err
 		}
-		databases, err := codexNamingDatabases(adapter.config.Path)
+		databases, err := codexNamingDatabases(adapter.files(), adapter.config.Path)
 		return files, databases, err
 	}
 	seen := map[string]bool{}
@@ -718,22 +723,13 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 	if unit.Reader != nil && captureViewOf(unit.Reader) != nil {
 		return readCapturedAuditRecord(ctx, unit)
 	}
-	if unit.Source.Kind == "conductor" {
-		adapter, err := MakeAdapter(unit.Source)
-		if err != nil {
-			return nil, nil, err
+	// A source whose sessions share one database (Conductor, OpenCode,
+	// Cursor, Zed), or are each one (the Cursor CLI), is read in place.
+	if adapter, err := MakeAdapter(unit.Source); err == nil {
+		if group, ok := adapter.(groupReader); ok {
+			setAdapterContext(adapter, ctx)
+			return group.readGroup(unit.Parts)
 		}
-		setAdapterContext(adapter, ctx)
-		part := unit.Parts[0]
-		separator := strings.LastIndex(part.item, ":sessions:")
-		if separator < 0 {
-			return nil, nil, errors.New("invalid session identity")
-		}
-		path := strings.TrimPrefix(part.item[:separator], "sqlite:")
-		var record *WorkspaceRecord
-		var read []sourcePart
-		err = adapter.(*conductorAdapter).database(path, map[string]bool{part.item[separator+len(":sessions:"):]: true}, func([]sourcePart) bool { return false }, func(value *WorkspaceRecord, parts []sourcePart) error { record, read = value, parts; return nil })
-		return record, read, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
@@ -752,6 +748,9 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		}
 		if strings.HasPrefix(part.item, "sqlite:") {
 			databases = append(databases, strings.TrimPrefix(part.item, "sqlite:"))
+		} else if isCodexSource(unit.Source.Kind) {
+			// A compressed rollout is frozen as it is, under its own name.
+			files = append(files, rolloutFile(part.item))
 		} else {
 			files = append(files, part.item)
 		}
@@ -831,7 +830,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 			return nil, nil, err
 		}
-		if err := snapshotSQLite(ctx, path, destination); err != nil {
+		if err := snapshotSourceSQLite(ctx, path, destination); err != nil {
 			return nil, nil, err
 		}
 		after, err := sqliteDependencyState(path)

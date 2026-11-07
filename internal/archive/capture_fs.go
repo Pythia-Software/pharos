@@ -3,11 +3,14 @@ package archive
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
@@ -35,6 +38,23 @@ type sourceFiles struct {
 }
 
 func (a baseAdapter) files() sourceFiles { return sourceFiles{view: a.view, ctx: a.context()} }
+
+// Adapters reach their source only through sourceFiles, so a captured source
+// is read as its capture and a live one as it is. liveSourceAccess names the
+// adapter functions that read the OS directly on purpose, and why: what they
+// read is not the source, or is read before there is one.
+// TestAdaptersReadThroughTheAccessLayer holds every other adapter function,
+// in adapters.go and adapter_*.go, to sourceFiles.
+var liveSourceAccess = map[string]string{
+	"installedAntigravityVersion": "The Antigravity version installed now, observed on this Mac only.",
+	"conductorCommitChange":       "The user's Git repositories, looked up on this Mac only (localLookups).",
+	"gitRemote":                   "The user's Git repositories, looked up on this Mac only (localLookups).",
+	"antigravityDataDir":          "Probe checks a folder before it is a source.",
+	"cursorProbeStats":            "Probe counts a location's chats before it is a source.",
+	"opencodeProbeStats":          "Probe counts a location's sessions before it is a source.",
+	"zedProbeStats":               "Probe counts a location's threads before it is a source.",
+	"snapshotSessions":            "Reads a snapshot generation capture indexing has already materialized.",
+}
 
 // rel is path's captured path in the view, if it is inside it.
 func (v *captureView) rel(path string) (string, bool) {
@@ -111,6 +131,133 @@ func (s sourceFiles) Open(path string) (*sourceFile, error) {
 	return &sourceFile{Reader: file, file: file, info: info}, nil
 }
 
+// Codex compresses a rollout idle for a week to <name>.jsonl.zst, one zstd
+// frame of the same bytes that declares their size, deletes the plain file
+// and keeps its mtime; resuming the thread restores the plain file. Capture
+// copies the compressed file as it is. Everything else knows the rollout by
+// its plain path and its content's size (contentInfo), so compression changes
+// neither a part, an origin nor an evidence locator, and parses nothing again.
+// Only reading it decodes it (OpenContent).
+const compressedRolloutSuffix = ".jsonl.zst"
+
+func compressedRollout(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), compressedRolloutSuffix)
+}
+
+// plainRollout is the plain file a compressed rollout was, or path itself.
+func plainRollout(path string) string {
+	if compressedRollout(path) {
+		return path[:len(path)-len(".zst")]
+	}
+	return path
+}
+
+// rolloutStem is a rollout's file name without .jsonl or .jsonl.zst.
+func rolloutStem(path string) string {
+	base := filepath.Base(plainRollout(path))
+	return base[:len(base)-len(filepath.Ext(base))]
+}
+
+// preferRollout picks which of a rollout's two forms to read when both are
+// listed: the newer, and the plain one when they are as new. Compression keeps
+// the mtime and an append moves it, so this is the form Codex itself reads
+// while both exist, and in a capture or retained input it passes over a copy
+// superseded since (the plain file captured before an append and compression,
+// or the compressed one captured before a resume) however that input was
+// assembled.
+func preferRollout(plain, compressed string, plainInfo, compressedInfo fs.FileInfo) string {
+	if compressedInfo.ModTime().After(plainInfo.ModTime()) {
+		return compressed
+	}
+	return plain
+}
+
+// rolloutFile is the file to read for a rollout known by its plain path (a
+// part item or origin): the plain file, or its compressed form when that is
+// the one preferRollout reads.
+func rolloutFile(plain string) string {
+	if !strings.HasSuffix(strings.ToLower(plain), ".jsonl") {
+		return plain
+	}
+	compressedInfo, err := os.Stat(plain + ".zst")
+	if err != nil {
+		return plain
+	}
+	plainInfo, err := os.Stat(plain)
+	if err != nil {
+		return plain + ".zst"
+	}
+	return preferRollout(plain, plain+".zst", plainInfo, compressedInfo)
+}
+
+// capturedRollout finds the copy of the rollout named by its plain path, in
+// whichever form was taken: a source configured as one compressed file maps
+// only that file.
+func (v *captureView) capturedRollout(item string) (string, bool) {
+	if path, ok := v.captured(item); ok {
+		return rolloutFile(path), true
+	}
+	return v.captured(item + ".zst")
+}
+
+// resolveRolloutSource follows a source configured as one rollout file to
+// whichever form of it is there now, since Codex renames it on compression
+// and on resume.
+func resolveRolloutSource(config SourceConfig) SourceConfig {
+	if lower := strings.ToLower(config.Path); strings.HasSuffix(lower, ".jsonl") || compressedRollout(lower) {
+		config.Path = rolloutFile(plainRollout(config.Path))
+	}
+	return config
+}
+
+// contentInfo describes a compressed rollout as the plain file it stands for:
+// the size its frame declares, read once per process while the file is
+// unchanged (cachedHead). A frame without a size keeps the stored size, so
+// its rollout is parsed once more after compression. Other files are as info.
+func (s sourceFiles) contentInfo(path string, info fs.FileInfo) fs.FileInfo {
+	if !compressedRollout(path) {
+		return info
+	}
+	size, err := s.cachedHead("zstd-content-size", path, func() (any, error) {
+		file, err := s.Open(path)
+		if err != nil {
+			return int64(-1), err
+		}
+		defer file.Close()
+		head := make([]byte, zstd.HeaderMaxSize)
+		n, err := io.ReadFull(file, head)
+		if err != nil && err != io.ErrUnexpectedEOF {
+			return int64(-1), err
+		}
+		var header zstd.Header
+		if header.Decode(head[:n]) != nil || !header.HasFCS || header.FrameContentSize > math.MaxInt64 {
+			return int64(-1), nil
+		}
+		return int64(header.FrameContentSize), nil
+	})
+	if err != nil || size.(int64) < 0 {
+		return info
+	}
+	return originalInfo{FileInfo: info, size: size.(int64)}
+}
+
+// OpenContent is Open for a reader of the content: a file the harness itself
+// stored compressed (compressedRollout) is decoded as it reads, and Stat
+// reports it as contentInfo does, as plans listed it.
+func (s sourceFiles) OpenContent(path string) (*sourceFile, error) {
+	file, err := s.Open(path)
+	if err != nil || !compressedRollout(path) {
+		return file, err
+	}
+	info := s.contentInfo(path, file.info)
+	decoder, err := newCaptureDecoder(bufio.NewReaderSize(file.Reader, 64<<10))
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return &sourceFile{Reader: decoder, file: file.file, decoder: decoder, outer: file.decoder, info: info, sourceEncoded: true}, nil
+}
+
 // ReadFile reads path's original bytes.
 func (s sourceFiles) ReadFile(path string) ([]byte, error) {
 	file, err := s.Open(path)
@@ -151,14 +298,32 @@ type sourceFile struct {
 	io.Reader
 	file    *os.File
 	decoder *zstd.Decoder
-	info    fs.FileInfo
+	// outer is the capture's own decoder under a source-side one; Pharos does
+	// not compress .zst files, so it is nil in practice.
+	outer *zstd.Decoder
+	info  fs.FileInfo
+	// sourceEncoded marks content decoded from a harness-compressed file,
+	// which is longer than the file as stored.
+	sourceEncoded bool
 }
 
 func (f *sourceFile) Stat() (fs.FileInfo, error) { return f.info, nil }
 
+// readLimit bounds a reader to the bytes present when the file was opened: a
+// log appended meanwhile is read again next time. A harness never appends to
+// a file it compressed, so its whole content is read.
+func (f *sourceFile) readLimit() int64 {
+	if f.sourceEncoded {
+		return math.MaxInt64
+	}
+	return f.info.Size()
+}
+
 func (f *sourceFile) Close() error {
-	if f.decoder != nil {
-		f.decoder.Close()
+	for _, decoder := range []*zstd.Decoder{f.decoder, f.outer} {
+		if decoder != nil {
+			decoder.Close()
+		}
 	}
 	return f.file.Close()
 }
@@ -203,6 +368,41 @@ func (v *captureView) open(rel string) (*sourceFile, error) {
 	return &sourceFile{Reader: decoder, file: file, decoder: decoder, info: originalInfo{FileInfo: info, size: entry.Size}}, nil
 }
 
+// Listing reads names, which a capture keeps as they are, so these read the
+// directory itself. They are here so an adapter reaches every part of its
+// source through sourceFiles (TestAdaptersReadThroughTheAccessLayer).
+
+// ReadDir lists a directory, as os.ReadDir.
+func (s sourceFiles) ReadDir(path string) ([]fs.DirEntry, error) { return os.ReadDir(path) }
+
+// WalkDir walks a tree, as filepath.WalkDir; take sizes with Info.
+func (s sourceFiles) WalkDir(root string, walk fs.WalkDirFunc) error {
+	return filepath.WalkDir(root, walk)
+}
+
+// Glob lists the paths pattern matches, as filepath.Glob.
+func (s sourceFiles) Glob(pattern string) ([]string, error) { return filepath.Glob(pattern) }
+
+// SQLite opens the database at path as the source is read: under a view its
+// captured copy (decoded, if stored encoded), otherwise the live file down
+// the locked-database ladder (openSourceSQLite).
+func (s sourceFiles) SQLite(path string) (*sql.DB, error) {
+	readable, err := s.Database(path)
+	if err != nil {
+		return nil, err
+	}
+	return openSourceSQLite(s.context(), readable)
+}
+
+// context is the files' context, or the background one for files made
+// without it (probe's, a test's).
+func (s sourceFiles) context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
 // Database is a path at which SQLite can open path: the path itself for a
 // live source or a plain capture, or for an encoded snapshot its decoded copy
 // in the reader's lease (materialize).
@@ -214,7 +414,7 @@ func (s sourceFiles) Database(path string) (string, error) {
 	if !ok {
 		return path, nil
 	}
-	return s.view.materialize(s.ctx, rel)
+	return s.view.materialize(s.context(), rel)
 }
 
 // materialize returns a path at which the captured entry rel can be opened

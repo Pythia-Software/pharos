@@ -50,7 +50,7 @@ export function buildApiCostTrend(facts: CostTimeBucket[], days: number, now: nu
   const sum = (rows: CostTimeBucket[]) => rows.reduce((n, row) => n + row.cost, 0);
   const current = window(now, days), count = current.reduce((n, fact) => n + fact.count, 0);
   const pointTimes = Array.from({ length: 31 }, (_, i) => now - (30 - i) * day), points = pointTimes.map(end => sum(window(end, 7)) / 7);
-  return { kind: "trend", format: "USD", value: count ? sum(current) : undefined, valueLabel: "API equivalent", pointValueLabel: "API equivalent / day", trendLabel: "7d avg / day", sampleLabel: `${count.toLocaleString()} priced usage facts · last ${days} days`,
+  return { kind: "trend", format: "USD", value: count ? sum(current) : undefined, valueLabel: "API equivalent", pointValueLabel: "API equivalent / day", trendLabel: "7d avg / day", sampleLabel: `${count.toLocaleString()} priced usage records · last ${days} days`,
     points, pointTimes, lookbackDays: 7, baseline: points.slice(0, -1).reduce((total, value) => total + value, 0) / 30,
-    detail: "Headline: selected-period API equivalent. Each sparkline point: summed fully priced cost in its trailing seven elapsed days divided by seven, including zero-activity days. History spans the last 30 days; the dashed norm is the mean of the prior 30 daily endpoints. All values use the same retained usage-fact time placement as the period total." };
+    detail: "Headline: selected-period API equivalent. Each sparkline point: summed fully priced cost in its trailing seven elapsed days divided by seven, including zero-activity days. History spans the last 30 days; the dashed norm is the mean of the prior 30 daily endpoints. All values use the same retained usage-record time placement as the period total." };
 }

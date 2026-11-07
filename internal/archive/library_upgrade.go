@@ -143,16 +143,16 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		{ID: "repositories", Label: "Merge repository identities", Unit: "repository",
 			Detail: "Merges the rows Pharos holds for one repository: different remote URLs, worktrees, and checkouts without a remote. It asks GitHub, through the gh command-line tool, which repositories were renamed or moved, so their work is counted together.", Pending: repositories},
 		{ID: "usage", Label: "Correct token attribution", Unit: "workspace",
-			Detail: "Recounts Claude sessions whose sub-agents were counted twice. Uses retained messages only.", Pending: usage},
-		{ID: "harness", Label: "Record harness versions", Unit: "conversation",
+			Detail: "Recounts Claude agent sessions whose sub-agents were counted twice. Uses retained messages only.", Pending: usage},
+		{ID: "harness", Label: "Record agent app versions", Unit: "conversation",
 			Detail: "Notes which Claude Code or Codex version ran each conversation, from retained messages or source files where they still exist.", Pending: harness},
 		{ID: "instructions", Label: "Record loaded instructions", Unit: "conversation",
 			Detail: "Notes which instruction files (CLAUDE.md, AGENTS.md, memory) and skills each Claude Code or Codex conversation loaded, from source files or captures where they still exist.", Pending: instructions},
 		{ID: "reasoning", Label: "Index saved reasoning", Unit: "conversation",
-			Detail: "Extracts saved thinking and reasoning summaries from retained message envelopes so the reasoning search target can find them. Resumes after interruption; unavailable source text remains unavailable.", Pending: reasoning},
+			Detail: "Extracts saved thinking and reasoning summaries from saved messages so the reasoning search target can find them. Resumes after interruption; unavailable source text remains unavailable.", Pending: reasoning},
 		{ID: "message-search", Label: "Repair message search", Unit: "conversation",
 			Detail: "Restores proven Claude parent/child links, makes delivered sub-agent reports readable, and repairs phrase matching in retained tool and context text. Keeps original evidence and resumes after interruption.", Pending: messageSearch},
-		{ID: "tools", Label: "Rebuild the tool ledger", Unit: "conversation",
+		{ID: "tools", Label: "Rebuild the tool index", Unit: "conversation",
 			Detail: "Re-reads retained messages to store error signatures, test failures, and repository-relative paths. The longest step.", Pending: tools},
 	}
 	for index := range steps {
@@ -289,7 +289,7 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 	}
 	state.running, state.startedAt, state.lastError = true, now(), ""
 	state.mu.Unlock()
-	labels := map[string]upgradeStep{"rollup": {ID: "rollup", Label: "Rebuild the Tools rollup"}}
+	labels := map[string]upgradeStep{"rollup": {ID: "rollup", Label: "Rebuild tool summaries"}}
 	report := func(step string, done, total int) {
 		state.mu.Lock()
 		state.step, state.done, state.total = step, done, total

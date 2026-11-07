@@ -79,7 +79,7 @@ function ribbonPreview(address: string, data: ConcurrencyData, now: number): Que
   const ready = cover.buckets.some(bucket => Object.keys(bucket.values).length);
   return { state: ready ? "ready" : "empty", total: cover.buckets.length, summary: ribbonCardTitle(settings), action: DASHBOARD_CARD_ACTION,
     emptyLabel: "No captured activity in this range", buckets: cover.buckets, series: cover.series,
-    note: `Average concurrent ${settings.counting === "agent" ? "sessions" : "workspaces"} in each period, including idle time, by repository.`,
+    note: `Average concurrent ${settings.counting === "agent" ? "conversations" : "workspaces"} in each period, including idle time, by repository.`,
     dashboardTrend: { prepared: true, xLabel: cover.hourly ? "hours" : "day", yLabel: cover.label, unit: "" } };
 }
 

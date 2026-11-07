@@ -12,7 +12,7 @@ export function weekday(id: string, title: string, description: string, unit: st
     action: "Inspect daily totals", note: calendar, ...extra };
 }
 
-const timing = "Follows the saved Parallelism counting and gap settings. Timing is estimated from transcript turns, with delegated work folded into its root unit. Daily placement uses hourly fact starts without prorating.";
+const timing = "Follows the saved Parallelism counting and gap settings. Timing is estimated from transcript turns, with linked sub-agent activity counted with its initiating conversation. Daily placement uses hourly fact starts without prorating.";
 export const weekdayRecipes: QueryRecipe[] = [
   weekday("human-words-weekday", "Words by day of the week", "Daily human-written word totals by weekday over the last {days} days, including idle days.", "words / day", { id: "weekday_words", op: "sum", field: "typed_words", groupBy: [], label: "Daily human-written words" },
     { note: `${calendar} Only typed or dictated words contribute; pasted and automated text are excluded. Days without recorded writing count as zero.` }),

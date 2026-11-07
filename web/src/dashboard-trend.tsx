@@ -1,3 +1,4 @@
+import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
@@ -99,6 +100,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     : "No earlier point has a value, so there is no reference level yet.");
   const bounds = timeBounds(where, catalog.time);
   const population = usePopulation(catalog, schema, where);
+  const outputEmpty=!result.loading&&!result.error&&result.results.every(entry=>!entry.buckets.length);
   const title = analysisCardCopy(catalog, view, where, schema).title;
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset), preset)}
     population={catalog.population ? <PopulationControl catalog={catalog} schema={schema} where={where} terms={population.terms} subjects={catalog.records.plural.toLowerCase()} onFilter={onFilter} /> : undefined} />;
@@ -111,7 +113,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     // A selection on the same breakdown would hide what the population keeps.
     if (view.selection?.values.length) set({ selection: { values: [], excluded: false } });
   } : undefined;
-  const action = onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined;
+  const action = <><DataReadinessIndicator id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty} updatedAt={result.updatedAt} />{onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : null}</>;
   // A heatmap draws the value its bins hold on that value's own axis, with
   // the band's edges as guides (heatmapAxis).
   const axis = view.display === "heatmap" ? heatmapAxis(catalog, view) : undefined;
@@ -120,16 +122,16 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     const value = (amount: number) => axis.bins.format.kind === "percent" ? percent(100 * amount) : format(amount, { ...measure, format: axis.bins.format });
     const guides = (axis.bins.edges ?? []).flatMap((edge, index) => index === 0 || !band.order?.[index] ? [] : [{ value: edge, label: band.values?.[band.order[index]] ?? band.order[index] }]);
     return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-      <TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme, view.percentiles)}
+      <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme, view.percentiles)}
         period={view.period} noun={axis.counted ? catalog.records.plural.toLowerCase() : weight.unit} label={axis.bins.label} format={value} amount={weight.op === "count" ? undefined : amount => format(amount, weight)}
-        rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} />
+        rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} /></DataReadinessEmpty>
       {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
       {children}
       {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
     </section>;
   }
   return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
-    <StackedColumns title={title} controls={controls} action={onView ? <CreateDashboardCard source={{ catalog, state, where, schema }} /> : undefined} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
+    <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><StackedColumns title={title} controls={controls} action={action} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display === "heatmap" ? "interval" : view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
       rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} bars={trendDrawing(catalog, view) === "trend_bar"} additive={built.additive} nonzero={view.nonzero && !view.share}
       references={built.references?.map(item => ({ value: item.value, level: item.level, label: `${percentileLabel(item.level)}, prior ${view.normPeriods}` }))}
@@ -139,6 +141,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {measure.populationShare && measure.note ? <p className="usage-dashboard-note">{measure.note}</p> : null}
+    </DataReadinessEmpty>
     {children}
     {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} /> : null}
   </section>;

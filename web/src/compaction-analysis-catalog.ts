@@ -13,9 +13,9 @@ export const compactionAnalysisCatalog: AnalysisCatalog = {
   },
   breakdowns: {
     trigger: { label: "Trigger", fields: ["trigger"], order: ["human", "machine", "unknown"] },
-    provider: { label: "Service", fields: ["provider"], empty: "Unknown service" },
-    trigger_provider: { label: "Trigger + service", fields: ["trigger", "provider"] },
-    harness: { label: "Agent / harness", fields: ["harness"], empty: "Unknown harness" },
+    provider: { label: "Provider", fields: ["provider"], empty: "Unknown provider" },
+    trigger_provider: { label: "Trigger + provider", fields: ["trigger", "provider"] },
+    harness: { label: "Agent app", fields: ["harness"], empty: "Unknown agent app" },
     model: { label: "Model", fields: ["model"], empty: "Unknown model" },
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
     channel: { label: "Channel", fields: ["channel"], empty: "Unknown channel" },

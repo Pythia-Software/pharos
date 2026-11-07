@@ -214,12 +214,23 @@ var fixesGlobalGuides = func() []fixesGuide {
 		return nil
 	}
 	out := []fixesGuide{}
-	for _, file := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md", ".gemini/GEMINI.md"} {
-		data, err := os.ReadFile(filepath.Join(home, file))
-		if err != nil {
+	read := func(name string) {
+		if data, err := os.ReadFile(filepath.Join(home, strings.TrimPrefix(name, "~/"))); err == nil {
+			out = append(out, fixesGuide{Name: name, Lines: strings.Split(string(data), "\n")})
+		}
+	}
+	for _, place := range globalInstructionPaths() {
+		if !strings.HasSuffix(place, "/") {
+			read(place)
 			continue
 		}
-		out = append(out, fixesGuide{Name: "~/" + file, Lines: strings.Split(string(data), "\n")})
+		// A folder of rule files (Cline's): each Markdown or text file in it.
+		entries, _ := os.ReadDir(filepath.Join(home, strings.TrimPrefix(place, "~/")))
+		for _, entry := range entries {
+			if extension := strings.ToLower(filepath.Ext(entry.Name())); entry.Type().IsRegular() && (extension == ".md" || extension == ".txt") {
+				read(place + entry.Name())
+			}
+		}
 	}
 	return out
 }

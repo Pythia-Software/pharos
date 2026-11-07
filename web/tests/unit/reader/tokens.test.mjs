@@ -14,7 +14,8 @@ const samples = events => [...events].map(message => message.tokenReport?.contex
 test("all source accounting formats reconcile against shared fixtures", () => {
   assert.ok(tokenCases.length > 0);
   for (const item of tokenCases) {
-    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), text: JSON.stringify(value) })));
+    // Fixture events are protocol accounting envelopes, stored as metadata.
+    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), kind: "metadata", role: "system", text: JSON.stringify(value) })));
     assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), item.total, item.name);
   }
 });
@@ -44,6 +45,13 @@ test("turn and sub-agent spend include nested usage across many turns", () => {
   const sampled = samples(events);
   assert.deepEqual([sampled.filter(sample => !sample.compact).length, sampled.filter(sample => sample.compact).length], [46, 1]);
   assert.deepEqual([...new Set(sampled.map(sample => sample.stream))], ["main", "child"]);
+});
+
+test("an advisor's request leaves the conversation's context alone", () => {
+  const reply = (id, input) => event(id, "metadata", { type: "assistant", message: { id, usage: { input_tokens: input, output_tokens: 10 } } });
+  const advisor = event("advisor", "metadata", { type: "assistant", advisor_of: "r1", message: { id: "r1:advisor:0", usage: { input_tokens: 50, output_tokens: 5 } } });
+  const { events } = render([human(), reply("r1", 1000), advisor, reply("r2", 1020)]);
+  assert.deepEqual(plain(samples(events).map(sample => sample.size)), [1000, 1020]);
 });
 
 test("split message usage includes cache once and reconciles result totals", () => {
@@ -128,4 +136,14 @@ test("nested subagent checkpoints count once and remain nested sessions", () => 
   assert.deepEqual(plain(graph.turns[0].events.map(message => message.native_id)), ["outer-call", "result"]);
   assert.deepEqual(plain(graph.childrenByParent.get("outer").map(message => message.native_id)), ["outer-request", "inner-call", "outer-total"]);
   assert.deepEqual(plain(graph.childrenByParent.get("inner").map(message => message.native_id)), ["inner-request", "inner-total"]);
+});
+
+test("only protocol metadata marks a continuation", () => {
+  const count = (total, last) => ({ kind: "metadata", role: "system", text: JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total }, last_token_usage: { total_tokens: last } } } }) });
+  const marker = JSON.stringify({ type: "session_meta", payload: { forked_from_id: "parent" } });
+  // Conductor stores pasted JSON as metadata under the sender's role.
+  for (const kind of ["message", "metadata"]) {
+    const reports = conversationTokenReports([{ kind, role: "user", text: marker }, count(1100, 100), count(1300, 200)]);
+    assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), 1300, kind);
+  }
 });

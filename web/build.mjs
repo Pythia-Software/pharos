@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const check = process.argv.includes("--check"), watch = process.argv.includes("--watch"), temporary = check ? mkdtempSync(join(tmpdir(), "pharos-bundles-")) : null;
-const bundles = [["src/index.tsx", "../internal/archive/assets/query-tables.js"], ["src/uifeedback/inbox.tsx", "../internal/uifeedback/assets/inbox.js"]];
+const bundles = [["src/index.tsx", "../internal/archive/assets/query-tables.js"], ["src/data-guide-entry.tsx", "../internal/archive/assets/data-guide.js"], ["src/uifeedback/inbox.tsx", "../internal/uifeedback/assets/inbox.js"]];
 try {
   for (const [entry, target] of bundles) {
     const output = temporary ? join(temporary, target.split("/").at(-1)) : target;
