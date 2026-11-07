@@ -279,6 +279,19 @@ does not dismiss an issue: the repaired unit must pass verification. Sampling
 does not certify the entire library, and a shared parser bug can still agree
 with the reference; provider fixtures remain necessary.
 
+**Verify this source again** on a mismatch checks every available input for
+that source, including retained copies from other Macs. An obsolete warning
+clears when its input passes, without rewriting it. **Verify & repair this
+source**, or **Verify all & repair mismatches** under Repair & maintenance,
+also reindexes inputs that still mismatch. Each repair uses the exact frozen
+record that failed comparison and verifies it again before clearing its issue.
+Healthy inputs are untouched; this avoids a full recapture and source-wide
+reindex. Copy authority and evidence-version guards still apply. Unreadable,
+changing or older inputs remain unresolved, with deferred/error counts shown
+separately from passed checks. Full verification can take time; Stop keeps
+committed repairs, and running it again checks the remaining inputs. Derived
+library analyses are marked for their usual background refresh.
+
 Independent verification can discover changes before the next index pass.
 When a known unit's selected parts differ from its indexed input states, its
 check defers until indexing catches up instead of reporting index lag as
@@ -299,7 +312,7 @@ Existing authentication applies to all endpoints. POST bodies are JSON.
 | `GET /api/sync/recovery?estimate=true&source=codex` | Retained size/group counts and measured copy/index estimate. |
 | `POST /api/sync/recovery` | `{"mode":"full","sources":["codex"]}`, `{"mode":"retained"}`, or `{"resume":"JOB_ID"}`. |
 | `POST /api/library/update` | Coordinated ordinary capture/index/deferred reconciliation. |
-| `POST /api/sync/verify` | `{"all":true,"sources":["codex"]}`; omitted source scope means all inputs. |
+| `POST /api/sync/verify` | `{"all":true,"sources":["codex"]}`; add `"repair":true` to reindex only fresh mismatches and reverify them. Repair requires `all:true`. Omitted source scope means all inputs. |
 | `GET /api/activity` | Progress, interruption, failures and verification summaries by returned run ID. |
 
 ## Measurement and regression gates

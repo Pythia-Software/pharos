@@ -238,6 +238,7 @@ func (c *Catalog) authorshipCheckpoint(ctx context.Context) (authorshipCheckpoin
 
 type authorshipIncremental struct {
 	checkpoint    authorshipCheckpoint
+	refinementKey string
 	graph, reason string
 	inputs        []authorInput
 	launches      []conversationLaunch
@@ -726,10 +727,11 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 			return err
 		}
 		metadata := map[string]string{"authorship_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
-		if full {
-			metadata["authorship_refined_at"] = now()
-		}
 		if revision == run.checkpoint.revision {
+			if full && run.refinementKey == authorshipRefinementKey(revision) {
+				metadata["authorship_refined_at"] = now()
+				metadata["authorship_refinement_inputs"] = run.refinementKey
+			}
 			metadata["authorship_complete_at"] = now()
 			if err := recordAuthorshipSuppressed(ctx, tx, representatives); err != nil {
 				return err
