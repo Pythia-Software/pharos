@@ -28,6 +28,7 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	labelrt "github.com/gbdubs/pharos/internal/labeler"
 	"github.com/gbdubs/pharos/internal/labeler/labelertest"
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // labelsTestSettings is a model directory with four labels (P > P.request,
@@ -393,6 +394,45 @@ func TestLabelsRunsInLimitedStepsAndOneAtATime(t *testing.T) {
 	var dirty int
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels_dirty`).Scan(&dirty); err != nil || dirty != 0 {
 		t.Fatalf("dirty marks left: %d %v", dirty, err)
+	}
+}
+
+// The run's lease: only another holder is "already running", which the
+// analysis chain waits out; any other lock failure keeps its cause. Neither
+// labels anything, and both leave the in-process mutex free. A run in this
+// process is refused before any lease is tried.
+func TestLabelsLockFailures(t *testing.T) {
+	catalog := labeledCatalog(t)
+	settings := labelsTestSettings(t, "ok")
+	labeled := func() (n int) {
+		_ = catalog.DB.QueryRow(`SELECT COUNT(*) FROM message_labels`).Scan(&n)
+		return n
+	}
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			refused := failFileLease(t, ".labels.lock", tc.err)
+			catalog.labels.Lock()
+			_, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+			catalog.labels.Unlock()
+			if err != errLabelsRunning || len(*refused) != 0 {
+				t.Fatalf("beside a run in this process: %v after %d lease attempts", err, len(*refused))
+			}
+			_, err = catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
+			if errors.Is(err, errLabelsRunning) != errors.Is(tc.err, filelock.ErrContended) || !errors.Is(err, tc.err) {
+				t.Fatalf("lease failure: %v", err)
+			}
+			requireLeasesClosed(t, *refused, 1)
+			if !catalog.labels.TryLock() {
+				t.Fatal("a failed lease kept the run's mutex")
+			}
+			catalog.labels.Unlock()
+			if n := labeled(); n != 0 {
+				t.Fatalf("labeled %d messages without the lease", n)
+			}
+		})
+	}
+	if stats, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{}); err != nil || stats.MessagesLabeled == 0 {
+		t.Fatalf("a run after the failures: %+v %v", stats, err)
 	}
 }
 

@@ -18,8 +18,9 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The labeler's downloadable assets (docs/local-labeler.md, "Model
@@ -363,18 +364,23 @@ func untarGzip(path, dir string) error {
 // labels fetch), so one Mac downloads once; status asks whether it is held.
 func labelsFetchLock() string { return filepath.Join(pharosSupportDir(), "labeler", ".fetch.lock") }
 
+// Tests replace only labelsFetchActive's lock calls to exercise failures.
+var lockLabelsFetchProbe = filelock.Lock
+
 // labelsFetchActive reports whether some process is downloading. It only
-// opens an existing lock file, so a status read creates nothing.
+// opens an existing lock file, so a status read creates nothing. It is a
+// status hint, not a safety verdict: no lock file means no download, and a
+// lock it cannot take for any reason reads as downloading.
 func labelsFetchActive() bool {
 	file, err := os.Open(labelsFetchLock())
 	if err != nil {
 		return false
 	}
 	defer file.Close()
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+	if err := lockLabelsFetchProbe(file, filelock.Shared, filelock.Try); err != nil {
 		return true
 	}
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = filelock.Unlock(file)
 	return false
 }
 
@@ -388,8 +394,11 @@ func fetchLabelsAssets(ctx context.Context, assets []labelsAsset, op *Op, progre
 		return err
 	}
 	lease, err := fileLease(labelsFetchLock(), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return errLabelsFetching
+	}
+	if err != nil {
+		return fmt.Errorf("lock the labeler download: %w", err)
 	}
 	defer lease.Close()
 	for _, asset := range assets {

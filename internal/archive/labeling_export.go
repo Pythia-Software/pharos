@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Training export (labeling-export-v1): one job's results as files a
@@ -407,8 +410,11 @@ func exportLabeling(ctx context.Context, dir, job, out string, replace, force bo
 		return "", nil, err
 	}
 	shared, err := fileLease(filepath.Join(dir, labelingLockFile), false)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return "", nil, fmt.Errorf("a labeling prepare is using %s", dir)
+	}
+	if err != nil {
+		return "", nil, err
 	}
 	defer shared.Close()
 	datasetManifest, err := os.ReadFile(filepath.Join(dir, labelingManifestFile))
