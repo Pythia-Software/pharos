@@ -41,20 +41,9 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		defer cancel()
 		child.setStopper(cancel)
 		ctx = withWorkProgress(ctx, child.mirrorWork)
-		err := s.Catalog.RefineAuthorship(ctx)
+		err := s.Catalog.refineAuthorship(ctx, false)
 		child.Finish(err)
-		if err != nil {
-			return err
-		}
-		// Refinement can change the human spans consumed by downstream work.
-		return s.Catalog.writeTransaction(ctx, "schedule refined writing consumers", func(tx *sql.Tx) error {
-			for _, name := range []string{"labels", "findings"} {
-				if err := markSyncDeferredStage(tx, name); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		return err
 	case "suggestions":
 		ctx, child := op.Child(OperationSpec{Kind: "ask.suggestions", Trigger: triggerChained})
 		err := s.refreshAskSuggestions(ctx)

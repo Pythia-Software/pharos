@@ -1612,6 +1612,219 @@ func TestLibraryMoveKeepsChangedSource(t *testing.T) {
 }
 
 func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		changed     bool
+		unavailable bool
+	}{
+		{name: "disconnect during preflight with backlog"},
+		{name: "disconnect during preflight with new activity", changed: true},
+		{name: "archive unavailable after preflight", unavailable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := lifecycleLibraries(t)
+			file := filepath.Join(t.TempDir(), "pending.json")
+			canonicalExport(t, file, "Pending", "before")
+			writeSourceFile(t, hostConfigPath(a), fmt.Sprintf("[[sources]]\nname = \"pending\"\nkind = \"canonical\"\naccount = \"local\"\npath = %q\nenabled = true\n", file))
+			var err error
+			a, err = LoadConfig(a.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination, err := readLibraryDescriptor(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.DeliveryTargetInstance = destination.Instance
+			if err := capturePendingLibrary(t.Context(), a); err != nil {
+				t.Fatal(err)
+			}
+			app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, err := app.registry.register(a, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := app.registry.register(b, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceChild, targetChild := lifecycleChild(t), lifecycleChild(t)
+			app.children[first], app.children[second] = sourceChild, targetChild
+			targetMessages := catalogCount(t, b, "messages")
+			if tc.changed {
+				canonicalExport(t, file, "Pending", "after!")
+			}
+			observed := false
+			override(t, &captureFault, func(stage, _ string) error {
+				if stage != "delivery-read" || observed {
+					return nil
+				}
+				observed = true
+				if tc.unavailable {
+					if err := os.Rename(b.Path, b.Path+".unavailable"); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := os.Rename(b.Path+".unavailable", b.Path); err != nil {
+							t.Error(err)
+						}
+					})
+				} else {
+					response := httptest.NewRecorder()
+					app.api(response, httptest.NewRequest(http.MethodPost, "/api/app/disconnect", strings.NewReader(fmt.Sprintf(`{"id":%q}`, second))))
+					if response.Code != http.StatusOK {
+						t.Fatalf("disconnect during preflight: %s", response.Body.String())
+					}
+				}
+				return nil
+			})
+			app.deliveryCycle(first, second)
+			if !observed || catalogCount(t, a, "messages") == 0 || catalogCount(t, b, "messages") != targetMessages {
+				t.Fatal("preflight availability change lost pending history or wrote the archive")
+			}
+			if app.job == nil || app.job["state"] != "paused" {
+				t.Fatal("unavailable archive was not reported as paused", app.job)
+			}
+			if !tc.changed {
+				select {
+				case <-sourceChild.done:
+					t.Fatal("unchanged backlog stopped the source service")
+				default:
+				}
+				if len(app.operations.reg.views()) != 0 {
+					t.Fatal("unchanged backlog registered delivery work")
+				}
+			} else {
+				db, err := openReadOnlySQLite(a.CatalogPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var captured int
+				if err := db.QueryRow("SELECT COUNT(*) FROM messages WHERE text='after!'").Scan(&captured); err != nil || captured != 1 {
+					t.Fatalf("new activity was not captured locally: %d %v", captured, err)
+				}
+			}
+		})
+	}
+	t.Run("broker probes before stopping services", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		file := filepath.Join(t.TempDir(), "pending.json")
+		canonicalExport(t, file, "Pending", "before")
+		writeSourceFile(t, hostConfigPath(a), fmt.Sprintf("[[sources]]\nname = \"pending\"\nkind = \"canonical\"\naccount = \"local\"\npath = %q\nenabled = true\n", file))
+		appPath := filepath.Join(t.TempDir(), "Pharos.app")
+		app, err := newApplicationManager(t.Context(), appPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := app.registry.register(a, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := app.registry.register(b, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := app.registry.save(); err != nil {
+			t.Fatal(err)
+		}
+		sourceChild, targetChild := lifecycleChild(t), lifecycleChild(t)
+		app.children[first], app.children[second] = sourceChild, targetChild
+		alive := func(child *applicationChild) bool {
+			select {
+			case <-child.done:
+				return false
+			default:
+				return true
+			}
+		}
+		copied := false
+		override(t, &captureFault, func(stage, _ string) error {
+			if stage == "copy" {
+				copied = true
+				if !alive(targetChild) || alive(sourceChild) {
+					t.Fatal("capture stopped the destination or failed to stop its source")
+				}
+				return fmt.Errorf("injected capture failure")
+			}
+			return nil
+		})
+		app.deliveryCycle(first, second)
+		if !copied || !alive(targetChild) || catalogCount(t, a, "messages") == 0 {
+			t.Fatal("failed capture interrupted the archive or lost pending history")
+		}
+		captureFault = nil
+		// Stop after catalog cleanup to exercise receipt-first recovery with
+		// an empty source. It must never recapture during resumed cleanup.
+		override(t, &libraryTransferFault, func(stage string) error {
+			if stage == "source-catalog-emptied" {
+				return fmt.Errorf("injected delivery interruption")
+			}
+			return nil
+		})
+		app.deliveryCycle(first, second)
+		if catalogCount(t, a, "messages") != 0 || alive(targetChild) {
+			t.Fatal("delivery did not reach its interrupted cleanup boundary")
+		}
+		libraryTransferFault = nil
+		captureFault = func(stage, _ string) error {
+			if stage == "copy" || stage == "snapshot" {
+				t.Fatal("resumed delivery recaptured source inputs")
+			}
+			return nil
+		}
+		app.deliveryCycle(first, second)
+		if _, err := os.Stat(pendingDeliveryPath(a)); !os.IsNotExist(err) {
+			t.Fatal("broker did not resume the delivery receipt", err)
+		}
+		captureFault = nil
+		app, err = newApplicationManager(t.Context(), appPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceChild, targetChild = lifecycleChild(t), lifecycleChild(t)
+		app.children[first], app.children[second] = sourceChild, targetChild
+		for range 2 {
+			app.deliveryCycle(first, second)
+		}
+		if !alive(sourceChild) || !alive(targetChild) || app.generation != 0 || app.job != nil || len(app.operations.reg.views()) != 0 {
+			t.Fatal("idle delivery after restart registered work or interrupted services")
+		}
+		// While the archive is held, new activity is captured once; the next
+		// tick retains the same payload and leaves both services alone.
+		canonicalExport(t, file, "Pending", "after!")
+		app.suspended[second] = true
+		app.deliveryCycle(first, second)
+		if alive(sourceChild) || !alive(targetChild) || catalogCount(t, a, "messages") == 0 {
+			t.Fatal("disconnected delivery failed to retain new activity locally")
+		}
+		sourceChild = lifecycleChild(t)
+		app.children[first] = sourceChild
+		generation := app.generation
+		app.deliveryCycle(first, second)
+		if !alive(sourceChild) || !alive(targetChild) || app.generation != generation {
+			t.Fatal("disconnected retry repeated an unchanged capture")
+		}
+		// Returning to already-delivered bytes is also a completed observation;
+		// it must not repeatedly recapture while another revision waits locally.
+		canonicalExport(t, file, "Pending", "before")
+		app.deliveryCycle(first, second)
+		sourceChild = lifecycleChild(t)
+		app.children[first] = sourceChild
+		generation = app.generation
+		app.deliveryCycle(first, second)
+		if !alive(sourceChild) || !alive(targetChild) || app.generation != generation {
+			t.Fatal("already-delivered source reversion repeated capture")
+		}
+		delete(app.suspended, second)
+		app.deliveryCycle(first, second)
+		if catalogCount(t, a, "messages") != 0 || alive(targetChild) {
+			t.Fatal("reconnected archive did not accept retained history")
+		}
+	})
 	t.Run("workspace reassignment", func(t *testing.T) {
 		a, b := lifecycleLibraries(t)
 		file := filepath.Join(t.TempDir(), "workspace.json")
@@ -1701,15 +1914,56 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	writeSourceFile(t, path, `{"workspaces":[{"id":"pending-session","title":"Pending","conversations":[{"id":"pending-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"pending text"}]},{"id":"unchanged-chat","provider":"codex","messages":[{"id":"q2","role":"user","text":"already delivered sibling"}]}]}]}`)
 	source := SourceConfig{Name: "pending", Kind: "canonical", Path: path, Account: "local", Enabled: true}
 	a.Sources = []SourceConfig{source}
+	destination, err := readLibraryDescriptor(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.DeliveryTargetInstance = destination.Instance
+	checkPlan := func(capture, transfer bool) {
+		t.Helper()
+		plan, err := planPendingDelivery(t.Context(), a)
+		if err != nil || plan.Capture != capture || plan.Transfer != transfer || plan.Resume {
+			t.Fatalf("pending delivery plan: %+v %v; want capture=%v transfer=%v", plan, err, capture, transfer)
+		}
+	}
 	if err := capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
+	checkPlan(false, true)
 	if _, err := TransferLibrary(context.Background(), a, b, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 0 {
 		t.Fatal("pending history retained after delivery")
 	}
+	checkPlan(false, false)
+	// Standalone retained evidence must be delivered even without any
+	// conversation rows; unreadable receipts must never establish idleness.
+	for _, extra := range []string{
+		filepath.Join(a.ArchiveRoot, "package", "extra.json"),
+		filepath.Join(a.ArchiveRoot, "package", captureHostName),
+		filepath.Join(a.CaptureRoot, "retained-evidence", "files", captureHostName),
+	} {
+		writeSourceFile(t, extra, "{}")
+		checkPlan(false, true)
+		if err := os.Remove(extra); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkPlan(false, false)
+	func() {
+		previous := captureFault
+		defer func() { captureFault = previous }()
+		captureFault = func(stage, _ string) error {
+			if stage == "delivery-read" {
+				return fmt.Errorf("injected unreadable source")
+			}
+			return nil
+		}
+		if _, err := planPendingDelivery(t.Context(), a); err == nil {
+			t.Fatal("unreadable input was acknowledged as unchanged")
+		}
+	}()
 	summary, err := Capture(context.Background(), a, []SourceConfig{source}, nil)
 	if err != nil || !summary.OK {
 		t.Fatal("unchanged capture failed", err)
@@ -1738,12 +1992,14 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	if err = os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
+	checkPlan(true, false)
 	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 1 {
 		t.Fatal("changed source must keep only its changed conversation pending")
 	}
+	checkPlan(false, true)
 	if _, err = TransferLibrary(context.Background(), a, b, true, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1763,12 +2019,14 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	// bringing unchanged conversations back into the local pending library.
 	contents = strings.Replace(readText(t, path), `"title":"Pending"`, `"title":"Renamed workspace","outcome":"complete","metadata":{"branch":"updated-branch"}`, 1)
 	writeSourceFile(t, path, contents)
+	checkPlan(true, false)
 	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 0 {
 		t.Fatal("workspace metadata update repopulated delivered conversations")
 	}
+	checkPlan(false, true)
 	c = reopenCatalog(t, a.CatalogPath)
 	if got := workspaceTitle(t, c, "pending-session"); got != "Renamed workspace" {
 		t.Fatal("workspace-only change did not become pending", got)
@@ -1788,6 +2046,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		t.Fatal("workspace-only delivery changed conversation storage or failed to empty the pending workspace")
 	}
 	a.DeliveryTargetInstance = randomToken()
+	checkPlan(true, false)
 	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}

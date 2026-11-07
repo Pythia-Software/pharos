@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -68,7 +69,15 @@ func TestSnapshotSQLiteStepsThroughOneReadTransaction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	target := filepath.Join(dir, "snapshot.db")
-	err := snapshotSQLite(ctx, file, target)
+	var copied, total int64
+	partial := false
+	err := snapshotSQLiteWithProgress(ctx, file, target, func(done, size int64) {
+		if size <= 0 || done < copied || done > size || total != 0 && size != total {
+			t.Fatalf("snapshot progress: %d of %d after %d of %d", done, size, copied, total)
+		}
+		partial = partial || done > 0 && done < size
+		copied, total = done, size
+	})
 	during := commits.Load()
 	close(stop)
 	if writeErr := <-done; writeErr != nil {
@@ -79,6 +88,9 @@ func TestSnapshotSQLiteStepsThroughOneReadTransaction(t *testing.T) {
 	}
 	if during == 0 {
 		t.Fatal("the writer never committed during the snapshot")
+	}
+	if info, statErr := os.Stat(target); statErr != nil || !partial || copied != total || copied != info.Size() {
+		t.Fatalf("snapshot progress did not reach its actual size: %d of %d, partial=%v, stat=%v", copied, total, partial, statErr)
 	}
 	snapshot, err := openReadOnlySQLite(target)
 	if err != nil {
@@ -101,7 +113,7 @@ func TestSnapshotSQLiteStepsThroughOneReadTransaction(t *testing.T) {
 	// Cancelled a few pages into a copy of thousands, it stops.
 	cancelled := &cancelAfter{Context: context.Background()}
 	cancelled.left.Store(5)
-	if err := backupSQLite(cancelled, openSourceSQLite, file, filepath.Join(dir, "cancelled.db")); !errors.Is(err, context.Canceled) {
+	if err := backupSQLite(cancelled, openSourceSQLite, file, filepath.Join(dir, "cancelled.db"), nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled snapshot: %v", err)
 	}
 }
