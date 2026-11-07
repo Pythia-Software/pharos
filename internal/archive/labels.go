@@ -203,6 +203,11 @@ type LabelerSettings struct {
 	// (agent events' beside labels', and the reverse), so that the default
 	// budget fits both models at the threads Settings chose.
 	PeerThreads int
+	// authorityAdmitted marks a caller the work authority admitted (§7.1):
+	// its grant already counts the worker's threads (labelsSplit fits them
+	// inside it), so the manager bounds only its model cache (memory and
+	// the shared GPU). Never read from a library's settings.
+	authorityAdmitted bool
 }
 
 func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
@@ -259,36 +264,54 @@ func (c *Catalog) labelerManager(settings LabelerSettings) *labelrt.Manager {
 
 // labelsBudget is what settings allow every model's workers together:
 // labels_thread_budget, else both models' workers and threads or half the
-// cores, whichever is more; and labels_memory_budget_mb. labelsAuthorityBudget
-// leaves threads to the work authority: the manager then bounds only its
-// model cache (memory and the shared GPU).
+// cores, whichever is more; and labels_memory_budget_mb. An admitted caller
+// leaves threads to the work authority (admittedLabeler).
 func labelsBudget(settings LabelerSettings) labelrt.Budget {
-	threads := settings.ThreadBudget
-	if threads == labelsAuthorityBudget {
+	if settings.authorityAdmitted {
 		return labelrt.Budget{MemoryMB: settings.MemoryBudgetMB}
 	}
+	threads := settings.ThreadBudget
 	if threads <= 0 {
 		threads = max(max(1, settings.Workers)*max(1, settings.Threads)+settings.PeerThreads, runtime.NumCPU()/2)
 	}
 	return labelrt.Budget{Threads: threads, MemoryMB: settings.MemoryBudgetMB}
 }
 
-// labelsAuthorityBudget, as a ThreadBudget, marks a caller the work
-// authority admitted (§7.1): its grant already counts the worker's threads
-// (labelsSplit fits them inside it), so a second thread budget in the
-// manager could only refuse work the authority granted, for example while
-// the other model's runner is resident beside it on battery.
-const labelsAuthorityBudget = -1
-
 // admittedLabeler is settings for an inference caller under ctx: with a
-// work grant in ctx the authority is the one CPU budget
-// (labelsAuthorityBudget); without one they are unchanged. Every call to
-// the manager sets its budget, so a later classic caller sets its own again.
+// work grant in ctx the authority is the one CPU budget, since a second
+// thread budget in the manager could only refuse work the authority granted
+// (for example while the other model's runner is resident beside it on
+// battery); without one they are unchanged. Every call to the manager sets
+// its budget, so a later classic caller sets its own again.
 func admittedLabeler(ctx context.Context, settings LabelerSettings) LabelerSettings {
-	if _, ok := ctx.Value(workAdmissionKey{}).(workAdmission); ok {
-		settings.ThreadBudget = labelsAuthorityBudget
-	}
+	_, settings.authorityAdmitted = ctx.Value(workAdmissionKey{}).(workAdmission)
 	return settings
+}
+
+// acquireLabelerCPU admits a labeler pipeline's execution (preparation
+// beside one model worker; see labelsSplit) and nothing before it. It asks
+// for at least the worker's threads and one preparation worker, so that grants
+// of different sizes start the same worker and a warm one is reused, and for
+// at most four preparation workers more. Without an authority it admits
+// nothing and the caller runs at its own settings. A cap lowered below that
+// least while waiting admits from one slot instead.
+func acquireLabelerCPU(ctx context.Context, c *Catalog, threads int, gpuOnly bool) (*workCPUGrant, error) {
+	threads = max(1, threads)
+	inference := threads
+	if gpuOnly {
+		inference = 1
+	}
+	most := threads + min(4, threads)
+	least := inference + 1
+	if a := workAuthorityFor(ctx, c); a != nil {
+		most = min(a.cap(), most)
+		least = min(most, least)
+	}
+	grant, err := acquireWorkCPU(ctx, c, least, most)
+	if errors.Is(err, errWorkGrantExceedsCap) && least > 1 {
+		grant, err = acquireWorkCPU(ctx, c, 1, most)
+	}
+	return grant, err
 }
 
 // The battery budget (docs/local-labeler.md, "Scheduling and power"): one
@@ -475,17 +498,12 @@ func labelsInputHash(items []labelingItem) string {
 // items differ from what their stored labels were made from, and stores the
 // results in batched write transactions. It stops between batches when ctx
 // ends, keeping what was stored; the next run resumes.
+//
+// Under a work authority it admits two leaves in turn: discovery (one
+// serial reader) at one slot, then labeling at acquireLabelerCPU's grant. It
+// waits for the second holding only the labels locks, which nothing waits
+// on: another run that finds them held is errLabelsRunning.
 func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts LabelsRunOptions) (*LabelsRunStats, error) {
-	if authority := workAuthorityFor(ctx, c); authority != nil {
-		if _, admitted := workAllocationFrom(ctx); !admitted {
-			var stats *LabelsRunStats
-			err := admitWorkCPU(ctx, c, 1, min(authority.cap(), max(1, settings.Threads)+min(4, max(1, settings.Threads))), func(ctx context.Context, _ workAllocation) (err error) {
-				stats, err = c.RunLabels(ctx, settings, opts)
-				return err
-			})
-			return stats, err
-		}
-	}
 	started := time.Now()
 	stats := &LabelsRunStats{}
 	defer func() { stats.Total = time.Since(started) }()
@@ -497,17 +515,23 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 	if settings.Worker == "" && !opts.DryRun {
 		return stats, fmt.Errorf("%w: set labels_worker (or PHAROS_LABELS_WORKER)", labelrt.ErrModelUnavailable)
 	}
+	discovery, err := acquireWorkCPU(ctx, c, 1, 1)
+	if err != nil {
+		return stats, err
+	}
+	defer discovery.Release()
 	release, err := c.labelsInvocation()
 	if err != nil {
 		return stats, err
 	}
 	defer release()
+	dctx := discovery.Ctx
 	model, err := labelrt.LoadModel(settings.ModelDir, settings.Variant)
 	if err != nil {
 		return stats, err
 	}
 	identity := labelsModelIdentity(model)
-	if err := c.ensureLabelsSchema(ctx); err != nil {
+	if err := c.ensureLabelsSchema(dctx); err != nil {
 		return stats, err
 	}
 	_, authorship, err := c.authorshipEstimateGenerations()
@@ -515,31 +539,40 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 		return stats, err
 	}
 	if !opts.DryRun {
-		if err := c.recordLabelsModel(ctx, model, identity); err != nil {
+		if err := c.recordLabelsModel(dctx, model, identity); err != nil {
 			return stats, err
 		}
 	}
-	builder, err := newLabelsItemBuilder(ctx, c.reader())
+	builder, err := newLabelsItemBuilder(dctx, c.reader())
 	if err != nil {
 		return stats, err
 	}
-	todo, err := c.labelsWork(ctx, builder, identity, opts, stats)
+	todo, err := c.labelsWork(dctx, builder, identity, opts, stats)
 	if err != nil {
 		return stats, err
 	}
+	discovery.Release()
 	progress("labels: %d conversations to rebuild of %d", len(todo), stats.Conversations)
 	reportWork(ctx, "labeling messages", "conversation", 0, len(todo))
 
 	run := &labelsRun{c: c, settings: settings, opts: opts, model: model, identity: identity, stats: stats, progress: progress}
-	if allocation, admitted := workAllocationFrom(ctx); admitted {
-		prep, inference, serial := labelsSplit(allocation.CPUs, settings.Threads, labelsGPUOnly(model, settings))
+	gpuOnly := labelsGPUOnly(model, settings)
+	grant, err := acquireLabelerCPU(ctx, c, settings.Threads, gpuOnly)
+	if err != nil {
+		return stats, err
+	}
+	if _, admitted := workAllocationFrom(grant.Ctx); admitted {
+		prep, inference, serial := labelsSplit(grant.Allocation.CPUs, settings.Threads, gpuOnly)
+		run.settings = admittedLabeler(grant.Ctx, settings)
 		run.prep, run.settings.Threads, run.settings.Workers = prep, inference, 1
 		run.opts.ThreadTarget = nil
 		if serial {
 			run.serial = make(chan struct{}, 1)
 		}
 	}
-	if err := run.execute(ctx, builder, todo); err != nil {
+	err = run.execute(grant.Ctx, builder, todo)
+	grant.Release()
+	if err != nil {
 		return stats, err
 	}
 	// The ledger is current when every conversation was covered and no input
@@ -571,7 +604,7 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 // labelsInvocation takes the labels run's locks: one run at a time in this
 // process, and across processes (the service and pharos labels run) through a
 // lease the OS releases if the holder exits. Either held elsewhere is
-// errLabelsRunning.
+// errLabelsRunning; any other lease failure keeps its cause.
 func (c *Catalog) labelsInvocation() (release func(), err error) {
 	if !c.labels.TryLock() {
 		return nil, errLabelsRunning
@@ -748,14 +781,16 @@ func (c *Catalog) labelsDiscover(ctx context.Context, builder *labelsItemBuilder
 	mark := followed
 	if graph {
 		// A session stores selected conversations ahead of the rest, so every
-		// wanted conversation needs a reason of its own, not only followers.
-		// A model or contract change (all) is otherwise only this view of the
-		// ledger: once a selected step rewrites the last old-model label, all
-		// is off, and so is the only reason its dependents, already labeled
-		// by the new model, had to follow its change.
-		mark = nil
+		// conversation wanted for a change needs a reason of its own, not only
+		// followers. A model or contract change (all) is otherwise only this
+		// view of the ledger: once a selected step rewrites the last old-model
+		// label, all is off, and so is the only reason its dependents, already
+		// labeled by the new model, had to follow its change. One wanted only
+		// for missing labels (never built, or labels lost) gets none: the
+		// ledger keeps it wanted until it is built, and a mark would read as a
+		// change to every later run, whose forks and re-senders then follow.
 		for _, id := range ids {
-			if want[id] && tokens[id] == "" {
+			if want[id] && changed[id] && tokens[id] == "" {
 				mark = append(mark, id)
 			}
 		}

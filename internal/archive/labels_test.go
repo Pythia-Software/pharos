@@ -1055,6 +1055,48 @@ func TestAdmittedLabelerLeavesThreadsToTheAuthority(t *testing.T) {
 	if _, _, err := c.labelerRunner(t.Context(), settings, model, classic); !errors.Is(err, labelrt.ErrBudget) {
 		t.Fatalf("a classic caller lost its own budget: %v", err)
 	}
+	// Admission is no saved value: a labels_thread_budget of -1 is the
+	// classic default, as any value below one is.
+	saved, unset := plugged, plugged
+	saved.ThreadBudget, unset.ThreadBudget = -1, 0
+	if got := labelsBudget(saved); got != labelsBudget(unset) || got.Threads <= 0 {
+		t.Fatalf("a saved budget of -1: %+v", got)
+	}
+
+	// RunLabels under an authority admits discovery at one slot, outside the
+	// labeling grant, and labeling at the worker's threads beside
+	// preparation. Its worker answers to the authority's budget, not the
+	// saved one that would refuse it.
+	catalog := labeledCatalog(t)
+	run := labelsTestSettings(t, "ok")
+	run.Threads, run.ThreadBudget = 2, 1
+	hellos := filepath.Join(t.TempDir(), "hellos.jsonl")
+	t.Setenv(labelertest.FakeHelloEnv, hellos)
+	authority := newWorkAuthority(4)
+	discovered := -1
+	progress := labelsProgressFunc(func(line string) {
+		if strings.Contains(line, "to rebuild") {
+			discovered = authority.facts().CPUAllocated
+		}
+	})
+	stats, err := catalog.RunLabels(withWorkAuthority(t.Context(), authority), run, LabelsRunOptions{Progress: progress})
+	if err != nil || !stats.Complete || stats.MessagesLabeled == 0 {
+		t.Fatalf("an admitted run: %+v %v", stats, err)
+	}
+	if discovered != 0 || authority.facts().CPUAllocated != 0 {
+		t.Fatalf("slots held after discovery %d, after the run %d", discovered, authority.facts().CPUAllocated)
+	}
+	if threads := labelerHelloThreads(t, hellos); !slices.Equal(threads, []int{2}) {
+		t.Fatalf("an admitted run's workers: %v threads", threads)
+	}
+}
+
+// labelsProgressFunc receives each progress line.
+type labelsProgressFunc func(string)
+
+func (f labelsProgressFunc) Write(p []byte) (int, error) {
+	f(string(p))
+	return len(p), nil
 }
 
 // A backlog continues as its own run only when plugged in; on battery the
@@ -1951,6 +1993,30 @@ func TestLabelsSessionKeepsDependentsOutsideTheSelection(t *testing.T) {
 	full, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{Full: true})
 	if err != nil || full.MessagesLabeled != 0 || full.MessagesRemoved != 0 {
 		t.Fatalf("recovery differs from a full run: %+v %v", full, err)
+	}
+	// Labels lost behind the ledger's back: discovery wants the conversation
+	// again but marks neither it nor its dependents, so a classic run
+	// restores it alone, as it would without the session.
+	execTx(t, reopened.DB, `DELETE FROM message_labels WHERE message_id='m-s1'`)
+	lost, err := reopened.newLabelsSession(settings, workAllocation{CPUs: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lost.Close()
+	if err := lost.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range append([]string{"c-root"}, dependents...) {
+		if labelsDirtyToken(t, reopened, id) != "" {
+			t.Fatalf("lost labels marked %s as changed", id)
+		}
+	}
+	if pending, err := lost.PendingFor(t.Context(), []string{"c-root"}); err != nil || len(pending) != 1 {
+		t.Fatalf("the conversation that lost labels: pending %v %v", pending, err)
+	}
+	healed, err := reopened.RunLabels(t.Context(), settings, LabelsRunOptions{})
+	if err != nil || !healed.Complete || healed.ConversationsBuilt != 1 || healed.MessagesLabeled != 1 {
+		t.Fatalf("restoring lost labels after a session's discovery: %+v %v", healed, err)
 	}
 }
 

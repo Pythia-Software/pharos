@@ -24,10 +24,12 @@ import (
 // library. Its safety rests on the ledger's own state, never on the session:
 //
 //   - Discover is RunLabels' discovery over the whole library. Before any
-//     selected label is stored, every conversation discovery wants (its
-//     followers, and those wanted for a model or contract change, a
-//     structure change or missing labels) has a dirty mark of its own, and
-//     deleted conversations lose their labels. A historical dependent outside
+//     selected label is stored, every conversation discovery wants for a
+//     change (its followers, and those wanted for a model or contract change
+//     or a structure change) has a dirty mark of its own, and deleted
+//     conversations lose their labels. One wanted only for missing labels
+//     needs none: the ledger shows it unbuilt until it is, and a mark would
+//     make classic runs treat it as changed. A historical dependent outside
 //     the selection stays discoverable by any later run, this binary's or an
 //     older one's.
 //   - A step adopts a dirty token only after marking the followers of the
