@@ -287,14 +287,21 @@ func ProbeSources(config Config, catalog *Catalog) ProbeReport {
 }
 
 func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
-	return probeSelectedSources(home, config, catalog, nil, nil)
+	return probeSelectedSources(home, config, catalog, nil, nil, false)
 }
 
 // A nil kinds map preserves the CLI's full probe. A non-nil map, including an
 // empty one, limits all discovery and environment reads to explicit choices.
-func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation) ProbeReport {
+// onlyLocations goes further: it reads no usual places and no variables,
+// only the folders the person named.
+func probeSelectedSources(home string, config Config, catalog *Catalog, kinds map[string]bool, locations []ProbeLocation, onlyLocations bool) ProbeReport {
 	started := time.Now()
-	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, kinds), Home: home, Environment: []ProbeVariable{},
+	statusKinds := kinds
+	if onlyLocations {
+		// Counting new history reads the usual places.
+		statusKinds = map[string]bool{}
+	}
+	report := ProbeReport{ProbeStatus: probeStatusForKinds(home, config, catalog, statusKinds), Home: home, Environment: []ProbeVariable{},
 		Candidates: []ProbeCandidate{}, Checked: []ProbeLocation{}, TimingsMS: map[string]int64{}}
 	run := &probeRun{home: home, config: config, report: &report, seen: map[string]*ProbeCandidate{}, deadline: started.Add(probeWalkBudget)}
 	type shellResult struct {
@@ -313,7 +320,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 	envNames, variables := []string{}, map[string][]variable{}
 	for index := range providerRegistry {
 		spec := &providerRegistry[index]
-		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] {
+		if spec.Probe == nil || kinds != nil && !kinds[spec.Kind] || onlyLocations {
 			continue
 		}
 		for _, env := range spec.Probe.Env {
@@ -340,7 +347,7 @@ func probeSelectedSources(home string, config Config, catalog *Catalog, kinds ma
 		report.TimingsMS[name] += time.Since(begin).Milliseconds()
 	}
 	for _, spec := range providerRegistry {
-		if spec.Probe != nil && spec.Probe.Defaults != nil {
+		if spec.Probe != nil && spec.Probe.Defaults != nil && !onlyLocations {
 			timed(spec.Kind, func() { spec.Probe.Defaults(run, home) })
 		}
 	}

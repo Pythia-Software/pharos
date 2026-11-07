@@ -1037,7 +1037,8 @@
     const captured = index.hosts || [];
     renderHeaderAction();
 
-    grid.querySelectorAll('.source-card.remote').forEach(card => card.remove());
+    grid.querySelectorAll('.source-card.remote,.source-group-heading.remote').forEach(card => card.remove());
+    if (captured.some(host => !host.current && host.sources?.length)) grid.append(node('h3', 'source-group-heading remote', 'Captured from other Macs'));
     for (const host of captured.filter(host => !host.current)) {
       for (const source of host.sources || []) {
         const card = node('article', 'source-card remote'), head = node('div', 'source-card-head'), title = node('div');
@@ -1232,12 +1233,12 @@
     if (!grid || !hostsData) return;
     const current = (hostsData.index.hosts || []).find(host => host.current);
     for (const card of grid.querySelectorAll('.source-card:not(.remote)')) {
-      const name = card.querySelector('h2')?.textContent;
+      const name = card.dataset.source;
       const source = current?.sources.find(item => item.name === name);
       let line = card.querySelector('.pharos-card-capture');
       if (!line) {
         line = node('div', 'pharos-card-capture');
-        card.append(line);
+        card.insertBefore(line, card.querySelector('.source-removal'));
       }
       line.replaceChildren();
       if (!source) {

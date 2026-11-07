@@ -137,7 +137,7 @@ Each spec also declares what its records hold (`Content`, `provider_capabilities
 - the tool's version;
 - a cost the tool reports.
 
-Each is supported, varies (with a note saying how), unsupported, or not applicable (a folder for a web chat). `GET /api/providers` serves the declarations, and `testdata/providers.json` keeps a copy for the JavaScript tests. The setup wizard takes its tools and their names from the endpoint, and shows a table of what the chosen tools record before any is added. Each Settings source card lists what its kind never records and what it records only sometimes.
+Each is supported, varies (with a note saying how), unsupported, or not applicable (a folder for a web chat). `GET /api/providers` serves the declarations, and `testdata/providers.json` keeps a copy for the JavaScript tests. The setup wizard takes its tools, their names, summaries, folder hints and usual locations from the endpoint (`Summary`, `FolderHint`, `SetupWith`, `OfferWhenFound` and `Export` in the spec), and its review says what each chosen tool doesn't record, with the whole table a click away. Each Settings source card lists what its kind never records and what it records only sometimes.
 
 A conversation's `coverage` is a completeness word (`complete`, or `partial` when content it lists could not be read). Conductor once stored its extractor version there. That now has its own column, `conversations.extractor`, and the catalog upgrade moved existing values.
 

@@ -130,7 +130,7 @@
   "control_audit": {
    "file": "docs/view-controls.json",
    "version": 1,
-   "controls": 895
+   "controls": 902
   },
   "sections": {
    "cards": ["section:card-library","section:card-library-controls","section:card-library-panel","section:card-library-title","section:cardLibraryPage","section:cards"],
@@ -699,7 +699,7 @@
   "settings/sources": {
    "path": "settings/sources",
    "title": "Sources",
-   "description": "Choose which conversation files Pharos reads on this Mac. Pharos keeps them current on the Background Processing page.",
+   "description": "The AI tools whose history Pharos reads on this Mac. Pharos keeps them current on the Background Processing page.",
    "route": "/settings/sources"
   },
   "settings/sync": {

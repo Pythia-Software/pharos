@@ -966,8 +966,10 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		calls := 0
 		chosen := "/Volumes/My SSD/quoted \"folder\"\nname"
 		var pickerError error
-		override(t, &applicationFolderPicker, func(ctx context.Context) (string, error) {
+		purposes := []string{}
+		override(t, &applicationFolderPicker, func(ctx context.Context, purpose string) (string, error) {
 			calls++
+			purposes = append(purposes, purpose)
 			return chosen, pickerError
 		})
 		request := func(method, origin, token string) *httptest.ResponseRecorder {
@@ -994,6 +996,13 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusOK || result["path"] != path {
 				t.Fatal("selection or cancellation was not preserved", w.Body.String(), err)
 			}
+		}
+		// Setup opens it to choose a source folder or an export file.
+		r := httptest.NewRequest(http.MethodPost, "/api/app/choose-folder", strings.NewReader(`{"purpose":"export"}`))
+		r.Header.Set("Authorization", "Bearer "+m.token)
+		m.ServeHTTP(httptest.NewRecorder(), r)
+		if purposes[len(purposes)-1] != "export" || purposes[0] != "" || !pickerPurposes["export"].File || pickerPurposes["source"].File {
+			t.Fatal("the picker is opened for what it chooses", purposes)
 		}
 		pickerError = fmt.Errorf("picker unavailable")
 		if w := request(http.MethodPost, "", m.token); w.Code != http.StatusInternalServerError {
