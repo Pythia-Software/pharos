@@ -248,4 +248,17 @@ func TestResourceLeaseProbesAreReused(t *testing.T) {
 	if cache.probe([]string{path}, at.Add(2*time.Second))[0].Live {
 		t.Fatal("a replacement PID inherited the old lease's ownership")
 	}
+
+	// Standalone collection must use the same idle-drive policy as the
+	// app broker, rather than its status reader's one-second lease cache.
+	servicePath := filepath.Join(t.TempDir(), "leases")
+	service := &Server{leases: leaseWatch{dirs: func() []string { return []string{servicePath} }}}
+	service.serviceHistoryProcesses(at)
+	if err := os.WriteFile(servicePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.serviceHistoryProcesses(at.Add(time.Second))
+	if probes := service.historyLeases.probe([]string{servicePath}, at.Add(2*time.Second)); len(probes) != 0 {
+		t.Fatal("standalone history re-probed the drive within the idle interval")
+	}
 }

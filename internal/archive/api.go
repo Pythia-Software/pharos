@@ -104,6 +104,7 @@ type Server struct {
 	work                *workService
 	workError           error
 	resourceBrokerOwned bool
+	historyLeases       resourceLeaseCache // owned only by the history collector
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {

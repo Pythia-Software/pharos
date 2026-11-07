@@ -541,6 +541,16 @@ func (s *Server) serviceResourceProcesses() []resourceProcess {
 	return append(processes, leaseProcesses(s.leases.probe(false), "", "")...)
 }
 
+// serviceHistoryProcesses uses the history collector's slower lease cache.
+// Status and lifecycle checks retain their existing fresh leaseWatch policy.
+func (s *Server) serviceHistoryProcesses(at time.Time) []resourceProcess {
+	processes := []resourceProcess{{PID: os.Getpid(), Role: "service"}}
+	if s.leases.dirs != nil {
+		processes = append(processes, leaseProcesses(s.historyLeases.probe(s.leases.dirs(), at), "", "")...)
+	}
+	return processes
+}
+
 // leaseProcesses are the live leases' processes on this Mac.
 func leaseProcesses(probes []leaseProbe, library, name string) []resourceProcess {
 	processes := []resourceProcess{}

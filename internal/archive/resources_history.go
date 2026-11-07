@@ -885,9 +885,10 @@ func resourceHistoryTasks(ops []*Op) []resourceHistoryTask {
 // collectResourceHistory is a standalone service's collection: itself, its
 // library's leases and their descendants. Work is active while an operation
 // is running (not queued or blocked).
-func (s *Server) collectResourceHistory(time.Time) resourceHistoryFrame {
+func (s *Server) collectResourceHistory(at time.Time) resourceHistoryFrame {
 	tasks := resourceHistoryTasks(s.ops.running())
 	active := slices.ContainsFunc(tasks, func(task resourceHistoryTask) bool { return task.State == opRunning })
+	s.historyLeases.active = active
 	return resourceHistoryFrame{Tasks: tasks, Active: active,
-		Scopes: collectResourceGroups(s.resources, processGPU, resourceScopeService, nil, s.serviceResourceProcesses(), nil)}
+		Scopes: collectResourceGroups(s.resources, processGPU, resourceScopeService, nil, s.serviceHistoryProcesses(at), nil)}
 }

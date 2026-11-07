@@ -590,7 +590,7 @@ func (s *labelsSession) Run(ctx context.Context, ids []string, limit int) (workD
 		case wrote && complete && current[id]:
 			s.setJob(id, nil)
 			step.Done = append(step.Done, id)
-		case wrote && complete, failed[id]:
+		case wrote && complete, failed[id] && ctx.Err() == nil:
 			// Stored, yet the ledger does not show it current (a label or
 			// its conversation went missing): never a false Done. Or the run
 			// gave up on it (unbuildable, or a message the worker could not
