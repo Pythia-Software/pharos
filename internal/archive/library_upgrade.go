@@ -97,7 +97,7 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	}
 	checked(1)
 	usage, err := count(`SELECT COUNT(*) FROM workspaces w WHERE EXISTS
-		(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id AND c.provider='claude')
+		(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id)
 		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=w.id AND s.version=?)`, usageAttributionVersion)
 	if err != nil {
 		return nil, err
@@ -143,7 +143,7 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		{ID: "repositories", Label: "Merge repository identities", Unit: "repository",
 			Detail: "Merges the rows Pharos holds for one repository: different remote URLs, worktrees, and checkouts without a remote. It asks GitHub, through the gh command-line tool, which repositories were renamed or moved, so their work is counted together.", Pending: repositories},
 		{ID: "usage", Label: "Correct token attribution", Unit: "workspace",
-			Detail: "Recounts Claude agent sessions whose sub-agents were counted twice. Uses retained messages only.", Pending: usage},
+			Detail: "Separates usage attributed to each agent session, unallocated branch totals, and partial child usage evidence. Reconciles overlapping reports using retained messages.", Pending: usage},
 		{ID: "harness", Label: "Record agent app versions", Unit: "conversation",
 			Detail: "Notes which Claude Code or Codex version ran each conversation, from retained messages or source files where they still exist.", Pending: harness},
 		{ID: "instructions", Label: "Record loaded instructions", Unit: "conversation",

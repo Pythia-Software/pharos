@@ -23,7 +23,7 @@ import (
 // transfer catalog also preserves conflicting revisions as evidence.
 var transferHistoryTables = []string{
 	"repositories", "hosts", "machines", "host_machines", "pull_requests", "workspaces", "workspace_delivery_inputs", "work_items", "conversations", "origin_observations", "messages",
-	"agent_sessions", "agent_session_usage", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
+	"agent_sessions", "agent_session_usage", "agent_session_token_evidence", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
 	"skill_usages", "conversation_instructions", "task_attempts", "handoffs", "change_sets", "change_files",
 	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "source_evidence",
 	"declared_native_aliases", "conversation_group_membership", "conversation_parent_refs", "ask_native_sessions", "protections", "activity_events", "receipts", "mcp_calls",
@@ -158,6 +158,8 @@ func historyDigest(ctx context.Context, db sqlReader) (string, error) {
 // History tables without rowids use their declared compound primary key.
 func historyOrder(table string) string {
 	switch table {
+	case "agent_session_token_evidence":
+		return "agent_session_id,message_id,scope"
 	case "agent_session_usage":
 		return "agent_session_id,usage_hour,model,effort,attribution"
 	case "work_pr_links":
@@ -639,7 +641,8 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	// usage buckets. Replace its membership/usage and prune obsolete derived
 	// entities before importing; divergent unions keep their existing facts.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM agent_session_messages WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));
- DELETE FROM agent_session_usage WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));`); err != nil {
+ DELETE FROM agent_session_usage WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));
+ DELETE FROM agent_session_token_evidence WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));`); err != nil {
 		return err
 	}
 	for _, table := range []string{"agent_sessions", "skill_usages", "tool_calls", "model_requests"} {

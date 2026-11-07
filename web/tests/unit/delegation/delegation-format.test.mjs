@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // delegation.tsx builds its date formatters when it loads, so the zone is set
 // first. Each test file runs in its own process.
 process.env.TZ = "America/Denver";
-const { addSessionColumns, sessionTimelineState, cellTitle, clampRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
+const { addSessionColumns, sessionTimelineState, cellTitle, metricText, tableMetricText, tokenAttributionText, clampRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
 const { readDelegationRoute, delegationRouteValues } = await import("../../../src/delegation-route");
 const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
 
@@ -171,4 +171,21 @@ test("saved Parallel activity routes use Timeline while retaining navigation and
   assert.deepEqual(legacy.collapsed, ["parent"]);
   assert.equal(readDelegationRoute(new URLSearchParams()).tab, "table");
   assert.equal(readDelegationRoute(new URLSearchParams({ explorer: "unknown" })).tab, "table");
+});
+
+
+test("token observations distinguish minima, unallocated branches and missing prices",()=>{
+  assert.equal(metricText(metric(116837,"reported-minimum")),"≥116.8K");
+  assert.equal(tableMetricText(metric(116837,"reported-minimum")),"≥116.8K*");
+  assert.equal(tableMetricText(metric(1000,"reported")),"1K");
+  assert.equal(tableMetricText(metric(1000,"partial")),"1K+");
+  assert.equal(tableMetricText(metric(null,"reported-minimum")),formatted(null));
+  assert.equal(metricText(metric(1000,"partial")),"1K+");
+  assert.equal(metricText(metric(null,"unknown")),formatted(null));
+  const child={self:{tokens:metric(116837,"reported-minimum")},token_attribution:{direct_tokens:0,accounted_tokens:0,unallocated_tokens:0,observed_minimum_tokens:116837}};
+  assert.match(tokenAttributionText(child),/Reported minimum.*last request/);
+  assert.match(tokenAttributionText(child),/breakdown not recorded.*API cost unavailable/);
+  assert.match(cellTitle(child.self.tokens,spec('tokens','tokens')),/Reported minimum/);
+  assert.match(tokenAttributionText({...child,token_attribution:{...child.token_attribution,unallocated_tokens:200000}}),/unallocated within this branch.*Self \+ children/);
+  assert.equal(tokenAttributionText({...child,token_attribution:{...child.token_attribution,direct_tokens:200000}}),"","request evidence supersedes a smaller observation");
 });
