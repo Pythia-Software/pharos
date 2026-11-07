@@ -177,6 +177,8 @@ func (s *Server) Serve() error {
 	s.daemon("maintainToolSearch", s.Catalog.maintainToolSearch)
 	s.daemon("maintainQueryTextIndexes", s.Catalog.maintainQueryTextIndexes)
 	s.daemon("maintainMessageLabelFacts", s.Catalog.maintainMessageLabelFacts)
+	s.daemon("maintainFingerprintImages", s.maintainFingerprintImages)
+	s.daemon("maintainFingerprintImagesSecondary", s.maintainFingerprintImagesSecondary)
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
@@ -563,6 +565,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
 	case strings.HasPrefix(path, "/api/labels/conversations/"), strings.HasPrefix(path, "/api/labels/workspaces/"):
 		s.getMessageLabelFingerprint(w, r)
+	case strings.HasPrefix(path, "/api/fingerprints/images/"):
+		s.getFingerprintPNG(w, r)
+	case path == "/api/fingerprints/status":
+		s.getFingerprintStatus(w, r)
 	case path == "/api/origins":
 		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
 		if err != nil {
@@ -706,6 +712,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/fingerprints":
+		s.postFingerprints(w, r, body)
 	case path == "/api/markdown-link":
 		s.markdownLink(w, r)
 	case path == "/api/search/text" || path == "/api/search/text/validate":

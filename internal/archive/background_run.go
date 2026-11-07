@@ -15,6 +15,11 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 	switch id {
 	case "search":
 		return s.Catalog.backgroundSearch(ctx)
+	case "fingerprints":
+		return s.Catalog.runSearchBatches(ctx, []searchBatch{
+			{"maintenance.fingerprints", s.Catalog.pruneFingerprintBlobs},
+			{"maintenance.fingerprints", s.Catalog.refreshFingerprintImages},
+		})
 	case "other-sources":
 		names := s.backgroundInputsFor(ctx, nil).otherSources
 		return s.backgroundCapture(ctx, op, "sources", names)

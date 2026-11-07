@@ -129,6 +129,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; it runs again after the next index.", Latency: "batch", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 
 	// C. Continuous maintenance: each pass that does real work.
+	{Kind: "maintenance.fingerprints", Label: "Render fingerprints", Verb: "Rendering fingerprints", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops during rendering; unfinished images stay queued and resume next time.", Latency: "record", Journal: journalLonger(10 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.library-view", Label: "Index the Search view", Verb: "Indexing the Search view", Holds: "D:w W:w", Affects: "view", Stop: "view",
 		OnEject: "Stops; the batch in progress is abandoned, and it carries on when Pharos next opens the library or on Resume.", Latency: "record", Journal: journalLonger(15 * time.Second), Priority: priorityBackground},
 	{Kind: "maintenance.previews", Label: "Fill in previews", Verb: "Filling in previews", Holds: "D:w W:w", Affects: "view",

@@ -13,48 +13,38 @@ import {answerQuery} from '../support/query-server.mjs';
 const path=page=>new URL(page.url()).pathname+new URL(page.url()).search;
 
 test('workspace fingerprints restore across views and respect the global event display setting',{skip},async t=>{
- const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5};
- const app=await open(t,{url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint svg'}),{page}=app;
- assert.ok(await page.getByRole('img',{name:/recorded branches workspace fingerprint/}).count());
+ const query={...EMPTY_QUERY,select:[{field:'title',width:280},{field:'fingerprint',width:180}],limit:5},requests=[];
+ const api={'POST /api/fingerprints':request=>{requests.push(request.body);return defaultApi['POST /api/fingerprints'](request);}};
+ const app=await open(t,{api,url:'/library?view=table&q_library='+encodeQuery(query),ready:'.message-label-fingerprint img'}),{page}=app;
+ assert.ok(await page.getByRole('img',{name:'Workspace fingerprint',exact:true}).count());
  await page.getByRole('group',{name:'Display results as'}).getByRole('button',{name:'Conversations',exact:true}).click();
- await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
- await app.settled();
- await page.reload();
- await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
- assert.ok(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed')==='true');
- await app.shot('workspace-fingerprints');
- // Event details use the same keyboard model as timeline marks, and a
- // workspace's event opens its owning conversation rather than the workspace ID.
- const eventButton=()=>page.locator('.message-label-fingerprint').first().getByRole('button',{name:/agent events\. Arrow keys/});
- await eventButton().focus();await page.getByRole('tooltip').waitFor();await page.keyboard.press('Enter');
- const source=page.getByRole('link',{name:'Show both in conversation →'});await source.waitFor();
- const href=new URL(await source.getAttribute('href'),page.url());
- assert.equal(href.searchParams.get('conversation'),'fixture-first');
- assert.ok(href.searchParams.get('message'));assert.ok(href.searchParams.get('reader_event_link'));
- await page.keyboard.press('Escape');
+ await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ await app.settled();await page.reload();
+ await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.equal(await page.getByRole('button',{name:'Conversations',exact:true}).getAttribute('aria-pressed'),'true');
  const settings=async()=>{await activateHeaderTool(page,'settingsToggle');await page.getByRole('link',{name:'App preferences',exact:true}).click();await page.getByRole('switch',{name:'Agent events in fingerprints',exact:true}).waitFor();await app.settled();};
  await settings();
  const toggle=()=>page.getByRole('switch',{name:'Agent events in fingerprints',exact:true});
  assert.equal(await toggle().getAttribute('aria-checked'),'true');
- const settingsURL=path(page),saved=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().method()==='POST'&&response.request().postDataJSON()?.set?.['pharos-fingerprint-events']===false);await toggle().click();
+ const settingsURL=path(page),saved=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().method()==='POST'&&response.request().postDataJSON()?.set?.['pharos-fingerprint-events']===false);
+ await toggle().click();await saved;
  assert.equal(await toggle().getAttribute('aria-checked'),'false');assert.equal(path(page),settingsURL);
- await page.waitForFunction(()=>!document.querySelector('.message-label-fingerprint .event-link-overlay'));
- await saved;
- await app.shot('fingerprint-events-setting');
+ requests.length=0;
  await page.goBack();await page.goBack();
- await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
- assert.equal(await eventButton().count(),0);
- await page.reload();await page.locator('.conversation-result-facts .message-label-fingerprint svg').first().waitFor();
- assert.equal(await eventButton().count(),0);
- // The saved global choice also applies to conversation fingerprints.
+ await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='workspace')));
+ requests.length=0;await page.reload();
+ await page.locator('.conversation-result-facts .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.length&&requests.every(body=>body.events===false));
+ // The persisted preference also selects the conversation image variant.
+ requests.length=0;
  await page.goto(new URL('/analyze?analyze_mode=query&analyze_data=message_labels',page.url()).href);
- await page.locator('.message-label-result-card .message-label-fingerprint svg').first().waitFor();
- assert.equal(await eventButton().count(),0);
+ await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.events===false&&body.items.some(item=>item.entity==='conversation')));
  await settings();assert.equal(await toggle().getAttribute('aria-checked'),'false');await toggle().click();
- await page.goBack();await page.goBack();
- await page.locator('.message-label-result-card .message-label-fingerprint .event-link-overlay').first().waitFor();
- await eventButton().focus();await page.getByRole('tooltip').waitFor();await page.keyboard.press('Escape');
- await app.shot('conversation-fingerprint-events');
+ requests.length=0;await page.goBack();await page.goBack();
+ await page.locator('.message-label-result-card .message-label-fingerprint img').first().waitFor();
+ assert.ok(requests.some(body=>body.events===true));
 });
 
 test('Background Processing table queries and editor layout restore independently in a fresh browser',{skip},async t=>{
@@ -1246,52 +1236,19 @@ test('native Message Labels dashboards and conversation cards share standard nav
  const rowsURL=path(page),fresh=await open(t,{api,url:rowsURL,ready:'.qt-row'});assert.equal(await fresh.page.getByRole('button',{name:'Table',exact:true}).getAttribute('aria-pressed'),'true');
  await page.getByRole('button',{name:'Cards',exact:true}).click();await page.locator('.message-label-result-card').first().waitFor();await app.settled();
  const cards=read(page);assert.deepEqual(cards.grouping.source.where,native.grouping.source.where);
- assert.ok(await page.locator('.message-label-result-card .message-label-fingerprint svg').count());
+ assert.ok(await page.locator('.message-label-result-card .message-label-fingerprint img').count());
  const link=await page.locator('.message-label-source').first().getAttribute('href');assert.ok(link.includes('/conversation/')||link.includes('/work/'));
 });
 
-test('fingerprint taxonomy inspection pins a source link and reveals its conversation message',{skip},async t=>{
- const snapshot=structuredClone(conversationLabelsFixture),ids=['P.request.work.implement','P.request.work.review','P.request.work.verify','P.request.input.information','P.request.input.permission','P.frame.scope','P.frame.constraint','P.control.redirect','C.input.answer','C.input.permission.grant','C.feedback.accept','C.feedback.challenge','C.report.finding','C.report.product','C.report.progress','C.deliberation.plan','C.deliberation.hypothesis','C.difficulty.blocker'];
- snapshot.conversations[0].messages[0].labels=ids.map(id=>[id,.9]);
- const event={id:'long-event',message_id:snapshot.conversations[0].messages[1].id,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'reply',sentence:'W'.repeat(260),target:{method:'quote',message_id:snapshot.conversations[0].messages[0].id,role:'user',text:'W'.repeat(220),strong:true}};
- const api={
-  'GET /api/labels/conversations/:id':({params})=>({conversation:{...snapshot.conversations[0],id:params.id,work_id:workID,messages:snapshot.conversations[0].messages.map(message=>({...message,conversation_id:rootConversation,work_id:workID,session_id:'s-root'}))},taxonomy:snapshot.taxonomy,truncated:false,agent_events:[event]}),
-  'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages:snapshot.conversations[0].messages.map(({at,labels,...message})=>({...message,native_id:message.id,created_at:at}))}),
- };
- const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels',api,ready:'.message-label-fingerprint svg',viewport:{width:390,height:480}}),{page}=app;
- // A short screen clamps the whole event card; its target quote must remain
- // reachable by scrolling the hover card without first pinning it.
- const eventButton=page.locator('.message-label-result-card').first().getByRole('button',{name:/agent events\. Arrow keys/});
- await eventButton.focus();const eventTip=page.getByRole('tooltip');await eventTip.waitFor();await eventTip.hover();
- assert.ok(await eventTip.evaluate(node=>node.scrollHeight>node.clientHeight),'the fixture must exercise a clamped event card');
- await page.mouse.wheel(0,600);await page.waitForFunction(()=>document.querySelector('.lt-ribbon-inspector[role="tooltip"]')?.scrollTop>0);
- const target=await eventTip.locator('blockquote.is-target').boundingBox(),tip=await eventTip.boundingBox();
- assert.ok(target.y+target.height<=tip.y+tip.height,'the target quote can be scrolled into view');
- assert.equal(await eventTip.getByRole('link').count(),0);
- await app.shot('clamped-event-after-scroll');
- await page.keyboard.press('Escape');await eventTip.waitFor({state:'hidden'});
- const before=path(page);await page.locator('.message-label-result-card svg g[tabindex]').first().hover({position:{x:2,y:2}});const tooltip=page.getByRole('tooltip');await tooltip.waitFor();await tooltip.hover();
- const box=await tooltip.boundingBox(),viewport=page.viewportSize();assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=viewport.width&&box.y+box.height<=viewport.height);
- const bar=await page.locator('.message-label-result-card .lt-emblem').first().boundingBox();assert.ok(box.y+box.height<=bar.y||box.y>=bar.y+bar.height,'the key leaves its fingerprint clickable');
- const scroller=tooltip.locator('.lt-ribbon-taxonomy-scroll');await scroller.hover();await page.mouse.wheel(0,420);await page.waitForFunction(()=>document.querySelector('.lt-ribbon-taxonomy-scroll')?.scrollTop>0);
- assert.equal(await tooltip.getByRole('link').count(),0);
- assert.equal(path(page),before);await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
- const segment=page.locator('.message-label-result-card').first().getByRole('button',{name:/^Ribbon segment/}).first(),pinned=page.getByRole('group',{name:'Ribbon segment details',exact:true});
- await segment.focus();await tooltip.waitFor();assert.equal(path(page),before);
- await segment.press('Enter');await pinned.waitFor();
- const source=pinned.getByRole('link',{name:'Show in conversation →',exact:true});await source.waitFor();
- assert.equal(await source.evaluate(node=>node===document.activeElement),true);assert.equal(path(page),before);
- await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
- assert.equal(await segment.evaluate(node=>node===document.activeElement),true);
- await segment.press('Space');await pinned.waitFor();await page.keyboard.press('Escape');
- await segment.click({position:{x:2,y:2}});await pinned.waitFor();await page.mouse.move(10,80);assert.equal(await pinned.isVisible(),true);
- await source.scrollIntoViewIfNeeded();await app.shot('fingerprint-pinned-source');
- await source.click();
- await page.locator('.conversation-panel [data-message-id="first-0"].pharos-reveal').first().waitFor();await app.settled();
+test('compact fingerprint PNGs load and navigate to the detailed conversation with the keyboard',{skip},async t=>{
+ const app=await open(t,{url:'/analyze?analyze_mode=query&analyze_data=message_labels',ready:'.message-label-fingerprint img',viewport:{width:390,height:480}}),{page}=app;
+ const image=page.locator('.message-label-result-card .fingerprint-image img').first();
+ await image.scrollIntoViewIfNeeded();
+ await page.waitForFunction(()=>{const img=document.querySelector('.message-label-result-card .fingerprint-image img');return img?.complete&&img.naturalWidth>0;});
+ const link=page.locator('.message-label-result-card .fingerprint-image').first().getByRole('link',{name:'Open conversation',exact:true});
+ await link.focus();await link.press('Enter');
+ await page.locator('.conversation-panel').waitFor();await app.settled();
  assert.equal(new URL(page.url()).searchParams.get('conversation'),rootConversation);
- assert.equal(new URL(page.url()).searchParams.get('reveal'),'message:first-0');
- assert.equal(await page.locator('[data-message-id="first-0"]').first().evaluate(node=>node===document.activeElement),false);
- assert.equal(await pinned.isVisible(),false);
 });
 
 test('Risky actions table edits are Back/Forward steps that restore the table',{skip},async t=>{

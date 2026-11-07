@@ -103,6 +103,13 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 
 **Local labels** (a prototype, off unless `labels_enabled` is set) label every message's function (requests, steering, feedback, reports and so on, taxonomy `candidate-0.3`) on this Mac with the `kestrel-68m` encoder. Pharos builds each message's items with `labeling prepare`'s own code, tokenizes and frames them in pure Go, and runs the model in a separate worker process (`cmd/pharos-labeler-ort`, ONNX Runtime) over a small versioned stdin/stdout protocol, so the `pharos` binary stays pure Go. Labels are a derived ledger (`message_labels`) rebuilt after authorship in the analysis chain, incrementally, never by a page; see [`docs/local-labeler.md`](local-labeler.md).
 
+Compact fingerprints in tables and conversation cards use background-generated
+PNGs with a durable, versioned queue and deduplicated storage in the catalog.
+The two profiles are 1024×128 and 1024×256, each with light/dark appearances.
+Detailed timelines retain interactive rendering. See
+[Compact fingerprint images](fingerprint-images.md) for processing, invalidation,
+recovery and API details.
+
 ## Sources and identity
 
 Each kind of source is one entry in `providerRegistry` (`provider_registry.go`). Its `providerSpec` declares the adapter, what capture copies and which of a database's tables it keeps, how retained inputs are acquired and named, where probe looks for it, whether setup offers it and in what order, whether background updates read it, its rank among mirrors, and where a person keeps its global instructions (which Fixes and Findings point at). Code that depends on a source's kind reads the spec rather than switching on the kind, so adding a provider is one entry plus its adapter (`TestAProviderNeedsOnlyItsSpec`). Parsers still name their own harnesses and channels.

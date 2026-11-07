@@ -39,6 +39,7 @@ type Catalog struct {
 	find         libraryFindCache
 	transcripts  transcriptFindCache
 	derived      derivedCache
+	fingerprints fingerprintWorker
 	// Initialized under derived.mu; caps simultaneous workload fits.
 	thinkingFitSlots chan struct{}
 	// quietVersion and warmVersion are the catalog versions warmCaches last
@@ -586,6 +587,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureMessageLabelFacts(context.Background()); err != nil {
 		return err
+	}
+	if err := c.ensureFingerprintImages(context.Background()); err != nil {
+		return fmt.Errorf("initialize fingerprint images: %w", err)
 	}
 	if err := c.ensureQueryCacheGeneration(); err != nil {
 		return fmt.Errorf("initialize query cache invalidation: %w", err)

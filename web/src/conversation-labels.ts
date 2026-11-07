@@ -35,7 +35,11 @@ export function workflowSessions(c:LabelConversation):LabelSession[] {
   return ordered;
 }
 export const functionRole=(id:string)=>id==="P"||id.startsWith("P.")?"Sender":id==="C"||id.startsWith("C.")?"Receiver":"Unclassified";
-export const stateFamily=(id:string):Family=>labelFamilies.find(f=>f.id===id.split('.').slice(0,2).join('.'))?.id??"root";
+const familyRanks = new Map<string,number>(labelFamilies.map((family,i)=>[family.id,i]));
+export const stateFamily=(id:string):Family=>{
+ const family=id.split('.').slice(0,2).join('.');
+ return familyRanks.has(family)?family as Family:'root';
+};
 const labelPalette:Record<string,string>={
  'P':'#28bfdf','P.request':'#399bed','P.request.work':'#399bed',
  'P.request.work.investigate':'#20bfae','P.request.work.implement':'#399bed','P.request.work.review':'#b36df1','P.request.work.revise':'#678fe9','P.request.work.verify':'#2bc48e',
@@ -72,7 +76,7 @@ const briefLabels:Record<string,string>={
 export const shortLabel=(id:string,taxonomy:Taxonomy=[])=>briefLabels[id]??stateName(id,taxonomy);
 export function compareStates(a:string,b:string):number {
   const root=(id:string)=>functionRole(id)==='Sender'?0:1;
-  const rank=(id:string)=>id==='P'||id==='C'?-1:labelFamilies.findIndex(f=>f.id===stateFamily(id));
+  const rank=(id:string)=>id==='P'||id==='C'?-1:familyRanks.get(stateFamily(id))!;
   return root(a)-root(b)||rank(a)-rank(b)||a.localeCompare(b);
 }
 export function stateName(id:string,taxonomy:Taxonomy=[]):string {

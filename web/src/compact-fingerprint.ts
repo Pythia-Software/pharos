@@ -1,5 +1,5 @@
-// Standalone compact-image prototype. Deliberately not wired into the live
-// fingerprint or timeline: selection and appearance are being reviewed first.
+// Compact image layout shared by the background renderer and preview tools.
+// Detailed conversation and timeline layouts keep their own rendering.
 import {conversationRibbon, parallelEnvelopes, ribbonSegment} from './conversation-fingerprint-model';
 import {mainSession, stateColor, type LabelConversation, type LabelTool, type Taxonomy} from './conversation-labels';
 import {eventGroup, glyphPath, layoutEventArcs, linkedTarget, weakTarget, type AgentEventLink, type ArcLayout, type EventLayout, type LayoutEvent} from './event-link-layout';
@@ -135,14 +135,26 @@ const extent = (radius: number, scale = 1) => radius * 1.18 + .5 * scale;
 /** Limit both vertical stacks and the fraction of each label column covered
  * by symbols. Curves remain thin; glyphs cannot blanket a message column. */
 function clearCoverage(marks: {x: number; x1?: number; r: number}[], width: number, height: number, columns: number, stacks = 2) {
- const edges = marks.flatMap(m => [[m.x - m.r, 1], [(m.x1 ?? m.x) + m.r, -1]] as const).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
- let stacked = 0; for (const [, delta] of edges) {stacked += delta; if (stacked > stacks) return false;}
- const cell = width / Math.max(1, columns), covered = new Map<number, number>();
+ const cell = width / Math.max(1, columns), covered = new Float64Array(columns), limit = cell * height * .28;
+ // All contributions are nonnegative. Reject a full column immediately,
+ // before allocating/sorting stack edges for a candidate that cannot fit.
  for (const m of marks) for (let i = Math.max(0, Math.floor((m.x - m.r) / cell)); i <= Math.min(columns - 1, Math.floor(((m.x1 ?? m.x) + m.r) / cell)); i++) {
   const area = Math.max(0, Math.min((i + 1) * cell, (m.x1 ?? m.x) + m.r) - Math.max(i * cell, m.x - m.r)) * m.r * 2;
-  covered.set(i, (covered.get(i) ?? 0) + area);
+  covered[i] += area;
+  if (covered[i] > limit) return false;
  }
- return [...covered.values()].every(area => area <= cell * height * .28);
+ if (marks.length <= stacks) return true;
+ // Two numeric sweeps avoid allocating a pair of arrays and calling a JS
+ // comparator for every edge. Ends win ties, just as in the original sweep.
+ const starts = new Float64Array(marks.length), ends = new Float64Array(marks.length);
+ for (let i = 0; i < marks.length; i++) {const m = marks[i]; starts[i] = m.x - m.r; ends[i] = (m.x1 ?? m.x) + m.r;}
+ starts.sort(); ends.sort();
+ let start = 0, end = 0, stacked = 0;
+ while (start < starts.length) {
+  if (ends[end] <= starts[start]) {end++; stacked--;}
+  else {start++; if (++stacked > stacks) return false;}
+ }
+ return true;
 }
 
 /** Strict compact placement. Reject the whole tentative addition if it would
@@ -153,7 +165,13 @@ function clearGeometry(layout: CompactEventLayout, width: number, height: number
  const marks = layout.markers.map(m => ({...m, r: extent(m.r, packing.scale)}));
  if (marks.some(m => m.overlap || m.x - m.r < 0 || m.x + m.r > width || m.y - m.r < 0 || m.y + m.r > height)) return false;
  if (!clearCoverage(marks, width, height, columns, packing.stacks)) return false;
- for (let i = 0; i < marks.length; i++) for (let j = i + 1; j < marks.length; j++) if (markGap(marks[i], marks[j]) < packing.scale) return false;
+ // placeMarks returns x-sorted marks. Outside horizontal reach a pair
+ // cannot collide, regardless of its lane, so avoid a quadratic scan.
+ const reach = Math.max(0, ...marks.map(m => m.r));
+ for (let i = 0; i < marks.length; i++) for (let j = i + 1; j < marks.length; j++) {
+  if (marks[j].x - marks[i].x >= marks[i].r + reach + packing.scale) break;
+  if (markGap(marks[i], marks[j]) < packing.scale) return false;
+ }
  for (let i = 0; i < layout.arcs.length; i++) for (const b of layout.arcs.slice(i + 1)) {
   const a = layout.arcs[i];
   if (Math.abs(a.x0 - b.x0) < 2.5 * packing.scale) return false;
@@ -210,15 +228,23 @@ export function layoutCompactFingerprint(prepared: CompactFingerprintPrepared, p
  const score = (c: Candidate) => c.strength * 100 + (!kinds.has(c.event.kind) ? 28 : 0) + (!groups.has(c.event.group) ? 18 : 0)
   + (c.target && !targets.has(c.target) ? 22 : 0) + (!phases.has(c.phase) ? 24 : 0) + (!sessions.has(c.session) ? 12 : 0)
   - (usedKinds.get(c.event.kind) ?? 0) * 5 - (c.target ? usedTargets.get(c.target) ?? 0 : 0) * 3 + clamp(c.event.probability);
+ // Scores only change after accepting a candidate. Keep that ranking across
+ // rejections instead of rescoring the entire history for every failed mark.
+ let ranked: Candidate[] = [], rank = 0, rerank = true;
  while (selected.length < eventLimit) {
-  let best: Candidate | undefined, bestScore = -Infinity;
-  for (const c of candidates) {
-   if (rejected.has(c.event.id)) continue;
-   const value = score(c);
-   if (value > bestScore || value === bestScore && c.event.id < best!.event.id) {best = c; bestScore = value;}
+  if (rerank) {
+   const scored = candidates.filter(c => !rejected.has(c.event.id)).map(c => ({c, score: score(c)}));
+   scored.sort((a, b) => b.score - a.score || (a.c.event.id < b.c.event.id ? -1 : a.c.event.id > b.c.event.id ? 1 : 0));
+   ranked = scored.map(s => s.c); rank = 0; rerank = false;
   }
+  const best = ranked[rank++];
   if (!best) break;
   rejected.add(best.event.id);
+  // Coverage and x bounds do not depend on arc/lane placement. Reject these
+  // before rebuilding all accepted geometry for a candidate that cannot fit.
+  const candidateRadius = extent(radius * (best.target ? 1.1 : 1), packing.scale), x = best.x * width;
+  if (x - candidateRadius < 0 || x + candidateRadius > width) continue;
+  if (!clearCoverage([...layout.markers.map(m => ({x: m.x, r: extent(m.r, packing.scale)})), {x, r: candidateRadius}], width, height, prepared.bands.length, packing.stacks)) continue;
   const nextLinks = new Set(links);
   if (best.target && (layout.arcs.some(a => a.key === best.target) || layout.arcs.length < arcLimit)) nextLinks.add(best.event.id);
   let next = eventGeometry([...selected, best], nextLinks, width, height, radius, packing);
@@ -227,7 +253,7 @@ export function layoutCompactFingerprint(prepared: CompactFingerprintPrepared, p
    next = eventGeometry([...selected, best], nextLinks, width, height, radius, packing);
    if (!clearGeometry(next, width, height, prepared.bands.length, packing)) continue;
   }
-  selected.push(best); layout = next; links = nextLinks;
+  selected.push(best); layout = next; links = nextLinks; rerank = true;
   kinds.add(best.event.kind); groups.add(best.event.group); phases.add(best.phase); sessions.add(best.session);
   usedKinds.set(best.event.kind, (usedKinds.get(best.event.kind) ?? 0) + 1);
   if (best.target) {targets.add(best.target); usedTargets.set(best.target, (usedTargets.get(best.target) ?? 0) + 1);}
@@ -238,14 +264,16 @@ export function layoutCompactFingerprint(prepared: CompactFingerprintPrepared, p
  const longestTool = prepared.tools.reduce((longest, t) => Math.max(longest, t.durationMs ?? 0), 1);
  const dotOf = (t: {drawX: number; y: number}): CompactMark => ({x: t.drawX, x1: t.drawX, y: t.y, r: toolRadius + .5});
  const tailEnd = (t: ToolCandidate) => t.endX === null ? t.x * width : Math.min(width - toolTailRadius, t.endX * width);
+ let rankedTools: ToolCandidate[] = [], toolRank = 0, rerankTools = true;
  while (tools.length < toolLimit) {
-  let best: ToolCandidate | undefined, bestScore = -Infinity;
-  for (const c of prepared.tools) {
-   if (skippedTools.has(c.tool.id)) continue;
-   const value = (c.error ? 1000 : 0) + 90 * Math.log1p(c.durationMs ?? 0) / Math.log1p(longestTool)
-    + (!categories.has(c.tool.category) ? 30 : 0) + (!toolPhases.has(c.phase) ? 22 : 0);
-   if (value > bestScore || value === bestScore && c.tool.id < best!.tool.id) {best = c; bestScore = value;}
+  if (rerankTools) {
+   const scored = prepared.tools.filter(c => !skippedTools.has(c.tool.id)).map(c => ({c, score:
+    (c.error ? 1000 : 0) + 90 * Math.log1p(c.durationMs ?? 0) / Math.log1p(longestTool)
+     + (!categories.has(c.tool.category) ? 30 : 0) + (!toolPhases.has(c.phase) ? 22 : 0)}));
+   scored.sort((a, b) => b.score - a.score || (a.c.tool.id < b.c.tool.id ? -1 : a.c.tool.id > b.c.tool.id ? 1 : 0));
+   rankedTools = scored.map(s => s.c); toolRank = 0; rerankTools = false;
   }
+  const best = rankedTools[toolRank++];
   if (!best) break;
   skippedTools.add(best.tool.id);
   const drawX = best.x * width, occupied = [...eventMarks, ...tools.map(dotOf)];
@@ -254,7 +282,7 @@ export function layoutCompactFingerprint(prepared: CompactFingerprintPrepared, p
   // never prevents the dot itself from representing an important call.
   const end = tailEnd(best), y = lanes.find(y => end - drawX > toolRadius + 2 && clearToolGeometry({x: drawX, x1: end, y, r: toolTailRadius}, occupied, layout, width, height, prepared.bands.length, packing, [dotOf({drawX, y})])) ?? lanes[0];
   if (y === undefined) continue;
-  tools.push({...best, drawX, drawEndX: drawX, y}); categories.add(best.tool.category); toolPhases.add(best.phase);
+  tools.push({...best, drawX, drawEndX: drawX, y}); categories.add(best.tool.category); toolPhases.add(best.phase); rerankTools = true;
  }
  const tails: CompactMark[] = [];
  for (const tool of tools) {
